@@ -7,7 +7,11 @@ param(
     [ValidateSet("Commercial", "GPLv3")]
     [string]$PyQtLicenseBasis,
 
-    [switch]$SkipTests
+    [switch]$SkipTests,
+
+    [switch]$SkipInstaller,
+
+    [string]$IsccPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -64,6 +68,19 @@ try {
     Compress-Archive -LiteralPath $releaseDir -DestinationPath $archive -CompressionLevel Optimal
     $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
     "$hash  $releaseName.zip" | Set-Content -LiteralPath $checksum -Encoding ascii
+
+    if (-not $SkipInstaller) {
+        $installerArguments = @{
+            Version = $Version
+            SourceDir = $releaseDir
+            OutputDir = $releaseRoot
+        }
+        if ($IsccPath) {
+            $installerArguments["IsccPath"] = $IsccPath
+        }
+        & (Join-Path $PSScriptRoot "build_installer.ps1") @installerArguments
+        if ($LASTEXITCODE -ne 0) { throw "Windows installer build failed." }
+    }
 
     Write-Host "Release package: $archive"
     Write-Host "SHA-256 file:  $checksum"

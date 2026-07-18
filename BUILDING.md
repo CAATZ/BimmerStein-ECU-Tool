@@ -1,6 +1,7 @@
 # Building BimmerStein ECU Tool
 
-The supported release build is a Windows x64 PyInstaller one-folder package.
+The supported release build is a Windows x64 PyInstaller one-folder package
+distributed as both a portable ZIP and a per-user installer.
 All commands below run from the repository root in PowerShell.
 
 ## 1. Create the build environment
@@ -10,6 +11,10 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pip install --upgrade pip
 .venv\Scripts\python.exe -m pip install -r requirements-build.txt
 ```
+
+Install Inno Setup 6 when building the installer EXE. The release scripts find
+`ISCC.exe` from `INNO_ISCC`, the standard Program Files locations, or an
+explicit `-IsccPath` argument.
 
 The FTDI D2XX driver is a system dependency used at runtime when available. It
 is not installed or redistributed by this repository.
@@ -85,7 +90,7 @@ release. The package verifier rejects missing or altered tracked texts.
 
 Publication still requires the release owner's final package review.
 
-## 6. Prepare a versioned release archive
+## 6. Prepare the versioned release artifacts
 
 After the release owner has selected a version, create the final ZIP with the
 GPLv3 licensing gate selected for the public beta:
@@ -96,13 +101,20 @@ Suite. The first beta is `0.1.0b1`, with Git tag `v0.1.0b1`.
 ```powershell
 .\packaging\prepare_release.ps1 `
     -Version 0.1.0b1 `
-    -PyQtLicenseBasis GPLv3
+    -PyQtLicenseBasis GPLv3 `
+    -IsccPath "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 ```
 
 The `Commercial` option is reserved for a future distribution whose application
 code and dependencies have been separately cleared for proprietary release. The
 script performs a fresh build, verifies the staged x64 package, records the
 project license and selected PyQt5 basis in `RELEASE-METADATA.json`, and writes
-both the ZIP and a SHA-256 file under `release\`.
+the portable ZIP, per-user installer EXE, individual checksum files, and
+`SHA256SUMS.txt` under `release\`.
+
+The installer uses the BimmerStein icon, installs under the current user's
+local application-data folder without requiring administrator access, creates
+a Start Menu shortcut, and offers an optional desktop shortcut. Use
+`-SkipInstaller` only when intentionally preparing a portable-only build.
 
 This script does not commit, push, tag, or publish anything.

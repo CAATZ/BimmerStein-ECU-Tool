@@ -43,6 +43,8 @@ configuration, patching, and recovery workflows.
   retained as a deprecated remove-only migration target.
 - Complete 24-slot DS2 live-data profiles with operating-state decoding, raw
   front-O2/MAF voltages, and automatic MS41.3 wideband AFR/target selection.
+- A branded, per-user Windows installer with Start Menu integration, an optional
+  desktop shortcut, and matching portable and installer checksums.
 
 ### Changed
 

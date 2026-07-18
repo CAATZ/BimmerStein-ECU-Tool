@@ -124,6 +124,16 @@ Windows font files.
 - Use: build-time dependencies of the documentation pipeline
 - Distribution: not intentionally bundled in the frozen application
 
+### Inno Setup 6.7.3
+
+- Project: Inno Setup by Jordan Russell, with portions by Martijn Laan
+- Use: compilation of the per-user Windows installer
+- License: Inno Setup License; use for distributing an application is permitted,
+  and an acknowledgment in product documentation is appreciated but not required
+
+The compiled installer retains the Inno Setup notices embedded by the unmodified
+compiler. Inno Setup is not bundled as a standalone application or compiler.
+
 ## Drivers and external software
 
 ### FTDI D2XX
@@ -143,7 +153,7 @@ applicable terms. The application's GPLv3 license does not cover imported data.
 
 ## Trademarks and independence
 
-BMW, FTDI, Microsoft, Python, PyQt, Qt, PyInstaller, ReportLab, pySerial,
-OpenSSL, and RomRaider names belong to their respective owners. BimmerStein ECU
+BMW, FTDI, Inno Setup, Microsoft, Python, PyQt, Qt, PyInstaller, ReportLab,
+pySerial, OpenSSL, and RomRaider names belong to their respective owners. BimmerStein ECU
 Tool is independent software and is not affiliated with or endorsed by those
 projects or companies.

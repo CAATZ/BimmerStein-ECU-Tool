@@ -33,10 +33,10 @@ BimmerStein ECU Tool brings BMW MS41 flashing, diagnostics, configuration, patch
 - Install and use Soft-BSL for supported high-speed operations.
 - Recover an unbootable ECU through the separate hardware-BSL workflow.
 
-The supported release target is **Windows x64**. The application is distributed as a complete
-one-folder portable package; the executable must remain beside its `_internal` directory.
-The required Visual C++ runtime is included in that folder, so no separate runtime installation
-is required.
+The supported release target is **Windows x64**. The application is distributed as both a per-user
+installer and a complete one-folder portable package. In portable mode, the executable must remain
+beside its `_internal` directory. The required Visual C++ runtime is included in both distributions,
+so no separate runtime installation is required.
 
 ## Safety
 
@@ -162,15 +162,16 @@ or write to the wrong calibration addresses.
 
 ## Installation
 
-1. Download or build the complete portable Windows folder.
-2. Install the driver for the intended FTDI adapter.
-3. Keep the executable and `_internal` directory together.
-4. Run `BimmerStein ECU Tool.exe`.
+1. Download the Windows installer or the complete portable ZIP.
+2. For the installer, run the versioned `Windows-x64-Setup.exe`; it installs for the current user
+   without requiring administrator access and offers an optional desktop shortcut.
+3. For portable use, extract the complete ZIP and keep the executable beside `_internal`.
+4. Install the driver for the intended FTDI adapter, then run `BimmerStein ECU Tool.exe`.
 
 D2XX is preferred for native-fast DS2, Soft-BSL, and hardware BSL. Normal DS2 and supported
 hardware-BSL paths can use pyserial where the optimized D2XX path is unavailable.
 
-User-generated data is stored beside the portable executable:
+User-generated data is stored beside the executable in either installation mode:
 
 - `backups/` contains reads, prepared images, and recovery files.
 - `logs/` contains session diagnostics.

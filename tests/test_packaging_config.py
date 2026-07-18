@@ -169,6 +169,9 @@ def test_release_packaging_requires_explicit_license_gates():
     assert 'vc_runtime_deployment = "application-local"' in text
     assert "vc_runtime_files_unmodified = $true" in text
     assert "vc_runtime_files = $verification.msvc_runtime" in text
+    assert "build_installer.ps1" in text
+    assert "SkipInstaller" in text
+    assert "IsccPath" in text
 
     build_text = (ROOT / "build_windows.ps1").read_text(encoding="utf-8")
     assert "b[1-9]\\d*" in build_text
@@ -176,6 +179,33 @@ def test_release_packaging_requires_explicit_license_gates():
     building = (ROOT / "BUILDING.md").read_text(encoding="utf-8")
     assert "-Version 0.1.0b1" in building
     assert "v0.1.0b1" in building
+
+
+def test_inno_installer_uses_bimmerstein_identity_and_per_user_install():
+    installer = (ROOT / "packaging" / "BimmerSteinECUTool.iss").read_text(
+        encoding="utf-8"
+    )
+    assert "AppName=BimmerStein ECU Tool" in installer
+    assert "AppPublisher=CAATZ" in installer
+    assert "PrivilegesRequired=lowest" in installer
+    assert "ArchitecturesAllowed=x64compatible" in installer
+    assert "ArchitecturesInstallIn64BitMode=x64compatible" in installer
+    assert "DefaultDirName={localappdata}\\Programs\\BimmerStein ECU Tool" in installer
+    assert "BimmerStein-ECU-Tool-{#AppVersion}-Windows-x64-Setup" in installer
+    assert "SetupIconFile=..\\assets\\bimmerstein_ecu_tool.ico" in installer
+    assert "LicenseFile={#SourceDir}\\LICENSE.txt" in installer
+    assert "InfoBeforeFile={#SourceDir}\\RELEASE_NOTES.md" in installer
+    assert 'Name: "desktopicon"' in installer
+    assert 'Filename: "{app}\\BimmerStein ECU Tool.exe"' in installer
+
+    builder = (ROOT / "packaging" / "build_installer.ps1").read_text(
+        encoding="utf-8"
+    )
+    assert "verify_dist.py" in builder
+    assert "INNO_ISCC" in builder
+    assert "AppDisplayVersion" in builder
+    assert "AppNumericVersion" in builder
+    assert "SHA256SUMS.txt" in builder
 
 
 def test_public_project_license_and_docs_are_gplv3():

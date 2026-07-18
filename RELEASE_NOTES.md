@@ -52,6 +52,7 @@ compliance with applicable emissions, safety, registration, and other laws.
 
 This first public beta is version `0.1.0b1` and is distributed under GNU GPL version 3
 (`GPL-3.0-only`). The free GPLv3 PyQt5 distribution path is selected. The
-Windows x64 portable package includes unchanged application-local Visual C++
-runtime files and records their SHA-256 hashes in its release metadata; no
-separate runtime installation is required.
+Windows x64 build is distributed as both a per-user installer and a portable
+ZIP. Both include unchanged application-local Visual C++ runtime files and
+record their SHA-256 hashes in the release metadata; no separate runtime
+installation or administrator access is required.
