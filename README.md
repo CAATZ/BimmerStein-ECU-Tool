@@ -20,7 +20,7 @@
 
 ## Overview
 
-BimmerStein ECU Tool brings the normal MS41 workflow into one dark-themed PyQt5 application:
+BimmerStein ECU Tool brings BMW MS41 flashing, diagnostics, configuration, patching, and recovery together in a single Windows application:
 
 - Read and write 256 KB full ROMs and 24 KB tune files.
 - Automatically select Soft-BSL, stock native-fast DS2, or normal DS2.
