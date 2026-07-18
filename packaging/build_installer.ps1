@@ -92,14 +92,25 @@ try {
         }
     }
 
-    & $compiler `
-        "/DAppVersion=$Version" `
-        "/DAppDisplayVersion=$displayVersion" `
-        "/DAppNumericVersion=$numericVersion" `
-        "/DSourceDir=$sourcePath" `
-        "/DOutputDir=$outputPath" `
+    $compilerArguments = @(
+        "/Qp",
+        "/DAppVersion=$Version",
+        "/DAppDisplayVersion=$displayVersion",
+        "/DAppNumericVersion=$numericVersion",
+        "/DSourceDir=$sourcePath",
+        "/DOutputDir=$outputPath",
         "packaging\BimmerSteinECUTool.iss"
-    if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed." }
+    )
+    $compilerArgumentText = ($compilerArguments | ForEach-Object {
+        '"' + $_.Replace('"', '\"') + '"'
+    }) -join ' '
+    $compilerProcess = [System.Diagnostics.Process]::Start(
+        $compiler,
+        $compilerArgumentText
+    )
+    if ($null -eq $compilerProcess) { throw "Inno Setup compiler did not start." }
+    $compilerProcess.WaitForExit()
+    if ($compilerProcess.ExitCode -ne 0) { throw "Inno Setup compilation failed." }
     if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
         throw "Inno Setup did not produce the expected installer: $installer"
     }

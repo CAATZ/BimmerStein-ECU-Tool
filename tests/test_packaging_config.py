@@ -206,6 +206,9 @@ def test_inno_installer_uses_bimmerstein_identity_and_per_user_install():
     assert "AppDisplayVersion" in builder
     assert "AppNumericVersion" in builder
     assert "SHA256SUMS.txt" in builder
+    assert "System.Diagnostics.Process" in builder
+    assert "WaitForExit" in builder
+    assert "compilerProcess.ExitCode" in builder
 
 
 def test_public_project_license_and_docs_are_gplv3():
