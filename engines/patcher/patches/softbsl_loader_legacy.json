@@ -1,0 +1,30 @@
+{
+  "id": "softbsl_loader_legacy",
+  "label": "descriptor-overlapping loader",
+  "deprecated": true,
+  "status": "DEPRECATED",
+  "title": "Soft-BSL SA1 loader at descriptor-overlapping 0x5D36 [DEPRECATED]",
+  "description": "Legacy MS41.3 loader whose body overlaps optional coding descriptor bytes at file 0x5D36-0x5D90. Retained only for exact installed-state detection and migration to the descriptor-safe relocated loader.",
+  "target": "MS41.3",
+  "recompute": ["boot_crc"],
+  "requires": [],
+  "conflicts": ["softbsl_loader"],
+  "cave": null,
+  "edits": [
+    {
+      "off": 21922,
+      "expect": "440a",
+      "data": "361d"
+    },
+    {
+      "off": 23862,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "f3f853e647f85a003d2ff3f823e447f89c003d2af3f824e447f89c003d25be88e168da00b81dc2fc25e45c8cc2f426e470c4e6f500d848c02d06da00a41db985085128c10df8da00ca1d49803d08e168da00b81da758a7a7da0000d80dffe7f81500da00b81d0dfada00440adb004fd87eb7a758a7a79ab7fc70f3f8b2fe7eb7db004ed8f7f8b0fea758a7a79ab6fc707eb6db00f075e6f500d8e6f6ffff40572d0fa985c0845064e08df04668417c1648402d0256f601a028d13df708510defc2f427e45c84c2f528e4704540643d02e108db00e118db00"
+    },
+    {
+      "off": 24572,
+      "expect": "ffffffff",
+      "data": "a55a42bd"
+    }
+  ]
+}

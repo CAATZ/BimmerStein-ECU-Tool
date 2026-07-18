@@ -1,0 +1,47 @@
+{
+  "id": "ignition_cut_v4",
+  "status": "DEPRECATED",
+  "tested": false,
+  "deprecated": true,
+  "superseded_by": "ignition_cut_v7",
+  "verification": "DEPRECATED. V4 corrected the RPM source but still used the non-live dwell/CAN path later proven unreachable on-car. Retained only for detection and removal; superseded by ignition_cut_v7.",
+  "title": "Ignition Cut v4 - dwell-zero rev limiter [DEPRECATED: non-live hook, use V7]",
+  "description": "DEPRECATED and remove-only. V4 reads actual RPM but its dwell hook is not in the recurring ignition final-stage path. Retained only so an installed V4 can be detected and reverted before installing Ignition Cut V7.",
+  "target": "MS41.3",
+  "recompute": [],
+  "requires": [],
+  "conflicts": [
+    "ignition_cut",
+    "ignition_cut_v2",
+    "ignition_cut_v3"
+  ],
+  "supersedes": [
+    "ignition_cut",
+    "ignition_cut_v2",
+    "ignition_cut_v3"
+  ],
+  "cave": {
+    "region": "proghigh",
+    "base": 236656,
+    "splice_off": 235056,
+    "splice_op": "jmps",
+    "relocatable": false,
+    "cals": {
+      "CUTSW": 92773,
+      "CUTRPM": 92774
+    }
+  },
+  "edits": [
+    {
+      "off": 235056,
+      "expect": "e6f1ecf6",
+      "data": "fa0370dc"
+    },
+    {
+      "off": 236656,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4e6000400f3f8652a47f8ff002d2847f800002d1a47f801003d06f3f860fd67f880002d1d0d1147f802003d06f3f861fd67f801002d140d0847f804003d10f3f861fd67f802002d0bf3f83cfc43f8662a8d06e6f40000f6f4ecf6f6f4eef6fcf4fc00e6f1ecf6fa0334d6"
+    }
+  ],
+  "label": "V4"
+}

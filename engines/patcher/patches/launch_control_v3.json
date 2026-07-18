@@ -1,0 +1,67 @@
+{
+  "id": "launch_control_v3",
+  "deprecated": true,
+  "label": "V3",
+  "superseded_by": "launch_control_v4",
+  "status": "DEPRECATED - REMOVE BEFORE V4",
+  "tested": false,
+  "verification": "V2 field testing proved the state machine and soft F014 clamp execute, but V3 remained coupled to the later field-failed Ignition Cut V6 actuator assumption and derived its hard threshold from the stock redline gap. Retained only for detection/removal before Launch Control V4 plus Ignition Cut V7.",
+  "title": "Launch Control v3 / 2-step [DEPRECATED - REMOVE ONLY]",
+  "description": "DEPRECATED and remove-only. V3 retained the proven launch latch and stock fuel-limiter state machine but derived its hard boundary from the stock DB87-DB86 gap. Its ignition mode requires the now field-failed Ignition Cut V6 descriptor. Remove V3 and V6 before installing Launch Control V4 with Ignition Cut V7.",
+  "target": "MS41.3",
+  "recompute": [],
+  "requires": ["ignition_cut_v6"],
+  "conflicts": [
+    "ignition_cut",
+    "ignition_cut_v2",
+    "ignition_cut_v3",
+    "ignition_cut_v4",
+    "ignition_cut_v5",
+    "launch_control",
+    "launch_control_v2"
+  ],
+  "supersedes": ["launch_control", "launch_control_v2"],
+  "cave": {
+    "region": "proghigh",
+    "base": 236800,
+    "splice_off": 252200,
+    "splice_op": "jmps",
+    "relocatable": false,
+    "splices": [
+      {"off": 252200, "base": 236800, "op": "jmps"},
+      {"off": 149458, "base": 236988, "op": "jmps"},
+      {"off": 149642, "base": 237088, "op": "calls"},
+      {"off": 149802, "base": 237088, "op": "calls"}
+    ],
+    "cals": {
+      "LC_SW": 95532,
+      "LC_CUTTYPE": 95533,
+      "LC_CLUTCHPOL": 95534,
+      "LC_MAXRPM": 95535,
+      "LC_ARMSPEED": 95536,
+      "LC_MAXSPEED": 95537,
+      "LC_MINTPS": 95538
+    }
+  },
+  "edits": [
+    {"off": 252200, "expect": "f3f89af1", "data": "fa0300dd"},
+    {"off": 149458, "expect": "fe2dfe11", "data": "fa03bcdd"},
+    {"off": 149642, "expect": "43f887db", "data": "da0320de"},
+    {"off": 149802, "expect": "43f887db", "data": "da0320de"},
+    {
+      "off": 236800,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4ecf5e6000400f3f82c3547f8ff002d3a47f800002d35f3f89af143f831359d32f3f8d0e843f832358d2df3f89af143f830359d2af3f82c3547f801003d05f3f860fd67f880000d0f47f802003d05f3f861fd67f801000d0747f804003d13f3f861fd67f80200f3fa2e3547fa00002d0447f800002d050d0847f800003d010d046f2d0d026e2d0d007e2df3f85afd67f840002d0bf3f82d3547f801003d06f3f83cfc43f82f358d017f2dfcf5fcf4fc00f3f89af1fa032c99"
+    },
+    {
+      "off": 236988,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4e6000400f3f85afd67f840002d0cf3f82d3547f800003d07f3f82f3543f814f09d02f7f814f0fcf4fc00fe2dfe11fa02d607"
+    },
+    {
+      "off": 237088,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf5ecf6e6000400f3fa5afd67fa40002d0ff3fa2d3547fa00003d0ac2f587dbc2f686db2056c2f62f350056418a0d0243f887dbfcf6fcf5fc00db00"
+    }
+  ]
+}

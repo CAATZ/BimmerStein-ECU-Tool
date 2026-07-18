@@ -1,0 +1,31 @@
+{
+  "id": "door_0x43",
+  "title": "0x43 normal-mode entry splice",
+  "user_description": "Adds a temporary normal-mode Soft-BSL entry through DS2 command 0x43. A later program-region reflash removes this bootstrap patch.",
+  "description": "Program-high splice on the clear-adapts 0x43 selector -> a stub that streams+runs a RAM agent from normal mode (no unlock). WIPED by a program reflash (re-deployable). Uses the program-high code cave.",
+  "target": "MS41.3",
+  "targets": ["MS41.2", "MS41.3"],
+  "recompute": [],
+  "recompute_by_target": {"MS41.2": ["program"]},
+  "requires": [],
+  "conflicts": [],
+  "cave": {
+    "region": "proghigh",
+    "base": 236394,
+    "splice_off": 160596,
+    "splice_op": "calls",
+    "relocatable": false
+  },
+  "edits": [
+    {
+      "off": 160596,
+      "expect": "da02cc51",
+      "data": "da036adb"
+    },
+    {
+      "off": 236394,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "f3f853e647f843003d2ff3f823e447f89c003d2af3f824e447f89c003d25be88e168da03ecdbc2fc25e45c8cc2f426e470c4e6f500d848c02d06da03d8dbb985085128c10df8da03fedb49803d08e168da03ecdba758a7a7da0000d80dffe7f81500da03ecdb0dfada02cc51db004fd87eb7a758a7a79ab7fc70f3f8b2fe7eb7db004ed8f7f8b0fea758a7a79ab6fc707eb6db00f075e6f500d8e6f6ffff40572d0fa985c0845064e08df04668417c1648402d0256f601a028d13df708510defc2f427e45c84c2f528e4704540643d02e108db00e118db00"
+    }
+  ]
+}

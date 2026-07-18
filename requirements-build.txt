@@ -1,0 +1,4 @@
+-r requirements-dev.txt
+-r requirements-docs.txt
+
+pyinstaller>=6.21,<7

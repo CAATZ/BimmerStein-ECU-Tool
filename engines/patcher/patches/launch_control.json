@@ -1,0 +1,61 @@
+{
+  "id": "launch_control",
+  "status": "DEPRECATED",
+  "tested": false,
+  "deprecated": true,
+  "label": "v1",
+  "superseded_by": "launch_control_v4",
+  "verification": "DEPRECATED. V1 owns the same non-live dwell splice later proven ineffective on-car and only lowers the soft fuel threshold. Retained as a detectable/removable record; superseded by launch_control_v4.",
+  "title": "Launch Control v1 - 3-splice revision [DEPRECATED: field-invalid design, use V3]",
+  "description": "DEPRECATED and remove-only. Its ignition path uses the non-live dwell hook and its fuel path coordinates only the soft threshold. Retained only so an installed V1 can be detected and reverted before installing Launch Control V4 with Ignition Cut V7.",
+  "target": "MS41.3",
+  "recompute": [],
+  "requires": [],
+  "conflicts": [
+    "ignition_cut",
+    "ignition_cut_v2",
+    "ignition_cut_v3",
+    "ignition_cut_v4",
+    "ignition_cut_v5",
+    "launch_control_v2"
+  ],
+  "supersedes": [],
+  "cave": {
+    "region": "proghigh",
+    "base": 236766,
+    "splice_off": 252200,
+    "splice_op": "jmps",
+    "relocatable": false,
+    "cals": {
+      "LC_SW": 95532,
+      "LC_CUTTYPE": 95533,
+      "LC_CLUTCHPOL": 95534,
+      "LC_MAXRPM": 95535,
+      "LC_ARMSPEED": 95536,
+      "LC_MAXSPEED": 95537,
+      "LC_MINTPS": 95538
+    }
+  },
+  "edits": [
+    {
+      "off": 252200,
+      "expect": "f3f89af1",
+      "data": "fa03dedc"
+    },
+    {
+      "off": 149458,
+      "expect": "fe2dfe11",
+      "data": "fa0378dd"
+    },
+    {
+      "off": 235056,
+      "expect": "e6f1ecf6",
+      "data": "fa03aedd"
+    },
+    {
+      "off": 236766,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4ecf5e6000400f3f82c3547f8ff002d3a47f800002d35f3f89af143f831359d32f3f8d0e843f832358d2df3f89af143f830359d2af3f82c3547f801003d05f3f860fd67f880000d0f47f802003d05f3f861fd67f801000d0747f804003d13f3f861fd67f80200f3fa2e3547fa00002d0447f800002d050d0847f800003d010d046f2d0d026e2d0d00fcf5fcf4fc00f3f89af1fa032c99ec00ecf4e6000400f3f85afd67f840002d0cf3f82d3547f800003d07f3f82f3543f814f09d02f7f814f0fcf4fc00fe2dfe11fa02d607ec00ecf4e6000400f3f85afd67f840002d10f3f82d3547f801003d0bf3f83cfc43f82f358d06e6f40000f6f4ecf6f6f4eef6fcf4fc00e6f1ecf6fa0334d6"
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "id": "ignition_cut_v7",
+  "status": "EMULATOR VERIFIED - ON-CAR TEST REQUIRED",
+  "tested": false,
+  "verification": "V7 is grounded at the final six-channel ignition actuator. Canonical ms41emu executes both real CALLS hooks, every switch/RPM/Launch request case, and both complete return paths including the manual-backed 0x65 stock `ANDB P1L,RL1`. Its native-entry matrix covers all six ADB2 single-cylinder masks, all six fd5e.8/ADC4 paired-cylinder masks, and the second recurring ADB2 site on both MS41.2 and MS41.3, while checking Port 1 effects plus stack/DPP/register hygiene. Physical spark interruption remains an on-car validation item.",
+  "title": "Ignition Cut v7 - six-channel final-stage spark cut",
+  "user_description": "Adds a configurable ignition-cut rev limiter at the ECU's proven six-cylinder coil final-stage charge commands. Emulator and static hardware-path verification are complete; vehicle testing is still required.",
+  "description": "Replaces both recurring `andb P1L,RL1` coil-charge transactions at file 0x3992A and 0x3998E with CALLS to a shared program-high cave at file 0x39C70. Standalone cut arms with CUTSW (FF=off, 00=always, 01/02/04=pin80/81/82) and triggers when actual rpm/32 at 0xFC3C reaches CUTRPM. Launch Control V4 may independently request spark cut through fd5a.7. Stock ADB2 masks clear one P1L.0..5 cylinder output plus companion P1L.6/.7; the fd5e.8 ADC4 masks clear paired cylinder outputs plus a companion bit. The cut path suppresses that complete scheduled mask transaction, while the stock path replays the exact displaced ANDB. Injector CC0-CC5 scheduling, CC6/CC7 timer scheduling, O2-heater control, VPP P2.6, and the later coil-release/watchdog paths remain untouched. Supersedes field-failed V6 and all older ignition-cut revisions.",
+  "target": "MS41.3",
+  "targets": ["MS41.2", "MS41.3"],
+  "recompute": [],
+  "recompute_by_target": {"MS41.2": ["program"]},
+  "requires": [],
+  "conflicts": [
+    "ignition_cut",
+    "ignition_cut_v2",
+    "ignition_cut_v3",
+    "ignition_cut_v4",
+    "ignition_cut_v5",
+    "ignition_cut_v6"
+  ],
+  "supersedes": [
+    "ignition_cut",
+    "ignition_cut_v2",
+    "ignition_cut_v3",
+    "ignition_cut_v4",
+    "ignition_cut_v5",
+    "ignition_cut_v6"
+  ],
+  "cave": {
+    "region": "proghigh",
+    "base": 236656,
+    "splice_off": 235818,
+    "splice_op": "calls",
+    "relocatable": false,
+    "splices": [
+      {"off": 235818, "base": 236656, "op": "calls"},
+      {"off": 235918, "base": 236656, "op": "calls"}
+    ],
+    "cals": {
+      "CUTSW": 92773,
+      "CUTRPM": 92774
+    }
+  },
+  "edits": [
+    {
+      "off": 235818,
+      "expect": "65f204ff",
+      "data": "da0370dc"
+    },
+    {
+      "off": 235918,
+      "expect": "65f204ff",
+      "data": "da0370dc"
+    },
+    {
+      "off": 236656,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4e6000400f3f85afd67f880003d27f3f8652a47f8ff002d2547f800002d1a47f801003d06f3f861fd67f802002d1a0d1147f802003d06f3f861fd67f801002d110d0847f804003d0df3f860fd67f880002d08f3f83cfc43f8662a8d03fcf4fc00db00fcf4fc0065f204ffdb00"
+    }
+  ]
+}

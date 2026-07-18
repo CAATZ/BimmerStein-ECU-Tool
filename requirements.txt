@@ -1,0 +1,6 @@
+# pyserial provides the portable fallback used by DS2 and hardware BSL.
+pyserial>=3.5
+
+# The desktop application additionally needs PyQt5. FTDI D2XX acceleration
+# uses the vendor driver directly when it is installed; no Python package is required.
+PyQt5>=5.15

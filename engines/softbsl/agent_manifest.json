@@ -1,0 +1,25 @@
+{
+  "format_version": 1,
+  "assembler": {
+    "path": "tools/AssembleC166.java",
+    "text_sha256": "71ceeb2bbd20b99f3597f146202eff898a4e8274a45e781fab8ec13b732c9f8b"
+  },
+  "agents": {
+    "amd": {
+      "source": "agent_build.asm",
+      "source_text_sha256": "dba862b81a8f55870ba3509eea56117b013929b0a53db9d7e50408fa05e92737",
+      "preprocessed_sha256": "a137862eeed1e55bb0b5b5c76fc53b1b45b6b5b69386b548a21f1a7ea905d9e1",
+      "payload": "agent.hex",
+      "payload_size": 1498,
+      "payload_sha256": "00eea04eae248f35f77140913bd27a0ffc0003251acd361db2ee80c4b336cb72"
+    },
+    "intel_28f200": {
+      "source": "agent_28f_build.asm",
+      "source_text_sha256": "73ed88d4c8df33b6eefa006060b55eb0b4e4d86029a02347ccc42dc3e9eb34be",
+      "preprocessed_sha256": "86a44182bc42e6ebe7e5f30044f449bbf4b3b89f77e1c31c8baddc57ef763556",
+      "payload": "agent_28f.hex",
+      "payload_size": 1464,
+      "payload_sha256": "5c35c219cf350f9dfd936be92907b2a44d9c52e0cb40d0831f805f49f8a418c2"
+    }
+  }
+}

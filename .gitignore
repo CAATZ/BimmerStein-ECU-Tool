@@ -1,0 +1,40 @@
+# Python bytecode, test caches, and local build state
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest-*/
+.ruff_cache/
+/build/
+/dist/
+/release/
+/tmp/
+/.tmp/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# ECU images and backups contain private identity data
+*.bin
+backups/
+flash_backup_*.bin
+
+# Runtime logs and user exports
+logs/
+*.log
+dtc_report.txt
+
+# User-imported calibration definitions are stored outside the source tree.
+definitions/
+
+# Internal engineering material is maintained in a separate local-only repo
+/_private/
+*.private.md
+
+# Operating-system and editor files
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

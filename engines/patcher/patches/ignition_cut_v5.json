@@ -1,0 +1,51 @@
+{
+  "id": "ignition_cut_v5",
+  "status": "DEPRECATED - FIELD FAILED",
+  "tested": false,
+  "verification": "DEPRECATED after on-car field test: ignition cut did nothing. Root cause confirmed in the stock disassembly: file 0x39630 is a one-time CAN/PEC message-object initialization dispatcher, not a recurring ignition-output hook. The old emulator gate started directly at the splice and therefore proved cave logic but not reachability. Superseded by ignition_cut_v7 at the proven P1L.0..5 final-stage charge commands.",
+  "title": "Ignition Cut v5 - unreachable CAN/PEC hook [DEPRECATED: FIELD FAILED, use V7]",
+  "description": "DEPRECATED and remove-only. On-car testing confirmed no spark cut because the splice at file 0x39630 belongs to CAN/PEC initialization and does not execute in the recurring ignition path. Retained only so already-flashed V5 images on MS41.2/MS41.3 can be detected and safely reverted before installing Ignition Cut V7.",
+  "superseded_by": "ignition_cut_v7",
+  "target": "MS41.3",
+  "targets": ["MS41.2", "MS41.3"],
+  "recompute": [],
+  "recompute_by_target": {"MS41.2": ["program"]},
+  "requires": [],
+  "conflicts": [
+    "ignition_cut",
+    "ignition_cut_v2",
+    "ignition_cut_v3",
+    "ignition_cut_v4"
+  ],
+  "supersedes": [
+    "ignition_cut",
+    "ignition_cut_v2",
+    "ignition_cut_v3",
+    "ignition_cut_v4"
+  ],
+  "cave": {
+    "region": "proghigh",
+    "base": 236656,
+    "splice_off": 235056,
+    "splice_op": "jmps",
+    "relocatable": false,
+    "cals": {
+      "CUTSW": 92773,
+      "CUTRPM": 92774
+    }
+  },
+  "edits": [
+    {
+      "off": 235056,
+      "expect": "e6f1ecf6",
+      "data": "fa0370dc"
+    },
+    {
+      "off": 236656,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4e6000400f3f85afd67f880003d27f3f8652a47f8ff002d2847f800002d1a47f801003d06f3f860fd67f880002d1d0d1147f802003d06f3f861fd67f801002d140d0847f804003d10f3f861fd67f802002d0bf3f83cfc43f8662a8d06e6f40000f6f4ecf6f6f4eef6fcf4fc00e6f1ecf6fa0334d6"
+    }
+  ],
+  "deprecated": true,
+  "label": "V5"
+}

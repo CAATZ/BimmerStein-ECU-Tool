@@ -1,0 +1,14 @@
+# Normalize line endings to LF in the repository (cross-platform, GitHub-standard).
+* text=auto eol=lf
+
+# Binary assets - never touch line endings.
+*.bin binary
+*.hex binary
+*.dat binary
+*.xlsx binary
+*.png binary
+*.ico binary
+*.pdf binary
+
+# Preserve upstream license texts byte-for-byte so packaged hashes are reproducible.
+THIRD_PARTY_LICENSES/*.txt binary !eol

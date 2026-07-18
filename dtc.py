@@ -1,0 +1,327 @@
+"""BMW MS41 DS2 diagnostic-trouble-code database and parser.
+
+Command 0x04 returns 24 ten-byte records plus a trailer byte. Record byte 1
+contains the single-byte DTC and byte 9 distinguishes stored (0xAB) from active
+(0xAC) faults. The layout was verified against an MS41 serial capture.
+"""
+
+from dataclasses import dataclass
+
+
+def format_dtc_table(dtcs: list) -> str:
+    """Return a human-readable plain-text table of DTCs."""
+    if not dtcs:
+        return "No DTCs stored."
+    lines = [
+        f"{'BMW Code':<10} {'SAE Code':<10} {'System':<22} {'Status':<30} Description",
+        "-" * 115,
+    ]
+    for d in dtcs:
+        lines.append(
+            f"{d.code_hex:<10} {d.sae_code:<10} {d.system:<22} {d.status_text:<30} {d.description}"
+        )
+    return "\n".join(lines)
+
+# ---------------------------------------------------------------------------
+# DS2 single-byte DTC database (BMW MS41 / MS42 / MS43)
+# Source: openms41.sites.google.com DTC reference table (verified)
+# Code = single byte integer (1–255), matches byte[1] of each 10-byte DS2 record
+# ---------------------------------------------------------------------------
+
+DS2_DTC_DB: dict = {
+    1:   ("Ignition coil Cyl 2",                        "Ignition"),
+    2:   ("Ignition coil Cyl 4",                        "Ignition"),
+    3:   ("Ignition coil Cyl 6",                        "Ignition"),
+    5:   ("Fuel injector Cyl 2",                        "Fuel Injectors"),
+    6:   ("Fuel injector Cyl 1",                        "Fuel Injectors"),
+    8:   ("Air Flow Meter (HFM)",                       "Air Intake"),
+    10:  ("Coolant Temperature Sensor",                 "Temperature"),
+    11:  ("Tank Pressure Sensor / Radiator Outlet Temp","Emissions"),
+    12:  ("TPS or Plausibility - Max Coolant Temp",     "Throttle"),
+    13:  ("Plausibility - Radiator Outlet Temp",        "Temperature"),
+    14:  ("Intake Air Temperature Sensor",              "Temperature"),
+    15:  ("Plausibility - Cut Out Time",                "ECU Internal"),
+    16:  ("AirCon Compressor PWM / Intake Air Temp",    "A/C"),
+    17:  ("Plausibility - Engine Coolant Temp",         "Temperature"),
+    18:  ("EWS Signal or Camshaft Sensor",              "Immobiliser"),
+    19:  ("VANOS Inlet/Exhaust Valve Activation",       "VANOS"),
+    20:  ("CHECK ENGINE Light Failure",                 "ECU Internal"),
+    21:  ("VANOS Electrical Fault or Inlet Valve",      "VANOS"),
+    22:  ("Fuel Injector Cyl 3",                        "Fuel Injectors"),
+    23:  ("Fuel Injector Cyl 6",                        "Fuel Injectors"),
+    24:  ("Fuel Injector Cyl 4",                        "Fuel Injectors"),
+    25:  ("Lambda Sensor Heater Bank 1",                "Lambda / Fueling"),
+    27:  ("Idle Control Valve Malfunction",             "Idle Control"),
+    29:  ("Ignition Coil Cyl 1",                        "Ignition"),
+    30:  ("Ignition Coil Cyl 3",                        "Ignition"),
+    31:  ("Ignition Coil Cyl 5",                        "Ignition"),
+    33:  ("Fuel Injector Cyl 5",                        "Fuel Injectors"),
+    35:  ("Aux. Air Injection System Relay",            "Emissions"),
+    36:  ("DME Main Relay",                             "Power Supply"),
+    37:  ("DME Main Relay Delay",                       "Power Supply"),
+    38:  ("Clutch Switch - Plausibility",               "Input Signals"),
+    39:  ("Brake Light Switch / Test Switch",           "Input Signals"),
+    40:  ("Brake Light Switch / Pedal Signal",          "Input Signals"),
+    42:  ("Multi Function Steering Wheel - Plausibility","Communication"),
+    43:  ("Multi Function Steering Wheel Button",       "Communication"),
+    45:  ("Multi Function Steering Wheel Port",         "Communication"),
+    47:  ("Temp Sensor Downstream Pre-Cat",             "Temperature"),
+    48:  ("DME Control Unit - Self Test 1",             "ECU Internal"),
+    49:  ("DME Control Unit",                           "ECU Internal"),
+    50:  ("EVAP Control Valve",                         "Emissions"),
+    51:  ("Shut-off Valve Charcoal Filter",             "Emissions"),
+    52:  ("Solenoid Valve - Exhaust Flap",              "Emissions"),
+    53:  ("Idle Speed Actuator",                        "Idle Control"),
+    55:  ("Lambda Sensor Heater Bank 2",                "Lambda / Fueling"),
+    56:  ("Ignition Current Feedback Resistor Open",    "Ignition"),
+    57:  ("Knock Sensor Bank 1",                        "Knock Control"),
+    58:  ("DME Control Unit - Self Test 2",             "ECU Internal"),
+    59:  ("Knock Sensor Bank 2",                        "Knock Control"),
+    61:  ("Lambda Sensor Heater Bank 2 Post Cat",       "Lambda / Fueling"),
+    62:  ("Aux. Air Injection Switching Valve",         "Emissions"),
+    63:  ("DME Control Unit / Ambient Temp via CAN",    "ECU Internal"),
+    64:  ("Plausibility - Ambient Temperature",         "Temperature"),
+    65:  ("Camshaft Position Sensor",                   "Crank/Cam"),
+    66:  ("DME Control Unit",                           "ECU Internal"),
+    67:  ("DME Control Unit",                           "ECU Internal"),
+    68:  ("Tank Venting Valve",                         "Emissions"),
+    69:  ("Fuel Pump Relay",                            "Fuel System"),
+    70:  ("DME Control Unit",                           "ECU Internal"),
+    71:  ("DME Control Unit",                           "ECU Internal"),
+    72:  ("DME Control Unit",                           "ECU Internal"),
+    74:  ("AirCon Compressor Relay",                    "A/C"),
+    75:  ("Lambda Sensor Voltage Bank 1",               "Lambda / Fueling"),
+    76:  ("Lambda Sensor Voltage Bank 2",               "Lambda / Fueling"),
+    77:  ("Lambda Sensor Voltage Bank 1 Post Cat",      "Lambda / Fueling"),
+    78:  ("Lambda Sensor Voltage Bank 2 Post Cat",      "Lambda / Fueling"),
+    79:  ("Lambda Sensor Heater Bank 1 Post Cat",       "Lambda / Fueling"),
+    80:  ("ABS/ASC Interface",                          "Communication"),
+    81:  ("MSR Signal - Active Too Long",               "Communication"),
+    82:  ("ABS/ASC Interface - Advance Adjustment",     "Communication"),
+    83:  ("Crankshaft Sensor",                          "Crank/Cam"),
+    90:  ("Exhaust Temp Pre Cat Bank 1",                "Temperature"),
+    91:  ("Exhaust Temp Pre Cat Bank 2",                "Temperature"),
+    92:  ("Exhaust Temp Post Cat Bank 1",               "Temperature"),
+    93:  ("Exhaust Temp Post Cat Bank 2",               "Temperature"),
+    94:  ("Auxiliary Air - Mass Flow Sensor",           "Emissions"),
+    95:  ("Auxiliary Air Valve or Hose Blocked",        "Emissions"),
+    96:  ("Auxiliary Air Pump Function",                "Emissions"),
+    97:  ("Auxiliary Air - Flow Rate Too Low",          "Emissions"),
+    98:  ("Auxiliary Air - Flow Rate Too High",         "Emissions"),
+    99:  ("Auxiliary Air Valve Jammed Open",            "Emissions"),
+    100: ("DME Control Unit - Self-Test Failed",        "ECU Internal"),
+    103: ("VANOS Error - Inlet Camshaft",               "VANOS"),
+    104: ("VANOS Error - Exhaust Camshaft",             "VANOS"),
+    105: ("VANOS Error - Position Inlet Camshaft",      "VANOS"),
+    106: ("VANOS Error - Position Exhaust Camshaft",    "VANOS"),
+    109: ("Throttle Valve Plausibility",                "Throttle"),
+    110: ("Pedal Sensor Value Potentiometer 1",         "Throttle"),
+    111: ("Pedal Sensor Value Potentiometer 2",         "Throttle"),
+    112: ("TPS Potentiometer 1",                        "Throttle"),
+    113: ("TPS Potentiometer 2",                        "Throttle"),
+    114: ("Throttle Valve Final Stage",                 "Throttle"),
+    115: ("Reference Voltage Regulator 1",              "ECU Internal"),
+    116: ("Reference Voltage Regulator 2",              "ECU Internal"),
+    117: ("Plausibility - Pedal Position Sensor 1/2",  "Throttle"),
+    118: ("Plausibility - TPS 1/2",                    "Throttle"),
+    119: ("Throttle Valve Sensor Mechanical Error",     "Throttle"),
+    120: ("Plausibility Pedal Sensor or TPS",          "Throttle"),
+    122: ("Engine Oil Temperature",                     "Temperature"),
+    123: ("Map Cooling Thermostat Control",             "Cooling"),
+    124: ("Activation DISA Solenoid",                   "Air Intake"),
+    125: ("Activation Electric Fan",                    "Cooling"),
+    126: ("Activation Tank Leak Pump Solenoid",         "Emissions"),
+    127: ("Activation Pump Solenoid",                   "Emissions"),
+    128: ("DME/EWS Communication",                      "Immobiliser"),
+    129: ("CAN Signal SMG 1",                           "Communication"),
+    130: ("CAN Signal ASC - Timeout",                   "Communication"),
+    131: ("CAN Signal Instrument Cluster - Timeout",    "Communication"),
+    132: ("CAN Signal Instrument Cluster - Timeout",    "Communication"),
+    133: ("CAN Signal ASC - Timeout",                   "Communication"),
+    134: ("SMG Intervention - Plausibility",            "Communication"),
+    135: ("Throttle Valve Re-Adaptation Required",      "Throttle"),
+    136: ("Throttle Valve Spring Test Failed",          "Throttle"),
+    137: ("CAN Signal - Steering Angle Sensor",         "Communication"),
+    139: ("CAN Signal - Tank Level Sensor",             "Communication"),
+    140: ("Tank Leak Pump Solenoid Reed Switch",        "Emissions"),
+    141: ("Tank Leak Pump Reed Switch Stuck",           "Emissions"),
+    142: ("Tank Leak Pump Reed Switch Open / DMTL",    "Emissions"),
+    143: ("Tank Ventilation / Leakage",                 "Emissions"),
+    144: ("Fuel System Large Leak",                     "Emissions"),
+    145: ("Fuel System Small Leak",                     "Emissions"),
+    146: ("EVAP Small Leak",                            "Emissions"),
+    147: ("Pedal Position Sensor Supply Channel 1",     "Throttle"),
+    149: ("Air Flow Sensor or Pedal Sensor Mismatch",   "Air Intake"),
+    150: ("Lambda Post Cat Bank 1 Max Limit",           "Lambda / Fueling"),
+    151: ("Lambda Post Cat Bank 2 Max Limit",           "Lambda / Fueling"),
+    152: ("Lambda Post Cat Bank 1 Min Limit",           "Lambda / Fueling"),
+    153: ("Lambda Pre Cat Bank 2 Max Limit",            "Lambda / Fueling"),
+    154: ("Lambda Pre Cat Bank 2 Min Limit",            "Lambda / Fueling"),
+    155: ("Lambda Pre Cat Bank 2 No Signal",            "Lambda / Fueling"),
+    156: ("Lambda Pre Cat Bank 1 No Signal",            "Lambda / Fueling"),
+    157: ("Lambda Post Cat Bank 1 Min Limit",           "Lambda / Fueling"),
+    159: ("Lambda Post Cat Bank 2 Max Limit",           "Lambda / Fueling"),
+    160: ("Lambda Post Cat Bank 2 / Throttle Stuck",    "Lambda / Fueling"),
+    161: ("Throttle Valve Stuck",                       "Throttle"),
+    162: ("Throttle Valve Control Deviation",           "Throttle"),
+    168: ("Pedal Position Sensor Pot Supply 1",         "Throttle"),
+    169: ("Throttle Valve Output Stage Cutoff",         "Throttle"),
+    170: ("DME Control Unit - Self Test Failed",        "ECU Internal"),
+    171: ("Plausibility - Throttle Valve",              "Throttle"),
+    172: ("Pedal Sensor Potentiometer 1/2 Short",       "Throttle"),
+    173: ("TPS Potentiometer 1/2 Short Circuit",        "Throttle"),
+    174: ("Throttle Valve Potentiometer 1/2 Adaptation","Throttle"),
+    175: ("Pedal Sensor 1 Adaptation",                  "Throttle"),
+    176: ("Pedal Sensor 2 Adaptation",                  "Throttle"),
+    186: ("Voltage Post Cat Bank 1",                    "Lambda / Fueling"),
+    187: ("Voltage Post Cat Bank 2",                    "Lambda / Fueling"),
+    188: ("Voltage Pre Cat Bank 1",                     "Lambda / Fueling"),
+    189: ("Voltage Pre Cat Bank 2",                     "Lambda / Fueling"),
+    190: ("EVAP Reed Switch Open",                      "Emissions"),
+    191: ("EVAP Reed Switch Closed",                    "Emissions"),
+    192: ("EVAP Reed Switch Open",                      "Emissions"),
+    193: ("EVAP Check Hoses",                           "Emissions"),
+    194: ("EVAP Large Leak",                            "Emissions"),
+    195: ("EVAP Small Leak",                            "Emissions"),
+    196: ("EVAP Electrical Valve / Barometric Pressure","Emissions"),
+    197: ("EVAP Barometric Pressure Sensor",            "Emissions"),
+    198: ("Cat Efficiency during Start Bank 1",         "Catalyst"),
+    199: ("Cat Efficiency during Start Bank 2",         "Catalyst"),
+    200: ("Lambda Regulation Bank 1 Pre Cat",           "Lambda / Fueling"),
+    201: ("Lambda Regulation Bank 2 Pre Cat",           "Lambda / Fueling"),
+    202: ("Lambda Regulation Bank 1 Post Cat",          "Lambda / Fueling"),
+    203: ("Lambda Regulation Bank 2 Post Cat",          "Lambda / Fueling"),
+    204: ("Idle Control System - Idle Speed Not Plausible", "Idle Control"),
+    208: ("EWS RPM Signal Error",                       "Immobiliser"),
+    209: ("EWS Message Error",                          "Immobiliser"),
+    210: ("Ignition Feedback Resistor (ZSR)",           "Ignition"),
+    211: ("Idle Speed Actuator - Mechanical",           "Idle Control"),
+    212: ("VANOS Bank 1 - Mechanical",                  "VANOS"),
+    214: ("Vehicle Speed Signal (VSS)",                 "Speed"),
+    215: ("Lambda Sensor Bank 1",                       "Lambda / Fueling"),
+    216: ("Lambda Sensor Bank 2",                       "Lambda / Fueling"),
+    217: ("CAN Bus Error - EGS Signal Not Present",     "Communication"),
+    218: ("CAN Module Warning",                         "Communication"),
+    219: ("CAN Module Offline",                         "Communication"),
+    220: ("Lambda Voltage Range Bank 1 Sensor 1",       "Lambda / Fueling"),
+    221: ("Lambda Voltage Range Bank 2 Sensor 1",       "Lambda / Fueling"),
+    222: ("Low Coolant Temp / Lambda Sensor Control",   "Temperature"),
+    223: ("Lambda Sensor Switching Bank 1 Sensor 2",    "Lambda / Fueling"),
+    224: ("Lambda Sensor Switching Bank 2 Sensor 2",    "Lambda / Fueling"),
+    225: ("Cat Efficiency Bank 1",                      "Catalyst"),
+    226: ("Cat Efficiency Bank 2",                      "Catalyst"),
+    227: ("Mixture Deviation Bank 1",                   "Lambda / Fueling"),
+    228: ("Mixture Deviation Bank 2",                   "Lambda / Fueling"),
+    229: ("Lambda Sensor Switching Bank 1",             "Lambda / Fueling"),
+    230: ("Lambda Sensor Switching Bank 2",             "Lambda / Fueling"),
+    231: ("Lambda Sensor Switching Bank 1 Pre Cat",     "Lambda / Fueling"),
+    232: ("Lambda Sensor Switching Bank 2 Pre Cat",     "Lambda / Fueling"),
+    233: ("Catalytic Converter Overall Efficiency Bank 1", "Catalyst"),
+    234: ("Catalytic Converter Overall Efficiency Bank 2", "Catalyst"),
+    235: ("Lambda Heater Bank 1 Post Cat",              "Lambda / Fueling"),
+    236: ("Lambda Heater Bank 2 Post Cat",              "Lambda / Fueling"),
+    238: ("Misfire Cyl 1",                              "Ignition"),
+    239: ("Misfire Cyl 2",                              "Ignition"),
+    240: ("Misfire Cyl 3",                              "Ignition"),
+    241: ("Misfire Cyl 4",                              "Ignition"),
+    242: ("Misfire Cyl 5",                              "Ignition"),
+    243: ("Misfire Cyl 6",                              "Ignition"),
+    244: ("Crankshaft Interval Timing",                 "Crank/Cam"),
+    245: ("Aux Air Injection System Bank 1",            "Emissions"),
+    246: ("Aux Air Injection System Bank 2",            "Emissions"),
+    247: ("Aux Air Injection System - Incorrect Flow",  "Emissions"),
+    248: ("Pre Cat Converter Efficiency Bank 1",        "Catalyst"),
+    249: ("Pre Cat Converter Efficiency Bank 2",        "Catalyst"),
+    250: ("Tank Venting Valve Function",                "Emissions"),
+    251: ("Tank Ventilation Diagnosis Error",           "Emissions"),
+    252: ("Tank Ventilation System Vacuum",             "Emissions"),
+    253: ("Charcoal Filter Shut-off Valve Stuck Shut",  "Emissions"),
+    254: ("Tank Ventilation System Large Air Leak",     "Emissions"),
+    255: ("Tank Ventilation System Valve Stuck Open",   "Emissions"),
+}
+
+
+# ---------------------------------------------------------------------------
+# DS2 DTC record and parser
+# ---------------------------------------------------------------------------
+
+_DS2_STATUS_STORED = 0xAB   # fault stored in memory (may not be currently active)
+_DS2_STATUS_ACTIVE = 0xAC   # fault currently active
+
+
+@dataclass
+class DS2DTCRecord:
+    """A single DTC record decoded from a DS2 0x04 response."""
+    code:       int    # 1-byte DTC number from byte[1] of each 10-byte record
+    status_raw: int    # byte[9]: 0xAB = stored, 0xAC = active
+    raw_record: bytes  # full 10-byte record (for debugging)
+
+    # --- GUI-facing properties ------------------------------------------------
+
+    @property
+    def code_hex(self) -> str:
+        return f"{self.code:03d}"
+
+    @property
+    def sae_code(self) -> str:
+        return f"DS2-{self.code:03d}"
+
+    @property
+    def system(self) -> str:
+        entry = DS2_DTC_DB.get(self.code)
+        return entry[1] if entry else "Unknown"
+
+    @property
+    def is_active(self) -> bool:
+        return self.status_raw == _DS2_STATUS_ACTIVE
+
+    @property
+    def status_text(self) -> str:
+        if self.status_raw == _DS2_STATUS_ACTIVE:
+            return "Active"
+        if self.status_raw == _DS2_STATUS_STORED:
+            return "Stored"
+        return f"0x{self.status_raw:02X}"
+
+    @property
+    def description(self) -> str:
+        entry = DS2_DTC_DB.get(self.code)
+        return entry[0] if entry else f"Unknown fault code {self.code}"
+
+    def __repr__(self):
+        return f"DS2 DTC {self.code:03d}  [{self.status_text}]  {self.description}"
+
+
+def parse_ds2_dtc_response(payload: bytes) -> list:
+    """Parse a DS2 command-0x04 response payload into a list of DS2DTCRecord.
+
+    Format verified against captured DS2 traffic:
+      payload = 241 bytes = 24 × 10-byte records + 1 trailer byte
+      Per record: byte[1] = DTC code (1-byte int), byte[9] = status marker
+      Records with code == 0 or code == 0xFF are silently skipped (empty slots).
+
+      NOTE: byte[3] is NOT the code — it is a separate flag/counter field that
+      reads as a constant 0x01 across most self-test slots. Reading byte[3]
+      instead of byte[1] was the original (incorrect) implementation and
+      caused every read to collapse to a single bogus "DTC 001" once the
+      genuine per-record codes (at byte[1]) were ignored.
+
+    Returns unique DTC codes sorted by code number.
+    """
+    if not payload:
+        return []
+    data = bytes(payload)
+    records = []
+    seen = set()
+    i = 0
+    while i + 9 < len(data):
+        rec = data[i:i + 10]
+        code       = rec[1]
+        status_raw = rec[9]
+        if code not in (0x00, 0xFF) and code not in seen:
+            seen.add(code)
+            records.append(DS2DTCRecord(code=code, status_raw=status_raw,
+                                        raw_record=rec))
+        i += 10
+    records.sort(key=lambda r: r.code)
+    return records

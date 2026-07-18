@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "status": "production-staged-entry-v1",
+  "load_address": "0xD800",
+  "relocation_address": "0xF600",
+  "relocation_window": "0xF600-0xF7FF",
+  "bootstrap_size": 52,
+  "body_source": "0xD834",
+  "body_size": 412,
+  "payload_size": 464,
+  "payload_sha256": "f17baa23c34c4de31cf61df19369992a0ccc3f8cf4748a94582807ffd0e421fb",
+  "wire_protocol": "5B; S2+S0BG+len+crc+xor; 06; switch; A6/06; agent; 06/A5",
+  "failure_boundary": "pre-erase stage failure commits E740=0 and hybrid-SRSTs"
+}

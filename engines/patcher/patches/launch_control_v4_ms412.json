@@ -1,0 +1,59 @@
+{
+  "id": "launch_control_v4_ms412",
+  "family_id": "launch_control_v4",
+  "status": "EMULATOR VERIFIED - ON-CAR RETEST REQUIRED",
+  "tested": false,
+  "verification": "MS41.2 shares both native DB87 comparison sites with MS41.3 and retains its fd30.4-specific soft-cave continuations. V4 gives both sites an independent LC_HARDRPM threshold at calibration address 0x3533 and recomputes the enabled MS41.2 program checksum. Canonical ms41emu gates configured thresholds, below-soft clamping, 0xFF fallback and saturation, stock fallback, both real call sites, recovery, and Ignition Cut V7 composition. Fuel mode has held the configured 4000 RPM setpoint on-car; the new V7 ignition mode remains an on-car retest item.",
+  "title": "Launch Control v4 / 2-step (MS41.2, independent soft + hard fuel limit or ignition cut)",
+  "user_description": "Adds MS41.2 clutch- or switch-armed launch control with independently configurable soft and hard limits and a choice of fuel-cut or ignition-cut operation. Fuel mode has been exercised on-car; ignition mode requires Ignition Cut V7 and still needs vehicle testing.",
+  "description": "MS41.2 Launch Control V4. Cave A retains the proven state machine. Cave B lowers regenerated F014 to LC_MAXRPM while preserving both native fd30.4 continuations. Both native DB87 comparisons use LC_HARDRPM for the hard threshold, retaining the complete stock cylinder-stage, delay, and hysteresis state machine without changing persistent DB87. LC_HARDRPM below LC_MAXRPM clamps to soft; 0xFF falls back to LC_MAXRPM + 96 RPM with saturation. Ignition mode requires Ignition Cut V7's six-channel P1L final-stage gate. Supersedes MS41.2 V3 and field-failed V2.",
+  "target": "MS41.2",
+  "recompute": ["program"],
+  "requires": ["ignition_cut_v7"],
+  "conflicts": ["ignition_cut_v5", "ignition_cut_v6", "launch_control_v2_ms412", "launch_control_v3_ms412"],
+  "supersedes": ["launch_control_v2_ms412", "launch_control_v3_ms412"],
+  "cave": {
+    "region": "proghigh",
+    "base": 236800,
+    "splice_off": 252200,
+    "splice_op": "jmps",
+    "relocatable": false,
+    "splices": [
+      {"off": 252200, "base": 236800, "op": "jmps"},
+      {"off": 149458, "base": 236988, "op": "jmps"},
+      {"off": 149642, "base": 237088, "op": "calls"},
+      {"off": 149802, "base": 237088, "op": "calls"}
+    ],
+    "cals": {
+      "LC_SW": 95532,
+      "LC_CUTTYPE": 95533,
+      "LC_CLUTCHPOL": 95534,
+      "LC_MAXRPM": 95535,
+      "LC_ARMSPEED": 95536,
+      "LC_MAXSPEED": 95537,
+      "LC_MINTPS": 95538,
+      "LC_HARDRPM": 95539
+    }
+  },
+  "edits": [
+    {"off": 252200, "expect": "f3f89af1", "data": "fa0300dd"},
+    {"off": 149458, "expect": "9a180940", "data": "fa03bcdd"},
+    {"off": 149642, "expect": "43f887db", "data": "da0320de"},
+    {"off": 149802, "expect": "43f887db", "data": "da0320de"},
+    {
+      "off": 236800,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4ecf5e6000400f3f82c3547f8ff002d3a47f800002d35f3f89af143f831359d32f3f8d0e843f832358d2df3f89af143f830359d2af3f82c3547f801003d05f3f861fd67f802000d0f47f802003d05f3f861fd67f801000d0747f804003d13f3f860fd67f88000f3fa2e3547fa00002d0447f800002d050d0847f800003d010d046f2d0d026e2d0d007e2df3f85afd67f840002d0bf3f82d3547f801003d06f3f83cfc43f82f358d017f2dfcf5fcf4fc00f3f89af1fa032c99"
+    },
+    {
+      "off": 236988,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4e6000400f3f85afd67f840002d0bf3f82d3549803d07f3f82f3543f814f09d02f7f814f0fcf4fc009a180240fa02d607fa02e807"
+    },
+    {
+      "off": 237088,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf5e6000400f3fa5afd67fa40002d1af3fa2d3549a03d16f3fa333547faff003d0af3fa2f3547fafd008d03e7faff000d0709a30d0543fa2f359d02f3fa2f35418a0d0243f887dbfcf5fc00db00"
+    }
+  ]
+}

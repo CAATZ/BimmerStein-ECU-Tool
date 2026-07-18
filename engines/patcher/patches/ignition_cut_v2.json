@@ -1,0 +1,40 @@
+{
+  "id": "ignition_cut_v2",
+  "status": "DEPRECATED",
+  "superseded_by": "ignition_cut_v7",
+  "tested": false,
+  "verification": "DEPRECATED: V2 compared CUTRPM with vehicle speed 0xF19A and also assumed P3.14 was a coil-charge output; later hardware-path tracing and on-car V6 testing disproved that actuator assumption. Retained only for detection/removal; superseded by ignition_cut_v7 at P1L.0..5 using actual RPM 0xFC3C.",
+  "title": "Ignition Cut v2 - wrong speed and actuator [DEPRECATED, use V7]",
+  "description": "DEPRECATED and remove-only. This revision gated on vehicle speed at 0xF19A and skipped P3.14, which is not the six-cylinder ignition final stage. Retained only so an installed V2 can be detected and reverted before installing Ignition Cut V7.",
+  "target": "MS41.3",
+  "recompute": [],
+  "requires": [],
+  "conflicts": [
+    "ignition_cut"
+  ],
+  "cave": {
+    "region": "proghigh",
+    "base": 236656,
+    "splice_off": 177432,
+    "splice_op": "jmps",
+    "relocatable": false,
+    "cals": {
+      "CUTSW": 92773,
+      "CUTRPM": 92774
+    }
+  },
+  "edits": [
+    {
+      "off": 177432,
+      "expect": "efe2e108",
+      "data": "fa0370dc"
+    },
+    {
+      "off": 236656,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00e6000400f3f8652a47f8ff002d2647f800002d1a47f801003d06f3f860fd67f880002d1b0d1147f802003d06f3f861fd67f801002d120d0847f804003d0ef3f861fd67f802002d09f3f89af143f8662a8d04fc00e108fa021cf5fc00efe2e108fa021cf5"
+    }
+  ],
+  "deprecated": true,
+  "label": "V2"
+}

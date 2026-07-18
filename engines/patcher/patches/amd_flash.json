@@ -1,0 +1,37 @@
+{
+  "id": "amd_flash",
+  "title": "AMD 29F flash driver",
+  "user_description": "Adds in-circuit calibration and program writing support for ECUs converted to AMD 29F200 or 29F400 flash memory.",
+  "description": "Replace the stock Intel-28F flash driver with our AMD-29F driver (the fw's own flasher then drives the AMD re-chip; enables cal/program writes on the 29F). Driver code lives in SA1/param1.",
+  "target": "MS41.3",
+  "targets": ["MS41.2", "MS41.3"],
+  "recompute": [
+    "boot_crc",
+    "cal"
+  ],
+  "requires": [],
+  "conflicts": [],
+  "cave": null,
+  "edits": [
+    {
+      "off": 16956,
+      "expect": "e6f45000b84c6fe0f2fd52fef2f452fe204d46f413008dfae00e0d53f04ec084f2f53ce70054a985b980f05e09a1f0e5c0a4f2f53ce70054a985e4800100e6f44000b84cc8c0f2fd52fee6f47000b84ca84cf0f4f04fc08466f480003d06f2f452fe204d46f497008df0f2f452fe204d46f497009d17f04f67f808003d08f04f67f810002d08e128f7f842e70d1ee128f7f842e70d1ae118f7f842e7e12a05fa41e70d03e128f7f842e7e6f4fe3f08c2f05c4054fd0306000100e00cf04e0981f0e4f04e43f83ae78da9e6f4",
+      "data": "e00e0d58f04ec084f2f53ce70054a985b980f05e09a1f0e5c0a4f2f53ce70054a985e4800100a85ca98047f8ff003d01b9a0f480010047f8ff003d02e4b00100e6f5aa0ae6f4aa00b845e6f55405e6f45500b845e6f5aa0ae6f4a000b845c8c0e6fd200028d13dfee6fdffffa98ca9ac518a67f840002d0c67fa20003d0228d13df5e6f5f000b85ce128f7f842e70d06e118f7f842e7e12a05fa41e7e6f4fe3f08c2f05c4054fd0306000100e00cf04e0981f0e4f04e43f83ae78da4e6f5f000b85cf6f900fe08029890db00"
+    },
+    {
+      "off": 17204,
+      "expect": "6fe0f2fc52fef2f452fe204c46f413008dfae7f85000f2f556e6b985e7f82000f2f556e6b985e7f8d000f2f556e6b985e6d70101a758a7a7f2f452fe204c46f454078d0308e1f2fc52fee7f87000f2f556e6b985f2f456e6a9a4f0d5f04dc08466f480003d0342fe44e78de242fe44e79d1ff04d67f808003d17f04dc08466f4300046f430002d0cf04d67f820003d04",
+      "data": "e6fdaa0ae6f5aa00b85de6fd5405e6f55500b85de6fdaa0ae6f58000b85de6f5aa00b85de6fd5405e6f55500b85df2f456e6e6f53000b854e6f5000828513dfee6d70101a758a7a7f2f552fe205c46f554078d0308e1f2fc52fef2f456e6a9a4a9b451ab67fa40002d0a67fb20003d0342fe44e78de5e12af7fa42e70d03e11af7fa42e7f2f456e6e6f5f000b854db00"
+    },
+    {
+      "off": 20700,
+      "expect": "da00800e",
+      "data": "ea00141c"
+    },
+    {
+      "off": 23572,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "da00800ee6f42823f6f444e7e6000c00e005f6f556e6da00800eea00f810"
+    }
+  ]
+}
