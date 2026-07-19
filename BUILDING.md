@@ -1,7 +1,9 @@
 # Building BimmerStein ECU Tool
 
 The supported release build is a Windows x64 PyInstaller one-folder package
-distributed as both a portable ZIP and a per-user installer.
+distributed as both a portable ZIP and a per-user installer. A separately
+labeled experimental Nuitka standalone package can be built as a second option;
+PyInstaller remains the recommended release backend.
 All commands below run from the repository root in PowerShell.
 
 ## 1. Create the build environment
@@ -15,6 +17,10 @@ python -m venv .venv
 Install Inno Setup 6 when building the installer EXE. The release scripts find
 `ISCC.exe` from `INNO_ISCC`, the standard Program Files locations, or an
 explicit `-IsccPath` argument.
+
+`requirements-build.txt` also pins the experimental Nuitka compiler and its
+build helpers. The Nuitka path uses MSVC because Python 3.14 is not supported by
+Nuitka's MinGW mode.
 
 The FTDI D2XX driver is a system dependency used at runtime when available. It
 is not installed or redistributed by this repository.
@@ -64,6 +70,17 @@ Output:
 Keep the complete folder together. `BimmerStein ECU Tool.exe` depends on the
 adjacent `_internal` directory.
 
+To compile the separately labeled experimental Nuitka portable package:
+
+```powershell
+.\build_windows_nuitka.ps1 -Version 0.1.0b4
+```
+
+Its output is `dist\BimmerStein ECU Tool Nuitka Experimental\`. It is a flat
+Nuitka standalone directory and does not use PyInstaller's `_internal` layout.
+The package includes `EXPERIMENTAL-NOTICE.txt`; do not rename or present it as
+the recommended installer without completing a new release qualification.
+
 ## 5. Licensing and publication gate
 
 The public project is licensed under GNU GPL version 3 (`GPL-3.0-only`), and a
@@ -83,10 +100,11 @@ Review `THIRD_PARTY_NOTICES.md` before public distribution. In particular:
 
 The tracked `THIRD_PARTY_LICENSES/` inventory matches the current Windows
 release toolchain: CPython 3.14.6, Qt 5.15.2, PyQt5-sip 12.18.0, pyserial 3.5,
-and PyInstaller 6.21.0. If any of those versions or the Python-carried OpenSSL
-or libffi libraries change, update the source license texts, hashes in
-`packaging/verify_dist.py`, and `THIRD_PARTY_NOTICES.md` before building a
-release. The package verifier rejects missing or altered tracked texts.
+PyInstaller 6.21.0, and the Nuitka 4.1.3 runtime exception. If any of those
+versions or the Python-carried OpenSSL or libffi libraries change, update the
+source license texts, hashes in `packaging/verify_dist.py`, and
+`THIRD_PARTY_NOTICES.md` before building a release. The package verifier rejects
+missing or altered tracked texts.
 
 Publication still requires the release owner's final package review.
 
@@ -95,26 +113,30 @@ Publication still requires the release owner's final package review.
 After the release owner has selected a version, create the final ZIP with the
 GPLv3 licensing gate selected for the public beta:
 
-Public beta versions use the same compact `bN` suffix as BimmerStein Tuning
-Suite. The first beta is `0.1.0b1`, with Git tag `v0.1.0b1`.
+Beta versions use the same compact `bN` suffix as BimmerStein Tuning Suite.
+The current beta is `0.1.0b4`, with Git tag `v0.1.0b4`.
 
 ```powershell
 .\packaging\prepare_release.ps1 `
-    -Version 0.1.0b1 `
+    -Version 0.1.0b4 `
     -PyQtLicenseBasis GPLv3 `
+    -IncludeExperimentalNuitka `
     -IsccPath "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 ```
 
 The `Commercial` option is reserved for a future distribution whose application
 code and dependencies have been separately cleared for proprietary release. The
-script performs a fresh build, verifies the staged x64 package, records the
-project license and selected PyQt5 basis in `RELEASE-METADATA.json`, and writes
-the portable ZIP, per-user installer EXE, individual checksum files, and
-`SHA256SUMS.txt` under `release\`.
+script performs a fresh build, verifies every staged x64 package, records the
+backend, experimental status, project license, and selected PyQt5 basis in
+`RELEASE-METADATA.json`, and writes the portable ZIPs, per-user installer EXEs,
+individual checksum files, and one complete `SHA256SUMS.txt` under `release\`.
 
-The installer uses the BimmerStein icon, installs under the current user's
-local application-data folder without requiring administrator access, creates
-a Start Menu shortcut, and offers an optional desktop shortcut. Use
-`-SkipInstaller` only when intentionally preparing a portable-only build.
+The regular and experimental installers use distinct product identities and
+installation directories so they can coexist. Both use the BimmerStein icon,
+install under the current user's local application-data folder without
+requiring administrator access, create a Start Menu shortcut, and offer an
+optional desktop shortcut. The Nuitka filenames, installer UI, install folder,
+and package notice all say **Nuitka Experimental**. Use `-SkipInstaller` only
+when intentionally preparing a portable-only build.
 
 This script does not commit, push, tag, or publish anything.

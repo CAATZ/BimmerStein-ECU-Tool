@@ -3,7 +3,15 @@ from pathlib import Path
 import pytest
 
 import ds2_native_fast_service as service
+import ds2_native_fast_reentry as native_reentry
 from ds2_fast_contracts import FastOperation
+
+
+@pytest.fixture(autouse=True)
+def _clean_native_reentry_registry():
+    native_reentry._reset_for_tests()
+    yield
+    native_reentry._reset_for_tests()
 
 
 class FakeJournal:
@@ -14,9 +22,11 @@ class FakeJournal:
         self.closed = False
         self.outcome = None
         self.fields = None
+        self.events = []
 
     def event_callback(self, event, fields):
         assert not self.closed
+        self.events.append((event, dict(fields)))
 
     def finish(self, outcome, **fields):
         assert not self.closed
@@ -42,10 +52,14 @@ def test_partial_service_uses_slim_session_without_backup_and_passes_verify(
     captured = {}
     sentinel = object()
     monkeypatch.setattr(service, "_new_journal", lambda port, operation: journal)
+    def open_transport(port, event_cb=None):
+        captured["event_cb"] = event_cb
+        return transport
+
     monkeypatch.setattr(
         service.NativeFastPartialWriteTransport,
         "open_d2xx",
-        lambda port, event_cb=None: transport,
+        open_transport,
     )
 
     class SlimSession:
@@ -57,15 +71,65 @@ def test_partial_service_uses_slim_session_without_backup_and_passes_verify(
                 transport=transport_arg, target=target, journal=journal_arg, kwargs=kwargs)
 
         def execute(self):
+            captured["event_cb"](
+                "write_flash_mode_marker_observed",
+                {"label": "write_authorization_initial", "e740": 0},
+            )
             return sentinel
 
     monkeypatch.setattr(service, "SlimNativeFastPartialWriteSession", SlimSession)
 
-    result = service.write_partial_d2xx("COM1", b"target", verify_write=True)
+    observed = []
+    result = service.write_partial_d2xx(
+        "COM1",
+        b"target",
+        verify_write=True,
+        event_cb=lambda event, fields: observed.append((event, dict(fields))),
+    )
 
     assert result is sentinel
     assert captured["target"] == b"target"
     assert captured["kwargs"]["verify_write"] is True
+    assert captured["kwargs"]["reentry_required"] is False
+    assert journal.events == observed == [
+        (
+            "write_flash_mode_marker_observed",
+            {"label": "write_authorization_initial", "e740": 0},
+        )
+    ]
+    assert not transport.is_open
+
+
+def test_partial_service_consumes_pending_same_port_reentry(monkeypatch, tmp_path):
+    journal = FakeJournal(tmp_path / "partial-reentry.jsonl", FastOperation.PARTIAL_WRITE)
+    transport = FakeTransport()
+    captured = {}
+    sentinel = object()
+    native_reentry.mark_reentry_required("COM1")
+    monkeypatch.setattr(service, "_new_journal", lambda port, operation: journal)
+    monkeypatch.setattr(
+        service.NativeFastPartialWriteTransport,
+        "open_d2xx",
+        lambda port, event_cb=None: transport,
+    )
+
+    class SlimSession:
+        destructive_started = False
+        safe_legacy_fallback = False
+        fast_write_armed = False
+
+        def __init__(self, _transport, _target, _journal, **kwargs):
+            captured.update(kwargs)
+
+        def execute(self):
+            assert captured["reentry_required"] is True
+            captured["reentry_ready_cb"]()
+            return sentinel
+
+    monkeypatch.setattr(service, "SlimNativeFastPartialWriteSession", SlimSession)
+
+    assert service.write_partial_d2xx("com1", b"target") is sentinel
+    assert not native_reentry.reentry_required("COM1")
     assert not transport.is_open
 
 
@@ -135,11 +199,17 @@ def test_program_only_service_uses_program_only_session(
     transport = FakeTransport()
     captured = {}
     sentinel = object()
+    native_reentry.mark_reentry_required("COM1")
     monkeypatch.setattr(service, "_new_journal", lambda port, operation: journal)
+
+    def open_transport(port, event_cb=None):
+        captured["event_cb"] = event_cb
+        return transport
+
     monkeypatch.setattr(
         service.NativeFastFullWriteTransport,
         "open_d2xx",
-        lambda port, event_cb=None: transport,
+        open_transport,
     )
 
     class SlimSession:
@@ -151,22 +221,81 @@ def test_program_only_service_uses_program_only_session(
                 transport=transport_arg, target=target, journal=journal_arg, kwargs=kwargs)
 
         def execute_program_only(self):
+            assert captured["kwargs"]["reentry_required"] is True
+            captured["kwargs"]["reentry_ready_cb"]()
+            captured["event_cb"](
+                "d2xx_queue_status",
+                {"phase": "before_initial_write_seed_attempt_1", "rx_bytes": 0},
+            )
             return sentinel
 
     monkeypatch.setattr(service, "SlimNativeFastFullWriteSession", SlimSession)
 
+    observed = []
     result = service.write_program_d2xx(
         "COM1",
         b"target",
         connected_family="amd",
         verify_write=False,
+        event_cb=lambda event, fields: observed.append((event, dict(fields))),
     )
 
     assert result is sentinel
     assert captured["target"] == b"target"
     assert captured["kwargs"]["connected_family"] == "amd"
     assert captured["kwargs"]["verify_write"] is False
+    assert not native_reentry.reentry_required("COM1")
+    assert journal.events == observed == [
+        (
+            "d2xx_queue_status",
+            {"phase": "before_initial_write_seed_attempt_1", "rx_bytes": 0},
+        )
+    ]
     assert not transport.is_open
+
+
+def test_program_only_reentry_timeout_closes_transport_and_preserves_gate(
+    monkeypatch, tmp_path
+):
+    journal = FakeJournal(tmp_path / "program-reentry-timeout.jsonl", FastOperation.FULL_WRITE)
+    transport = FakeTransport()
+    captured = {}
+    native_reentry.mark_reentry_required("COM1")
+    monkeypatch.setattr(service, "_new_journal", lambda port, operation: journal)
+    monkeypatch.setattr(
+        service.NativeFastFullWriteTransport,
+        "open_d2xx",
+        lambda port, event_cb=None: transport,
+    )
+
+    class ReentryTimeoutSession:
+        destructive_started = False
+        safe_legacy_fallback = False
+        fast_write_armed = False
+
+        def __init__(self, _transport, _target, _journal, **kwargs):
+            captured.update(kwargs)
+
+        def execute_program_only(self):
+            assert captured["reentry_required"] is True
+            raise service.NativeFastWriteReentryNotReady(
+                "E659 did not reach 0xCC; no challenge, selector, or flash command was sent"
+            )
+
+    monkeypatch.setattr(
+        service, "SlimNativeFastFullWriteSession", ReentryTimeoutSession
+    )
+
+    with pytest.raises(service.NativeFastPreEraseFailure) as caught:
+        service.write_program_d2xx(
+            "COM1", b"prepared bootstrap", connected_family="amd"
+        )
+
+    assert caught.value.reentry_not_ready is True
+    assert caught.value.safe_legacy_fallback is False
+    assert transport.is_open is False
+    assert native_reentry.reentry_required("COM1") is True
+
 
 def test_failed_retained_recovery_keeps_transport_and_seals_new_journal(
     monkeypatch, tmp_path

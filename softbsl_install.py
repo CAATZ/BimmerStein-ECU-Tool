@@ -15,6 +15,14 @@ class SoftBSLInstallError(RuntimeError):
     """The in-process install engine rejected or failed an operation."""
 
 
+class SoftBSLInstallCancelled(SoftBSLInstallError):
+    """The operator stopped installation before the persistent-image erase."""
+
+    def __init__(self, message, *, phase=None):
+        self.phase = phase
+        super().__init__(message)
+
+
 class SoftBSLInstallRecovery:
     """Application-facing wrapper for a retained installer transport."""
 
@@ -60,13 +68,17 @@ _NOISY_INSTALL_PREFIXES = (
 
 
 def _install_log(log):
-    """Keep safety decisions and phase outcomes; drop temporary/debug details."""
+    """Keep the window concise while retaining installer detail in session logs."""
     def forward(message, level="info"):
         message = str(message).strip()
         if not message:
             return
         plain = message.lower().lstrip("- ")
         if plain.startswith(_NOISY_INSTALL_PREFIXES):
+            try:
+                log(message, "debug")
+            except TypeError:
+                log(message)
             return
         if "phase 1/3:" in plain:
             message = "Phase 1/3: preparing the temporary DS2 entry path."
@@ -81,7 +93,22 @@ def _install_log(log):
         elif "phase 2 finalized e740=0" in plain:
             message = "Flash state finalized; the ECU rebooted into normal mode."
         elif "install done" in plain:
-            message = "Soft-BSL installation completed and verified."
+            # The GUI completion handler owns the one user-facing success line.
+            # Keep the engine's richer terminal record in the session file.
+            level = "debug"
+        elif "fast bootstrap complete" in plain and "program finalized" in plain:
+            level = "debug"
+        elif "fast bootstrap complete" in plain:
+            message = "Phase 1/3 complete; the required ignition cycle may begin."
+        elif plain.startswith((
+            "ecu flash-mode marker", "d2xx queue status", "staged ",
+            "streaming agent", "agent running", "agent baud preflight",
+            "install: assuming", "arming bootloader writes", "erase ",
+            "erase done", "programmed up to", "programmed ",
+            "verify (read-back)", "verify ok", "marker-0 finalize",
+            "[ok] boot/param1", "[ok] program door", "[ok] program 0x43",
+        )):
+            level = "debug"
         elif plain.startswith("flash-ic: auto-detected"):
             family = "Intel 28F200" if "intel" in plain else "AMD/JEDEC"
             message = f"Flash command set detected: {family}."
@@ -89,7 +116,9 @@ def _install_log(log):
             level = "error"
         elif "warning" in plain or "brick-class" in plain or "wipe" in plain:
             level = "warn"
-        elif "verified" in plain or "complete" in plain or "install done" in plain:
+        elif level != "debug" and (
+            "verified" in plain or "complete" in plain or "install done" in plain
+        ):
             level = "ok"
         try:
             log(message, level)
@@ -118,6 +147,10 @@ def _run_install(args, log):
         raise SoftBSLInstallRecoveryRequired(
             SoftBSLInstallRecovery(error.recovery)
         ) from error
+    except _sb.InstallCancelled as error:
+        raise SoftBSLInstallCancelled(
+            str(error), phase=getattr(error, "phase", None)
+        ) from error
     except _sb.SoftBSLError as error:
         raise SoftBSLInstallError(str(error)) from error
     return 0
@@ -136,6 +169,10 @@ def resume_install(recovery, log, progress_cb=None):
     except _sb.InstallRecoveryRequired as error:
         recovery.engine_recovery = error.recovery
         raise SoftBSLInstallRecoveryRequired(recovery) from error
+    except _sb.InstallCancelled as error:
+        raise SoftBSLInstallCancelled(
+            str(error), phase=getattr(error, "phase", None)
+        ) from error
     except _sb.SoftBSLError as error:
         raise SoftBSLInstallError(str(error)) from error
 

@@ -8,6 +8,11 @@ import pytest
 
 from ds2_write_authorization import (
     AUTHORIZATION_STATE_ADDRESS,
+    FLASH_MODE_MARKER_ADDRESS,
+    INITIAL_SEED_RETRY_DELAY,
+    MAX_INITIAL_SEED_ATTEMPTS,
+    NATIVE_FAST_REENTRY_LATCH_ADDRESS,
+    NATIVE_FAST_REENTRY_TIMER_ADDRESS,
     WRONG_KEY_COUNTER_ADDRESS,
 )
 
@@ -38,6 +43,8 @@ class _LegacyAuthorizationHarness(DS2Interface):
             return bytes((self.state,))
         if address == WRONG_KEY_COUNTER_ADDRESS:
             return bytes((self.wrong_keys,))
+        if address == FLASH_MODE_MARKER_ADDRESS:
+            return b"\x00"
         return b"\x00" * count
 
     def _prepare(self):
@@ -92,31 +99,131 @@ def _legacy_0x90_payloads(harness):
 
 def test_legacy_unlock_defaults_to_proven_challenge_and_sends_one_key():
     d = _LegacyAuthorizationHarness()
+    messages = []
 
-    assert d.unlock_write(max_seed_attempts=3, seed_retry_delay=0) == b"\x00"
+    assert d.unlock_write(log_fn=lambda message, *_args: messages.append(message)) == b"\x00"
 
     assert _legacy_0x90_payloads(d) == [
         b"BMW\x1e",
         d._compute_ms41_key(0x1E, _LEGACY_SEED),
     ]
     assert (d.state, d.wrong_keys) == (2, 0)
+    assert messages == [
+        "MS41 flash-mode marker (initial authorization): E740=0x00"
+    ]
 
 
-def test_legacy_a1_retries_only_when_auth_state_remains_zero():
+def test_legacy_unlock_does_not_use_native_fast_reentry_latch():
+    d = _LegacyAuthorizationHarness()
+
+    assert d.unlock_write() == b"\x00"
+
+    read_addresses = [
+        event[1]
+        for event in d.events
+        if event[0] == "read"
+    ]
+    assert NATIVE_FAST_REENTRY_TIMER_ADDRESS not in read_addresses
+    assert NATIVE_FAST_REENTRY_LATCH_ADDRESS not in read_addresses
+
+
+def test_legacy_clean_a1_waits_once_refreshes_preamble_then_retries(monkeypatch):
     d = _LegacyAuthorizationHarness(challenge_a1=1, challenge_a1_state=0)
+    messages = []
+    monkeypatch.setattr(
+        ds2.time,
+        "sleep",
+        lambda seconds: d.events.append(("sleep", float(seconds))),
+    )
 
-    assert d.unlock_write(max_seed_attempts=3, seed_retry_delay=0) == b"\x00"
+    assert d.unlock_write(log_fn=lambda message, *_args: messages.append(message)) == b"\x00"
 
-    assert _legacy_0x90_payloads(d).count(b"BMW\x1e") == 2
-    assert ("prepare",) in d.events
+    assert _legacy_0x90_payloads(d) == [
+        b"BMW\x1e",
+        b"BMW\x1e",
+        d._compute_ms41_key(0x1E, _LEGACY_SEED),
+    ]
+    retry_flow = []
+    for event in d.events:
+        if event[:2] == ("execute", 0x90) and event[2] == b"BMW\x1e":
+            retry_flow.append(("challenge",))
+        elif event[0] == "sleep":
+            retry_flow.append(event)
+        elif event == ("prepare",):
+            retry_flow.append(event)
+        elif event == ("read", 0x2001, 12):
+            retry_flow.append(("read_preamble",))
+        elif event == ("status",):
+            retry_flow.append(event)
+    assert retry_flow == [
+        ("challenge",),
+        ("sleep", 10.0),
+        ("prepare",),
+        ("read_preamble",),
+        ("status",),
+        ("challenge",),
+    ]
+    assert messages == [
+        "MS41 flash-mode marker (initial authorization): E740=0x00",
+        "MS41 flash-mode marker (after challenge A1 attempt 1): E740=0x00",
+        "ECU seed not ready; waiting 10 seconds before one final retry",
+    ]
+    assert MAX_INITIAL_SEED_ATTEMPTS == 2
+    assert INITIAL_SEED_RETRY_DELAY == 10.0
     assert (d.state, d.wrong_keys) == (2, 0)
+
+
+def test_legacy_clean_a1_stops_after_second_challenge(monkeypatch):
+    d = _LegacyAuthorizationHarness(
+        challenge_a1=MAX_INITIAL_SEED_ATTEMPTS,
+        challenge_a1_state=0,
+    )
+    sleeps = []
+    monkeypatch.setattr(ds2.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    with pytest.raises(ds2.DS2NegativeResponse, match="after 2 bounded"):
+        d.unlock_write()
+
+    assert _legacy_0x90_payloads(d) == [b"BMW\x1e", b"BMW\x1e"]
+    assert sleeps == [10.0]
+
+
+@pytest.mark.parametrize(
+    "seed_error",
+    (
+        ds2.DS2Error("simulated challenge timeout"),
+        ds2.DS2NegativeResponse(
+            "malformed contextual A1",
+            command=0x90,
+            status=0xA1,
+            response=bytes.fromhex("12 05 A1 00 B6"),
+        ),
+    ),
+    ids=("transport-timeout", "a1-with-payload"),
+)
+def test_legacy_non_safe_seed_failure_never_retries(monkeypatch, seed_error):
+    d = _LegacyAuthorizationHarness()
+
+    def fail_challenge(command, args=b"", timeout=None):
+        del timeout
+        d.events.append(("execute", command, bytes(args)))
+        raise seed_error
+
+    monkeypatch.setattr(d, "execute", fail_challenge)
+
+    with pytest.raises(type(seed_error)):
+        d.unlock_write()
+
+    assert _legacy_0x90_payloads(d) == [b"BMW\x1e"]
+    assert ("prepare",) not in d.events
+    assert ("status",) not in d.events
 
 
 def test_legacy_a1_in_pending_key_state_never_repeats_challenge():
     d = _LegacyAuthorizationHarness(challenge_a1=1, challenge_a1_state=1)
 
     with pytest.raises(ds2.DS2Error, match="E658=1"):
-        d.unlock_write(max_seed_attempts=3, seed_retry_delay=0)
+        d.unlock_write()
 
     assert _legacy_0x90_payloads(d) == [b"BMW\x1e"]
     assert d.wrong_keys == 0
@@ -130,7 +237,7 @@ def test_legacy_a1_with_counter_change_never_repeats_challenge():
     )
 
     with pytest.raises(ds2.DS2Error, match="E658=0, E74B=1"):
-        d.unlock_write(max_seed_attempts=3, seed_retry_delay=0)
+        d.unlock_write()
 
     assert _legacy_0x90_payloads(d) == [b"BMW\x1e"]
 
@@ -140,7 +247,7 @@ def test_legacy_unsafe_auth_state_sends_no_0x90(state, wrong_keys):
     d = _LegacyAuthorizationHarness(state=state, wrong_keys=wrong_keys)
 
     with pytest.raises(ds2.DS2Error, match="turn ignition off"):
-        d.unlock_write(max_seed_attempts=3, seed_retry_delay=0)
+        d.unlock_write()
 
     assert _legacy_0x90_payloads(d) == []
 
@@ -148,7 +255,7 @@ def test_legacy_unsafe_auth_state_sends_no_0x90(state, wrong_keys):
 def test_legacy_existing_authorization_is_confirmed_without_key():
     d = _LegacyAuthorizationHarness(state=2)
 
-    assert d.unlock_write(max_seed_attempts=3, seed_retry_delay=0) == b"\x00"
+    assert d.unlock_write() == b"\x00"
     assert _legacy_0x90_payloads(d) == [b"BMW\x1e"]
 
 
@@ -323,13 +430,16 @@ def test_open_falls_back_when_d2xx_construction_raises(monkeypatch):
 
 
 class _FakeD2XXDriver:
-    def __init__(self, com_ports=(3, 7), fail_baud=False, latency_statuses=None):
+    def __init__(self, com_ports=(3, 7), fail_baud=False, latency_statuses=None,
+                 queue_status=(0, 0, 0)):
         self.com_ports = tuple(com_ports)
         self.fail_baud = fail_baud
         self.latency_statuses = list(latency_statuses or ())
         self.latency_calls = []
         self.handles = {}
         self.closed = []
+        self.purge_calls = []
+        self.queue_status = tuple(queue_status)
 
     @staticmethod
     def _set(pointer, ctype, value):
@@ -351,7 +461,13 @@ class _FakeD2XXDriver:
         self.latency_calls.append(int(value.value))
         return self.latency_statuses.pop(0) if self.latency_statuses else 0
     def FT_SetTimeouts(self, *_args): return 0
-    def FT_Purge(self, *_args): return 0
+    def FT_Purge(self, _handle, mask):
+        self.purge_calls.append(int(mask)); return 0
+    def FT_GetStatus(self, _handle, rx, tx, events):
+        self._set(rx, ctypes.c_ulong, self.queue_status[0])
+        self._set(tx, ctypes.c_ulong, self.queue_status[1])
+        self._set(events, ctypes.c_ulong, self.queue_status[2])
+        return 0
 
 
 def test_d2xx_binds_to_the_selected_com_port(monkeypatch):
@@ -365,6 +481,19 @@ def test_d2xx_binds_to_the_selected_com_port(monkeypatch):
     assert 101 not in driver.closed
     serial.close()
     assert 101 in driver.closed
+
+
+def test_d2xx_open_purges_both_queues_and_exposes_full_status(monkeypatch):
+    from engines.softbsl import d2xx_serial
+    driver = _FakeD2XXDriver((7,), queue_status=(3, 2, 1))
+    monkeypatch.setattr(d2xx_serial, "_ft", driver)
+
+    serial = d2xx_serial.D2XXSerial(port="COM7")
+
+    assert driver.purge_calls == [d2xx_serial._PURGE_RX | d2xx_serial._PURGE_TX]
+    assert serial.queue_status() == (3, 2, 1)
+    assert serial.in_waiting == 3
+    serial.close()
 
 
 def test_d2xx_prefers_one_ms_latency_and_falls_back_to_two(monkeypatch):

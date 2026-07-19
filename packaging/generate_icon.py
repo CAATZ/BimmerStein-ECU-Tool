@@ -1,62 +1,54 @@
-"""Build the Windows multi-resolution icon from the supplied PNG artwork."""
+"""Render the canonical BimmerStein ECU Tool vector into app icon assets."""
 
 from __future__ import annotations
 
+import os
 import struct
 from pathlib import Path
 
-from PyQt5.QtCore import QBuffer, QIODevice, Qt
-from PyQt5.QtGui import QImage
+from PyQt5.QtCore import QByteArray, QBuffer, QIODevice
+from PyQt5.QtGui import QGuiApplication, QImage, QPainter
+from PyQt5.QtSvg import QSvgRenderer
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "assets" / "bimmerstein_ecu_tool.png"
-OUTPUT = ROOT / "assets" / "bimmerstein_ecu_tool.ico"
+SOURCE = ROOT / "assets" / "bimmerstein_ecu_tool.svg"
+PNG_OUTPUT = ROOT / "assets" / "bimmerstein_ecu_tool.png"
+ICON_OUTPUT = ROOT / "assets" / "bimmerstein_ecu_tool.ico"
+PNG_SIZE = 1024
 SIZES = (16, 24, 32, 48, 64, 128, 256)
 
 
-def _png_bytes(image: QImage) -> bytes:
-    buffer = QBuffer()
+def _render_png(renderer: QSvgRenderer, size: int) -> bytes:
+    image = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
+    image.fill(0)
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    renderer.render(painter)
+    painter.end()
+
+    data = QByteArray()
+    buffer = QBuffer(data)
     buffer.open(QIODevice.WriteOnly)
     if not image.save(buffer, "PNG"):
-        raise RuntimeError("Qt could not encode an icon image as PNG")
-    return bytes(buffer.data())
-
-
-def clean_source_metadata() -> QImage:
-    """Rewrite the canonical PNG from pixels only, discarding all metadata."""
-    source = QImage(str(SOURCE))
-    if source.isNull():
-        raise RuntimeError(f"could not read icon source: {SOURCE}")
-    cleaned = _png_bytes(source.convertToFormat(QImage.Format_ARGB32))
-    SOURCE.write_bytes(cleaned)
-    result = QImage.fromData(cleaned, "PNG")
-    if result.isNull():
-        raise RuntimeError("could not reload the metadata-clean icon source")
-    return result
+        raise RuntimeError(f"could not encode {size}x{size} icon frame")
+    return bytes(data)
 
 
 def build_icon() -> None:
-    source = clean_source_metadata()
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    app = QGuiApplication.instance() or QGuiApplication([])
+    renderer = QSvgRenderer(str(SOURCE))
+    if not renderer.isValid():
+        raise RuntimeError(f"could not load icon source: {SOURCE}")
 
-    images: list[tuple[int, bytes]] = []
-    for size in SIZES:
-        # The supplied artwork is almost square; crop its transparent/black
-        # canvas centrally so every Windows icon frame is square and crisp.
-        scaled = source.scaled(
-            size,
-            size,
-            Qt.KeepAspectRatioByExpanding,
-            Qt.SmoothTransformation,
-        )
-        left = max(0, (scaled.width() - size) // 2)
-        top = max(0, (scaled.height() - size) // 2)
-        images.append((size, _png_bytes(scaled.copy(left, top, size, size))))
+    PNG_OUTPUT.write_bytes(_render_png(renderer, PNG_SIZE))
+    frames = [(size, _render_png(renderer, size)) for size in SIZES]
 
-    directory = bytearray(struct.pack("<HHH", 0, 1, len(images)))
+    directory = bytearray(struct.pack("<HHH", 0, 1, len(frames)))
     payload = bytearray()
-    offset = 6 + 16 * len(images)
-    for size, data in images:
+    offset = 6 + 16 * len(frames)
+    for size, data in frames:
         dimension = 0 if size == 256 else size
         directory.extend(
             struct.pack(
@@ -74,9 +66,13 @@ def build_icon() -> None:
         payload.extend(data)
         offset += len(data)
 
-    OUTPUT.write_bytes(directory + payload)
-    print(f"cleaned {SOURCE} ({SOURCE.stat().st_size} bytes)")
-    print(f"wrote {OUTPUT} ({OUTPUT.stat().st_size} bytes)")
+    ICON_OUTPUT.write_bytes(directory + payload)
+    app.processEvents()
+    print(f"wrote {PNG_OUTPUT} ({PNG_SIZE}x{PNG_SIZE})")
+    print(
+        f"wrote {ICON_OUTPUT} "
+        f"({', '.join(f'{size}px' for size in SIZES)})"
+    )
 
 
 if __name__ == "__main__":

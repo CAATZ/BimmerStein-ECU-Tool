@@ -4,9 +4,10 @@ import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # Set before importing PyQt5.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import pytest
+from ms41 import MS41ECU
 
 try:
-    from PyQt5.QtCore import QEvent
+    from PyQt5.QtCore import QEvent, QThread
     from PyQt5.QtGui import QPalette
     from PyQt5.QtWidgets import QApplication, QMessageBox, QInputDialog, QFileDialog, QPushButton
     import gui
@@ -35,6 +36,64 @@ def _set_bsl_chip(window, chip):
     index = window.cb_bsl_chip.findData(chip)
     assert index >= 0
     window.cb_bsl_chip.setCurrentIndex(index)
+
+
+def test_debug_log_is_file_only(tmp_path):
+    app, window = _gui()
+    try:
+        log_path = tmp_path / "session.txt"
+        window._log_file = log_path.open("w", encoding="utf-8")
+
+        window._log("queue RX=0 TX=0", "debug")
+        window._log("Write completed", "ok")
+        window._log_file.close()
+        window._log_file = None
+
+        assert "queue RX=0 TX=0" not in window.log_view.toPlainText()
+        assert "Write completed" in window.log_view.toPlainText()
+        text = log_path.read_text(encoding="utf-8")
+        assert "[DEBUG] queue RX=0 TX=0" in text
+        assert "[OK   ] Write completed" in text
+    finally:
+        window.close()
+
+
+def test_status_only_progress_resets_completed_read_without_fake_byte_units():
+    app, window = _gui()
+    try:
+        window.progress_bar.setValue(100)
+        window.progress_label.setText("base read  256/256 KB")
+
+        window._on_progress(0, 1, "Authorizing program write")
+
+        assert window.progress_bar.value() == 0
+        assert window.progress_label.text() == "Authorizing program write"
+    finally:
+        window.close()
+
+
+def test_status_only_progress_preserves_completed_bar_when_total_is_zero():
+    app, window = _gui()
+    try:
+        window.progress_bar.setValue(100)
+        window.progress_label.setText("Writing calibration region  24/24 KB")
+
+        window._on_progress(0, 0, "Finalizing ECU write")
+
+        assert window.progress_bar.value() == 100
+        assert window.progress_label.text() == "Finalizing ECU write"
+    finally:
+        window.close()
+
+
+def test_shared_progress_status_has_its_own_row_below_full_width_bar():
+    app, window = _gui()
+    try:
+        root = window.centralWidget().layout()
+        assert root.indexOf(window.progress_bar) >= 0
+        assert root.indexOf(window.progress_label) == root.indexOf(window.progress_bar) + 1
+    finally:
+        window.close()
 
 
 @pytest.fixture(autouse=True)
@@ -127,6 +186,189 @@ def test_softbsl_installer_recovery_releases_port_after_session_closes(monkeypat
         window.close()
 
 
+def test_softbsl_keycycle_cancel_reports_safe_pre_phase2_stop(monkeypatch):
+    app, window = _gui()
+    released = []
+    shown = []
+    try:
+        monkeypatch.setattr(
+            window,
+            "_release_softbsl_port",
+            lambda port: released.append(port),
+        )
+        monkeypatch.setattr(
+            QMessageBox,
+            "information",
+            staticmethod(lambda *args, **_kwargs: shown.append(args)),
+        )
+        error = gui.softbsl_install.SoftBSLInstallCancelled(
+            "Phase 2 erase was not started"
+        )
+
+        window._on_softbsl_install_failure("COM1", error)
+
+        assert released == ["COM1"]
+        assert shown
+        assert shown[0][1] == "Soft-BSL Installation Paused"
+        assert "No persistent-image erase occurred" in shown[0][2]
+    finally:
+        window.close()
+
+
+@pytest.mark.parametrize(
+    ("answer_name", "expected_owner"),
+    [
+        pytest.param("Cancel", None, id="cancel"),
+        pytest.param("Retry", "softbsl", id="retry"),
+    ],
+)
+def test_phase1_reentry_prompt_releases_port_while_modal_and_disconnects_gui(
+    monkeypatch, answer_name, expected_owner
+):
+    app, window = _gui()
+    answer = getattr(QMessageBox, answer_name)
+    shown = []
+    try:
+        window._port_owner.acquire("softbsl")
+        window._softbsl_handoff_port = "COM7"
+        window._connection_port = "COM7"
+        window._ds2 = None
+        window.btn_connect.blockSignals(True)
+        window.btn_connect.setChecked(True)
+        window.btn_connect.setText("Disconnect")
+        window.btn_connect.blockSignals(False)
+        monkeypatch.setattr(
+            window,
+            "_reopen_ds2_with_retry",
+            lambda *_args, **_kwargs: pytest.fail(
+                "the ordinary 9600-baud DS2 session must remain closed"
+            ),
+        )
+
+        def warning(parent, title, message, buttons, default):
+            assert QThread.currentThread() == app.thread()
+            assert parent is window
+            assert window._port_owner.is_free()
+            assert window._softbsl_handoff_port is None
+            assert window._connection_port is None
+            assert window._ds2 is None
+            assert window.btn_connect.isChecked() is False
+            assert "Disconnected" in window.lbl_status.text()
+            shown.append((title, message, buttons, default))
+            return answer
+
+        monkeypatch.setattr(QMessageBox, "warning", staticmethod(warning))
+
+        window._softbsl_prompt._show_phase1_reentry(
+            "COM7", "Turn ignition OFF, wait at least 10 seconds, then turn ignition ON."
+        )
+
+        assert shown[0][0] == "Soft-BSL Installation Needs an Ignition Cycle"
+        assert shown[0][2] == QMessageBox.Retry | QMessageBox.Cancel
+        assert shown[0][3] == QMessageBox.Cancel
+        assert window._port_owner.owner == expected_owner
+        assert window._softbsl_prompt._retry_answer is (
+            answer == QMessageBox.Retry
+        )
+    finally:
+        window._port_owner.release("softbsl")
+        window.close()
+
+
+def test_phase1_reentry_retry_fails_safe_when_port_owner_cannot_be_reacquired(
+    monkeypatch
+):
+    _app, window = _gui()
+    shown = []
+    try:
+        window._port_owner.acquire("bsl")
+        monkeypatch.setattr(
+            QMessageBox,
+            "warning",
+            staticmethod(
+                lambda *args, **_kwargs: shown.append(args) or QMessageBox.Ok
+            ),
+        )
+
+        assert window._reacquire_softbsl_port_after_phase1_reentry("COM7") is False
+
+        assert window._port_owner.owner == "bsl"
+        assert shown[0][1] == "Soft-BSL Installation Cancelled"
+        assert "without writing the ECU" in shown[0][2]
+    finally:
+        window._port_owner.release("bsl")
+        window.close()
+
+
+def test_pre_phase1_cancel_restores_busy_progress_and_controls(monkeypatch):
+    _app, window = _gui()
+    shown = []
+
+    class Signal:
+        def __init__(self):
+            self.callback = None
+
+        def connect(self, callback):
+            self.callback = callback
+
+        def emit(self, *args):
+            self.callback(*args)
+
+    class ImmediateFailWorker:
+        def __init__(self, task):
+            self.task = task
+            self.log_signal = Signal()
+            self.progress_signal = Signal()
+            self.done_signal = Signal()
+
+        def start(self):
+            try:
+                self.task(
+                    lambda message, level="info": self.log_signal.emit(message, level),
+                    lambda done, total, label="": self.progress_signal.emit(
+                        done, total, label
+                    ),
+                )
+            except Exception as error:
+                self.done_signal.emit(False, error)
+
+    try:
+        window._port_owner.acquire("softbsl")
+        monkeypatch.setattr(gui, "WorkerThread", ImmediateFailWorker)
+        monkeypatch.setattr(
+            QMessageBox,
+            "information",
+            staticmethod(
+                lambda *args, **_kwargs: shown.append(args) or QMessageBox.Ok
+            ),
+        )
+
+        def task(_log_fn, progress_fn):
+            progress_fn(1, 2, "Phase 1")
+            raise gui.softbsl_install.SoftBSLInstallCancelled(
+                "operator cancelled", phase="pre_phase1"
+            )
+
+        window._run_task(
+            task,
+            on_failure=lambda error: window._on_softbsl_install_failure(
+                "COM7", error
+            ),
+        )
+
+        assert window._task_busy is False
+        assert window.progress_bar.isHidden() is True
+        assert window.progress_label.text() == ""
+        assert window.btn_connect.isEnabled() is True
+        assert window._port_owner.is_free()
+        assert window._softbsl_install_recovery is None
+        assert shown[0][1] == "Soft-BSL Installation Cancelled"
+        assert "before the temporary Phase 1 write" in shown[0][2]
+    finally:
+        window._port_owner.release("softbsl")
+        window.close()
+
+
 def _write_ms413_base(path):
     """Create the minimum markers needed for a consistent full MS41.3 test image."""
     import ms41
@@ -155,6 +397,14 @@ def test_gui_constructs_headless_with_existing_tabs():
         assert w.lbl_intended_use.text() == (
             "OFF-ROAD, COMPETITION, RESEARCH, AND BENCH USE ONLY"
         )
+        assert isinstance(w.lbl_intended_use.parentWidget(), gui.QGroupBox)
+        assert w.lbl_intended_use.parentWidget().title().startswith("ECU Connection")
+        connection_layout = w.lbl_intended_use.parentWidget().layout()
+        assert connection_layout.count() == 1
+        connection_row = connection_layout.itemAt(0).layout()
+        assert connection_row.indexOf(w.chk_direct_tap) < connection_row.indexOf(
+            w.lbl_intended_use
+        ) < connection_row.indexOf(w.lbl_status)
         titles = {w.tabs.tabText(i).strip() for i in range(w.tabs.count())}
         assert EXISTING_TABS <= titles, f"missing tabs: {EXISTING_TABS - titles}"
     finally:
@@ -168,6 +418,139 @@ def test_flash_tab_backup_is_explicit_optional_and_verify_defaults_off():
         assert w.chk_backup_before_write.isChecked() is False
         assert w.chk_verify.isChecked() is False
     finally:
+        w.close()
+
+
+@pytest.mark.parametrize(("mode", "size", "save_copy"), [
+    ("full", MS41ECU.FULL_ROM_SIZE, False),
+    ("tune", MS41ECU.TUNE_SIZE, True),
+])
+def test_flash_read_saves_to_bins_before_optional_copy(
+        mode, size, save_copy, tmp_path, monkeypatch):
+    app, w = _gui()
+    try:
+        data = bytes([0x5A]) * size
+        copy_path = tmp_path / f"{mode}-operator-copy.bin"
+        w._ds2 = object()
+        w._connection_port = "COM_TEST"
+        events = []
+        monkeypatch.setattr(w, "_auto_transfer_route", lambda: "legacy_ds2")
+        monkeypatch.setattr(
+            w, "_ds2_read",
+            lambda which, progress_fn, log_fn:
+                (events.append(("read", which)), data)[1])
+
+        entry = type("Entry", (), {
+            "filename": f"catalogued-{mode}.bin",
+            "path": os.path.join(gui.BACKUP_DIR, f"catalogued-{mode}.bin"),
+        })()
+        archived = {}
+        def save_image(image, archive_mode, source):
+            events.append(("archive", archive_mode))
+            archived.update(data=bytes(image), mode=archive_mode, source=source)
+            return entry
+        monkeypatch.setattr(w, "_backup_save_bytes", save_image)
+        if mode == "tune":
+            monkeypatch.setattr(
+                w, "_record_full_ecu_read",
+                lambda *args, **kwargs: pytest.fail("tune read must use partial-read owner"))
+        refreshed = []
+        monkeypatch.setattr(w, "_refresh_backup_table", lambda: refreshed.append(True))
+
+        prompt = {}
+        def ask_copy(*args, **kwargs):
+            events.append(("prompt", mode))
+            prompt.update(title=args[1], message=args[2])
+            return QMessageBox.Yes if save_copy else QMessageBox.No
+        monkeypatch.setattr(QMessageBox, "question", staticmethod(ask_copy))
+        dialog = {}
+        if save_copy:
+            monkeypatch.setattr(
+                QFileDialog, "getSaveFileName",
+                staticmethod(lambda *args, **kwargs:
+                             (dialog.update(title=args[1], suggested=args[2]),
+                              (str(copy_path), ""))[1]))
+        else:
+            monkeypatch.setattr(
+                QFileDialog, "getSaveFileName",
+                staticmethod(lambda *args, **kwargs:
+                             pytest.fail("No must not open the save dialog")))
+
+        def sync_run_task(task, on_success=None, on_failure=None):
+            try:
+                result = task(lambda *args, **kwargs: None, lambda *args, **kwargs: None)
+            except Exception as error:
+                if on_failure:
+                    on_failure(error)
+                else:
+                    raise
+            else:
+                if on_success:
+                    on_success(result)
+        monkeypatch.setattr(w, "_run_task", sync_run_task)
+
+        w._on_read(mode)
+
+        assert events == [("read", mode), ("archive", mode), ("prompt", mode)]
+        assert archived["data"] == data
+        assert archived["mode"] == mode
+        assert archived["source"] == "ECU read"
+        assert w._session_backup_read is True
+        if mode == "full":
+            assert w._last_full_read == data
+            assert w._last_full_read_key is not None
+        else:
+            assert w._last_full_read is None
+        assert "automatically to Bins" in prompt["message"]
+        assert gui.BACKUP_DIR in prompt["message"]
+        assert refreshed == [True]
+        if save_copy:
+            assert copy_path.read_bytes() == data
+            assert dialog["suggested"] == entry.filename
+            assert dialog["title"] == "Save Additional Tune (24 KB) Copy"
+        else:
+            assert not copy_path.exists()
+    finally:
+        w._ds2 = None
+        w._connection_port = None
+        w.close()
+
+
+def test_flash_read_wrong_size_is_not_saved_or_offered_for_copy(monkeypatch):
+    app, w = _gui()
+    try:
+        w._ds2 = object()
+        monkeypatch.setattr(w, "_auto_transfer_route", lambda: "legacy_ds2")
+        monkeypatch.setattr(
+            w, "_ds2_read",
+            lambda which, progress_fn, log_fn: b"\x5A" * (MS41ECU.TUNE_SIZE - 1))
+        monkeypatch.setattr(
+            w, "_backup_save_bytes",
+            lambda *args, **kwargs: pytest.fail("wrong-sized read must not reach Bins"))
+        monkeypatch.setattr(
+            QMessageBox, "question",
+            staticmethod(lambda *args, **kwargs:
+                         pytest.fail("wrong-sized read must not offer a copy")))
+        failures = []
+
+        def sync_run_task(task, on_success=None, on_failure=None):
+            try:
+                result = task(lambda *args, **kwargs: None, lambda *args, **kwargs: None)
+            except Exception as error:
+                failures.append(error)
+                if on_failure:
+                    on_failure(error)
+            else:
+                if on_success:
+                    on_success(result)
+        monkeypatch.setattr(w, "_run_task", sync_run_task)
+
+        w._on_read("tune")
+
+        assert len(failures) == 1
+        assert "24,575 bytes; expected 24,576" in str(failures[0])
+    finally:
+        w._ds2 = None
         w.close()
 
 
@@ -189,7 +572,140 @@ def test_flash_success_is_logged_before_modal_instructions(monkeypatch):
             ("log", "Full ROM write completed.", "ok"),
             ("modal", "Full ROM Write Complete", "Full ROM write completed."),
         ]
+        assert w._post_write_cycle_pending is True
     finally:
+        w.close()
+
+
+def test_pending_post_write_cycle_blocks_native_write_while_e658_is_active(monkeypatch):
+    app, w = _gui()
+    try:
+        reads = []
+        native_calls = []
+
+        class FakeDS2:
+            def read_mem(self, address, length):
+                reads.append((address, length))
+                return b"\x02"
+
+        w._ds2 = FakeDS2()
+        monkeypatch.setattr(w, "_log", lambda *args, **kwargs: None)
+        monkeypatch.setattr(w, "_show_flash_complete", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            w,
+            "_run_via_native_fast_write",
+            lambda *args, **kwargs: native_calls.append((args, kwargs)),
+        )
+
+        w._finish_flash_success("Calibration Write Complete", "Calibration write completed.")
+
+        with pytest.raises(RuntimeError) as caught:
+            w._native_fast_write_with_fallback(
+                "tune",
+                b"target",
+                "intel",
+                lambda *args, **kwargs: None,
+                lambda *args, **kwargs: None,
+                verify_write=False,
+            )
+
+        message = str(caught.value).lower()
+        assert reads == [(gui.AUTHORIZATION_STATE_ADDRESS, 1)]
+        assert native_calls == []
+        assert w._post_write_cycle_pending is True
+        assert "nothing was erased" in message
+        assert "turn ignition off" in message
+        assert "10 seconds" in message
+        assert "turn ignition on" in message
+    finally:
+        w._ds2 = None
+        w._post_write_cycle_pending = False
+        w.close()
+
+
+def test_native_read_reentry_block_is_not_hidden_by_slow_fallback(monkeypatch):
+    app, w = _gui()
+    try:
+        slow_reads = []
+        failure = gui.ds2_fast_read.NativeFastReadReentryNotReady(
+            "native-fast read reentry did not complete"
+        )
+        monkeypatch.setattr(
+            w,
+            "_run_via_native_fast_ds2",
+            lambda *args, **kwargs: (_ for _ in ()).throw(failure),
+        )
+        monkeypatch.setattr(
+            w,
+            "_ds2_read",
+            lambda *args, **kwargs: slow_reads.append((args, kwargs)),
+        )
+
+        with pytest.raises(
+            gui.ds2_fast_read.NativeFastReadReentryNotReady,
+            match="did not complete",
+        ) as caught:
+            w._native_fast_read_with_fallback(
+                "tune",
+                lambda *args, **kwargs: None,
+                lambda *args, **kwargs: None,
+            )
+
+        assert caught.value is failure
+        assert slow_reads == []
+    finally:
+        w.close()
+
+
+def test_pending_post_write_cycle_clears_at_e658_zero_and_native_write_proceeds(
+    monkeypatch,
+):
+    app, w = _gui()
+    try:
+        reads = []
+        logs = []
+        service_calls = []
+        sentinel = object()
+
+        class FakeDS2:
+            def read_mem(self, address, length):
+                reads.append((address, length))
+                return b"\x00"
+
+        def run_native(operation, log_fn, progress_fn, **kwargs):
+            return operation("COM1", progress_fn, log_fn)
+
+        w._ds2 = FakeDS2()
+        monkeypatch.setattr(w, "_log", lambda message, level="info": logs.append((message, level)))
+        monkeypatch.setattr(w, "_show_flash_complete", lambda *args, **kwargs: None)
+        monkeypatch.setattr(w, "_run_via_native_fast_write", run_native)
+        monkeypatch.setattr(
+            gui.ds2_native_fast_service,
+            "write_partial_d2xx",
+            lambda port, target, **kwargs: service_calls.append(
+                (port, target, kwargs)
+            ) or sentinel,
+        )
+
+        w._finish_flash_success("Calibration Write Complete", "Calibration write completed.")
+        result = w._native_fast_write_with_fallback(
+            "tune",
+            b"target",
+            "intel",
+            lambda message, level="info": logs.append((message, level)),
+            lambda *args, **kwargs: None,
+            verify_write=False,
+        )
+
+        assert result is sentinel
+        assert reads == [(gui.AUTHORIZATION_STATE_ADDRESS, 1)]
+        assert len(service_calls) == 1
+        assert service_calls[0][0:2] == ("COM1", b"target")
+        assert w._post_write_cycle_pending is False
+        assert ("Required post-write ignition cycle confirmed (E658=0).", "ok") in logs
+    finally:
+        w._ds2 = None
+        w._post_write_cycle_pending = False
         w.close()
 
 
@@ -302,6 +818,59 @@ def test_native_pre_erase_failure_never_falls_back_without_low_identity(monkeypa
             gui.ds2_native_fast_service.NativeFastPreEraseFailure,
         )
         assert calls == []
+    finally:
+        w._ds2 = None
+        w.close()
+
+
+def test_initial_seed_unavailable_never_restarts_legacy_write(monkeypatch):
+    app, w = _gui()
+    try:
+        legacy_calls = []
+        low_ds2 = object()
+        w._ds2 = low_ds2
+        failure = gui.ds2_native_fast_service.NativeFastPreEraseFailure(
+            gui.ds2_native_fast_service.InitialWriteSeedUnavailable(
+                "initial write seed unavailable after 2 bounded BMW/0x1E challenges"
+            ),
+            safe_legacy_fallback=True,
+        )
+
+        monkeypatch.setattr(
+            w,
+            "_run_via_native_fast_write",
+            lambda *args, **kwargs: (_ for _ in ()).throw(failure),
+        )
+        monkeypatch.setattr(
+            w,
+            "_ds2_write",
+            lambda *args, **kwargs: legacy_calls.append((args, kwargs)),
+        )
+
+        with pytest.raises(RuntimeError) as caught:
+            w._native_fast_write_with_fallback(
+                "full",
+                b"target",
+                "intel",
+                lambda *args, **kwargs: None,
+                lambda *args, **kwargs: None,
+                verify_write=False,
+            )
+
+        message = str(caught.value).lower()
+        assert caught.value.__cause__ is failure
+        assert isinstance(
+            failure.cause,
+            gui.ds2_native_fast_service.InitialWriteSeedUnavailable,
+        )
+        assert failure.safe_legacy_fallback is True
+        assert w._ds2 is low_ds2
+        assert legacy_calls == []
+        assert "normal ds2 at 9600 was restored" in message
+        assert "nothing was erased" in message
+        assert "turn ignition off" in message
+        assert "10 seconds" in message
+        assert "turn ignition on" in message
     finally:
         w._ds2 = None
         w.close()
@@ -465,6 +1034,24 @@ def test_direct_tap_disables_echo_and_locks_connection_controls(monkeypatch):
         w._set_all_buttons_enabled(True)
         assert w.cb_port.isEnabled()
         assert w.chk_direct_tap.isEnabled()
+    finally:
+        w.close()
+
+
+def test_stopping_inactive_live_data_does_not_log_false_polling_message(monkeypatch):
+    app, w = _gui()
+    try:
+        logs = []
+        monkeypatch.setattr(
+            w,
+            "_log",
+            lambda message, level="info": logs.append((message, level)),
+        )
+        assert w._poller is None
+
+        w._on_live_stop()
+
+        assert ("Live data polling stopped", "info") not in logs
     finally:
         w.close()
 
@@ -666,6 +1253,7 @@ def test_identity_full_flash_read_auto_routes_archives_and_loads_editor(monkeypa
         w._connection_port = "COM_TEST"
         w._ecu_identity_source = _live_identity_source()
         w._ecu_softbsl_marker = "B"
+        w._ecu_softbsl_hook_present = True
         w._ecu_chip_sig = bytes.fromhex("e00e0d58f04ec084")
         w._d2xx_ok = True
         monkeypatch.setattr(w, "_ask_identity_backup_choice", lambda: "backup")
@@ -724,6 +1312,7 @@ def test_identity_partial_read_auto_routes_through_softbsl(monkeypatch):
         w._connection_port = "COM_TEST"
         w._ecu_identity_source = _live_identity_source()
         w._ecu_softbsl_marker = "B"
+        w._ecu_softbsl_hook_present = True
         w._ecu_chip_sig = bytes.fromhex("e00e0d58f04ec084")
         w._d2xx_ok = True
         monkeypatch.setattr(w, "_ask_identity_backup_choice", lambda: "partial")
@@ -768,6 +1357,7 @@ def test_identity_write_rewrites_only_sa1_and_persists_recovery(monkeypatch, tmp
         w._connection_port = "COM_TEST"
         w._ecu_id = "1437806"
         w._ecu_softbsl_marker = "B"
+        w._ecu_softbsl_hook_present = True
         w._ecu_chip_sig = bytes.fromhex("e00e0d58f04ec084")
         w._d2xx_ok = True
         w._ecu_identity_source = bytes(image)
@@ -831,6 +1421,7 @@ def test_identity_write_on_top_rewrites_complete_fused_sa7(monkeypatch, tmp_path
         w._connection_port = "COM_TEST"
         w._ecu_id = "1437806"
         w._ecu_softbsl_marker = "T"
+        w._ecu_softbsl_hook_present = True
         w._ecu_chip_sig = bytes.fromhex("e00e0d58f04ec084")
         w._d2xx_ok = True
         w._ecu_identity_source = bytes(image)
@@ -1208,6 +1799,52 @@ def test_task_restores_button_state_after_callback_reopens_ds2(monkeypatch):
         w.close()
 
 
+def test_run_task_stops_active_live_poller_before_worker_starts(monkeypatch):
+    app, w = _gui()
+    try:
+        events = []
+
+        class Poller:
+            csv_rows = 0
+
+            def stop(self):
+                events.append("poller_stop")
+
+        class Signal:
+            def __init__(self):
+                self.callback = None
+
+            def connect(self, callback):
+                self.callback = callback
+
+            def emit(self, *args):
+                self.callback(*args)
+
+        class ImmediateWorker:
+            def __init__(self, _task):
+                self.log_signal = Signal()
+                self.progress_signal = Signal()
+                self.done_signal = Signal()
+
+            def start(self):
+                events.append("worker_start")
+                assert w._poller is None
+                assert not w._live_timer.isActive()
+                self.done_signal.emit(True, None)
+
+        w._poller = Poller()
+        w._live_timer.start()
+        monkeypatch.setattr(gui, "WorkerThread", ImmediateWorker)
+
+        w._run_task(lambda *_args: None)
+
+        assert events == ["poller_stop", "worker_start"]
+    finally:
+        w._live_timer.stop()
+        w._poller = None
+        w.close()
+
+
 def test_softbsl_cal_preservation_control_is_gated_by_live_variant():
     app, w = _gui()
     try:
@@ -1318,26 +1955,46 @@ def test_softbsl_install_matching_force_base_skips_ecu_image(monkeypatch, tmp_pa
         w.close()
 
 
-def test_softbsl_install_success_popup_follows_ds2_restore(monkeypatch):
+def test_softbsl_install_success_disconnects_without_reopening_ds2(monkeypatch):
     app, w = _gui()
     try:
         shown = {}
-
-        def restore(port):
-            shown["released"] = port
-            w._ds2 = object()
-
-        monkeypatch.setattr(w, "_release_softbsl_port", restore)
+        w._port_owner.acquire("softbsl")
+        w._softbsl_handoff_port = "COM7"
+        w._connection_port = "COM7"
+        w._ds2 = None
+        w.btn_connect.blockSignals(True)
+        w.btn_connect.setChecked(True)
+        w.btn_connect.blockSignals(False)
+        end_session_calls = []
+        monkeypatch.setattr(
+            w, "_end_session_log", lambda: end_session_calls.append(True)
+        )
+        monkeypatch.setattr(
+            w,
+            "_reopen_ds2_with_retry",
+            lambda *_args, **_kwargs: pytest.fail(
+                "verified installation must not reopen the DS2 session"
+            ),
+        )
         monkeypatch.setattr(
             QMessageBox, "information",
             staticmethod(lambda *args, **kwargs: shown.update(info=args) or QMessageBox.Ok))
 
         w._on_softbsl_install_success("COM7")
 
-        assert shown["released"] == "COM7"
+        assert w._port_owner.is_free()
+        assert w._softbsl_handoff_port is None
+        assert w._connection_port is None
+        assert w._ds2 is None
+        assert not w.btn_connect.isChecked()
+        assert end_session_calls == [True]
+        assert w.lbl_status.text() == "● Disconnected"
         assert shown["info"][1] == "Soft-BSL Installed"
         assert "installed and verified successfully" in shown["info"][2]
-        assert "DS2 connection" in shown["info"][2]
+        assert "closed intentionally" in shown["info"][2]
+        assert "Press Connect" in shown["info"][2]
+        assert "use Soft-BSL automatically" in shown["info"][2]
     finally:
         w._ds2 = None
         w.close()
@@ -1512,6 +2169,8 @@ def test_bsl_tab_present_with_flash_and_diag_controls():
         assert w.btn_bsl_read_tune.text() == "Read Tune (24 KB)…"
         assert "standard file order" in w.btn_bsl_read_full.toolTip()
         assert "0x10000–0x15FFF" in w.btn_bsl_read_tune.toolTip()
+        assert "additional copy elsewhere" in w.btn_bsl_read_full.toolTip()
+        assert "additional copy elsewhere" in w.btn_bsl_read_tune.toolTip()
         assert not w.btn_bsl_vpp.isEnabled()
         assert w.btn_bsl_vpp.text() == "VPP On (select 28F200)"
         assert "Select Intel 28F200" in w.btn_bsl_vpp.toolTip()
@@ -1531,38 +2190,167 @@ def test_bsl_tab_present_with_flash_and_diag_controls():
         w.close()
 
 
-def test_bsl_tune_read_saves_and_catalogues_standard_partial(tmp_path, monkeypatch):
+@pytest.mark.parametrize(("mode", "size"), [
+    ("tune", MS41ECU.TUNE_SIZE),
+    ("full", MS41ECU.FULL_ROM_SIZE),
+])
+def test_bsl_read_saves_automatically_to_bins(mode, size, tmp_path, monkeypatch):
     app, w = _gui()
     try:
-        path = tmp_path / "bsl-tune.bin"
-        data = b"\x5A" * gui.MS41ECU.TUNE_SIZE
+        path = tmp_path / f"bsl-{mode}-capture.bin"
+        data = b"\x5A" * size
         _set_bsl_chip(w, "28f200")
         w.cb_bsl_baud.setCurrentIndex(2)
         monkeypatch.setattr(
             QFileDialog, "getSaveFileName",
-            staticmethod(lambda *a, **k: (str(path), "")))
+            staticmethod(lambda *a, **k: pytest.fail("BSL read must not show a save dialog")))
+        monkeypatch.setattr(
+            gui.tempfile, "mkstemp",
+            lambda **kwargs: (
+                os.open(path, os.O_CREAT | os.O_RDWR), str(path)))
         monkeypatch.setattr(w, "_acquire_bsl_port", lambda: "COM_BSL_TEST")
 
         called = {}
         def fake_dump(port, outfile, chip, half, log, progress, **kwargs):
             called.update(port=port, outfile=outfile, chip=chip, half=half, **kwargs)
-            path.write_bytes(data)
+            with open(outfile, "wb") as handle:
+                handle.write(data)
             return 0
-        monkeypatch.setattr(gui.bsl_service, "dump_tune", fake_dump)
+        monkeypatch.setattr(gui.bsl_service, f"dump_{mode}", fake_dump)
 
         archived = {}
-        entry = type("Entry", (), {"filename": "catalogued-bsl-tune.bin"})()
-        monkeypatch.setattr(
-            w._backup_mgr, "add_data",
-            lambda image, filename, **metadata:
-                (archived.update(data=bytes(image), filename=filename, **metadata), entry)[1])
+        def archive(image, filename, **metadata):
+            archived.update(data=bytes(image), filename=filename, **metadata)
+            return type("Entry", (), {
+                "filename": filename,
+                "path": os.path.join(gui.BACKUP_DIR, filename),
+            })()
+        monkeypatch.setattr(w._backup_mgr, "add_data", archive)
         monkeypatch.setattr(w, "_refresh_backup_table",
                             lambda: archived.update(refreshed=True))
         released = []
         monkeypatch.setattr(w._port_owner, "release", lambda owner: released.append(owner))
         shown = {}
         monkeypatch.setattr(
-            QMessageBox, "information",
+            QMessageBox, "question",
+            staticmethod(lambda *a, **k:
+                         (shown.update(title=a[1], message=a[2]), QMessageBox.No)[1]))
+
+        def sync_run_task(task, on_success=None, on_failure=None):
+            try:
+                result = task(lambda *a, **k: None, lambda *a, **k: None)
+            except Exception as error:
+                if on_failure:
+                    on_failure(error)
+            else:
+                if on_success:
+                    on_success(result)
+        monkeypatch.setattr(w, "_run_task", sync_run_task)
+
+        getattr(w, f"_on_bsl_read_{mode}")()
+
+        assert not path.exists()
+        assert called == {
+            "port": "COM_BSL_TEST", "outfile": str(path), "chip": "28f200",
+            "half": "upper", "baud": 38400, "reset_line": "dtr"}
+        assert archived["data"] == data
+        assert archived["filename"].startswith(f"ms41_bsl_{mode}_")
+        assert archived["filename"].endswith(".bin")
+        assert archived["source"] == "BSL-Unbricker read"
+        assert archived["refreshed"] is True
+        assert released == ["bsl"]
+        assert shown["title"] == "BSL Read Complete"
+        assert "automatically to Bins" in shown["message"]
+        assert gui.BACKUP_DIR in shown["message"]
+    finally:
+        w.close()
+
+
+def test_bsl_read_can_save_optional_copy_after_bins_archive(tmp_path, monkeypatch):
+    app, w = _gui()
+    try:
+        temporary_path = tmp_path / "temporary-bsl-read.bin"
+        copy_path = tmp_path / "operator-copy.bin"
+        data = b"\xA5" * MS41ECU.TUNE_SIZE
+        _set_bsl_chip(w, "28f200")
+        monkeypatch.setattr(
+            gui.tempfile, "mkstemp",
+            lambda **kwargs: (
+                os.open(temporary_path, os.O_CREAT | os.O_RDWR), str(temporary_path)))
+        monkeypatch.setattr(w, "_acquire_bsl_port", lambda: "COM_BSL_TEST")
+
+        def fake_dump(port, outfile, chip, half, log, progress, **kwargs):
+            with open(outfile, "wb") as handle:
+                handle.write(data)
+            return 0
+        monkeypatch.setattr(gui.bsl_service, "dump_tune", fake_dump)
+
+        archived = {}
+        def archive(image, filename, **metadata):
+            archived.update(data=bytes(image), filename=filename, **metadata)
+            return type("Entry", (), {
+                "filename": filename,
+                "path": os.path.join(gui.BACKUP_DIR, filename),
+            })()
+        monkeypatch.setattr(w._backup_mgr, "add_data", archive)
+        monkeypatch.setattr(w, "_refresh_backup_table", lambda: None)
+        monkeypatch.setattr(w._port_owner, "release", lambda owner: None)
+        monkeypatch.setattr(
+            QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
+        dialog = {}
+        monkeypatch.setattr(
+            QFileDialog, "getSaveFileName",
+            staticmethod(lambda *a, **k:
+                         (dialog.update(title=a[1], suggested=a[2]),
+                          (str(copy_path), ""))[1]))
+
+        def sync_run_task(task, on_success=None, on_failure=None):
+            try:
+                result = task(lambda *a, **k: None, lambda *a, **k: None)
+            except Exception as error:
+                if on_failure:
+                    on_failure(error)
+            else:
+                if on_success:
+                    on_success(result)
+        monkeypatch.setattr(w, "_run_task", sync_run_task)
+
+        w._on_bsl_read_tune()
+
+        assert archived["data"] == data
+        assert not temporary_path.exists()
+        assert copy_path.read_bytes() == data
+        assert dialog["title"] == "Save Additional BSL Tune (24 KB) Copy"
+        assert dialog["suggested"] == archived["filename"]
+    finally:
+        w.close()
+
+
+def test_bsl_incomplete_read_removes_temporary_file_and_skips_bins(
+        tmp_path, monkeypatch):
+    app, w = _gui()
+    try:
+        path = tmp_path / "incomplete-bsl-read.bin"
+        _set_bsl_chip(w, "28f200")
+        monkeypatch.setattr(
+            gui.tempfile, "mkstemp",
+            lambda **kwargs: (
+                os.open(path, os.O_CREAT | os.O_RDWR), str(path)))
+        monkeypatch.setattr(w, "_acquire_bsl_port", lambda: "COM_BSL_TEST")
+
+        def incomplete_dump(port, outfile, chip, half, log, progress, **kwargs):
+            with open(outfile, "wb") as handle:
+                handle.write(b"\x5A" * 1024)
+            return 0
+        monkeypatch.setattr(gui.bsl_service, "dump_tune", incomplete_dump)
+        monkeypatch.setattr(
+            w._backup_mgr, "add_data",
+            lambda *args, **kwargs: pytest.fail("incomplete read must not reach Bins"))
+        released = []
+        monkeypatch.setattr(w._port_owner, "release", lambda owner: released.append(owner))
+        shown = {}
+        monkeypatch.setattr(
+            QMessageBox, "critical",
             staticmethod(lambda *a, **k: shown.update(title=a[1], message=a[2])))
 
         def sync_run_task(task, on_success=None, on_failure=None):
@@ -1578,16 +2366,10 @@ def test_bsl_tune_read_saves_and_catalogues_standard_partial(tmp_path, monkeypat
 
         w._on_bsl_read_tune()
 
-        assert path.read_bytes() == data
-        assert called == {
-            "port": "COM_BSL_TEST", "outfile": str(path), "chip": "28f200",
-            "half": "upper", "baud": 38400, "reset_line": "dtr"}
-        assert archived["data"] == data
-        assert archived["filename"] == path.name
-        assert archived["source"] == "BSL-Unbricker read"
-        assert archived["refreshed"] is True
+        assert not path.exists()
         assert released == ["bsl"]
-        assert shown["title"] == "BSL Read Complete"
+        assert shown["title"] == "BSL Read Failed"
+        assert "No incomplete image was added to Bins" in shown["message"]
     finally:
         w.close()
 
@@ -1685,6 +2467,184 @@ def test_bsl_dry_run_populates_preview_and_gates_arm(tmp_path):
         w.close()
 
 
+def test_bins_open_in_bsl_button_is_offline_local_action():
+    app, w = _gui()
+    try:
+        assert w.btn_backup_open_bsl.text() == "Open in BSL-Unbricker"
+        assert "does not open hardware or flash anything" in w.btn_backup_open_bsl.toolTip()
+
+        w._ds2 = None
+        w.backup_table.clearSelection()
+        w._set_backup_buttons_enabled()
+        assert not w.btn_backup_open_bsl.isEnabled()
+
+        row = w.backup_table.rowCount()
+        w.backup_table.insertRow(row)
+        w.backup_table.selectRow(row)
+        w._set_backup_buttons_enabled()
+        assert w.btn_backup_open_bsl.isEnabled()
+        assert not w.btn_backup_flash.isEnabled()
+    finally:
+        w.close()
+
+
+def test_bins_tune_handoff_prepares_bsl_without_changing_geometry(
+        tmp_path, monkeypatch):
+    app, w = _gui()
+    try:
+        path = tmp_path / "catalogued-tune.bin"
+        path.write_bytes(b"\x5A" * gui.MS41ECU.TUNE_SIZE)
+        entry = type("Entry", (), {"path": str(path), "filename": path.name})()
+        monkeypatch.setattr(w, "_selected_backup", lambda: entry)
+        messages = []
+        monkeypatch.setattr(
+            w, "_log", lambda message, level="info": messages.append((message, level)))
+
+        _set_bsl_chip(w, "29f400")
+        w.cb_bsl_half.setCurrentText("lower")
+        w.cb_bsl_region.setCurrentText("program-mid")
+        previous_chip = w.cb_bsl_chip.currentData()
+        previous_half = w.cb_bsl_half.currentText()
+        w._bsl_plan = object()
+        w.btn_bsl_arm.setEnabled(True)
+        w.tabs.setCurrentIndex(0)
+
+        w._on_backup_open_in_bsl()
+
+        assert w._bsl_ref == os.path.abspath(path)
+        assert w._bsl_ref_lbl.text() == path.name
+        assert w.cb_bsl_region.currentText() == "tune"
+        assert w.cb_bsl_chip.currentData() == previous_chip
+        assert w.cb_bsl_half.currentText() == previous_half
+        assert w._bsl_plan is None
+        assert not w.btn_bsl_arm.isEnabled()
+        assert w.tabs.currentIndex() == w._bsl_tab_index
+        assert messages == [(f"BSL reference loaded from Bins: {path.name}", "info")]
+    finally:
+        w.close()
+
+
+def test_bins_full_handoff_preserves_bsl_geometry_and_invalidates_plan(
+        tmp_path, monkeypatch):
+    app, w = _gui()
+    try:
+        path = tmp_path / "catalogued-full.bin"
+        path.write_bytes(b"\xA5" * gui.MS41ECU.FULL_ROM_SIZE)
+        entry = type("Entry", (), {"path": str(path), "filename": path.name})()
+        monkeypatch.setattr(w, "_selected_backup", lambda: entry)
+        monkeypatch.setattr(w, "_log", lambda *args, **kwargs: None)
+
+        _set_bsl_chip(w, "29f400")
+        w.cb_bsl_half.setCurrentText("lower")
+        w.cb_bsl_region.setCurrentText("program-mid")
+        geometry = (
+            w.cb_bsl_chip.currentData(),
+            w.cb_bsl_half.currentText(),
+            w.cb_bsl_region.currentText(),
+        )
+        w._bsl_plan = object()
+        w.btn_bsl_arm.setEnabled(True)
+        w.tabs.setCurrentIndex(0)
+
+        w._on_backup_open_in_bsl()
+
+        assert w._bsl_ref == os.path.abspath(path)
+        assert w._bsl_ref_lbl.text() == path.name
+        assert (
+            w.cb_bsl_chip.currentData(),
+            w.cb_bsl_half.currentText(),
+            w.cb_bsl_region.currentText(),
+        ) == geometry
+        assert w._bsl_plan is None
+        assert not w.btn_bsl_arm.isEnabled()
+        assert w.tabs.currentIndex() == w._bsl_tab_index
+    finally:
+        w.close()
+
+
+def test_bins_missing_file_handoff_does_not_mutate_bsl_state(
+        tmp_path, monkeypatch):
+    app, w = _gui()
+    try:
+        missing = tmp_path / "missing.bin"
+        entry = type("Entry", (), {"path": str(missing), "filename": missing.name})()
+        monkeypatch.setattr(w, "_selected_backup", lambda: entry)
+        shown = {}
+        monkeypatch.setattr(
+            QMessageBox, "critical",
+            staticmethod(lambda *args, **kwargs: shown.update(
+                title=args[1], message=args[2])))
+
+        _set_bsl_chip(w, "29f400")
+        w.cb_bsl_half.setCurrentText("lower")
+        w.cb_bsl_region.setCurrentText("program-mid")
+        plan = object()
+        w._bsl_ref = "existing-reference.bin"
+        w._bsl_ref_lbl.setText("existing-reference.bin")
+        w._bsl_plan = plan
+        w.btn_bsl_arm.setEnabled(True)
+        w.tabs.setCurrentIndex(0)
+        state = (
+            w._bsl_ref, w._bsl_ref_lbl.text(), w.cb_bsl_chip.currentData(),
+            w.cb_bsl_half.currentText(), w.cb_bsl_region.currentText(),
+            w._bsl_plan, w.btn_bsl_arm.isEnabled(), w.tabs.currentIndex(),
+        )
+
+        w._on_backup_open_in_bsl()
+
+        assert shown["title"] == "File Missing"
+        assert "missing.bin" in shown["message"]
+        assert (
+            w._bsl_ref, w._bsl_ref_lbl.text(), w.cb_bsl_chip.currentData(),
+            w.cb_bsl_half.currentText(), w.cb_bsl_region.currentText(),
+            w._bsl_plan, w.btn_bsl_arm.isEnabled(), w.tabs.currentIndex(),
+        ) == state
+    finally:
+        w.close()
+
+
+def test_bins_invalid_size_handoff_does_not_mutate_bsl_state(
+        tmp_path, monkeypatch):
+    app, w = _gui()
+    try:
+        path = tmp_path / "wrong-size.bin"
+        path.write_bytes(b"\x00" * 1024)
+        entry = type("Entry", (), {"path": str(path), "filename": path.name})()
+        monkeypatch.setattr(w, "_selected_backup", lambda: entry)
+        shown = {}
+        monkeypatch.setattr(
+            QMessageBox, "critical",
+            staticmethod(lambda *args, **kwargs: shown.update(
+                title=args[1], message=args[2])))
+
+        _set_bsl_chip(w, "29f400")
+        w.cb_bsl_half.setCurrentText("lower")
+        w.cb_bsl_region.setCurrentText("program-mid")
+        plan = object()
+        w._bsl_ref = "existing-reference.bin"
+        w._bsl_ref_lbl.setText("existing-reference.bin")
+        w._bsl_plan = plan
+        w.btn_bsl_arm.setEnabled(True)
+        w.tabs.setCurrentIndex(0)
+        state = (
+            w._bsl_ref, w._bsl_ref_lbl.text(), w.cb_bsl_chip.currentData(),
+            w.cb_bsl_half.currentText(), w.cb_bsl_region.currentText(),
+            w._bsl_plan, w.btn_bsl_arm.isEnabled(), w.tabs.currentIndex(),
+        )
+
+        w._on_backup_open_in_bsl()
+
+        assert shown["title"] == "Unsupported BSL Reference"
+        assert "1,024 bytes" in shown["message"]
+        assert (
+            w._bsl_ref, w._bsl_ref_lbl.text(), w.cb_bsl_chip.currentData(),
+            w.cb_bsl_half.currentText(), w.cb_bsl_region.currentText(),
+            w._bsl_plan, w.btn_bsl_arm.isEnabled(), w.tabs.currentIndex(),
+        ) == state
+    finally:
+        w.close()
+
+
 def test_flash_chip_label_generic_before_connect():
     app, w = _gui()
     try:
@@ -1729,6 +2689,7 @@ def test_transfer_mode_shows_softbsl_when_marker_and_d2xx_present():
     try:
         w._d2xx_ok = True
         w._ecu_softbsl_marker = "B"
+        w._ecu_softbsl_hook_present = True
         w._ecu_program_variant = "MS41.2"
         w._update_transfer_mode()
         assert w._fast_read_available() is True
@@ -1750,11 +2711,57 @@ def test_transfer_mode_uses_native_ds2_without_softbsl_marker():
         w.close()
 
 
+def test_transfer_mode_uses_native_ds2_when_loader_exists_without_hook():
+    app, w = _gui()
+    try:
+        w._d2xx_ok = True
+        w._ecu_softbsl_marker = "B"
+        w._ecu_softbsl_hook_present = False
+        w._update_transfer_mode()
+
+        assert w._fast_read_available() is False
+        assert w._auto_transfer_route() == "native_ds2"
+        assert "Soft-BSL hook not detected" in w.lbl_transfer_mode.text()
+    finally:
+        w.close()
+
+
+def test_live_softbsl_hook_check_reads_exact_descriptor_edits_at_ds2_addresses():
+    import patch_service
+
+    patch = patch_service.definitions()["door_magic"]
+    expected_reads = {
+        int(edit["off"]) ^ 0x4000: bytes.fromhex(edit["data"])
+        for edit in patch["edits"]
+    }
+    calls = []
+
+    class HookedDS2:
+        def read_mem(self, address, length):
+            calls.append((address, length))
+            return expected_reads[address]
+
+    assert gui.MS41FlashGUI._live_patch_present(HookedDS2(), "door_magic") is True
+    assert calls == [
+        (int(edit["off"]) ^ 0x4000, len(bytes.fromhex(edit["data"])))
+        for edit in patch["edits"]
+    ]
+
+    class MissingHookDS2(HookedDS2):
+        def read_mem(self, address, length):
+            data = super().read_mem(address, length)
+            return bytes([data[0] ^ 0xFF]) + data[1:]
+
+    assert gui.MS41FlashGUI._live_patch_present(
+        MissingHookDS2(), "door_magic") is False
+
+
 def test_transfer_mode_ds2_without_d2xx_even_with_marker():
     app, w = _gui()
     try:
         w._d2xx_ok = False
         w._ecu_softbsl_marker = "B"
+        w._ecu_softbsl_hook_present = True
         w._update_transfer_mode()
         assert w._fast_read_available() is False
         assert "D2XX" in w.lbl_transfer_mode.text()
@@ -1796,6 +2803,78 @@ def test_run_via_softbsl_hands_off_port_and_restores_connection(monkeypatch):
         assert w._ds2 is not None            # reconnected
     finally:
         w.cb_port = original_port_widget
+        w.close()
+
+
+def test_run_via_softbsl_can_leave_success_disconnected(monkeypatch):
+    app, w = _gui()
+    try:
+        closed = []
+
+        class ConnectedDS2:
+            def close(self):
+                closed.append(True)
+
+        w._ds2 = ConnectedDS2()
+        w._connection_port = "COM1"
+        w._port_owner.acquire("flasher")
+        reopened = []
+        monkeypatch.setattr(
+            w, "_reopen_ds2_with_retry",
+            lambda *_args, **_kwargs: reopened.append(True),
+        )
+
+        result = w._run_via_softbsl(
+            lambda *_args: b"written",
+            log_fn=lambda *_args: None,
+            progress_fn=lambda *_args: None,
+            restore_after_success=False,
+        )
+
+        assert result == b"written"
+        assert closed == [True]
+        assert reopened == []
+        assert w._ds2 is None
+        assert w._port_owner.owner is None
+    finally:
+        w._port_owner.release("flasher")
+        w._port_owner.release("softbsl")
+        w.close()
+
+
+def test_run_via_softbsl_failure_still_restores_ds2_when_success_would_disconnect(
+        monkeypatch):
+    app, w = _gui()
+    try:
+        class ConnectedDS2:
+            def close(self):
+                pass
+
+        w._ds2 = ConnectedDS2()
+        w._connection_port = "COM1"
+        w._port_owner.acquire("flasher")
+        reopened = []
+        monkeypatch.setattr(
+            w, "_reopen_ds2_with_retry",
+            lambda port, _log_fn: reopened.append(port),
+        )
+
+        def fail_before_erase(*_args):
+            raise RuntimeError("injected pre-erase failure")
+
+        with pytest.raises(RuntimeError, match="pre-erase failure"):
+            w._run_via_softbsl(
+                fail_before_erase,
+                log_fn=lambda *_args: None,
+                progress_fn=lambda *_args: None,
+                restore_after_success=False,
+            )
+
+        assert reopened == ["COM1"]
+        assert w._port_owner.owner == "flasher"
+    finally:
+        w._port_owner.release("flasher")
+        w._port_owner.release("softbsl")
         w.close()
 
 
@@ -2023,6 +3102,7 @@ def test_write_full_routes_through_softbsl_when_available(monkeypatch):
         monkeypatch.setattr(softbsl_service, "run_flash",
                             lambda *a, **k: calls.update(kw=k))
         w._ecu_softbsl_marker = "B"       # loader present + D2XX -> auto-routes to soft-BSL
+        w._ecu_softbsl_hook_present = True
         w._d2xx_ok = True
         w.chk_verify.setChecked(True)
 
@@ -2060,6 +3140,7 @@ def test_bootloader_checkbox_enabled_only_when_softbsl_available():
 
         w._d2xx_ok = True
         w._ecu_softbsl_marker = "B"
+        w._ecu_softbsl_hook_present = True
         w._update_bootloader_checkbox_state()
         assert w.chk_bootloader_write.isEnabled() is True
         assert w.chk_boot_preserve_identity.isEnabled() is False
@@ -2080,11 +3161,44 @@ def test_bootloader_write_file_warning_flags_missing_patches():
         w.close()
 
 
+def test_softbsl_survival_check_uses_effective_full_write_regions():
+    import patch_service
+
+    patches = patch_service.definitions()
+
+    def image_with(*patch_ids):
+        image = bytearray(b"\xFF" * 262144)
+        for patch_id in patch_ids:
+            for edit in patches[patch_id]["edits"]:
+                start = int(edit["off"])
+                payload = bytes.fromhex(edit["data"])
+                image[start:start + len(payload)] = payload
+        return bytes(image)
+
+    stock = image_with()
+    hook_only = image_with("door_magic")
+    complete = image_with("softbsl_loader", "door_magic")
+
+    # A simple full write preserves the already-working loader in SA1, but
+    # always replaces the program-region entry hook.
+    assert gui.MS41FlashGUI._softbsl_missing_after_full_write(
+        stock, write_bootloader=False) == ("door_magic",)
+    assert gui.MS41FlashGUI._softbsl_missing_after_full_write(
+        hook_only, write_bootloader=False) == ()
+
+    # A BOOT-enabled write replaces both regions, so the target needs both.
+    assert gui.MS41FlashGUI._softbsl_missing_after_full_write(
+        hook_only, write_bootloader=True) == ("softbsl_loader",)
+    assert gui.MS41FlashGUI._softbsl_missing_after_full_write(
+        complete, write_bootloader=True) == ()
+
+
 def test_bootloader_write_blocked_when_typed_ack_wrong(monkeypatch):
     app, w = _gui()
     try:
         w._d2xx_ok = True
         w._ecu_softbsl_marker = "B"
+        w._ecu_softbsl_hook_present = True
         w._update_transfer_mode()
         w.chk_bootloader_write.setChecked(True)
 
@@ -2171,24 +3285,166 @@ def test_reopen_ds2_gives_up_after_max_attempts_and_stays_disconnected(monkeypat
 
         monkeypatch.setattr(gui_module, "DS2Interface", AlwaysFails)
         logs = []
-        w._reopen_ds2_with_retry("COM1", lambda *a: logs.append(a[0]), attempts=3, delay=0.0)
+        w._port_owner.acquire("flasher")
+        w._connection_port = "COM1"
+        w.btn_connect.setChecked(True)
+        w.btn_connect.setText("Disconnect")
+        w.lbl_status.setText("● Connected (DS2)")
 
+        restored = w._reopen_ds2_with_retry(
+            "COM1", lambda *a: logs.append(a[0]), attempts=3, delay=0.0)
+
+        assert restored is False
         assert w._ds2 is None
+        assert w._port_owner.is_free()
+        assert w._connection_port is None
+        assert not w.btn_connect.isChecked()
+        assert w.btn_connect.text() == "Connect"
+        assert "Disconnected" in w.lbl_status.text()
         assert any("Could not reconnect" in m for m in logs)
     finally:
         w.close()
 
 
-@pytest.mark.parametrize("marker,d2xx,expected", [
-    ("B",  True,  True),
-    ("B",  False, False),
-    (None, True,  False),
-    (None, False, False),
+def test_main_tab_native_read_restores_low_ds2_for_following_native_write(
+        monkeypatch):
+    app, w = _gui()
+    try:
+        events = []
+        logs = []
+        progress = []
+        reopened = []
+        open_attempts = []
+
+        class InitiallyConnectedDS2:
+            def close(self):
+                events.append("initial_ds2_closed")
+
+        class ReopenedDS2:
+            uses_d2xx = True
+
+            def __init__(self, *, port, baud, verbose, echo):
+                assert (port, baud, verbose, echo) == ("COM1", 9600, False, False)
+                reopened.append(self)
+                self.closed = False
+                events.append(("ordinary_ds2_created", baud))
+
+            def open(self):
+                open_attempts.append(self)
+                events.append("ordinary_ds2_open")
+                if len(open_attempts) == 1:
+                    raise PermissionError(13, "transient handoff", None, 5)
+
+            def identify(self):
+                events.append("ordinary_ds2_identified")
+                return b"SHINDE1" + b"\xFF" * 10
+
+            def close(self):
+                self.closed = True
+                events.append("ordinary_ds2_closed")
+
+        def native_read(port, *, progress_cb, event_cb, echo):
+            assert (port, echo) == ("COM1", False)
+            assert w._port_owner.owner == "native_fast_ds2"
+            assert w._ds2 is None
+            events.append("native_read")
+            event_cb(
+                "host_baud_changed",
+                {"old": 9600, "new": 187500, "reason": "test selector up"},
+            )
+            progress_cb(24576, 24576, "fast_partial_read")
+            event_cb(
+                "host_baud_changed",
+                {"old": 187500, "new": 9600, "reason": "test cleanup"},
+            )
+            return type("ReadResult", (), {"data": b"R" * 24576})()
+
+        def native_write(port, target, *, verify_write, progress_cb):
+            assert (port, target, verify_write) == ("COM1", b"target", False)
+            assert w._port_owner.owner == "native_fast_ds2"
+            assert w._ds2 is None
+            events.append("native_write")
+            progress_cb(len(target), len(target), "native_partial_write")
+            return "write-result"
+
+        monkeypatch.setattr(gui, "DS2Interface", ReopenedDS2)
+        monkeypatch.setattr(gui.time, "sleep", lambda _seconds: None)
+        monkeypatch.setattr(
+            gui.ds2_fast_read,
+            "read_partial_d2xx",
+            native_read,
+        )
+        monkeypatch.setattr(
+            gui.ds2_native_fast_service,
+            "write_partial_d2xx",
+            native_write,
+        )
+
+        w._ds2 = InitiallyConnectedDS2()
+        w._connection_port = "COM1"
+        w._connection_echo = False
+        w._ecu_softbsl_marker = None
+        w._d2xx_ok = True
+        w._port_owner.acquire("flasher")
+
+        data = w._read_image_auto(
+            "tune",
+            lambda *args: logs.append(args),
+            lambda *args: progress.append(args),
+        )
+
+        assert data == b"R" * 24576
+        assert w._port_owner.owner == "flasher"
+        assert w._ds2 is reopened[1]
+        assert w._ds2.closed is False
+        assert len(open_attempts) == 2
+        assert any("ECU back up after the Fast operation (attempt 2)" in item[0]
+                   for item in logs)
+        assert not any("Native DS2 host baud" in item[0] for item in logs)
+
+        restored_after_read = w._ds2
+        result = w._write_tune_auto(
+            b"target",
+            lambda *args: logs.append(args),
+            lambda *args: progress.append(args),
+            verify_write=False,
+        )
+
+        assert result is None
+        assert restored_after_read.closed is True
+        assert events.index("native_read") < events.index("native_write")
+        assert progress == [
+            (24576, 24576, "fast_partial_read"),
+            (0, 0, "Reopening normal DS2 at 9600"),
+            (len(b"target"), len(b"target"), "native_partial_write"),
+            (0, 0, "Reopening normal DS2 at 9600"),
+        ]
+        assert w._port_owner.owner == "flasher"
+        assert w._ds2 is reopened[2]
+        assert w._ds2.closed is False
+        assert events.count("ordinary_ds2_identified") == 2
+        assert all(event == ("ordinary_ds2_created", 9600)
+                   for event in events if isinstance(event, tuple))
+    finally:
+        if w._ds2 is not None:
+            w._ds2.close()
+            w._ds2 = None
+        w._port_owner.release("flasher")
+        w.close()
+
+
+@pytest.mark.parametrize("marker,hook,d2xx,expected", [
+    ("B",  True,  True,  True),
+    ("B",  False, True,  False),
+    ("B",  True,  False, False),
+    (None, False, True,  False),
+    (None, False, False, False),
 ])
-def test_fast_read_available_truth_table(marker, d2xx, expected):
+def test_fast_read_available_truth_table(marker, hook, d2xx, expected):
     app, w = _gui()
     try:
         w._ecu_softbsl_marker = marker
+        w._ecu_softbsl_hook_present = hook
         w._d2xx_ok = d2xx
         assert w._fast_read_available() is expected
     finally:
@@ -2200,6 +3456,7 @@ def test_patches_read_routes_through_softbsl_when_available(monkeypatch):
     try:
         import softbsl_service
         w._ecu_softbsl_marker = "B"
+        w._ecu_softbsl_hook_present = True
         w._d2xx_ok = True
         payload = b"\xAB" * 262144
         captured = {}
@@ -2483,7 +3740,7 @@ def test_config_tab_scrolls_instead_of_compressing_combobox_rows():
         w.close()
 
 
-@pytest.mark.parametrize("target_size", (None, gui.MS41ECU.TUNE_SIZE))
+@pytest.mark.parametrize("target_size", (None, MS41ECU.TUNE_SIZE))
 def test_config_experimental_program_gate_requires_loaded_full_rom(target_size):
     app, w = _gui()
     try:
@@ -2961,24 +4218,127 @@ def test_close_event_warns_and_can_abort_when_task_busy(monkeypatch):
         w.close()
 
 
-def test_close_event_vetoes_live_softbsl_recovery(monkeypatch):
+def test_close_event_cancel_vetoes_live_softbsl_recovery(monkeypatch):
     from PyQt5.QtGui import QCloseEvent
     app, w = _gui()
     try:
-        recovery = type("Recovery", (), {"is_open": True})()
+        close_calls = []
+
+        class Recovery:
+            is_open = True
+
+            def close_after_confirmed_power_cycle(self):
+                close_calls.append(True)
+
+        recovery = Recovery()
         w._softbsl_write_recovery = recovery
+        w._port_owner.acquire("softbsl")
         shown = {}
         monkeypatch.setattr(
-            QMessageBox, "critical",
-            staticmethod(lambda *args, **kwargs: shown.update(message=args) or QMessageBox.Ok),
+            QMessageBox,
+            "warning",
+            staticmethod(
+                lambda *args, **kwargs: shown.update(message=args) or QMessageBox.Cancel
+            ),
         )
 
         event = QCloseEvent()
         w.closeEvent(event)
 
         assert not event.isAccepted()
+        assert close_calls == []
+        assert w._softbsl_write_recovery is recovery
+        assert w._port_owner.owner == "softbsl"
         assert "Soft-BSL RAM-agent" in shown["message"][2]
         assert "Retry Flash Recovery" in shown["message"][2]
     finally:
         w._softbsl_write_recovery = None
+        w._port_owner.release("softbsl")
+        w.close()
+
+
+def test_close_event_vetoes_busy_recovery_without_releasing_it(monkeypatch):
+    from PyQt5.QtGui import QCloseEvent
+    app, w = _gui()
+    try:
+        close_calls = []
+
+        class Recovery:
+            is_open = True
+
+            def close_after_confirmed_power_cycle(self):
+                close_calls.append(True)
+
+        recovery = Recovery()
+        w._softbsl_write_recovery = recovery
+        w._task_busy = True
+        w._port_owner.acquire("softbsl")
+        shown = []
+        monkeypatch.setattr(
+            QMessageBox,
+            "warning",
+            staticmethod(
+                lambda *args, **kwargs: shown.append((args, kwargs)) or QMessageBox.Close
+            ),
+        )
+
+        event = QCloseEvent()
+        w.closeEvent(event)
+
+        assert not event.isAccepted()
+        assert close_calls == []
+        assert w._softbsl_write_recovery is recovery
+        assert w._port_owner.owner == "softbsl"
+        assert len(shown) == 1
+        assert shown[0][0][1] == "Flash Recovery In Progress"
+    finally:
+        w._task_busy = False
+        w._softbsl_write_recovery = None
+        w._port_owner.release("softbsl")
+        w.close()
+
+
+def test_close_event_close_releases_recovery_owner_and_accepts(monkeypatch):
+    from PyQt5.QtGui import QCloseEvent
+    app, w = _gui()
+    try:
+        close_calls = []
+        logs = []
+
+        class Recovery:
+            is_open = True
+
+            def close_after_confirmed_power_cycle(self):
+                close_calls.append(True)
+                self.is_open = False
+
+        recovery = Recovery()
+        w._softbsl_write_recovery = recovery
+        w._port_owner.acquire("softbsl")
+        monkeypatch.setattr(
+            QMessageBox,
+            "warning",
+            staticmethod(lambda *args, **kwargs: QMessageBox.Close),
+        )
+        monkeypatch.setattr(
+            w,
+            "_log",
+            lambda message, level="info": logs.append((message, level)),
+        )
+        monkeypatch.setattr(w, "_on_live_stop", lambda: None)
+        monkeypatch.setattr(w, "_disconnect", lambda: None)
+        monkeypatch.setattr(w, "_end_session_log", lambda: None)
+
+        event = QCloseEvent()
+        w.closeEvent(event)
+
+        assert event.isAccepted()
+        assert close_calls == [True]
+        assert w._softbsl_write_recovery is None
+        assert w._port_owner.is_free()
+        assert any("Abandoned the retained Soft-BSL RAM-agent session" in message
+                   for message, _level in logs)
+    finally:
+        w._softbsl_write_recovery = None
+        w._port_owner.release("softbsl")
         w.close()

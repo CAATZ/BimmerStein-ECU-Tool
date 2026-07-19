@@ -137,7 +137,11 @@ class D2XXSerial:
                 except Exception:
                     continue
             self._apply_timeouts()
-            self.reset_input_buffer()
+            # A freshly acquired adapter must not inherit either receive-side
+            # echo bytes or queued transmit bytes from a previous owner.  Use
+            # one atomic D2XX purge so every DS2/native/Soft-BSL handoff starts
+            # from a known-empty host transport.
+            self.reset_buffers()
         except Exception:
             _close_handle(getattr(self, "_h", None))
             self._open = False
@@ -216,12 +220,28 @@ class D2XXSerial:
     def reset_output_buffer(self):
         _chk(_driver().FT_Purge(self._h, _PURGE_TX), "Purge TX")
 
+    def reset_buffers(self):
+        _chk(
+            _driver().FT_Purge(self._h, _PURGE_RX | _PURGE_TX),
+            "Purge RX/TX",
+        )
+
+    def queue_status(self):
+        """Return the D2XX receive, transmit, and event queue counts."""
+        rx = C.c_ulong(0)
+        tx = C.c_ulong(0)
+        events = C.c_ulong(0)
+        _chk(
+            _driver().FT_GetStatus(
+                self._h, C.byref(rx), C.byref(tx), C.byref(events)
+            ),
+            "GetStatus",
+        )
+        return rx.value, tx.value, events.value
+
     @property
     def in_waiting(self):
-        rx = C.c_ulong(0); tx = C.c_ulong(0); ev = C.c_ulong(0)
-        _chk(_driver().FT_GetStatus(
-            self._h, C.byref(rx), C.byref(tx), C.byref(ev)), "GetStatus")
-        return rx.value
+        return self.queue_status()[0]
 
     # -- modem lines (K-line: both driven low/inactive like the pyserial path) --
     def setDTR(self, on):

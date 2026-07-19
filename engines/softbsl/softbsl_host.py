@@ -125,6 +125,8 @@ class InstallRequest:
     preserve_cal: bool = True
     allow_convert: object = None
     confirm_reinstall: object = None
+    keycycle_retry_prompt: object = None
+    phase1_reentry_prompt: object = None
     progress_cb: object = None
     ds2_factory: object = DS2Interface
     verbose: bool = False
@@ -142,6 +144,12 @@ class InstallRequest:
         self.base = None if self.base_bytes is not None else self.base
         self.cmd = "install"
         self.keycycle_prompt = self.prompt
+        if self.keycycle_retry_prompt is None:
+            self.keycycle_retry_prompt = getattr(self.prompt, "retry_cancel", None)
+        if self.phase1_reentry_prompt is None:
+            self.phase1_reentry_prompt = getattr(
+                self.prompt, "phase1_reentry_retry_cancel", None
+            )
         self.confirm_convert = self.allow_convert
 
 # Sectors a full BOTTOM-half (A17 low / --half lower working bank) write erases
@@ -388,6 +396,14 @@ class SoftBSLError(Exception):
     pass
 
 
+class InstallCancelled(SoftBSLError):
+    """The operator stopped a persistent install before Phase 2 erase."""
+
+    def __init__(self, message, *, phase="pre_phase2"):
+        self.phase = str(phase)
+        super().__init__(message)
+
+
 class D2XXRequiredError(SoftBSLError):
     """A fast baud tier was requested on a transport that is not D2XX."""
 
@@ -551,15 +567,16 @@ class SoftBSL:
     # -- entry: DS2 unlock -> trigger upload -> jump (stays 8E2 throughout) --
     def _ds2_unlock(self):
         # Mirror the PROVEN write-mode setup (the stock DS2 write flow):
-        # 0xA2 prepare -> read 0x2001 -> 0x0D status -> 0x90 seed/key. The
-        # intermediate read + status are REQUIRED. The shared unlock inspects
-        # E658/E74B so it cannot mistake a pending key for a fresh challenge.
+        # 0xA2 prepare -> read 0x2001 -> 0x0D status -> shared 0x90 seed/key.
+        # Soft-BSL bootstrap still enters through the stock authorization
+        # handler, so it must not add an E659 gate or override the shared
+        # challenge/attempt policy.
         d = self.ds2
-        self.log("DS2: prepare (0xA2) -> read 0x2001 -> status (0x0D) -> seed/key (0x90) ...")
+        self.log("DS2: prepare (0xA2) -> read 0x2001 -> status (0x0D) -> shared seed/key (0x90) ...")
         d._prepare()
         d.read_mem(0x2001, 12)
         d.status()
-        d.unlock_write()                            # -> E658 == 2 (write phase)
+        d.unlock_write()
 
     def _trigger_frame(self, agent, trigger):
         """Build (frame, crc) for the chosen trigger. crc = CRC16 over the agent (init 0xFFFF,
@@ -1396,7 +1413,16 @@ def _open(args, require_d2xx=False):
         raise SoftBSLError("no serial port was selected")
     ds2_factory = getattr(args, "ds2_factory", DS2Interface)
     d = ds2_factory(args.port, baud=9600, verbose=args.verbose, echo=not args.no_echo)
-    d.open()
+    try:
+        d.open()
+    except Exception:
+        # A transport constructor/open can fail after acquiring its native
+        # handle. Never strand that handle outside the caller's cleanup path.
+        try:
+            d.close()
+        except Exception:
+            pass
+        raise
     if require_d2xx and not getattr(d, "uses_d2xx", False):
         d.close()
         raise D2XXRequiredError(
@@ -1410,17 +1436,30 @@ def _session(args, require_d2xx=False):
     flash mode + open the 5a window, then rapid-retry the enter to catch it — no physical key-cycle."""
     agent = load_agent(args.agent)
     d = _open(args, require_d2xx=require_d2xx)
-    sb = SoftBSL(d)
-    # Keep hand-built/test request objects on the legacy path unless they
-    # explicitly identify the temporary 0x43 installer door.
-    trigger = getattr(args, "trigger", None)
-    if getattr(args, "auto_flash", False) and trigger == "5a":
-        sb.ensure_flash_mode()                    # 0x2A from normal -> flash mode + fresh 5a window
-        sb.enter_retry(agent, trigger="5a")       # catch the post-reboot window
-    elif getattr(args, "hammer_entry", False):
-        sb.enter_retry(agent, trigger=trigger)    # hammer the door to catch a software self-reboot window
-    else:
-        sb.enter(agent, trigger=trigger)
+    try:
+        sb = SoftBSL(d)
+        # Keep hand-built/test request objects on the legacy path unless they
+        # explicitly identify the temporary 0x43 installer door.
+        trigger = getattr(args, "trigger", None)
+        if getattr(args, "auto_flash", False) and trigger == "5a":
+            sb.ensure_flash_mode()                # 0x2A from normal -> flash mode + fresh 5a window
+            sb.enter_retry(agent, trigger="5a")   # catch the post-reboot window
+        elif getattr(args, "hammer_entry", False):
+            sb.enter_retry(agent, trigger=trigger)  # catch a software self-reboot window
+        else:
+            sb.enter(agent, trigger=trigger)
+    except Exception:
+        # In an assignment such as ``d, sb = _session(...)``, an entry failure
+        # prevents the caller from ever receiving ``d``. Close it here so the
+        # D2XX handle cannot remain locked until process exit.
+        try:
+            d.close()
+        except Exception as close_error:
+            _emit(
+                f"  transport cleanup after failed agent entry also failed: {close_error}",
+                level="error",
+            )
+        raise
     return d, sb
 
 
@@ -2061,15 +2100,25 @@ def cmd_deploy_splice(args):
 
         probe = None
         try:
-            probe = _open(args)
-            if not getattr(probe, "uses_d2xx", False):
+            preflight = _live_preflight(args)
+            if preflight is None:
+                probe = _open(args)
+                uses_d2xx = bool(getattr(probe, "uses_d2xx", False))
+                live_family, live_sig = _detect_flash_chip(probe)
+            else:
+                uses_d2xx = bool(preflight["uses_d2xx"])
+                live_family = preflight["flash_family"]
+                live_sig = preflight["flash_signature"]
+            if not uses_d2xx:
                 _emit("   native fast bootstrap skipped: active DS2 transport is not D2XX.", "warn")
             else:
-                live_family, live_sig = _detect_flash_chip(probe)
                 # Release the read-only DS2 probe before the native service
-                # opens its own D2XX handle on the same COM port.
-                probe.close()
-                probe = None
+                # opens its own D2XX handle on the same COM port. A compose
+                # install normally reuses the preflight captured before its
+                # native-fast base read and therefore has no probe here.
+                if probe is not None:
+                    probe.close()
+                    probe = None
                 target_family = ecu_info.image_chip_family(img)
                 if live_family is None:
                     raise SoftBSLError(
@@ -2084,6 +2133,7 @@ def cmd_deploy_splice(args):
                 _emit(
                     f"-- native fast DS2 bootstrap ({live_family.upper()}, exact 187500 baud; tune untouched) --"
                 )
+
                 fast_result = ds2_native_fast_service.write_program_d2xx(
                     args.port,
                     img,
@@ -2109,6 +2159,31 @@ def cmd_deploy_splice(args):
             # erase-time failure. Do not reopen, downshift, or cycle it.
             raise
         except ds2_native_fast_service.NativeFastPreEraseFailure as error:
+            if error.reentry_not_ready:
+                if bool(getattr(args, "phase1_reentry_recovery", False)):
+                    # Preserve the structured service failure for the install-only
+                    # operator recovery loop. The native service has already closed
+                    # its D2XX handle; this function's finally also closes any probe
+                    # before the installer invokes the GUI callback.
+                    raise
+                raise SoftBSLError(
+                    f"native fast bootstrap was not started: {error}. Nothing "
+                    "was erased. Turn ignition OFF, wait at least 10 seconds, "
+                    "turn ignition ON, then retry"
+                ) from error
+            if error.seed_unavailable:
+                raise SoftBSLError(
+                    "native fast bootstrap was not started: the ECU remained safely "
+                    "locked and did not make a write seed available after the bounded "
+                    "quiet retry. Nothing was erased, and the DS2 9600 fallback was not "
+                    "attempted because it would repeat the same authorization request. "
+                    "Turn ignition OFF, wait at least 10 seconds, turn ignition ON, then retry"
+                ) from error
+            if bool(getattr(args, "native_fast_retry_only", False)):
+                raise SoftBSLError(
+                    "native fast bootstrap retry failed before erase; the legacy "
+                    f"9600 writer was not attempted: {error}"
+                ) from error
             if not error.safe_legacy_fallback:
                 raise SoftBSLError(
                     "native fast bootstrap failed before erase without a confirmed "
@@ -2363,6 +2438,46 @@ def _detect_flash_chip(d):
     if sig == _DRV_SIG_INTEL:
         return "intel", sig
     return None, sig
+
+
+def _store_live_preflight(args, d, flash_family, flash_signature):
+    """Carry one read-only live preflight through the complete install.
+
+    Compose installs may perform a native-fast full base read.  Reopening DS2
+    afterward solely to rediscover the same variant and driver family disturbs
+    the post-read authorization context.  Capture all required evidence before
+    that read and reuse it for the version gate and Phase-1 bootstrap.
+    """
+
+    cal_v, prog_v, consistent = _detect_ecu_variant(d)
+    evidence = {
+        "port": str(getattr(args, "port", "")),
+        "uses_d2xx": bool(getattr(d, "uses_d2xx", False)),
+        "flash_family": flash_family,
+        "flash_signature": bytes(flash_signature),
+        "cal_variant": cal_v,
+        "program_variant": prog_v,
+        "consistent": bool(consistent),
+    }
+    args._live_preflight = evidence
+    return evidence
+
+
+def _live_preflight(args):
+    evidence = getattr(args, "_live_preflight", None)
+    if not isinstance(evidence, dict):
+        return None
+    if evidence.get("port") != str(getattr(args, "port", "")):
+        return None
+    required = {
+        "uses_d2xx",
+        "flash_family",
+        "flash_signature",
+        "cal_variant",
+        "program_variant",
+        "consistent",
+    }
+    return evidence if required <= evidence.keys() else None
 
 
 # ── runtime image composition (base + patches) so the repo ships ZERO firmware .bins ──────────────
@@ -2715,56 +2830,64 @@ def _install_resolve_images(args):
         live_base_needed and not dry and bool(getattr(args, "port", None))
         and native_factory
     )
-    if chip == "auto" or live_base_needed:
-        if use_fast_base and chip != "auto":
-            # No flash-family probe is needed when the caller supplied an explicit chip.
-            try:
-                base = _read_ecu_base_fast(
-                    args, progress_cb=getattr(args, "progress_cb", None))
-                base_source = "native fast stock DS2"
-            except Exception as fast_error:
-                _emit(f"  native fast stock-DS2 base read unavailable ({fast_error}); "
-                      "falling back to legacy 9600 DS2.")
-                d = _open(args)
-                try:
-                    base = _read_ecu_base(d, progress_cb=getattr(args, "progress_cb", None))
-                finally:
-                    d.close()
-                base_source = "legacy stock DS2 fallback"
-        else:
+    if use_fast_base and chip != "auto":
+        # Capture every live safety marker before the native-fast base read so
+        # the remaining install never needs to reopen DS2 merely to repeat the
+        # same preflight.
+        d = _open(args)
+        try:
+            det, sig = _detect_flash_chip(d)
+            _store_live_preflight(args, d, det, sig)
+        finally:
+            d.close()
+        try:
+            base = _read_ecu_base_fast(
+                args, progress_cb=getattr(args, "progress_cb", None))
+            base_source = "native fast stock DS2"
+        except Exception as fast_error:
+            _emit(f"  native fast stock-DS2 base read unavailable ({fast_error}); "
+                  "falling back to legacy 9600 DS2.")
             d = _open(args)
             try:
-                det, sig = _detect_flash_chip(d)
-                if chip == "auto":
-                    if det is None:
-                        raise SoftBSLError(f"  flash-IC auto-detect FAILED (boot/param1 driver sig @0x023C = "
-                                 f"{sig.hex() or 'unreadable'}); pass --chip.")
-                    chip = "29f400" if det == "amd" else "28f200"
-                    _emit(f"  chip: auto-detected {chip} ({det.upper()} driver)")
-                if live_base_needed:
-                    if use_fast_base:
-                        # Close the probe before opening the D2XX fast reader (FTDI handles are
-                        # exclusive). The fast reader is read-only and returns to low-rate DS2.
-                        d.close()
-                        d = None
-                        try:
-                            base = _read_ecu_base_fast(
-                                args, progress_cb=getattr(args, "progress_cb", None))
-                            base_source = "native fast stock DS2"
-                        except Exception as fast_error:
-                            _emit(f"  native fast stock-DS2 base read unavailable ({fast_error}); "
-                                  "falling back to legacy 9600 DS2.")
-                            d = _open(args)
-                            base = _read_ecu_base(
-                                d, progress_cb=getattr(args, "progress_cb", None))
-                            base_source = "legacy stock DS2 fallback"
-                    else:
+                base = _read_ecu_base(d, progress_cb=getattr(args, "progress_cb", None))
+            finally:
+                d.close()
+            base_source = "legacy stock DS2 fallback"
+    elif chip == "auto" or live_base_needed:
+        d = _open(args)
+        try:
+            det, sig = _detect_flash_chip(d)
+            _store_live_preflight(args, d, det, sig)
+            if chip == "auto":
+                if det is None:
+                    raise SoftBSLError(f"  flash-IC auto-detect FAILED (boot/param1 driver sig @0x023C = "
+                             f"{sig.hex() or 'unreadable'}); pass --chip.")
+                chip = "29f400" if det == "amd" else "28f200"
+                _emit(f"  chip: auto-detected {chip} ({det.upper()} driver)")
+            if live_base_needed:
+                if use_fast_base:
+                    # Close the probe before opening the D2XX fast reader (FTDI handles are
+                    # exclusive). No later installer phase repeats this preflight.
+                    d.close()
+                    d = None
+                    try:
+                        base = _read_ecu_base_fast(
+                            args, progress_cb=getattr(args, "progress_cb", None))
+                        base_source = "native fast stock DS2"
+                    except Exception as fast_error:
+                        _emit(f"  native fast stock-DS2 base read unavailable ({fast_error}); "
+                              "falling back to legacy 9600 DS2.")
+                        d = _open(args)
                         base = _read_ecu_base(
                             d, progress_cb=getattr(args, "progress_cb", None))
-                        base_source = "legacy stock DS2"
-            finally:
-                if d is not None:
-                    d.close()
+                        base_source = "legacy stock DS2 fallback"
+                else:
+                    base = _read_ecu_base(
+                        d, progress_cb=getattr(args, "progress_cb", None))
+                    base_source = "legacy stock DS2"
+        finally:
+            if d is not None:
+                d.close()
     if chip != getattr(args, "chip", "auto"):
         args.chip = chip                             # pin the resolved chip for the downstream gate
     if base is None:
@@ -2881,6 +3004,7 @@ def _install_recovery(args, target, flash_over, phase, retained):
 
 def _install_keycycle(args):
     prompt = getattr(args, "keycycle_prompt", None)
+    retry_prompt = getattr(args, "keycycle_retry_prompt", None)
     message = (
         "KEY-CYCLE the ECU NOW: switch ignition OFF and wait ~10 s, then switch "
         "ignition ON and continue. This reboot is mandatory so the freshly-flashed "
@@ -2895,6 +3019,57 @@ def _install_keycycle(args):
             "\n      (mandatory -- the freshly-flashed 0x43 door is inert until this reboot arms the"
             " normal-mode dispatcher) "
         )
+
+    while True:
+        probe = None
+        readiness_error = None
+        try:
+            _emit("Confirming that the ECU rebooted into normal 9600-baud DS2 before Phase 2 ...")
+            probe = _open(args)
+            identity = probe.identify()
+            if not identity:
+                raise SoftBSLError("stock DS2 identify returned an empty response")
+        except Exception as error:
+            readiness_error = error
+        finally:
+            if probe is not None:
+                try:
+                    probe.close()
+                except Exception as close_error:
+                    readiness_error = SoftBSLError(
+                        f"post-key-cycle DS2 probe could not release the serial port: {close_error}"
+                    )
+                    _emit(
+                        f"Post-key-cycle DS2 probe cleanup failed: {close_error}",
+                        level="error",
+                    )
+        if readiness_error is not None:
+            detail = (
+                "The ECU did not answer normal 9600-baud DS2 after the required ignition "
+                f"cycle ({readiness_error}).\n\n"
+                "Confirm ignition OFF, wait approximately 10 seconds, then ignition ON. "
+                "Retry checks the ECU again. Cancel stops safely before Phase 2 erase."
+            )
+            _emit(
+                f"Post-key-cycle stock DS2 readiness was not confirmed: {readiness_error}",
+                level="warn",
+            )
+            if retry_prompt is not None:
+                retry = bool(retry_prompt(detail))
+            else:
+                retry = input(
+                    "\n  ECU did not answer normal DS2 after the key-cycle. "
+                    "Turn ignition ON, then type R to retry or C to cancel before Phase 2: "
+                ).strip().lower() in ("r", "retry")
+            if not retry:
+                raise InstallCancelled(
+                    "installation cancelled after the temporary entry path was written; "
+                    "Phase 2 erase was not started",
+                    phase="post_phase1",
+                ) from readiness_error
+            continue
+        _emit("Post-key-cycle stock DS2 readiness confirmed; Phase 2 may begin.", level="ok")
+        return
 
 
 def _run_install_target_phase(args, target, flash_over):
@@ -3043,12 +3218,20 @@ def cmd_install(args):
         _emit("    (28F uses the proven Intel agent + 12 V VPP); an explicit --chip is cross-checked and")
         _emit("    REFUSED on a family mismatch.")
     else:
-        dg = _open(args)      # CLEAN stock-DS2 read for the pre-flight: markers + chip via READ_MEM only,
-        try:                  #   NO agent trigger (_session would fire a doomed 0x43 before Phase 1 deploys it)
-            cal_v, prog_v, consistent = _detect_ecu_variant(dg)
-            det_fam, det_sig = _detect_flash_chip(dg)      # driver FAMILY: "amd"|"intel"|None (no silicon read-ID)
-        finally:
-            dg.close()
+        preflight = _live_preflight(args)
+        if preflight is None:
+            dg = _open(args)  # CLEAN stock-DS2 read only; no agent trigger.
+            try:
+                det_fam, det_sig = _detect_flash_chip(dg)
+                preflight = _store_live_preflight(args, dg, det_fam, det_sig)
+            finally:
+                dg.close()
+        else:
+            det_fam = preflight["flash_family"]
+            det_sig = preflight["flash_signature"]
+        cal_v = preflight["cal_variant"]
+        prog_v = preflight["program_variant"]
+        consistent = preflight["consistent"]
         # ── flash-IC reconcile (checked FIRST: the WRONG flash command set = an instant brick) ──
         raw_chip = getattr(args, "chip", "auto")
         det_label = _DRV_FAMILY_LABEL.get(det_fam)
@@ -3131,25 +3314,60 @@ def cmd_install(args):
     if not args.yes and input("\n  Proceed with the LIVE install (writes the boot sector)? Type 'yes': ").strip() != "yes":
         raise SoftBSLError("aborted.")
     _emit("\n=== PHASE 1/3: bootstrap 0x43 door via stock DS2 (program region; boot untouched) ===")
-    try:
-        cmd_deploy_splice(
-            _sub(
-                image=args.bootstrap,
-                dry_run=False,
-                yes=True,
-                no_readback=True,
-                verify_ranges=getattr(args, "bootstrap_verify_ranges", ()),
+    native_fast_retry_only = False
+    while True:
+        try:
+            cmd_deploy_splice(
+                _sub(
+                    image=args.bootstrap,
+                    dry_run=False,
+                    yes=True,
+                    no_readback=True,
+                    verify_ranges=getattr(args, "bootstrap_verify_ranges", ()),
+                    phase1_reentry_recovery=True,
+                    native_fast_retry_only=native_fast_retry_only,
+                )
             )
-        )
-    except Exception as error:
-        # Import locally so the standalone host CLI does not load the native
-        # production stack unless this install path actually uses it.
-        import ds2_native_fast_service
-        if isinstance(error, ds2_native_fast_service.NativeWriteRecoveryRequired):
-            raise InstallRecoveryRequired(
-                _install_recovery(args, target, flash_over, "bootstrap", error.recovery)
-            ) from error
-        raise
+        except Exception as error:
+            # Import locally so the standalone host CLI does not load the native
+            # production stack unless this install path actually uses it.
+            import ds2_native_fast_service
+            if isinstance(error, ds2_native_fast_service.NativeWriteRecoveryRequired):
+                raise InstallRecoveryRequired(
+                    _install_recovery(args, target, flash_over, "bootstrap", error.recovery)
+                ) from error
+            if (
+                isinstance(error, ds2_native_fast_service.NativeFastPreEraseFailure)
+                and error.reentry_not_ready
+            ):
+                recovery_prompt = getattr(args, "phase1_reentry_prompt", None)
+                if recovery_prompt is None:
+                    raise SoftBSLError(
+                        f"native fast bootstrap was not started: {error}. Nothing "
+                        "was erased. Turn ignition OFF, wait at least 10 seconds, "
+                        "turn ignition ON, then retry"
+                    ) from error
+                message = (
+                    "The ECU did not finish its previous native-fast session, so the "
+                    "temporary Soft-BSL write was not started. No challenge, selector, "
+                    "erase, or flash command was sent, and nothing was erased.\n\n"
+                    "The serial port has been disconnected and released.\n\n"
+                    "Turn ignition OFF, wait at least 10 seconds, then turn ignition ON. "
+                    "After ignition is ON, click Retry to continue. Click Cancel to stop "
+                    "the entire Soft-BSL installation."
+                )
+                if not bool(recovery_prompt(str(args.port), message)):
+                    raise InstallCancelled(
+                        "installation cancelled before the temporary Phase 1 write; "
+                        "no challenge, selector, erase, or flash command was sent",
+                        phase="pre_phase1",
+                    ) from error
+                # An explicit Retry repeats only this already-prepared native-fast
+                # program-only write. It must never downshift into the legacy writer.
+                native_fast_retry_only = True
+                continue
+            raise
+        break
 
     # The disposable 0x43 door is inert until boot initialization re-arms the
     # normal-mode dispatcher, so this physical ignition cycle remains mandatory.

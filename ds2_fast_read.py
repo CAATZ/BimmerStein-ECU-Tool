@@ -36,6 +36,21 @@ from ds2_fast_plans import (
     build_fast_partial_read_plan,
     ds2_image_to_file_layout,
 )
+from ds2_native_fast_reentry import (
+    clear_reentry_required,
+    mark_reentry_required,
+    reentry_required,
+)
+from ds2_write_authorization import (
+    AUTHORIZATION_STATE_ADDRESS,
+    NATIVE_FAST_REENTRY_LATCH_ADDRESS,
+    NATIVE_FAST_REENTRY_LATCH_READY_VALUE,
+    NATIVE_FAST_REENTRY_POLL_INTERVAL,
+    NATIVE_FAST_REENTRY_TIMER_ADDRESS,
+    NATIVE_FAST_REENTRY_TIMER_INITIAL_VALUE,
+    NATIVE_FAST_REENTRY_TIMEOUT,
+    WRONG_KEY_COUNTER_ADDRESS,
+)
 
 
 IDENTIFY_COMMAND = 0x00
@@ -75,6 +90,10 @@ class FastReadTimeout(FastReadError):
 
 class FastReadStateError(FastReadError):
     """The requested action is illegal in the current rate/session state."""
+
+
+class NativeFastReadReentryNotReady(FastReadStateError):
+    """The ECU cannot safely accept another native-fast selector this cycle."""
 
 
 @dataclass(frozen=True)
@@ -216,6 +235,13 @@ class NativeFastReadTransport:
     def close(self) -> None:
         if self.is_open:
             self.serial.close()
+
+    def queue_status(self) -> Tuple[int, int, int]:
+        getter = getattr(self.serial, "queue_status", None)
+        if getter is None:
+            raise FastReadError("D2XX transport does not expose queue status")
+        rx_bytes, tx_bytes, event_count = getter()
+        return int(rx_bytes), int(tx_bytes), int(event_count)
 
     def set_baud(self, baud: int, *, reason: str) -> None:
         old = self.baud
@@ -372,6 +398,10 @@ class NativeFastReadSession:
         post_cleanup_delay: float = 0.25,
         post_cleanup_timeout: float = 15.0,
         post_cleanup_poll: float = 1.0,
+        reentry_timeout: float = NATIVE_FAST_REENTRY_TIMEOUT,
+        reentry_poll: float = NATIVE_FAST_REENTRY_POLL_INTERVAL,
+        reentry_required: bool = False,
+        reentry_ready_cb: Optional[Callable[[], None]] = None,
         stability_probes: int = 3,
         progress_cb: Optional[ProgressCallback] = None,
         event_cb: Optional[EventCallback] = None,
@@ -387,6 +417,10 @@ class NativeFastReadSession:
         self.post_cleanup_delay = max(0.0, float(post_cleanup_delay))
         self.post_cleanup_timeout = max(0.1, float(post_cleanup_timeout))
         self.post_cleanup_poll = max(0.0, float(post_cleanup_poll))
+        self.reentry_timeout = max(0.1, float(reentry_timeout))
+        self.reentry_poll = max(0.01, float(reentry_poll))
+        self.reentry_required = bool(reentry_required)
+        self.reentry_ready_cb = reentry_ready_cb
         self.stability_probes = max(1, int(stability_probes))
         self.progress_cb = progress_cb
         self.event_cb = event_cb
@@ -398,6 +432,7 @@ class NativeFastReadSession:
         self.token: Optional[bytes] = None
         self.cleanup_b0_seen = False
         self.recovery_used = False
+        self.fast_selector_attempted = False
 
     def _emit(self, event: str, **fields: object) -> None:
         if self.event_cb is not None:
@@ -423,6 +458,27 @@ class NativeFastReadSession:
             old_link=old_link.name.lower(),
             new_link=self.link.name.lower(),
             reason=reason,
+        )
+
+    def _emit_queue_status(self, *, phase: str) -> None:
+        """Record transport queues without making diagnostics operational."""
+        try:
+            rx_bytes, tx_bytes, event_count = self.transport.queue_status()
+        except Exception as error:
+            self._emit(
+                "d2xx_queue_status",
+                phase=phase,
+                available=False,
+                error=f"{type(error).__name__}: {error}",
+            )
+            return
+        self._emit(
+            "d2xx_queue_status",
+            phase=phase,
+            available=True,
+            rx_bytes=rx_bytes,
+            tx_bytes=tx_bytes,
+            event_count=event_count,
         )
 
     def _request(
@@ -505,6 +561,130 @@ class NativeFastReadSession:
             reason="identity and session token validated",
         )
 
+    def _wait_for_native_fast_reentry(self) -> None:
+        """Wait for the shared post-native-fast completion latch when armed.
+
+        A fresh first operation does not use this gate. The caller arms it only
+        when this process previously completed or recovered a native-fast
+        selector session on the same port. E72E/E659 are common across the
+        supported MS41 variants; the F1FA/F7E0/F7E8 counters are not.
+        """
+
+        if self.state is not SessionState.TOKEN_KNOWN or self.link is not LinkRate.LOW:
+            raise FastReadStateError(
+                "native-fast reentry polling requires TOKEN_KNOWN at low rate"
+            )
+        if not self.reentry_required:
+            self._emit("native_fast_read_reentry_not_required")
+            return
+
+        started = self._monotonic()
+        sample = 0
+        wait_announced = False
+        while True:
+            sample += 1
+            e658 = self._read_mem(
+                ReadRequest(AUTHORIZATION_STATE_ADDRESS, 1),
+                label=f"native_fast_reentry_{sample:02d}_E658",
+            )[0]
+            wrong_keys = self._read_mem(
+                ReadRequest(WRONG_KEY_COUNTER_ADDRESS, 1),
+                label=f"native_fast_reentry_{sample:02d}_E74B",
+            )[0]
+            timer = int.from_bytes(
+                self._read_mem(
+                    ReadRequest(NATIVE_FAST_REENTRY_TIMER_ADDRESS, 2),
+                    label=f"native_fast_reentry_{sample:02d}_E72E",
+                ),
+                "little",
+            )
+            latch = self._read_mem(
+                ReadRequest(NATIVE_FAST_REENTRY_LATCH_ADDRESS, 1),
+                label=f"native_fast_reentry_{sample:02d}_E659",
+            )[0]
+            elapsed = max(0.0, self._monotonic() - started)
+            marker_fields = {
+                "sample": sample,
+                "elapsed_s": round(elapsed, 6),
+                "e658": e658,
+                "e74b": wrong_keys,
+                "e72e": timer,
+                "e659": latch,
+            }
+            self._emit("native_fast_read_reentry_marker", **marker_fields)
+
+            if e658 != 0:
+                self._emit(
+                    "native_fast_read_reentry_blocked",
+                    reason="authorization_state",
+                    **marker_fields,
+                )
+                raise NativeFastReadReentryNotReady(
+                    f"native-fast read entry is blocked by E658={e658}; turn "
+                    "ignition off, wait at least 10 seconds, then turn it on"
+                )
+            if wrong_keys >= 2:
+                self._emit(
+                    "native_fast_read_reentry_blocked",
+                    reason="wrong_key_lockout",
+                    **marker_fields,
+                )
+                raise NativeFastReadReentryNotReady(
+                    "native-fast read entry is blocked by E74B >= 2; turn "
+                    "ignition off, wait at least 10 seconds, then turn it on"
+                )
+            if latch == NATIVE_FAST_REENTRY_LATCH_READY_VALUE:
+                self.reentry_required = False
+                if self.reentry_ready_cb is not None:
+                    self.reentry_ready_cb()
+                self._emit(
+                    "native_fast_read_reentry_ready",
+                    **marker_fields,
+                )
+                return
+            if timer > NATIVE_FAST_REENTRY_TIMER_INITIAL_VALUE:
+                self._emit(
+                    "native_fast_read_reentry_blocked",
+                    reason="implausible_timer",
+                    **marker_fields,
+                )
+                raise NativeFastReadReentryNotReady(
+                    f"native-fast reentry timer E72E is implausible ({timer}); "
+                    "ignition cycle required"
+                )
+            if elapsed >= self.reentry_timeout:
+                self._emit(
+                    "native_fast_read_reentry_blocked",
+                    reason="timeout",
+                    timeout_s=self.reentry_timeout,
+                    **marker_fields,
+                )
+                raise NativeFastReadReentryNotReady(
+                    "native-fast read reentry did not complete within "
+                    f"{self.reentry_timeout:g} seconds; ignition cycle required"
+                )
+
+            if not wait_announced:
+                self._emit(
+                    "native_fast_read_reentry_wait_started",
+                    timeout_s=self.reentry_timeout,
+                    **marker_fields,
+                )
+                wait_announced = True
+            if self.progress_cb is not None:
+                self.progress_cb(
+                    0,
+                    0,
+                    "Waiting for ECU native-fast readiness "
+                    f"(E72E={timer}, E659=0x{latch:02X})",
+                )
+            self._sleep(
+                min(
+                    self.reentry_poll,
+                    max(0.0, self.reentry_timeout - elapsed),
+                )
+            )
+
     def _liveness(self, target: LinkRate) -> None:
         token = self._require_token()
         actual = self._read_mem(
@@ -534,6 +714,7 @@ class NativeFastReadSession:
                 f"disallowed escalation {old.name} --0x{selector:02X}--> {target.name}"
             )
 
+        self.fast_selector_attempted = True
         self._request(
             SELECTOR_COMMAND,
             bytes((selector,)) + self._require_token(),
@@ -695,6 +876,12 @@ class NativeFastReadSession:
             link=LinkRate.LOW,
             reason="B0 cleanup and normal low identity validated",
         )
+        self._emit(
+            "captured_read_cleanup_completed",
+            selector_to_low_guard_s=guard,
+            post_b0_identify_sent=True,
+        )
+        self._emit_queue_status(phase="post_read_cleanup_b0")
 
     def recover_read_only_to_low(self) -> bool:
         """Probe known rates and apply only the proven read-side cleanup."""
@@ -805,6 +992,17 @@ class NativeFastReadSession:
     def _recover_after_failure(self) -> None:
         if self.link is LinkRate.LOW and self.state is SessionState.LOW_READY:
             return
+        if (
+            not self.fast_selector_attempted
+            and self.link is LinkRate.LOW
+            and self.state is SessionState.TOKEN_KNOWN
+        ):
+            self._set_state(
+                state=SessionState.LOW_READY,
+                link=LinkRate.LOW,
+                reason="failure occurred before any native-fast selector",
+            )
+            return
         recovered = self.recover_read_only_to_low()
         self._emit("automatic_read_recovery", recovered=recovered)
 
@@ -813,6 +1011,7 @@ class NativeFastReadSession:
 
         try:
             self._begin()
+            self._wait_for_native_fast_reentry()
             self._enter_high()
             plan = build_fast_partial_read_plan()
             payloads = self._execute_read_requests(
@@ -846,6 +1045,7 @@ class NativeFastReadSession:
 
         try:
             self._begin()
+            self._wait_for_native_fast_reentry()
             self._enter_high()
             plan = build_fast_full_read_plan(pass_count=1)
             ds2_image = self._execute_full_pass(plan, 0)
@@ -898,14 +1098,24 @@ def read_partial_d2xx(
         echo=echo,
         event_cb=event_cb,
     )
+    pending = reentry_required(port)
+    session: Optional[NativeFastReadSession] = None
     try:
         session = NativeFastReadSession(
             transport,
             progress_cb=progress_cb,
             event_cb=event_cb,
+            reentry_required=pending,
+            reentry_ready_cb=lambda: clear_reentry_required(port),
         )
         return session.read_partial()
     finally:
+        if (
+            session is not None
+            and session.fast_selector_attempted
+            and session.link is LinkRate.LOW
+        ):
+            mark_reentry_required(port)
         transport.close()
 
 
@@ -923,12 +1133,22 @@ def read_full_d2xx(
         echo=echo,
         event_cb=event_cb,
     )
+    pending = reentry_required(port)
+    session: Optional[NativeFastReadSession] = None
     try:
         session = NativeFastReadSession(
             transport,
             progress_cb=progress_cb,
             event_cb=event_cb,
+            reentry_required=pending,
+            reentry_ready_cb=lambda: clear_reentry_required(port),
         )
         return session.read_full()
     finally:
+        if (
+            session is not None
+            and session.fast_selector_attempted
+            and session.link is LinkRate.LOW
+        ):
+            mark_reentry_required(port)
         transport.close()

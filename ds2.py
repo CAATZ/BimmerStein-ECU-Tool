@@ -797,8 +797,7 @@ class DS2Interface:
         return bytes((buf[ecx_5 + i] + buf[49 + i] + buf[26 + i]) & 0xFF
                      for i in range(4))
 
-    def unlock_write(self, XX: int = None, *, max_seed_attempts: int = None,
-                     seed_retry_delay: float = None) -> bytes:
+    def unlock_write(self, XX: int = None, *, log_fn=None, progress_cb=None) -> bytes:
         """Perform the MS41 DS2 write-unlock handshake (command 0x90).
 
         Sends BMW+XX challenge frame, receives 42-byte ECU response,
@@ -816,12 +815,12 @@ class DS2Interface:
             mismatch.
           * E658 state 1 means the ECU expects a key. A BMW challenge must not
             be repeated in that state because it would count as a wrong key.
-            A pre-key retry is allowed only after E658 is confirmed at zero and
-            E74B is confirmed unchanged.
+            Production defaults to the single captured initial challenge.
         """
         from ds2_write_authorization import (
             AUTHORIZATION_STATE_ADDRESS,
             CAPTURED_INITIAL_CHALLENGE,
+            FLASH_MODE_MARKER_ADDRESS,
             INITIAL_SEED_RETRY_DELAY,
             MAX_INITIAL_SEED_ATTEMPTS,
             WRONG_KEY_COUNTER_ADDRESS,
@@ -832,16 +831,8 @@ class DS2Interface:
         XX = int(XX)
         if not 0 <= XX <= 41:
             raise ValueError("write challenge must be in the stock range 0..41")
-        if max_seed_attempts is None:
-            max_seed_attempts = MAX_INITIAL_SEED_ATTEMPTS
-        if seed_retry_delay is None:
-            seed_retry_delay = INITIAL_SEED_RETRY_DELAY
-        max_seed_attempts = int(max_seed_attempts)
-        seed_retry_delay = float(seed_retry_delay)
-        if max_seed_attempts < 1:
-            raise ValueError("max_seed_attempts must be at least one")
-        if seed_retry_delay < 0:
-            raise ValueError("seed_retry_delay cannot be negative")
+        max_seed_attempts = MAX_INITIAL_SEED_ATTEMPTS
+        seed_retry_delay = INITIAL_SEED_RETRY_DELAY
 
         def read_authorization_state():
             state_data = self.read_mem(AUTHORIZATION_STATE_ADDRESS, 1)
@@ -853,7 +844,22 @@ class DS2Interface:
             log.debug("MS41 write auth state: E658=%d E74B=%d", state, counter)
             return state, counter
 
+        def observe_flash_mode_marker(label):
+            marker_data = self.read_mem(FLASH_MODE_MARKER_ADDRESS, 1)
+            if len(marker_data) != 1:
+                raise DS2Error("Could not read the stock flash-mode marker E740")
+            marker = marker_data[0]
+            message = f"MS41 flash-mode marker ({label}): E740=0x{marker:02X}"
+            log.info(message)
+            if log_fn:
+                try:
+                    log_fn(message, "info")
+                except TypeError:
+                    log_fn(message)
+            return marker
+
         state, wrong_keys = read_authorization_state()
+        observe_flash_mode_marker("initial authorization")
         if wrong_keys >= 2:
             raise DS2Error(
                 "Write authorization is locked (E74B >= 2); turn ignition off, "
@@ -879,6 +885,7 @@ class DS2Interface:
             return already
 
         initial_wrong_keys = wrong_keys
+
         rx_data = None
         last_error = None
         for attempt in range(1, max_seed_attempts + 1):
@@ -886,15 +893,17 @@ class DS2Interface:
                 rx_data = self.execute(0x90, bmw_payload)
                 break
             except DS2Error as error:
-                if isinstance(error, DS2NegativeResponse) and not (
+                retryable_empty_a1 = isinstance(error, DS2NegativeResponse) and (
                     error.command == 0x90
                     and error.status == 0xA1
                     and error.payload == b""
-                ):
+                )
+                if not retryable_empty_a1:
                     raise
                 last_error = error
                 try:
                     state, wrong_keys = read_authorization_state()
+                    observe_flash_mode_marker(f"after challenge A1 attempt {attempt}")
                 except DS2Error as state_error:
                     raise DS2Error(
                         "Write-seed response was ambiguous and ECU authorization "
@@ -914,12 +923,18 @@ class DS2Interface:
                         status=getattr(error, "status", None),
                         response=getattr(error, "response", b""),
                     ) from error
-                log.info(
-                    "Write seed unavailable with E658 still zero; refreshing preamble before "
-                    "bounded retry %d/%d",
-                    attempt + 1,
-                    max_seed_attempts,
+                wait_message = (
+                    f"ECU seed not ready; waiting {seed_retry_delay:g} seconds "
+                    "before one final retry"
                 )
+                log.info(wait_message)
+                if log_fn:
+                    try:
+                        log_fn(wait_message, "warn")
+                    except TypeError:
+                        log_fn(wait_message)
+                if progress_cb:
+                    progress_cb(0, 0, wait_message)
                 time.sleep(seed_retry_delay)
                 self._prepare()
                 self.read_mem(0x2001, 12)
@@ -1117,7 +1132,7 @@ class DS2Interface:
                 _log("0xE659 not ready for verify; skipped", "warn")
                 return None, None
             time.sleep(0.5)
-        self.unlock_write()
+        self.unlock_write(log_fn=_log)
         self.read_mem(0x1CF4, 3)
         self.status()
         resp = self._flash_sub(0x0F, self._ds2_addr3(self.PROGRAM_VERIFY_DS2_ADDR))
@@ -1217,7 +1232,7 @@ class DS2Interface:
 
         if not skip_unlock:
             _log("Unlocking write (DS2 seed-key)…")
-            self.unlock_write()
+            self.unlock_write(log_fn=_log, progress_cb=progress_cb)
 
         # Post-unlock diagnostic reads (observed in capture)
         self.read_mem(0x1CF4, 3)
@@ -1360,7 +1375,7 @@ class DS2Interface:
             self.status()
         if not skip_unlock:
             _log("Unlocking write (DS2 seed-key)…")
-            self.unlock_write()
+            self.unlock_write(log_fn=_log, progress_cb=progress_cb)
         self.read_mem(0x1CF4, 3)
 
         # ── Phase 1 — program sectors ─────────────────────────────────────────

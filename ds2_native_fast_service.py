@@ -6,11 +6,13 @@ import datetime as _datetime
 from dataclasses import dataclass
 from pathlib import Path
 
-from ds2_fast_contracts import FastOperation
+from ds2_fast_contracts import FastOperation, LinkRate
 from ds2_fast_full_write import (
     NativeFastFullWriteTransport,
 )
 from ds2_fast_partial_write import (
+    InitialWriteSeedUnavailable,
+    NativeFastWriteReentryNotReady,
     NativeFastPartialWriteTransport,
 )
 from ds2_fast_slim_write import (
@@ -18,6 +20,11 @@ from ds2_fast_slim_write import (
     SlimNativeFastPartialWriteSession,
 )
 from ds2_fast_safety import OperationJournal
+from ds2_native_fast_reentry import (
+    clear_reentry_required,
+    mark_reentry_required,
+    reentry_required,
+)
 from app_paths import mutable_path
 
 
@@ -34,6 +41,8 @@ class NativeFastPreEraseFailure(NativeFastServiceError):
     def __init__(self, cause: Exception, *, safe_legacy_fallback: bool):
         self.cause = cause
         self.safe_legacy_fallback = bool(safe_legacy_fallback)
+        self.seed_unavailable = isinstance(cause, InitialWriteSeedUnavailable)
+        self.reentry_not_ready = isinstance(cause, NativeFastWriteReentryNotReady)
         super().__init__(str(cause))
 
 
@@ -94,6 +103,19 @@ def _new_journal(port: str, operation: FastOperation) -> OperationJournal:
     )
 
 
+def _event_sink(journal: OperationJournal, observer=None):
+    """Always journal transport events; mirror diagnostics without affecting I/O."""
+    def callback(event, fields):
+        journal.event_callback(event, fields)
+        if observer is not None:
+            try:
+                observer(event, dict(fields))
+            except Exception:
+                # External diagnostic rendering must never alter flash state.
+                pass
+    return callback
+
+
 def _finish_setup_failure(
     journal: OperationJournal,
     error: Exception,
@@ -122,22 +144,26 @@ def write_partial_d2xx(
     *,
     verify_write: bool = False,
     progress_cb=None,
+    event_cb=None,
 ):
     """Run the slim partial writer and retain D2XX after a post-erase failure."""
     journal = _new_journal(port, FastOperation.PARTIAL_WRITE)
     try:
         transport = NativeFastPartialWriteTransport.open_d2xx(
-            port, event_cb=journal.event_callback
+            port, event_cb=_event_sink(journal, event_cb)
         )
     except Exception as error:
         _finish_setup_failure(journal, error, phase="transport_open")
         raise
+    pending = reentry_required(port)
     try:
         session = SlimNativeFastPartialWriteSession(
             transport,
             bytes(target_tune),
             journal,
             verify_write=verify_write,
+            reentry_required=pending,
+            reentry_ready_cb=lambda: clear_reentry_required(port),
             progress_cb=_progress_adapter(progress_cb),
         )
     except Exception as error:
@@ -160,11 +186,21 @@ def write_partial_d2xx(
                     error=error,
                 )
             ) from error
+        if (
+            bool(getattr(session, "fast_write_armed", False))
+            and getattr(session, "link", None) is LinkRate.LOW
+        ):
+            mark_reentry_required(port)
         transport.close()
         raise NativeFastPreEraseFailure(
             error, safe_legacy_fallback=session.safe_legacy_fallback
         ) from error
     else:
+        if (
+            bool(getattr(session, "fast_write_armed", False))
+            and getattr(session, "link", None) is LinkRate.LOW
+        ):
+            mark_reentry_required(port)
         transport.close()
         return result
 
@@ -176,16 +212,18 @@ def write_full_d2xx(
     connected_family: str,
     verify_write: bool = False,
     progress_cb=None,
+    event_cb=None,
 ):
     """Run the slim full writer, staying high on success and retaining failures."""
     journal = _new_journal(port, FastOperation.FULL_WRITE)
     try:
         transport = NativeFastFullWriteTransport.open_d2xx(
-            port, event_cb=journal.event_callback
+            port, event_cb=_event_sink(journal, event_cb)
         )
     except Exception as error:
         _finish_setup_failure(journal, error, phase="transport_open")
         raise
+    pending = reentry_required(port)
     try:
         session = SlimNativeFastFullWriteSession(
             transport,
@@ -193,6 +231,8 @@ def write_full_d2xx(
             journal,
             connected_family=connected_family,
             verify_write=verify_write,
+            reentry_required=pending,
+            reentry_ready_cb=lambda: clear_reentry_required(port),
             progress_cb=_progress_adapter(progress_cb),
         )
     except Exception as error:
@@ -215,6 +255,11 @@ def write_full_d2xx(
                     error=error,
                 )
             ) from error
+        if (
+            bool(getattr(session, "fast_write_armed", False))
+            and getattr(session, "link", None) is LinkRate.LOW
+        ):
+            mark_reentry_required(port)
         transport.close()
         raise NativeFastPreEraseFailure(
             error, safe_legacy_fallback=session.safe_legacy_fallback
@@ -233,6 +278,7 @@ def write_program_d2xx(
     connected_family: str,
     verify_write: bool = False,
     progress_cb=None,
+    event_cb=None,
 ):
     """Deploy only the program array with the native fast DS2 contract.
 
@@ -244,13 +290,14 @@ def write_program_d2xx(
     journal = _new_journal(port, FastOperation.FULL_WRITE)
     try:
         transport = NativeFastFullWriteTransport.open_d2xx(
-            port, event_cb=journal.event_callback
+            port, event_cb=_event_sink(journal, event_cb)
         )
     except Exception as error:
         # No transport means no request reached the ECU; a caller may safely
         # retry the exact operation through its legacy low-rate path.
         _finish_setup_failure(journal, error, phase="transport_open")
         raise NativeFastPreEraseFailure(error, safe_legacy_fallback=True) from error
+    pending = reentry_required(port)
     try:
         session = SlimNativeFastFullWriteSession(
             transport,
@@ -258,6 +305,8 @@ def write_program_d2xx(
             journal,
             connected_family=connected_family,
             verify_write=verify_write,
+            reentry_required=pending,
+            reentry_ready_cb=lambda: clear_reentry_required(port),
             progress_cb=_progress_adapter(progress_cb),
         )
     except Exception as error:
@@ -278,6 +327,11 @@ def write_program_d2xx(
                     error=error,
                 )
             ) from error
+        if (
+            bool(getattr(session, "fast_write_armed", False))
+            and getattr(session, "link", None) is LinkRate.LOW
+        ):
+            mark_reentry_required(port)
         transport.close()
         raise NativeFastPreEraseFailure(
             error, safe_legacy_fallback=session.safe_legacy_fallback

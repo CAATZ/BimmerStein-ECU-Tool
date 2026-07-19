@@ -11,6 +11,26 @@ def test_d2xx_available_returns_bool_and_never_raises():
     assert softbsl_install.d2xx_available() in (True, False)
 
 
+def test_install_log_keeps_detail_as_debug_and_one_terminal_success():
+    events = []
+    log = softbsl_install._install_log(
+        lambda message, level="info": events.append((message, level))
+    )
+
+    log("bootstrap door : temporary.bin")
+    log("staged 43 entry (stage=464 B, tier=high, agent=1464 B) ...")
+    log(">>> INSTALL DONE: detailed engine completion")
+    log("== FAST BOOTSTRAP COMPLETE == stock full-program finalization left the ECU high")
+
+    assert events[0] == ("bootstrap door : temporary.bin", "debug")
+    assert events[1][1] == "debug"
+    assert events[2][1] == "debug"
+    assert events[3] == (
+        "Phase 1/3 complete; the required ignition cycle may begin.",
+        "ok",
+    )
+
+
 def test_install_compose_reads_ecu_when_no_base(monkeypatch):
     captured = {}
     def fake_run(args, log):
@@ -65,6 +85,20 @@ def test_cached_full_read_is_passed_as_bytes_not_a_file_path(monkeypatch):
     assert args.ds2_factory is softbsl_install.AppDS2Interface
 
 
+def test_install_request_uses_dedicated_phase1_reentry_callback():
+    class Prompt:
+        def __call__(self, _message):
+            return None
+
+        def phase1_reentry_retry_cancel(self, port, message):
+            return bool(port and message)
+
+    prompt = Prompt()
+    args = softbsl_install._install_args(port="COM4", prompt=prompt)
+
+    assert args.phase1_reentry_prompt == prompt.phase1_reentry_retry_cancel
+
+
 def test_run_install_calls_engine_directly_and_normalizes_success(monkeypatch):
     seen = []
     monkeypatch.setattr(softbsl_install._sb, "cmd_install",
@@ -90,6 +124,22 @@ def test_run_install_normalizes_domain_error_for_the_gui(monkeypatch):
         assert False, "expected an in-process service error"
     except softbsl_install.SoftBSLInstallError as e:
         assert "safety gate refused" in str(e)
+
+
+def test_run_install_preserves_pre_phase1_typed_cancellation(monkeypatch):
+    def cancel(_request, _log):
+        raise softbsl_install._sb.InstallCancelled(
+            "operator cancelled before Phase 1", phase="pre_phase1"
+        )
+
+    monkeypatch.setattr(softbsl_install._sb, "install", cancel)
+    args = softbsl_install._install_args(port="COM9", prompt=lambda _m: None)
+
+    with pytest.raises(softbsl_install.SoftBSLInstallCancelled) as caught:
+        softbsl_install._run_install(args, lambda _line: None)
+
+    assert caught.value.phase == "pre_phase1"
+    assert "before Phase 1" in str(caught.value)
 
 
 def test_run_install_preserves_live_installer_recovery(monkeypatch):
@@ -240,6 +290,103 @@ def test_phase1_recovery_reuses_native_session_before_continuing_install(monkeyp
         ("resume", native_recovery, progress),
         ("continue", request, b"target", {"scope": "softbsl"}),
     ]
+
+
+def test_install_keycycle_retries_until_stock_ds2_reboot_is_confirmed(monkeypatch):
+    events = []
+
+    class Probe:
+        def __init__(self, label, answers):
+            self.label = label
+            self.answers = answers
+
+        def identify(self):
+            events.append(("identify", self.label))
+            if not self.answers:
+                raise RuntimeError("ignition is still off")
+            return b"SHINDE1"
+
+        def close(self):
+            events.append(("close", self.label))
+
+    probes = iter((Probe("off", False), Probe("on", True)))
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_open",
+        lambda _args: next(probes),
+    )
+    args = SimpleNamespace(
+        keycycle_prompt=lambda message: events.append(("keycycle", message)),
+        keycycle_retry_prompt=lambda message: events.append(("retry", message)) or True,
+    )
+
+    softbsl_install._sb._install_keycycle(args)
+
+    assert [event[0] for event in events] == [
+        "keycycle", "identify", "close", "retry", "identify", "close"
+    ]
+    assert "OFF" in events[0][1] and "ignition ON" in events[0][1]
+    assert "Phase 2 erase" in events[3][1]
+
+
+def test_install_keycycle_cancel_is_typed_and_pre_phase2(monkeypatch):
+    events = []
+
+    class SilentProbe:
+        def identify(self):
+            raise RuntimeError("no response")
+
+        def close(self):
+            events.append("close")
+
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_open",
+        lambda _args: SilentProbe(),
+    )
+    args = SimpleNamespace(
+        keycycle_prompt=lambda _message: None,
+        keycycle_retry_prompt=lambda _message: False,
+    )
+
+    with pytest.raises(
+        softbsl_install._sb.InstallCancelled,
+        match="Phase 2 erase was not started",
+    ):
+        softbsl_install._sb._install_keycycle(args)
+
+    assert events == ["close"]
+
+
+def test_session_closes_transport_when_agent_entry_fails_before_return(monkeypatch):
+    events = []
+
+    class Transport:
+        def close(self):
+            events.append("close")
+
+    class FailingSoftBSL:
+        def __init__(self, _transport):
+            pass
+
+        def enter(self, _agent, trigger=None):
+            events.append(("enter", trigger))
+            raise softbsl_install._sb.SoftBSLError("ignition was not cycled")
+
+    monkeypatch.setattr(softbsl_install._sb, "load_agent", lambda _path: b"agent")
+    monkeypatch.setattr(softbsl_install._sb, "_open", lambda *_args, **_kwargs: Transport())
+    monkeypatch.setattr(softbsl_install._sb, "SoftBSL", FailingSoftBSL)
+    args = SimpleNamespace(
+        agent="agent.hex",
+        trigger="43",
+        auto_flash=False,
+        hammer_entry=False,
+    )
+
+    with pytest.raises(softbsl_install._sb.SoftBSLError, match="not cycled"):
+        softbsl_install._sb._session(args)
+
+    assert events == [("enter", "43"), "close"]
 
 
 def test_engine_composes_with_the_vendored_patcher_library(monkeypatch):
@@ -767,7 +914,7 @@ def test_shared_app_ds2_supports_install_finalize(monkeypatch):
     events = []
     d._prepare = lambda: events.append("prepare")
     d.status = lambda: events.append("status")
-    d.unlock_write = lambda: events.append("unlock")
+    d.unlock_write = lambda **_kwargs: events.append("unlock")
     d.read_mem = lambda addr, size: (b"\xCC" if addr == 0xE659 else b"\x00" * size)
     d._flash_sub = lambda sub, addr: events.append((sub, addr)) or b"\x01"
 
@@ -800,7 +947,12 @@ def test_softbsl_entry_uses_shared_state_aware_unlock_without_e659_gate():
 
     host._ds2_unlock()
 
-    assert events == ["prepare", ("read", 0x2001, 12), "status", "unlock"]
+    assert events == [
+        "prepare",
+        ("read", 0x2001, 12),
+        "status",
+        "unlock",
+    ]
 
 
 def test_bootstrap_unsafe_native_failure_never_starts_legacy_writer(
@@ -865,6 +1017,574 @@ def test_bootstrap_unsafe_native_failure_never_starts_legacy_writer(
         softbsl_install._sb.cmd_deploy_splice(args)
 
     assert events == ["open", "probe_closed", "native_program"]
+
+
+def test_bootstrap_seed_unavailable_never_starts_legacy_writer_even_when_low_is_confirmed(
+    tmp_path, monkeypatch
+):
+    import ds2_native_fast_service
+
+    image = tmp_path / "bootstrap.bin"
+    image.write_bytes(b"\xFF" * 0x40000)
+    events = []
+
+    class Probe:
+        uses_d2xx = True
+
+        def close(self):
+            events.append("probe_closed")
+
+    def open_probe(_args):
+        events.append("open")
+        if events.count("open") > 1:
+            raise AssertionError("legacy 9600 writer must not be opened")
+        return Probe()
+
+    def seed_unavailable(*_args, **_kwargs):
+        events.append("native_program")
+        raise ds2_native_fast_service.NativeFastPreEraseFailure(
+            ds2_native_fast_service.InitialWriteSeedUnavailable(
+                "initial write seed unavailable after 2 bounded BMW/0x1E challenges"
+            ),
+            safe_legacy_fallback=True,
+        )
+
+    monkeypatch.setattr(softbsl_install._sb, "_open", open_probe)
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_detect_flash_chip",
+        lambda _probe: ("intel", b"INTEL"),
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb.ecu_info,
+        "image_chip_family",
+        lambda _image: "intel",
+    )
+    monkeypatch.setattr(
+        ds2_native_fast_service,
+        "write_program_d2xx",
+        seed_unavailable,
+    )
+    args = SimpleNamespace(
+        image=str(image),
+        dry_run=False,
+        yes=True,
+        no_finalize=False,
+        no_readback=True,
+        verify_ranges=(),
+        port="COM1",
+        progress_cb=None,
+    )
+
+    with pytest.raises(
+        softbsl_install._sb.SoftBSLError,
+        match="not started",
+    ) as caught:
+        softbsl_install._sb.cmd_deploy_splice(args)
+
+    assert events == ["open", "probe_closed", "native_program"]
+    message = str(caught.value).lower()
+    assert "nothing was erased" in message
+    assert "9600 fallback was not attempted" in message
+    assert "turn ignition off" in message
+    assert "10 seconds" in message
+    assert "turn ignition on" in message
+
+
+def test_bootstrap_reuses_install_preflight_without_reopening_ds2(
+    tmp_path, monkeypatch
+):
+    import ds2_native_fast_service
+
+    image = tmp_path / "bootstrap.bin"
+    image.write_bytes(b"\xFF" * 0x40000)
+    calls = []
+    preflight = {
+        "port": "COM1",
+        "uses_d2xx": True,
+        "flash_family": "intel",
+        "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
+        "cal_variant": "MS41.3",
+        "program_variant": "MS41.3",
+        "consistent": True,
+    }
+
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_open",
+        lambda _args: pytest.fail(
+            "Phase-1 must not reopen DS2 after the native-fast base read"
+        ),
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb.ecu_info,
+        "image_chip_family",
+        lambda _image: "intel",
+    )
+    monkeypatch.setattr(
+        ds2_native_fast_service,
+        "write_program_d2xx",
+        lambda *args, **kwargs: calls.append((args, kwargs))
+        or SimpleNamespace(power_cycle_required=True, verified=False),
+    )
+    args = SimpleNamespace(
+        image=str(image),
+        dry_run=False,
+        yes=True,
+        no_finalize=False,
+        no_readback=True,
+        verify_ranges=(),
+        port="COM1",
+        progress_cb=None,
+        _live_preflight=preflight,
+    )
+
+    softbsl_install._sb.cmd_deploy_splice(args)
+
+    assert len(calls) == 1
+    assert calls[0][0][0] == "COM1"
+    assert calls[0][1]["connected_family"] == "intel"
+
+
+def test_install_reuses_cached_variant_and_family_for_phase1(monkeypatch, tmp_path):
+    bootstrap = tmp_path / "bootstrap.bin"
+    target = tmp_path / "target.bin"
+    bootstrap.write_bytes(b"\xFF" * 0x40000)
+    target.write_bytes(b"\xFF" * 0x40000)
+    calls = []
+    preflight = {
+        "port": "COM1",
+        "uses_d2xx": True,
+        "flash_family": "intel",
+        "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
+        "cal_variant": "MS41.3",
+        "program_variant": "MS41.3",
+        "consistent": True,
+    }
+    args = SimpleNamespace(
+        bootstrap=str(bootstrap),
+        target=str(target),
+        port="COM1",
+        dry_run=False,
+        yes=True,
+        preserve_cal=True,
+        chip="28f200",
+        baud="low",
+        force=False,
+        progress_cb=None,
+        bootstrap_verify_ranges=(),
+        _live_preflight=preflight,
+    )
+
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_open",
+        lambda _args: pytest.fail(
+            "cached preflight must avoid a post-base-read DS2 reopen"
+        ),
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_patch_base_version",
+        lambda _image: "MS41.3",
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "cmd_deploy_splice",
+        lambda phase_args: calls.append(("phase1", phase_args._live_preflight)),
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_continue_install_after_bootstrap",
+        lambda *_args: calls.append(("continue",)),
+    )
+
+    softbsl_install._sb.cmd_install(args)
+
+    assert calls == [("phase1", preflight), ("continue",)]
+
+
+def test_install_phase1_marker_recovery_reuses_prepared_images_and_live_family(
+    monkeypatch, tmp_path
+):
+    import ds2_native_fast_service
+
+    bootstrap = tmp_path / "bootstrap-retry.bin"
+    target = tmp_path / "target-retry.bin"
+    bootstrap_bytes = b"\xA5" * 0x40000
+    target_bytes = b"\x5A" * 0x40000
+    bootstrap.write_bytes(bootstrap_bytes)
+    target.write_bytes(target_bytes)
+    events = []
+
+    class Probe:
+        uses_d2xx = True
+        closed = False
+
+        def close(self):
+            self.closed = True
+            events.append("probe_closed")
+
+    probe = Probe()
+    open_calls = []
+
+    def open_probe(_args):
+        open_calls.append(True)
+        return probe
+
+    native_calls = []
+
+    def write_program(port, image, **kwargs):
+        native_calls.append((port, bytes(image), dict(kwargs)))
+        if len(native_calls) == 1:
+            raise ds2_native_fast_service.NativeFastPreEraseFailure(
+                ds2_native_fast_service.NativeFastWriteReentryNotReady(
+                    "E659 did not reach 0xCC; no challenge, selector, or flash command was sent"
+                ),
+                safe_legacy_fallback=False,
+            )
+        return SimpleNamespace(power_cycle_required=True, verified=False)
+
+    prompt_calls = []
+
+    def retry_prompt(port, message):
+        assert probe.closed is True
+        prompt_calls.append((port, message))
+        return True
+
+    args = SimpleNamespace(
+        bootstrap=str(bootstrap),
+        target=str(target),
+        port="COM1",
+        dry_run=False,
+        yes=True,
+        preserve_cal=True,
+        chip="auto",
+        baud="high",
+        force=False,
+        progress_cb=None,
+        bootstrap_verify_ranges=(),
+        phase1_reentry_prompt=retry_prompt,
+    )
+    resolve_calls = []
+    continued = []
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_install_resolve_images",
+        lambda request: resolve_calls.append(request),
+    )
+    monkeypatch.setattr(softbsl_install._sb, "_open", open_probe)
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_detect_flash_chip",
+        lambda _probe: ("intel", softbsl_install._sb._DRV_SIG_INTEL),
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_detect_ecu_variant",
+        lambda _probe: ("MS41.3", "MS41.3", True),
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb.ecu_info,
+        "image_chip_family",
+        lambda _image: "intel",
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb, "_patch_base_version", lambda _image: "MS41.3"
+    )
+    monkeypatch.setattr(
+        ds2_native_fast_service, "write_program_d2xx", write_program
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_install_keycycle",
+        lambda request: continued.append(("keycycle", request)),
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_run_install_target_phase",
+        lambda request, prepared_target, flash_over: continued.append(
+            ("phase2", request, prepared_target, flash_over)
+        ),
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_finish_install",
+        lambda request, prepared_target: continued.append(
+            ("finish", request, prepared_target)
+        ),
+    )
+
+    softbsl_install._sb.cmd_install(args)
+
+    assert len(resolve_calls) == 1
+    assert len(open_calls) == 1
+    assert len(native_calls) == 2
+    assert [call[0] for call in native_calls] == ["COM1", "COM1"]
+    assert [call[1] for call in native_calls] == [bootstrap_bytes, bootstrap_bytes]
+    assert [call[2]["connected_family"] for call in native_calls] == [
+        "intel", "intel"
+    ]
+    assert len(prompt_calls) == 1
+    assert "nothing was erased" in prompt_calls[0][1]
+    assert "The serial port has been disconnected and released" in prompt_calls[0][1]
+    assert [step[0] for step in continued] == ["keycycle", "phase2", "finish"]
+    assert continued[1][2] == target_bytes
+    assert continued[2][2] == target_bytes
+
+
+def test_repeated_phase1_marker_timeout_requires_each_decision_and_cancel_is_typed(
+    monkeypatch, tmp_path
+):
+    import ds2_native_fast_service
+
+    bootstrap = tmp_path / "bootstrap-repeat.bin"
+    target = tmp_path / "target-repeat.bin"
+    bootstrap.write_bytes(b"\xA5" * 0x40000)
+    target.write_bytes(b"\x5A" * 0x40000)
+    preflight = {
+        "port": "COM1",
+        "uses_d2xx": True,
+        "flash_family": "intel",
+        "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
+        "cal_variant": "MS41.3",
+        "program_variant": "MS41.3",
+        "consistent": True,
+    }
+    decisions = iter((True, False))
+    prompt_calls = []
+    attempts = []
+    marker_error = ds2_native_fast_service.NativeFastPreEraseFailure(
+        ds2_native_fast_service.NativeFastWriteReentryNotReady(
+            "E659 did not reach 0xCC; no challenge, selector, or flash command was sent"
+        ),
+        safe_legacy_fallback=False,
+    )
+    args = SimpleNamespace(
+        bootstrap=str(bootstrap),
+        target=str(target),
+        port="COM1",
+        dry_run=False,
+        yes=True,
+        preserve_cal=True,
+        chip="28f200",
+        baud="high",
+        force=False,
+        progress_cb=None,
+        bootstrap_verify_ranges=(),
+        _live_preflight=preflight,
+        phase1_reentry_prompt=lambda port, message: prompt_calls.append(
+            (port, message)
+        ) or next(decisions),
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb, "_install_resolve_images", lambda _args: None
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb, "_patch_base_version", lambda _image: "MS41.3"
+    )
+
+    def fail_marker(phase_args):
+        attempts.append(
+            (phase_args.image, phase_args.native_fast_retry_only)
+        )
+        raise marker_error
+
+    monkeypatch.setattr(softbsl_install._sb, "cmd_deploy_splice", fail_marker)
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_continue_install_after_bootstrap",
+        lambda *_args: pytest.fail("Phase 2 must not start after cancellation"),
+    )
+
+    with pytest.raises(softbsl_install._sb.InstallCancelled) as caught:
+        softbsl_install._sb.cmd_install(args)
+
+    assert caught.value.phase == "pre_phase1"
+    assert attempts == [(str(bootstrap), False), (str(bootstrap), True)]
+    assert len(prompt_calls) == 2
+
+
+def test_phase1_native_retry_never_downshifts_to_legacy_writer(monkeypatch, tmp_path):
+    import ds2_native_fast_service
+
+    bootstrap = tmp_path / "bootstrap-no-fallback.bin"
+    image = b"\xA5" * 0x40000
+    bootstrap.write_bytes(image)
+    preflight = {
+        "port": "COM1",
+        "uses_d2xx": True,
+        "flash_family": "intel",
+        "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
+        "cal_variant": "MS41.3",
+        "program_variant": "MS41.3",
+        "consistent": True,
+    }
+    native_calls = []
+
+    def native_attempt(*_args, **_kwargs):
+        native_calls.append(True)
+        if len(native_calls) == 1:
+            cause = ds2_native_fast_service.NativeFastWriteReentryNotReady(
+                "E659 did not reach 0xCC"
+            )
+            safe_fallback = False
+        else:
+            cause = OSError("fresh D2XX transport could not open")
+            safe_fallback = True
+        raise ds2_native_fast_service.NativeFastPreEraseFailure(
+            cause, safe_legacy_fallback=safe_fallback
+        )
+
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_open",
+        lambda _args: pytest.fail("legacy DS2 must not be opened on the retry"),
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb.ecu_info,
+        "image_chip_family",
+        lambda _image: "intel",
+    )
+    monkeypatch.setattr(
+        ds2_native_fast_service, "write_program_d2xx", native_attempt
+    )
+    args = SimpleNamespace(
+        image=str(bootstrap),
+        dry_run=False,
+        yes=True,
+        no_finalize=False,
+        no_readback=True,
+        verify_ranges=(),
+        port="COM1",
+        progress_cb=None,
+        _live_preflight=preflight,
+        phase1_reentry_recovery=True,
+        native_fast_retry_only=False,
+    )
+
+    with pytest.raises(ds2_native_fast_service.NativeFastPreEraseFailure):
+        softbsl_install._sb.cmd_deploy_splice(args)
+
+    args.native_fast_retry_only = True
+    with pytest.raises(
+        softbsl_install._sb.SoftBSLError,
+        match="legacy 9600 writer was not attempted",
+    ):
+        softbsl_install._sb.cmd_deploy_splice(args)
+
+    assert len(native_calls) == 2
+
+
+@pytest.mark.parametrize(
+    "phase1_error",
+    [
+        pytest.param(
+            __import__("ds2_native_fast_service").NativeFastPreEraseFailure(
+                __import__("ds2_native_fast_service").InitialWriteSeedUnavailable(
+                    "seed unavailable"
+                ),
+                safe_legacy_fallback=False,
+            ),
+            id="seed-unavailable",
+        ),
+        pytest.param(
+            __import__("ds2_native_fast_service").NativeFastPreEraseFailure(
+                RuntimeError("unrelated pre-erase failure"),
+                safe_legacy_fallback=False,
+            ),
+            id="unrelated-pre-erase",
+        ),
+    ],
+)
+def test_phase1_non_marker_preerase_failures_do_not_prompt(
+    phase1_error, monkeypatch, tmp_path
+):
+    bootstrap = tmp_path / "bootstrap-exclusion.bin"
+    target = tmp_path / "target-exclusion.bin"
+    bootstrap.write_bytes(b"\xA5" * 0x40000)
+    target.write_bytes(b"\x5A" * 0x40000)
+    preflight = {
+        "port": "COM1",
+        "uses_d2xx": True,
+        "flash_family": "intel",
+        "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
+        "cal_variant": "MS41.3",
+        "program_variant": "MS41.3",
+        "consistent": True,
+    }
+    args = SimpleNamespace(
+        bootstrap=str(bootstrap), target=str(target), port="COM1", dry_run=False,
+        yes=True, preserve_cal=True, chip="28f200", baud="high", force=False,
+        progress_cb=None, bootstrap_verify_ranges=(), _live_preflight=preflight,
+        phase1_reentry_prompt=lambda *_args: pytest.fail(
+            "only the structured marker timeout may prompt"
+        ),
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb, "_install_resolve_images", lambda _args: None
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb, "_patch_base_version", lambda _image: "MS41.3"
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "cmd_deploy_splice",
+        lambda _args: (_ for _ in ()).throw(phase1_error),
+    )
+
+    with pytest.raises(type(phase1_error)):
+        softbsl_install._sb.cmd_install(args)
+
+
+def test_phase1_posterase_failure_retains_session_without_marker_prompt(
+    monkeypatch, tmp_path
+):
+    import ds2_native_fast_service
+
+    bootstrap = tmp_path / "bootstrap-posterase.bin"
+    target = tmp_path / "target-posterase.bin"
+    bootstrap.write_bytes(b"\xA5" * 0x40000)
+    target.write_bytes(b"\x5A" * 0x40000)
+    preflight = {
+        "port": "COM1",
+        "uses_d2xx": True,
+        "flash_family": "intel",
+        "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
+        "cal_variant": "MS41.3",
+        "program_variant": "MS41.3",
+        "consistent": True,
+    }
+    retained = SimpleNamespace(
+        port="COM1", error=RuntimeError("program interrupted"), is_open=True
+    )
+    post_erase = ds2_native_fast_service.NativeWriteRecoveryRequired(retained)
+    args = SimpleNamespace(
+        bootstrap=str(bootstrap), target=str(target), port="COM1", dry_run=False,
+        yes=True, preserve_cal=True, chip="28f200", baud="high", force=False,
+        progress_cb=None, bootstrap_verify_ranges=(), _live_preflight=preflight,
+        phase1_reentry_prompt=lambda *_args: pytest.fail(
+            "post-erase failures must retain recovery without the marker prompt"
+        ),
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb, "_install_resolve_images", lambda _args: None
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb, "_patch_base_version", lambda _image: "MS41.3"
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "cmd_deploy_splice",
+        lambda _args: (_ for _ in ()).throw(post_erase),
+    )
+
+    with pytest.raises(softbsl_install._sb.InstallRecoveryRequired) as caught:
+        softbsl_install._sb.cmd_install(args)
+
+    assert caught.value.recovery.phase == "bootstrap"
+    assert caught.value.recovery.retained is retained
+    assert caught.value.recovery.is_open is True
 
 
 def test_bootstrap_readback_reports_typed_cumulative_progress():

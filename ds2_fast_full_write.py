@@ -47,7 +47,11 @@ from ds2_fast_plans import (
     TUNE_PRE_ERASE_POLL_ADDRESS,
     TUNE_START,
 )
-from ds2_write_authorization import INITIAL_SEED_RETRY_DELAY
+from ds2_write_authorization import (
+    INITIAL_SEED_RETRY_DELAY,
+    NATIVE_FAST_REENTRY_POLL_INTERVAL,
+    NATIVE_FAST_REENTRY_TIMEOUT,
+)
 
 
 class FullWriteError(PartialWriteError):
@@ -61,6 +65,8 @@ class FullWriteFamilyError(FullWriteError):
 @dataclass(frozen=True)
 class FullWriteTiming:
     initial_seed_retry_delay: float = INITIAL_SEED_RETRY_DELAY
+    native_fast_reentry_poll_interval: float = NATIVE_FAST_REENTRY_POLL_INTERVAL
+    native_fast_reentry_timeout: float = NATIVE_FAST_REENTRY_TIMEOUT
     pre_arm_delay: float = 0.40
     post_selector_delay: float = 0.52
     poll_delay: float = 0.50
@@ -209,8 +215,17 @@ class NativeFastFullWriteSession(NativeFastPartialWriteSession):
             first_byte_timeout=timeout,
         )
 
-    def _program_requests(self, requests: Tuple[FlashRequest, ...], phase: str) -> int:
-        total = sum(request.count for request in requests)
+    def _program_requests(
+        self,
+        requests: Tuple[FlashRequest, ...],
+        phase: str,
+        *,
+        progress_label: Optional[str] = None,
+        progress_base: int = 0,
+        progress_total: Optional[int] = None,
+    ) -> int:
+        local_total = sum(request.count for request in requests)
+        displayed_total = local_total if progress_total is None else progress_total
         done = 0
         for index, request in enumerate(requests, 1):
             self._flash_full(
@@ -218,11 +233,16 @@ class NativeFastFullWriteSession(NativeFastPartialWriteSession):
                 f"full_{phase}_{index:03d}_0x{request.address:06X}_{request.count}",
             )
             done += request.count
-            self._progress(phase, done, total)
+            self._progress(
+                progress_label or phase,
+                progress_base + done,
+                displayed_total,
+            )
             self._sleep(self.timing.between_program_requests)
         return done
 
     def _finalize_full(self) -> None:
+        self._progress("Finalizing full ROM write", 0, 0)
         self._set_state(
             state=SessionState.WRITE_FINALIZE_HIGH,
             link=LinkRate.HIGH,

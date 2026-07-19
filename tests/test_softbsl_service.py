@@ -23,6 +23,21 @@ def test_service_uses_the_app_ds2_transport():
     assert softbsl_service._sbds2 is app_ds2
 
 
+def test_agent_log_downgrades_mechanics_but_preserves_actionable_messages():
+    events = []
+    log = softbsl_service._agent_log(
+        lambda message, level="info": events.append((message, level))
+    )
+
+    log("streaming agent (1464 B) into SRAM 0xD800 ...")
+    log("marker 0 was not confirmed after reset; trying stock program VERIFY ...", "warn")
+
+    assert events == [
+        ("streaming agent (1464 B) into SRAM 0xD800 ...", "debug"),
+        ("marker 0 was not confirmed after reset; trying stock program VERIFY ...", "warn"),
+    ]
+
+
 def test_amd_image_is_blocked_on_intel_before_agent_entry(monkeypatch):
     monkeypatch.setattr(
         softbsl_service, "_open_session",

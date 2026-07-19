@@ -41,7 +41,7 @@ def _read_requests_at(serial, address):
     )
 
 
-def _partial_session(tmp_path, *, verify_write):
+def _partial_session(tmp_path, *, verify_write, progress_cb=None):
     source = _image_fixture()
     token = source.ds2_image[TOKEN_ADDRESS:TOKEN_ADDRESS + TOKEN_LENGTH]
     serial = PartialWriteStockSerial(source.ds2_image, token=token)
@@ -54,12 +54,13 @@ def _partial_session(tmp_path, *, verify_write):
         journal,
         verify_write=verify_write,
         timing=ZERO_PARTIAL_TIMING,
+        progress_cb=progress_cb,
         sleeper=lambda _seconds: None,
     )
     return session, serial, journal, target
 
 
-def _full_session(tmp_path, *, verify_write):
+def _full_session(tmp_path, *, verify_write, progress_cb=None):
     source = _image_fixture()
     token = source.ds2_image[TOKEN_ADDRESS:TOKEN_ADDRESS + TOKEN_LENGTH]
     serial = FullWriteStockSerial(source.ds2_image, token=token)
@@ -72,6 +73,7 @@ def _full_session(tmp_path, *, verify_write):
         connected_family="intel",
         verify_write=verify_write,
         timing=ZERO_FULL_TIMING,
+        progress_cb=progress_cb,
         sleeper=lambda _seconds: None,
     )
     return session, serial, journal
@@ -101,6 +103,45 @@ def test_slim_partial_verify_reads_requested_tune_once(tmp_path):
     assert _read_requests_at(serial, TUNE_START) == 1
 
 
+def test_slim_partial_progress_reports_cumulative_payload_bytes(tmp_path):
+    progress = []
+    session, _serial, _journal, _target = _partial_session(
+        tmp_path,
+        verify_write=False,
+        progress_cb=lambda phase, done, total: progress.append(
+            (phase, done, total)
+        ),
+    )
+
+    result = session.execute()
+
+    program = [
+        event
+        for event in progress
+        if event[0] == "Writing calibration region"
+    ]
+    assert program
+    assert {total for _phase, _done, total in program} == {
+        result.program_payload_bytes
+    }
+    assert [done for _phase, done, _total in program] == sorted(
+        done for _phase, done, _total in program
+    )
+    assert program[-1] == (
+        "Writing calibration region",
+        result.program_payload_bytes,
+        result.program_payload_bytes,
+    )
+
+    status_labels = [
+        phase.lower()
+        for phase, done, total in progress
+        if (done, total) == (0, 0)
+    ]
+    assert any("finaliz" in label for label in status_labels)
+    assert any("9600" in label or "low" in label for label in status_labels)
+
+
 def test_slim_full_without_verify_stays_high_and_does_not_read_back(tmp_path):
     session, serial, journal = _full_session(tmp_path, verify_write=False)
 
@@ -128,6 +169,53 @@ def test_slim_full_verify_reads_only_the_affected_ranges_once(tmp_path):
     assert _read_requests_at(serial, 0x20000) == 1
 
 
+def test_slim_full_progress_is_one_monotonic_program_and_calibration_total(
+    tmp_path,
+):
+    progress = []
+    session, _serial, _journal = _full_session(
+        tmp_path,
+        verify_write=False,
+        progress_cb=lambda phase, done, total: progress.append(
+            (phase, done, total)
+        ),
+    )
+
+    result = session.execute()
+
+    byte_progress = [
+        event
+        for event in progress
+        if event[2] > 0
+        and event[1:] != (0, 1)
+        and (
+            "program" in event[0].lower()
+            or "calibration" in event[0].lower()
+            or "tune" in event[0].lower()
+        )
+    ]
+    assert byte_progress
+    assert any("program" in phase.lower() for phase, _done, _total in byte_progress)
+    assert any(
+        "calibration" in phase.lower() or "tune" in phase.lower()
+        for phase, _done, _total in byte_progress
+    )
+    assert {total for _phase, _done, total in byte_progress} == {
+        result.payload_bytes
+    }
+    assert [done for _phase, done, _total in byte_progress] == sorted(
+        done for _phase, done, _total in byte_progress
+    )
+    assert byte_progress[-1][1:] == (result.payload_bytes, result.payload_bytes)
+
+    status_labels = [
+        phase.lower()
+        for phase, done, total in progress
+        if (done, total) == (0, 0)
+    ]
+    assert any("finaliz" in label for label in status_labels)
+
+
 def test_slim_program_only_never_erases_or_programs_tune_and_cleans_to_low(tmp_path):
     source = _image_fixture()
     token = source.ds2_image[0x205E:0x205E + 10]
@@ -137,6 +225,7 @@ def test_slim_program_only_never_erases_or_programs_tune_and_cleans_to_low(tmp_p
     serial = FullWriteStockSerial(source.ds2_image, token=token)
     journal = FullMemoryJournal(tmp_path / "slim-program-only.jsonl")
     transport = NativeFastFullWriteTransport(serial, event_cb=journal.event_callback)
+    progress = []
     session = SlimNativeFastFullWriteSession(
         transport,
         target,
@@ -144,6 +233,9 @@ def test_slim_program_only_never_erases_or_programs_tune_and_cleans_to_low(tmp_p
         connected_family="intel",
         verify_write=False,
         timing=ZERO_FULL_TIMING,
+        progress_cb=lambda phase, done, total: progress.append(
+            (phase, done, total)
+        ),
         sleeper=lambda _seconds: None,
     )
 
@@ -169,3 +261,13 @@ def test_slim_program_only_never_erases_or_programs_tune_and_cleans_to_low(tmp_p
         if command == 0x90 and len(args) == 11
     ]
     assert selectors == [0x01]
+    status_updates = [event for event in progress if event[1:] == (0, 1)]
+    assert status_updates == [
+        ("Authorizing program write", 0, 1),
+        ("Entering high-rate write mode", 0, 1),
+        ("Checking high-rate write link", 0, 1),
+        ("Preparing program erase", 0, 1),
+        ("Erasing program region", 0, 1),
+        ("Waiting for program erase to settle", 0, 1),
+        ("Starting temporary hook flash", 0, 1),
+    ]

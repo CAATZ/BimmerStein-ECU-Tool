@@ -35,7 +35,8 @@ exposed by the local runtime; `libffi-8.dll` identifies its ABI only.
 
 - Project: Riverbank Computing PyQt5
 - Installed package metadata: GPL version 3 or a commercial Riverbank license
-- Use: desktop user interface; bundled into the PyInstaller Windows package
+- Use: desktop user interface; bundled into the PyInstaller and experimental
+  Nuitka Windows packages
 
 The public beta uses the free GPLv3 edition of PyQt5 and the application is
 distributed under GNU GPL version 3 (`GPL-3.0-only`). The complete application
@@ -86,12 +87,27 @@ instead of presenting the text as a byte-identical wheel artifact.
 - License material:
   `THIRD_PARTY_LICENSES/PyInstaller-6.21.0-COPYING.txt`
 
+### Nuitka 4.1.3 runtime (experimental build only)
+
+- Project: Nuitka by Kay Hayen
+- Installed compiler metadata: GNU Affero General Public License version 3
+- Use: build-time compiler and the runtime code linked into the separately
+  labeled experimental Nuitka executable
+- License material:
+  `THIRD_PARTY_LICENSES/Nuitka-4.1.3-LICENSE-RUNTIME.txt`
+
+The Nuitka compiler itself is not bundled. Nuitka's Runtime Library Exception
+is an additional permission under AGPLv3 for target code produced by its
+compilation process. The tracked text is a byte-identical copy from the
+installed Nuitka 4.1.3 distribution. The application remains distributed under
+`GPL-3.0-only`; the exception does not change the project's license.
+
 ### Microsoft Visual C++ runtime
 
 - Frozen files: `VCRUNTIME140.dll`, `VCRUNTIME140_1.dll`, `MSVCP140.dll`, and
   `MSVCP140_1.dll` in the CPython and Qt application-local runtime directories
-- Origin: copied unchanged by PyInstaller from the installed CPython 3.14.6 and
-  PyQt5-Qt5 5.15.2 Windows build dependencies
+- Origin: copied unchanged by the selected PyInstaller or Nuitka backend from
+  the installed CPython 3.14.6 and PyQt5-Qt5 5.15.2 Windows build dependencies
 - Deployment: application-local in the Windows x64 portable package; users do
   not need to install a separate Visual C++ runtime
 
@@ -153,7 +169,7 @@ applicable terms. The application's GPLv3 license does not cover imported data.
 
 ## Trademarks and independence
 
-BMW, FTDI, Inno Setup, Microsoft, Python, PyQt, Qt, PyInstaller, ReportLab,
-pySerial, OpenSSL, and RomRaider names belong to their respective owners. BimmerStein ECU
-Tool is independent software and is not affiliated with or endorsed by those
-projects or companies.
+BMW, FTDI, Inno Setup, Microsoft, Nuitka, Python, PyQt, Qt, PyInstaller,
+ReportLab, pySerial, OpenSSL, and RomRaider names belong to their respective
+owners. BimmerStein ECU Tool is independent software and is not affiliated with
+or endorsed by those projects or companies.

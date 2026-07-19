@@ -159,6 +159,8 @@ class SlimNativeFastPartialWriteSession(
         timing: PartialWriteTiming = CAPTURED_PARTIAL_WRITE_TIMING,
         challenge: int = INITIAL_CHALLENGE,
         finalize_challenge: int = FINALIZE_CHALLENGE,
+        reentry_required: bool = False,
+        reentry_ready_cb: Optional[Callable[[], None]] = None,
         progress_cb: Optional[Callable[[str, int, int], None]] = None,
         sleeper: Callable[[float], None] = time.sleep,
     ):
@@ -180,6 +182,8 @@ class SlimNativeFastPartialWriteSession(
         self.timing = timing
         self.challenge = challenge
         self.finalize_challenge = finalize_challenge
+        self.reentry_required = bool(reentry_required)
+        self.reentry_ready_cb = reentry_ready_cb
         self.progress_cb = progress_cb
         self.cancel_cb = None
         self._sleep = sleeper
@@ -203,7 +207,7 @@ class SlimNativeFastPartialWriteSession(
         actual = self._read_range(
             TUNE_START,
             TUNE_SIZE,
-            phase="fast_partial_optional_verify",
+            phase="Verifying calibration region",
         )
         if actual != self.target_tune:
             index = next(
@@ -385,6 +389,8 @@ class SlimNativeFastFullWriteSession(
         rates: RateProfile = PRODUCTION_RATE_PROFILE,
         timing: FullWriteTiming = FullWriteTiming(),
         challenge: int = INITIAL_CHALLENGE,
+        reentry_required: bool = False,
+        reentry_ready_cb: Optional[Callable[[], None]] = None,
         progress_cb: Optional[Callable[[str, int, int], None]] = None,
         sleeper: Callable[[float], None] = time.sleep,
     ):
@@ -407,6 +413,8 @@ class SlimNativeFastFullWriteSession(
         self.rates = rates
         self.timing = timing
         self.challenge = challenge
+        self.reentry_required = bool(reentry_required)
+        self.reentry_ready_cb = reentry_ready_cb
         self.progress_cb = progress_cb
         self.cancel_cb = None
         self._sleep = sleeper
@@ -517,9 +525,11 @@ class SlimNativeFastFullWriteSession(
         """Erase/program only the program array; never enter the tune phase."""
         assert self.plan is not None
         plan = self.plan
+        self._progress("Preparing program erase", 0, 1)
         for index, request in enumerate(plan.program_polls, 1):
             self._flash_full(request, f"program_only_control_poll_{index}")
             self._sleep(self.timing.poll_delay)
+        self._progress("Erasing program region", 0, 1)
         self.destructive_started = True
         self._record(
             "destructive_boundary_crossed",
@@ -527,7 +537,9 @@ class SlimNativeFastFullWriteSession(
             retry_policy="no automatic retry or baud fallback",
         )
         self._flash_full(plan.program_erase, "program_only_array_erase", 6.0)
+        self._progress("Waiting for program erase to settle", 0, 1)
         self._sleep(self.timing.post_program_erase_delay)
+        self._progress("Starting temporary hook flash", 0, 1)
         self._flash_full(plan.primer, "program_only_primer")
         return plan.primer.count + self._program_requests(
             plan.program, "program_only_array"
@@ -566,6 +578,12 @@ class SlimNativeFastFullWriteSession(
     def _program_full_plan(self) -> Tuple[int, int]:
         assert self.plan is not None
         plan = self.plan
+        program_payload_total = plan.primer.count + sum(
+            request.count for request in plan.program
+        )
+        tune_payload_total = sum(request.count for request in plan.tune)
+        full_payload_total = program_payload_total + tune_payload_total
+        self._progress("Erasing program region (phase 1 of 2)", 0, 1)
         for index, request in enumerate(plan.program_polls, 1):
             self._flash_full(request, f"full_program_control_poll_{index}")
             self._sleep(self.timing.poll_delay)
@@ -578,8 +596,17 @@ class SlimNativeFastFullWriteSession(
         self._flash_full(plan.program_erase, "full_program_array_erase", 6.0)
         self._sleep(self.timing.post_program_erase_delay)
         self._flash_full(plan.primer, "full_program_primer")
+        self._progress(
+            "Writing program region (phase 1 of 2)",
+            plan.primer.count,
+            full_payload_total,
+        )
         program_payload = plan.primer.count + self._program_requests(
-            plan.program, "program_array"
+            plan.program,
+            "program_array",
+            progress_label="Writing program region (phase 1 of 2)",
+            progress_base=plan.primer.count,
+            progress_total=full_payload_total,
         )
         self._set_state(
             state=SessionState.HIGH_FULL_TUNE,
@@ -589,9 +616,16 @@ class SlimNativeFastFullWriteSession(
         for index, request in enumerate(plan.tune_polls_before, 1):
             self._flash_full(request, f"full_tune_control_poll_{index}")
             self._sleep(self.timing.poll_delay)
+        self._progress("Erasing calibration region (phase 2 of 2)", 0, 0)
         self._flash_full(plan.tune_erase, "full_tune_sector_erase", 5.0)
         self._sleep(self.timing.post_tune_erase_delay)
-        tune_payload = self._program_requests(plan.tune, "tune")
+        tune_payload = self._program_requests(
+            plan.tune,
+            "tune",
+            progress_label="Writing calibration region (phase 2 of 2)",
+            progress_base=program_payload,
+            progress_total=full_payload_total,
+        )
         for index, request in enumerate(plan.tune_polls_after, 1):
             self._flash_full(request, f"full_tune_post_poll_{index}")
             self._sleep(self.timing.post_tune_poll_delay)
@@ -707,8 +741,11 @@ class SlimNativeFastFullWriteSession(
             self._read_mem(0x1000C, 4, label="program_only_low_preamble_0x1000C")
             self._status("program_only_low_status_before_authorization")
             self._read_mem(0x1D07, 13, label="program_only_low_preamble_0x1D07")
+            self._progress("Authorizing program write", 0, 1)
             self._authorize_once()
+            self._progress("Entering high-rate write mode", 0, 1)
             self._arm_and_enter_high_full()
+            self._progress("Checking high-rate write link", 0, 1)
             self._high_rate_stability_check()
             program_payload = self._program_program_only_plan()
             self._finalize_full()

@@ -59,7 +59,7 @@ read-back verification.
 | Soft-BSL | Persistent loader plus RAM agents | Installation modifies firmware and requires the guided workflow. |
 | Hardware BSL | Intel 28F200 and AMD/JEDEC 29F200/29F400 | Uses a separate direct ASC0 tap, not the normal K-Line connection. |
 | File sizes | 256 KB full ROM and 24 KB tune | Choose the operation matching the file and intended region. |
-| Host platform | Windows x64 portable release | Keep the bundled `_internal` directory; it includes the required Visual C++ runtime. |
+| Host platform | Windows x64 installer or portable release | The regular PyInstaller package is recommended. Assets labeled `Nuitka-Experimental` are a second compatibility-testing option. |
 
 ### Flash-chip families
 
@@ -73,14 +73,26 @@ read-back verification.
 
 ## Install and start
 
+### Windows installer
+
+1. Download the regular versioned `Windows-x64-Setup.exe` installer (recommended).
+2. Run it for a per-user installation with no administrator access required.
+3. Install the driver for the intended FTDI adapter, then launch **BimmerStein ECU Tool**.
+
+Assets whose names contain `Nuitka-Experimental` are an explicitly **experimental** second option.
+That installer uses a distinct product identity and installation directory so it can coexist with the
+regular build for compatibility testing. Report the selected backend when describing startup or
+packaging behavior.
+
 ### Portable Windows package
 
 1. Verify the release ZIP checksum against its matching `.zip.sha256` file when supplied.
 2. Extract the complete ZIP into a writable folder.
 3. Run `BimmerStein ECU Tool.exe` from the extracted application folder.
 
-Do not move only the executable. PyQt, protocol resources, patch descriptors, and
-RAM-agent payloads are stored under `_internal` beside it.
+Do not move only the executable. PyQt, protocol resources, patch descriptors, and RAM-agent
+payloads are stored under `_internal` in the regular package and beside the executable in the flat
+experimental Nuitka package. Keep the selected package's complete extracted folder together.
 
 The executable may not be code-signed. Windows can show an unknown-publisher warning. Confirm the
 release filename and matching `.zip.sha256` value before continuing.
@@ -293,6 +305,12 @@ Bins catalogs files created by reads, backups, and patch composition. Entries in
 variant, type, VIN/CAL metadata, notes, and source. Use descriptive notes and preserve a known-good
 original separately from edited or patched images.
 
+Select a 24 KB tune or 256 KB full-ROM entry and choose **Open in BSL-Unbricker** to load it as the
+hardware-BSL reference image and open that tab. This prepares the recovery controls only; it does
+not connect to hardware, review or approve a flash plan, or flash the ECU. A tune selects the
+**tune** region when available. A full ROM leaves the chip, physical half, and region unchanged for
+the operator to select explicitly.
+
 <!-- pagebreak -->
 
 ## Firmware patches
@@ -317,6 +335,8 @@ during vehicle testing. Field-failed Ignition Cut V6 remains visible only when i
 be removed before V7 is applied.
 Applying one requires an explicit confirmation. Do not treat emulator verification as proof of
 safe behavior on an engine.
+
+<!-- pagebreak -->
 
 ### Required external definitions
 
@@ -394,6 +414,12 @@ Use the guided installer. It identifies the target, prepares the temporary entry
 the current image and flash family, installs the persistent loader, and confirms normal DS2
 communication after the required ignition sequence.
 
+If the temporary Phase 1 write cannot observe the ECU-owned `E659=0xCC` readiness marker, the
+application closes and releases the adapter before asking for an ignition cycle and an explicit
+**Retry** or **Cancel**. Cancellation at this prompt is pre-erase: no challenge, selector, erase, or
+flash command was sent. Each repeated marker timeout requires a new decision; the retry reopens a
+fresh native-fast transport and never silently changes to the legacy writer.
+
 The temporary installation entry is removed after the persistent loader is written. Subsequent
 daily operations use the persistent loader and current RAM agents.
 
@@ -440,7 +466,8 @@ VPP control remains disabled until the Intel chip family is selected.
 1. Select the dedicated BSL COM port, chip, physical half, region, and rate. The application uses
    the DTR reset line for the supported entry circuit.
 2. For a read, choose full 256 KB file order or the standard 24 KB tune.
-3. For a write, select the reference image and choose **Review Flash Plan**.
+3. For a write, select the reference image directly or prepare one from **Bins**, then choose
+   **Review Flash Plan**.
 4. Verify every physical address range and prerequisite in the preview.
 5. Choose **Confirm and Flash** only when the plan is correct.
 6. Monitor erase, programming, and complete physical-region read-back.
@@ -481,9 +508,9 @@ integrity before retrying.
 ### The ROM Analyzer cannot load definitions
 
 Use **Load Definition...** to select a valid RomRaider-format MS41 XML file. Do not copy XML files
-into `_internal`. If a registered definition was changed or damaged outside the application,
-delete it and import a known-good copy again. Confirm the BIN size and exact ECU software identity
-before relying on matched values.
+into `_internal` or any other packaged runtime directory. If a registered definition was changed or
+damaged outside the application, delete it and import a known-good copy again. Confirm the BIN size
+and exact ECU software identity before relying on matched values.
 
 ### Values or identity look wrong
 

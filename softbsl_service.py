@@ -116,6 +116,27 @@ _BAUD_ORDER = ("high", "mid", "low")   # fast -> safe; low (9600) is pyserial-sa
 _WRITE_LINK_PROBE_BASE = 0x20000
 _WRITE_LINK_PROBE_SIZE = 128
 
+_AGENT_DETAIL_PREFIXES = (
+    "ds2: prepare", "e740=", "in flash mode", "staged ",
+    "streaming agent", "agent running", "entered on attempt", "baud ->",
+    "erase ", "erase done", "programmed up to", "verify (read-back)",
+    "verify ok", "marker-0 finalize",
+)
+
+
+def _agent_log(log):
+    """Downgrade routine RAM-agent mechanics without discarding diagnostics."""
+    def forward(message, level="info"):
+        message = str(message)
+        plain = message.strip().lower()
+        if level == "info" and plain.startswith(_AGENT_DETAIL_PREFIXES):
+            level = "debug"
+        try:
+            log(message, level)
+        except TypeError:
+            log(message)
+    return forward
+
 
 class _WriteProgressTracker:
     """Forward progress while remembering the first destructive erase boundary."""
@@ -241,7 +262,9 @@ def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=Non
     if require_d2xx and not d.uses_d2xx:
         d.close()
         raise D2XXRequiredError(f"{port} opened through {d.transport_name or 'an unknown transport'}")
-    sb = _sb.SoftBSL(d, log=log)
+    # Detailed agent mechanics remain in the session file, while the GUI keeps
+    # phase outcomes, warnings, errors, and recovery instructions visible.
+    sb = _sb.SoftBSL(d, log=_agent_log(log))
     staged = baud_tier is not None and hasattr(sb, "enter_staged")
     try:
         agent = _sb.load_agent(_sb.agent_path_for_family(chip_family))

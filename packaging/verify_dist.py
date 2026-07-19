@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -24,6 +25,9 @@ REQUIRED_PATCH_IDS = {
 }
 PE_MACHINE_AMD64 = 0x8664
 REQUIRED_LICENSE_FILES = {
+    "Nuitka-4.1.3-LICENSE-RUNTIME.txt": (
+        "20ff0ae581adf436a7b06e50e67a6c8913aec1ea4e60dba138d0a0bee7ee520c"
+    ),
     "PyInstaller-6.21.0-COPYING.txt": (
         "dcf75fdb959db1e3b41c0f8505069d2ece781b5ec6b3d0a4d30975cfc6580245"
     ),
@@ -51,6 +55,12 @@ MSVC_RUNTIME_FILES = (
     Path("PyQt5/Qt5/bin/MSVCP140_1.dll"),
     Path("PyQt5/Qt5/bin/VCRUNTIME140.dll"),
     Path("PyQt5/Qt5/bin/VCRUNTIME140_1.dll"),
+)
+NUITKA_MSVC_RUNTIME_FILES = (
+    Path("VCRUNTIME140.dll"),
+    Path("VCRUNTIME140_1.dll"),
+    Path("MSVCP140.dll"),
+    Path("MSVCP140_1.dll"),
 )
 
 
@@ -94,7 +104,7 @@ def _verify_license_inventory(app_dir: Path) -> dict[str, str]:
     return verified
 
 
-def _msvc_runtime_sources() -> dict[Path, tuple[Path, str]]:
+def _pyinstaller_msvc_runtime_sources() -> dict[Path, tuple[Path, str]]:
     """The exact dependency files PyInstaller is expected to copy unchanged."""
     pyqt_spec = importlib.util.find_spec("PyQt5")
     if pyqt_spec is None or not pyqt_spec.submodule_search_locations:
@@ -113,10 +123,60 @@ def _msvc_runtime_sources() -> dict[Path, tuple[Path, str]]:
     }
 
 
-def _verify_msvc_runtime(content: Path) -> dict[str, dict[str, str | int]]:
+def _nuitka_msvc_runtime_sources(
+        content: Path) -> dict[Path, tuple[Path, str]]:
+    """Resolve the unchanged CPython/MSVC redistributables selected by Nuitka."""
+    python_root = Path(sys.base_prefix)
+    sources: dict[Path, tuple[Path, str]] = {
+        NUITKA_MSVC_RUNTIME_FILES[0]: (
+            python_root / NUITKA_MSVC_RUNTIME_FILES[0], "CPython 3.14.6"),
+        NUITKA_MSVC_RUNTIME_FILES[1]: (
+            python_root / NUITKA_MSVC_RUNTIME_FILES[1], "CPython 3.14.6"),
+    }
+    program_files_x86 = os.environ.get("ProgramFiles(x86)")
+    if not program_files_x86:
+        raise RuntimeError("ProgramFiles(x86) is unavailable for Nuitka runtime verification")
+    redist_root = (
+        Path(program_files_x86)
+        / "Microsoft Visual Studio" / "2022" / "BuildTools" / "VC" / "Redist" / "MSVC"
+    )
+    for relative in NUITKA_MSVC_RUNTIME_FILES[2:]:
+        packaged = content / relative
+        if not packaged.is_file():
+            raise RuntimeError(f"packaged VC++ runtime file is missing: {relative.as_posix()}")
+        packaged_digest = hashlib.sha256(packaged.read_bytes()).hexdigest()
+        candidates = sorted(
+            redist_root.glob(f"*/x64/Microsoft.VC143.CRT/{relative.name}"),
+            reverse=True,
+        )
+        source = next(
+            (
+                candidate for candidate in candidates
+                if hashlib.sha256(candidate.read_bytes()).hexdigest() == packaged_digest
+            ),
+            None,
+        )
+        if source is None:
+            raise RuntimeError(
+                "packaged VC++ runtime file does not match an installed MSVC "
+                f"redistributable: {relative.as_posix()}"
+            )
+        sources[relative] = (source, f"MSVC {source.parents[2].name} redistributable")
+    return sources
+
+
+def _msvc_runtime_sources(
+        backend: str, content: Path) -> dict[Path, tuple[Path, str]]:
+    if backend == "nuitka":
+        return _nuitka_msvc_runtime_sources(content)
+    return _pyinstaller_msvc_runtime_sources()
+
+
+def _verify_msvc_runtime(
+        content: Path, *, backend: str = "pyinstaller") -> dict[str, dict[str, str | int]]:
     """Prove every packaged VC++ runtime file is an unchanged dependency copy."""
     verified: dict[str, dict[str, str | int]] = {}
-    for relative, (source, origin) in _msvc_runtime_sources().items():
+    for relative, (source, origin) in _msvc_runtime_sources(backend, content).items():
         packaged = content / relative
         if not source.is_file():
             raise RuntimeError(f"VC++ runtime source dependency is missing: {source}")
@@ -138,7 +198,11 @@ def _verify_msvc_runtime(content: Path) -> dict[str, dict[str, str | int]]:
 
 
 def _verify_release_metadata(
-        app_dir: Path, msvc_runtime: dict[str, dict[str, str | int]]) -> None:
+        app_dir: Path,
+        msvc_runtime: dict[str, dict[str, str | int]],
+        *,
+        backend: str,
+) -> None:
     metadata_path = app_dir / "RELEASE-METADATA.json"
     if not metadata_path.exists():
         return
@@ -152,9 +216,13 @@ def _verify_release_metadata(
         raise RuntimeError("release metadata does not affirm unmodified VC++ runtime files")
     if metadata.get("vc_runtime_files") != msvc_runtime:
         raise RuntimeError("release metadata VC++ runtime hashes do not match the package")
+    if metadata.get("build_backend") != backend:
+        raise RuntimeError("release metadata has the wrong build backend")
+    if metadata.get("experimental") is not (backend == "nuitka"):
+        raise RuntimeError("release metadata has the wrong experimental-build status")
 
 
-def verify_distribution(app_dir: Path) -> dict:
+def verify_distribution(app_dir: Path, *, expected_backend: str | None = None) -> dict:
     app_dir = Path(app_dir).resolve()
     executable = app_dir / f"{APP_NAME}.exe"
     if not executable.is_file():
@@ -167,8 +235,14 @@ def verify_distribution(app_dir: Path) -> dict:
             f"Windows executable is not x64 (PE machine 0x{machine:04X}): {executable}")
 
     content = app_dir / "_internal"
+    backend = "pyinstaller"
     if not content.is_dir():
         content = app_dir
+        backend = "nuitka"
+    if expected_backend is not None and backend != expected_backend:
+        raise RuntimeError(
+            f"package backend is {backend}, expected {expected_backend}"
+        )
 
     required = (
         app_dir / "README.md",
@@ -190,14 +264,22 @@ def verify_distribution(app_dir: Path) -> dict:
         content / "engines" / "softbsl" / "stage1_manifest.json",
         content / "engines" / "softbsl" / "agent_manifest.json",
         content / "engines" / "patcher" / "patches" / "softbsl_loader.json",
-        content / "PyQt5" / "Qt5" / "bin" / "Qt5Core.dll",
     )
+    if backend == "pyinstaller":
+        required += (
+            content / "PyQt5" / "Qt5" / "bin" / "Qt5Core.dll",
+        )
+    else:
+        required += (
+            content / "qt5core.dll",
+            content / "PyQt5" / "qt-plugins" / "platforms" / "qwindows.dll",
+        )
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
         raise RuntimeError("packaged runtime files are missing:\n" + "\n".join(missing))
 
-    verified_msvc_runtime = _verify_msvc_runtime(content)
-    _verify_release_metadata(app_dir, verified_msvc_runtime)
+    verified_msvc_runtime = _verify_msvc_runtime(content, backend=backend)
+    _verify_release_metadata(app_dir, verified_msvc_runtime, backend=backend)
 
     for forbidden in ("_private", "tests", "docs", "defs", "definitions"):
         if (content / forbidden).exists() or (app_dir / forbidden).exists():
@@ -234,11 +316,26 @@ def verify_distribution(app_dir: Path) -> dict:
             "source-only README links leaked into the portable package: "
             + ", ".join(leaked_references)
         )
-    if '_internal/assets/bimmerstein_ecu_tool.png' not in release_readme:
+    expected_icon_reference = (
+        "_internal/assets/bimmerstein_ecu_tool.png"
+        if backend == "pyinstaller"
+        else "assets/bimmerstein_ecu_tool.png"
+    )
+    if expected_icon_reference not in release_readme:
         raise RuntimeError("portable README does not reference its packaged application icon")
 
+    experimental_notice = app_dir / "EXPERIMENTAL-NOTICE.txt"
+    if backend == "nuitka":
+        if not experimental_notice.is_file():
+            raise RuntimeError("experimental Nuitka notice is missing from package root")
+        if "EXPERIMENTAL" not in experimental_notice.read_text(
+                encoding="utf-8").upper():
+            raise RuntimeError("Nuitka package notice is not marked experimental")
+    elif experimental_notice.exists():
+        raise RuntimeError("experimental Nuitka notice leaked into PyInstaller package")
+
     verified_licenses = _verify_license_inventory(app_dir)
-    if (content / "THIRD_PARTY_LICENSES").exists():
+    if content != app_dir and (content / "THIRD_PARTY_LICENSES").exists():
         raise RuntimeError("third-party license inventory must be public at package root")
     notices = (app_dir / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
     missing_license_references = [
@@ -272,6 +369,8 @@ def verify_distribution(app_dir: Path) -> dict:
 
     return {
         "application": str(app_dir),
+        "build_backend": backend,
+        "experimental": backend == "nuitka",
         "pe_machine": f"0x{machine:04X}",
         "executable_bytes": executable.stat().st_size,
         "patch_count": len(patch_ids),
@@ -284,12 +383,18 @@ def verify_distribution(app_dir: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--backend",
+        choices=("pyinstaller", "nuitka"),
+        help="require the package to match this frozen backend",
+    )
+    parser.add_argument(
         "app_dir",
         nargs="?",
         type=Path,
         default=ROOT / "dist" / APP_NAME,
     )
-    result = verify_distribution(parser.parse_args().app_dir)
+    args = parser.parse_args()
+    result = verify_distribution(args.app_dir, expected_backend=args.backend)
     print(json.dumps(result, indent=2))
     return 0
 

@@ -8,6 +8,61 @@ shared by BimmerStein applications.
 
 ## [Unreleased]
 
+## [0.1.0b4] - 2026-07-19
+
+### Added
+
+- Added an explicitly labeled experimental Nuitka Windows installer and
+  portable ZIP as a second packaging option. The established PyInstaller build
+  remains the recommended download, and the two installer identities can
+  coexist for compatibility testing.
+
+### Fixed
+
+- A Soft-BSL temporary Phase 1 program-only write that times out waiting for
+  the ECU-owned `E659=0xCC` readiness marker now closes and releases the serial
+  transport before offering an ignition-cycle retry or safe pre-erase cancel.
+- Repeated marker timeouts require a new explicit operator decision, reuse the
+  same validated prepared images and flash family, and never silently fall back
+  to the legacy writer; unrelated pre-erase errors still fail closed and
+  post-erase recovery behavior is unchanged.
+
+## [0.1.0b3] - 2026-07-18
+
+### Fixed
+
+- Successful Soft-BSL installation now intentionally leaves the application
+  disconnected instead of reopening DS2, so the next manual connection detects
+  the installed loader and enables automatic Soft-BSL transfer routing.
+- Stock DS2 writes started immediately after a native-fast read now recover from
+  the ECU's temporary seed-unavailable state with one 10-second zero-traffic
+  interval, qualified twice on hardware, and one refreshed-preamble retry
+  instead of rapid challenge polling that kept the ECU from becoming ready.
+- Normal 9,600-baud fallback retries only an exact empty `0x90/A1` after
+  `E658/E74B` prove the ECU remained safely locked; malformed responses and
+  timeouts fail closed, and Soft-BSL bootstrap installation no longer repeats a
+  seed-unavailable failure through the legacy writer.
+- Active live-data polling is stopped before an ECU task begins, preventing
+  background DS2 traffic during authorization, baud transitions, and port
+  handoffs.
+
+## [0.1.0b2] - 2026-07-17
+
+### Fixed
+
+- Soft-BSL installation now confirms that normal DS2 communication has returned
+  after the required ignition cycle before entering the destructive hook-write
+  phase, with an explicit retry or safe cancellation path when the ECU is not
+  ready.
+- Failed Soft-BSL entry and serial-open paths now release their D2XX/COM handle,
+  so a missed ignition cycle no longer requires restarting the application to
+  reconnect.
+- Soft-BSL hook-write progress now reports its authorization and pre-program
+  work instead of appearing frozen on the completed base read.
+- Replaced the approximate ECU Tool artwork with an exact white-and-black color
+  variant of the canonical BimmerStein vector, including transparent corners
+  and matching multi-resolution Windows icon frames.
+
 ## [0.1.0b1] - 2026-07-17
 
 First public beta for BMW MS41.1, MS41.2, and MS41.3 programming, diagnostics,

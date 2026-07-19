@@ -290,10 +290,12 @@ def _parse_markdown(text: str, styles, available_width: float):
                 parts.append(lines[index].strip().lstrip("> "))
                 index += 1
             kind = "NOTE"
-            if parts and re.fullmatch(r"\[!(NOTE|WARNING|DANGER)\]", parts[0]):
+            if parts and re.fullmatch(
+                    r"\[!(NOTE|IMPORTANT|WARNING|DANGER)\]", parts[0]):
                 kind = parts.pop(0)[2:-1]
             palette = {
                 "NOTE": ("#edf4fa", "#4b779e", "#b7cde0"),
+                "IMPORTANT": ("#edf4fa", "#4b779e", "#b7cde0"),
                 "WARNING": ("#fff4df", "#d19024", "#e7c47f"),
                 "DANGER": ("#fdeaea", "#cf3e45", "#e3a1a5"),
             }

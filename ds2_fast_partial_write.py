@@ -48,8 +48,15 @@ from ds2_fast_read import (
 from ds2_write_authorization import (
     AUTHORIZATION_STATE_ADDRESS,
     CAPTURED_INITIAL_CHALLENGE,
+    FLASH_MODE_MARKER_ADDRESS,
     INITIAL_SEED_RETRY_DELAY,
     MAX_INITIAL_SEED_ATTEMPTS,
+    NATIVE_FAST_REENTRY_LATCH_ADDRESS,
+    NATIVE_FAST_REENTRY_LATCH_READY_VALUE,
+    NATIVE_FAST_REENTRY_POLL_INTERVAL,
+    NATIVE_FAST_REENTRY_TIMER_ADDRESS,
+    NATIVE_FAST_REENTRY_TIMER_INITIAL_VALUE,
+    NATIVE_FAST_REENTRY_TIMEOUT,
     WRONG_KEY_COUNTER_ADDRESS,
 )
 
@@ -88,6 +95,14 @@ class UnsafePartialWriteCommand(PartialWriteError):
 
 class PartialWriteTimeout(PartialWriteError):
     """A complete echo or ECU reply did not arrive within the bound."""
+
+
+class InitialWriteSeedUnavailable(PartialWriteTimeout):
+    """The ECU stayed safely locked but did not offer a seed within the bound."""
+
+
+class NativeFastWriteReentryNotReady(PartialWriteTimeout):
+    """A known prior native-fast session did not reach its shared ready latch."""
 
 
 class PartialWriteStateError(PartialWriteError):
@@ -137,6 +152,8 @@ def compute_ms41_write_key(challenge: int, seed_payload: bytes) -> bytes:
 @dataclass(frozen=True)
 class PartialWriteTiming:
     initial_seed_retry_delay: float = INITIAL_SEED_RETRY_DELAY
+    native_fast_reentry_poll_interval: float = NATIVE_FAST_REENTRY_POLL_INTERVAL
+    native_fast_reentry_timeout: float = NATIVE_FAST_REENTRY_TIMEOUT
     post_authorization_delay: float = 0.40
     between_low_preamble_reads: float = 0.10
     pre_arm_delay: float = 1.60
@@ -260,6 +277,13 @@ class NativeFastPartialWriteTransport:
     def close(self) -> None:
         if self.is_open:
             self.serial.close()
+
+    def queue_status(self) -> Tuple[int, int, int]:
+        getter = getattr(self.serial, "queue_status", None)
+        if getter is None:
+            raise PartialWriteError("D2XX transport does not expose queue status")
+        rx_bytes, tx_bytes, event_count = getter()
+        return int(rx_bytes), int(tx_bytes), int(event_count)
 
     def set_baud(self, baud: int, *, reason: str) -> None:
         old = self.baud
@@ -573,6 +597,27 @@ class NativeFastPartialWriteSession:
         if self.progress_cb is not None:
             self.progress_cb(phase, current, total)
 
+    def _record_queue_status(self, *, phase: str) -> None:
+        """Journal transport queues without changing the authorization path."""
+        try:
+            rx_bytes, tx_bytes, event_count = self.transport.queue_status()
+        except Exception as error:
+            self.transport._emit(
+                "d2xx_queue_status",
+                phase=phase,
+                available=False,
+                error=f"{type(error).__name__}: {error}",
+            )
+            return
+        self.transport._emit(
+            "d2xx_queue_status",
+            phase=phase,
+            available=True,
+            rx_bytes=rx_bytes,
+            tx_bytes=tx_bytes,
+            event_count=event_count,
+        )
+
     def _cancel_checkpoint(self, label: str) -> None:
         if self.cancel_cb is not None and self.cancel_cb():
             self._record(
@@ -658,8 +703,117 @@ class NativeFastPartialWriteSession:
         )
         return state, wrong_keys
 
+    def _observe_flash_mode_marker(self, *, label_prefix: str) -> int:
+        """Record E740 for diagnosis without using it as an authorization gate."""
+        marker = self._read_mem(
+            FLASH_MODE_MARKER_ADDRESS,
+            1,
+            label=f"{label_prefix}_flash_mode_marker_0xE740",
+        )[0]
+        self.transport._emit(
+            "write_flash_mode_marker_observed",
+            label=label_prefix,
+            e740=marker,
+        )
+        return marker
+
+    def _wait_for_native_fast_reentry(
+        self,
+        *,
+        expected_state: int,
+        initial_wrong_keys: int,
+    ) -> None:
+        """Observe the shared completion latch only after a known fast session.
+
+        The caller-provided per-port state scopes this away from fresh initial
+        authorization. E72E/E659 are shared by MS41.0 through MS41.3, unlike
+        the variant-specific F1FA/F7E0/F7E8 selector countdowns.
+        """
+
+        if not bool(getattr(self, "reentry_required", False)):
+            self._record("write_native_fast_reentry_not_required")
+            return
+
+        timeout_s = float(self.timing.native_fast_reentry_timeout)
+        poll_s = float(self.timing.native_fast_reentry_poll_interval)
+        started = time.monotonic()
+        sample = 1
+        wait_announced = False
+        while True:
+            timer = int.from_bytes(
+                self._read_mem(
+                    NATIVE_FAST_REENTRY_TIMER_ADDRESS,
+                    2,
+                    label=f"write_native_fast_reentry_{sample:02d}_0xE72E",
+                ),
+                "little",
+            )
+            latch = self._read_mem(
+                NATIVE_FAST_REENTRY_LATCH_ADDRESS,
+                1,
+                label=f"write_native_fast_reentry_{sample:02d}_0xE659",
+            )[0]
+            elapsed_s = time.monotonic() - started
+            state, wrong_keys = self._read_authorization_state(
+                label_prefix=f"write_reentry_sample_{sample:02d}"
+            )
+            marker_fields = {
+                "sample": sample,
+                "e72e": timer,
+                "e659": latch,
+                "e658": state,
+                "e74b": wrong_keys,
+                "elapsed_s": round(elapsed_s, 6),
+            }
+            self._record("write_native_fast_reentry_observed", **marker_fields)
+
+            if state != expected_state or wrong_keys != initial_wrong_keys:
+                self.authorization_may_be_active = state in (1, 2)
+                self.authorization_state_requires_cycle = state not in (0, 2)
+                raise PartialWriteStateError(
+                    "write authorization changed while waiting for native-fast "
+                    f"reentry (E658={state}, E74B={wrong_keys}); no challenge "
+                    "or flash command was sent"
+                )
+            if latch == NATIVE_FAST_REENTRY_LATCH_READY_VALUE:
+                self.reentry_required = False
+                ready_cb = getattr(self, "reentry_ready_cb", None)
+                if ready_cb is not None:
+                    ready_cb()
+                self._record("write_native_fast_reentry_ready", **marker_fields)
+                return
+            if timer > NATIVE_FAST_REENTRY_TIMER_INITIAL_VALUE:
+                raise NativeFastWriteReentryNotReady(
+                    f"ECU native-fast reentry timer E72E is implausible ({timer}); "
+                    "no challenge, selector, or flash command was sent"
+                )
+            if elapsed_s >= timeout_s:
+                raise NativeFastWriteReentryNotReady(
+                    "ECU native-fast completion latch E659 did not reach 0xCC "
+                    f"within {timeout_s:g} seconds (E72E={timer}); no challenge, "
+                    "selector, or flash command was sent"
+                )
+
+            if not wait_announced:
+                self._record(
+                    "write_native_fast_reentry_wait_started",
+                    timeout_s=timeout_s,
+                    **marker_fields,
+                )
+                wait_announced = True
+            wait_label = (
+                "Waiting for ECU native-fast readiness "
+                f"(E72E={timer}, E659=0x{latch:02X})"
+            )
+            self._progress(wait_label, sample, 0)
+            self._sleep(min(poll_s, max(0.0, timeout_s - elapsed_s)))
+            sample += 1
+
     def _authorize_once(self) -> str:
         state, initial_wrong_keys = self._read_authorization_state(
+            label_prefix="write_authorization_initial"
+        )
+        self._observe_flash_mode_marker(
             label_prefix="write_authorization_initial"
         )
         if initial_wrong_keys >= 2:
@@ -682,9 +836,17 @@ class NativeFastPartialWriteSession:
                 f"unexpected write-authorization state E658={state}"
             )
 
+        self._wait_for_native_fast_reentry(
+            expected_state=state,
+            initial_wrong_keys=initial_wrong_keys,
+        )
+
         if state == 2:
             self.authorization_may_be_active = True
             self.authorization_state_requires_cycle = True
+            self._record_queue_status(
+                phase="before_existing_authorization_confirmation"
+            )
             confirmation = self._request(
                 SEED_KEY_COMMAND,
                 b"BMW" + bytes((self.challenge,)),
@@ -723,6 +885,9 @@ class NativeFastPartialWriteSession:
                     frozenset((ResponseStatus.ACK,)),
                 ),
                 "write_status_before_seed",
+            )
+            self._record_queue_status(
+                phase=f"before_initial_write_seed_attempt_{attempt}"
             )
             try:
                 response = self._request(
@@ -764,6 +929,9 @@ class NativeFastPartialWriteSession:
                 state_after, wrong_keys_after = self._read_authorization_state(
                     label_prefix=f"write_seed_a1_attempt_{attempt:02d}"
                 )
+                self._observe_flash_mode_marker(
+                    label_prefix=f"write_seed_a1_attempt_{attempt:02d}"
+                )
             except Exception:
                 self.authorization_may_be_active = True
                 raise
@@ -777,9 +945,29 @@ class NativeFastPartialWriteSession:
             self.authorization_may_be_active = False
             self.authorization_state_requires_cycle = False
             if attempt < MAX_INITIAL_SEED_ATTEMPTS:
-                self._sleep(self.timing.initial_seed_retry_delay)
+                quiet_s = float(self.timing.initial_seed_retry_delay)
+                wait_label = (
+                    f"ECU seed not ready; waiting {quiet_s:g} seconds "
+                    "before one final retry"
+                )
+                self._record(
+                    "initial_write_seed_retry_wait_started",
+                    attempt=attempt,
+                    next_attempt=attempt + 1,
+                    seconds=quiet_s,
+                )
+                self._progress(wait_label, 0, 0)
+                quiet_started = time.monotonic()
+                self._sleep(quiet_s)
+                self._record(
+                    "initial_write_seed_retry_wait_completed",
+                    attempt=attempt,
+                    next_attempt=attempt + 1,
+                    seconds=quiet_s,
+                    actual_s=round(time.monotonic() - quiet_started, 6),
+                )
         if seed_response is None:
-            raise PartialWriteTimeout(
+            raise InitialWriteSeedUnavailable(
                 "initial write seed unavailable after "
                 f"{MAX_INITIAL_SEED_ATTEMPTS} bounded BMW/0x{self.challenge:02X} challenges"
             )
@@ -937,6 +1125,7 @@ class NativeFastPartialWriteSession:
     def _erase_and_program(self) -> Tuple[int, int]:
         if self.plan is None:
             raise PartialWriteStateError("write plan is unavailable")
+        self._progress("Erasing calibration region", 0, 1)
         self.destructive_started = True
         self._record(
             "destructive_boundary_crossed",
@@ -961,6 +1150,8 @@ class NativeFastPartialWriteSession:
             payload_bytes=payload_bytes,
             retry_policy="none",
         )
+        done = 0
+        self._progress("Writing calibration region", done, payload_bytes)
         for index, request in enumerate(self.plan.program, 1):
             self._flash(
                 request,
@@ -969,7 +1160,8 @@ class NativeFastPartialWriteSession:
                     f"0x{request.address:06X}_{request.count}"
                 ),
             )
-            self._progress("program", index, total)
+            done += request.count
+            self._progress("Writing calibration region", done, payload_bytes)
             self._sleep(self.timing.between_program_requests)
         self._record(
             "partial_program_acknowledged",
@@ -979,6 +1171,9 @@ class NativeFastPartialWriteSession:
         return total, payload_bytes
 
     def _finalize(self) -> int:
+        # A zero total is a status-only update.  Keep the completed byte bar in
+        # place while the capture-qualified finalizer performs its seed polls.
+        self._progress("Finalizing calibration write", 0, 0)
         self._set_state(
             state=SessionState.WRITE_FINALIZE_HIGH,
             link=LinkRate.HIGH,
@@ -1127,6 +1322,7 @@ class NativeFastPartialWriteSession:
             raise PartialWriteStateError(
                 f"partial cleanup requires a known link, got {self.link.name}"
             )
+        self._progress("Returning ECU to DS2 9600", 0, 0)
         old = self.link
         self.cleanup_attempted = True
         self._request(

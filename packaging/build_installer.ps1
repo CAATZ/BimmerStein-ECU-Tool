@@ -7,7 +7,10 @@ param(
 
     [string]$OutputDir,
 
-    [string]$IsccPath
+    [string]$IsccPath,
+
+    [ValidateSet("pyinstaller", "nuitka")]
+    [string]$Backend = "pyinstaller"
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,7 +18,9 @@ Set-StrictMode -Version Latest
 
 $root = Split-Path -Parent $PSScriptRoot
 $releaseRoot = Join-Path $root "release"
-$releaseName = "BimmerStein-ECU-Tool-$Version-Windows-x64"
+$isExperimental = $Backend -eq "nuitka"
+$packageSuffix = if ($isExperimental) { "-Nuitka-Experimental" } else { "" }
+$releaseName = "BimmerStein-ECU-Tool-$Version-Windows-x64$packageSuffix"
 if (-not $SourceDir) {
     $SourceDir = Join-Path $releaseRoot $releaseName
 }
@@ -58,7 +63,7 @@ $compiler = [System.IO.Path]::GetFullPath($compiler)
 
 Push-Location $root
 try {
-    & $python "packaging\verify_dist.py" $sourcePath
+    & $python "packaging\verify_dist.py" --backend $Backend $sourcePath
     if ($LASTEXITCODE -ne 0) { throw "Installer source-package verification failed." }
 
     $match = [regex]::Match(
@@ -97,10 +102,14 @@ try {
         "/DAppVersion=$Version",
         "/DAppDisplayVersion=$displayVersion",
         "/DAppNumericVersion=$numericVersion",
+        "/DPackageSuffix=$packageSuffix",
         "/DSourceDir=$sourcePath",
         "/DOutputDir=$outputPath",
         "packaging\BimmerSteinECUTool.iss"
     )
+    if ($isExperimental) {
+        $compilerArguments = @("/DNuitkaExperimental") + $compilerArguments
+    }
     $compilerArgumentText = ($compilerArguments | ForEach-Object {
         '"' + $_.Replace('"', '\"') + '"'
     }) -join ' '
@@ -118,7 +127,12 @@ try {
     $versionInfo = (Get-Item -LiteralPath $installer).VersionInfo
     $productName = $versionInfo.ProductName.Trim()
     $productVersion = $versionInfo.ProductVersion.Trim()
-    if ($productName -ne "BimmerStein ECU Tool") {
+    $expectedProductName = if ($isExperimental) {
+        "BimmerStein ECU Tool (Nuitka Experimental)"
+    } else {
+        "BimmerStein ECU Tool"
+    }
+    if ($productName -ne $expectedProductName) {
         throw "Installer product metadata is incorrect: $($versionInfo.ProductName)"
     }
     if ($productVersion -ne $numericVersion) {

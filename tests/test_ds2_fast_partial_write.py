@@ -25,14 +25,18 @@ from ds2_fast_contracts import (
 from ds2_fast_partial_write import (
     FLASH_COMMAND,
     FINALIZE_CHALLENGE,
+    InitialWriteSeedUnavailable,
     MAX_FINALIZE_SEED_ATTEMPTS,
     NativeFastPartialWriteTransport,
+    NativeFastWriteReentryNotReady,
     PartialWriteCancelled,
     PartialWriteReadbackMismatch,
     PartialWriteStateError,
     PartialWriteTimeout,
     PartialWriteTiming,
+    PREPARE_COMMAND,
     SEED_KEY_COMMAND,
+    STATUS_COMMAND,
     TOKEN_ADDRESS,
     TOKEN_LENGTH,
     UnsafePartialWriteCommand,
@@ -50,7 +54,13 @@ from ds2_fast_safety import OperationJournal, inspect_operation_journal
 from ds2_fast_slim_write import SlimNativeFastPartialWriteSession
 from ds2_write_authorization import (
     AUTHORIZATION_STATE_ADDRESS,
+    FLASH_MODE_MARKER_ADDRESS,
+    INITIAL_SEED_RETRY_DELAY,
     MAX_INITIAL_SEED_ATTEMPTS,
+    NATIVE_FAST_REENTRY_LATCH_ADDRESS,
+    NATIVE_FAST_REENTRY_POLL_INTERVAL,
+    NATIVE_FAST_REENTRY_TIMER_ADDRESS,
+    NATIVE_FAST_REENTRY_TIMEOUT,
     WRONG_KEY_COUNTER_ADDRESS,
 )
 from ms41 import MS41ECU
@@ -63,6 +73,11 @@ SEED = bytes.fromhex(
     "31 34 39 38 30 30 30 30 31 31 35 38 35 32 31 "
     "32 30 32 39 38 31 33 34 34 32 36 32"
 )
+
+
+def test_native_fast_reentry_timeout_allows_slow_completion_latch():
+    assert NATIVE_FAST_REENTRY_TIMEOUT == 20.0
+
 
 class MemoryJournal:
     def __init__(self, path: Path):
@@ -110,12 +125,14 @@ class PartialWriteStockSerial:
         missing_existing_authorization_confirmation: bool = False,
         authorization_state: int = 0,
         wrong_key_count: int = 0,
+        native_reentry_states=None,
     ):
         assert len(ds2_image) == FULL_IMAGE_SIZE
         assert len(token) == TOKEN_LENGTH
         self.memory = bytearray(ds2_image)
         self.memory[AUTHORIZATION_STATE_ADDRESS] = int(authorization_state)
         self.memory[WRONG_KEY_COUNTER_ADDRESS] = int(wrong_key_count)
+        self.memory[FLASH_MODE_MARKER_ADDRESS] = 0
         self.token = bytes(token)
         self.identity = IDENTITY
         self.finalize_busy = int(finalize_busy)
@@ -136,6 +153,11 @@ class PartialWriteStockSerial:
         self.missing_existing_authorization_confirmation = bool(
             missing_existing_authorization_confirmation
         )
+        self.native_reentry_states = list(
+            native_reentry_states
+            or ({"e72e": 0, "e659": 0xCC},)
+        )
+        self.native_reentry_index = 0
         self.cleanup_completed = False
         self._readback_corruption_used = False
         self._baud = CAPTURED_RATE_PROFILE.low
@@ -172,6 +194,9 @@ class PartialWriteStockSerial:
 
     def reset_input_buffer(self):
         self._pending.clear()
+
+    def queue_status(self):
+        return len(self._pending), 0, 0
 
     def flush(self):
         pass
@@ -212,7 +237,16 @@ class PartialWriteStockSerial:
         elif frame.command == 0x06:
             address = int.from_bytes(args[:4], "big")
             count = args[4]
-            data = bytearray(self.memory[address : address + count])
+            reentry = self.native_reentry_states[
+                min(self.native_reentry_index, len(self.native_reentry_states) - 1)
+            ]
+            if address == NATIVE_FAST_REENTRY_TIMER_ADDRESS and count == 2:
+                data = bytearray(int(reentry["e72e"]).to_bytes(2, "little"))
+            elif address == NATIVE_FAST_REENTRY_LATCH_ADDRESS and count == 1:
+                data = bytearray((int(reentry["e659"]),))
+                self.native_reentry_index += 1
+            else:
+                data = bytearray(self.memory[address : address + count])
             if (
                 self.readback_corrupt_address is not None
                 and self.selector == 0x01
@@ -403,7 +437,7 @@ def _session(
     return session, serial, journal, source
 
 
-def _authorization_session(tmp_path, **serial_kwargs):
+def _authorization_session(tmp_path, *, reentry_required=False, **serial_kwargs):
     token = bytes(range(TOKEN_LENGTH))
     image = bytearray(b"\xFF" * FULL_IMAGE_SIZE)
     image[TOKEN_ADDRESS:TOKEN_ADDRESS + TOKEN_LENGTH] = token
@@ -418,6 +452,7 @@ def _authorization_session(tmp_path, **serial_kwargs):
         b"\xFF" * (TUNE_END - TUNE_START),
         journal,
         verify_write=False,
+        reentry_required=reentry_required,
         timing=ZERO_TIMING,
         sleeper=lambda _seconds: None,
     )
@@ -432,11 +467,115 @@ def test_seed_key_matches_both_live_initial_and_finalize_keys():
     assert compute_ms41_write_key(0x1F, SEED) == bytes.fromhex("9797a19a")
 
 
-def test_initial_a1_retries_only_after_ram_confirms_clean_state(tmp_path):
+def test_pending_native_reentry_polls_shared_latch_before_first_challenge(tmp_path):
+    session, serial, journal = _authorization_session(
+        tmp_path,
+        reentry_required=True,
+        native_reentry_states=(
+            {"e72e": 3, "e659": 0},
+            {"e72e": 2, "e659": 0},
+            {"e72e": 1, "e659": 0},
+            {"e72e": 0, "e659": 0xCC},
+        ),
+    )
+    session.timing = replace(
+        ZERO_TIMING,
+        native_fast_reentry_poll_interval=NATIVE_FAST_REENTRY_POLL_INTERVAL,
+        native_fast_reentry_timeout=NATIVE_FAST_REENTRY_TIMEOUT,
+    )
+    sleeps = []
+    session._sleep = lambda seconds: sleeps.append(float(seconds))
+
+    assert session._authorize_once() == "new_authorization"
+
+    timer_reads = [
+        index
+        for index, (_baud, command, args) in enumerate(serial.requests)
+        if command == 0x06
+        and int.from_bytes(args[:4], "big")
+        == NATIVE_FAST_REENTRY_TIMER_ADDRESS
+    ]
+    latch_reads = [
+        index
+        for index, (_baud, command, args) in enumerate(serial.requests)
+        if command == 0x06
+        and int.from_bytes(args[:4], "big")
+        == NATIVE_FAST_REENTRY_LATCH_ADDRESS
+    ]
+    challenge_indices = [
+        index
+        for index, (_baud, command, args) in enumerate(serial.requests)
+        if command == SEED_KEY_COMMAND and args == b"BMW\x1e"
+    ]
+    assert len(timer_reads) == 4
+    assert len(latch_reads) == 4
+    assert len(challenge_indices) == 1
+    assert max(timer_reads + latch_reads) < challenge_indices[0]
+    assert sleeps == [1.0, 1.0, 1.0]
+    assert [
+        (fields["e72e"], fields["e659"])
+        for event, fields in journal.events
+        if event == "write_native_fast_reentry_observed"
+    ] == [(3, 0), (2, 0), (1, 0), (0, 0xCC)]
+    assert any(
+        event == "write_native_fast_reentry_ready"
+        for event, _fields in journal.events
+    )
+    assert [
+        (fields["label"], fields["e740"])
+        for event, fields in journal.events
+        if event == "write_flash_mode_marker_observed"
+    ] == [("write_authorization_initial", 0)]
+
+
+def test_fresh_initial_authorization_does_not_read_reentry_latch(tmp_path):
+    session, serial, _journal = _authorization_session(tmp_path)
+
+    assert session._authorize_once() == "new_authorization"
+
+    read_addresses = [
+        int.from_bytes(args[:4], "big")
+        for _baud, command, args in serial.requests
+        if command == 0x06
+    ]
+    assert NATIVE_FAST_REENTRY_TIMER_ADDRESS not in read_addresses
+    assert NATIVE_FAST_REENTRY_LATCH_ADDRESS not in read_addresses
+
+
+def test_stuck_common_latch_blocks_before_challenge_selector_or_flash(tmp_path):
     session, serial, _journal = _authorization_session(
         tmp_path,
-        initial_seed_busy=2,
+        reentry_required=True,
+        native_reentry_states=({"e72e": 1000, "e659": 0},),
+    )
+    session.timing = replace(
+        ZERO_TIMING,
+        native_fast_reentry_poll_interval=0,
+        native_fast_reentry_timeout=0,
+    )
+
+    with pytest.raises(NativeFastWriteReentryNotReady, match="E659"):
+        session._authorize_once()
+
+    assert all(
+        command != SEED_KEY_COMMAND
+        for _baud, command, _args in serial.requests
+    )
+    assert serial.flash_requests == []
+
+
+def test_initial_a1_retries_only_after_ram_confirms_clean_state(tmp_path):
+    session, serial, journal = _authorization_session(
+        tmp_path,
+        initial_seed_busy=1,
         initial_seed_busy_state=0,
+    )
+    progress = []
+    session.progress_cb = lambda phase, current, total: progress.append(
+        (phase, current, total)
+    )
+    session._sleep = lambda seconds: serial.requests.append(
+        ("sleep", float(seconds), b"")
     )
 
     assert session._authorize_once() == "new_authorization"
@@ -452,10 +591,104 @@ def test_initial_a1_retries_only_after_ram_confirms_clean_state(tmp_path):
         if command == SEED_KEY_COMMAND
         and args == compute_ms41_write_key(0x1E, SEED)
     ]
-    assert len(challenges) == 3
+    retry_flow = []
+    for baud, command, args in serial.requests:
+        if baud == "sleep":
+            retry_flow.append(("sleep", command))
+        elif command == PREPARE_COMMAND:
+            retry_flow.append(("prepare",))
+        elif command == 0x06 and int.from_bytes(args[:4], "big") == 0x2001:
+            retry_flow.append(("read_preamble",))
+        elif command == STATUS_COMMAND:
+            retry_flow.append(("status",))
+        elif command == SEED_KEY_COMMAND and args == b"BMW\x1e":
+            retry_flow.append(("challenge",))
+    assert retry_flow == [
+        ("prepare",),
+        ("read_preamble",),
+        ("status",),
+        ("challenge",),
+        ("sleep", 10.0),
+        ("prepare",),
+        ("read_preamble",),
+        ("status",),
+        ("challenge",),
+    ]
+    assert MAX_INITIAL_SEED_ATTEMPTS == 2
+    assert INITIAL_SEED_RETRY_DELAY == 10.0
+    assert len(challenges) == 2
     assert len(keys) == 1
+    sleep_index = next(
+        index
+        for index, (baud, _command, _args) in enumerate(serial.requests)
+        if baud == "sleep"
+    )
+    assert [
+        int.from_bytes(args[:4], "big")
+        for _baud, command, args in serial.requests[sleep_index - 3:sleep_index]
+        if command == 0x06
+    ] == [
+        AUTHORIZATION_STATE_ADDRESS,
+        WRONG_KEY_COUNTER_ADDRESS,
+        FLASH_MODE_MARKER_ADDRESS,
+    ]
+    assert serial.requests[sleep_index + 1][1] == PREPARE_COMMAND
+    wait_progress = [
+        item for item in progress if "waiting 10 seconds" in item[0].lower()
+    ]
+    assert wait_progress == [
+        ("ECU seed not ready; waiting 10 seconds before one final retry", 0, 0)
+    ]
+    assert [
+        (fields["label"], fields["e740"])
+        for event, fields in journal.events
+        if event == "write_flash_mode_marker_observed"
+    ] == [
+        ("write_authorization_initial", 0),
+        ("write_seed_a1_attempt_01", 0),
+    ]
+    wait_events = [
+        (event, fields)
+        for event, fields in journal.events
+        if event in {
+            "initial_write_seed_retry_wait_started",
+            "initial_write_seed_retry_wait_completed",
+        }
+    ]
+    assert [event for event, _fields in wait_events] == [
+        "initial_write_seed_retry_wait_started",
+        "initial_write_seed_retry_wait_completed",
+    ]
+    assert [
+        (fields["attempt"], fields["next_attempt"], fields["seconds"])
+        for _event, fields in wait_events
+    ] == [(1, 2, 10.0), (1, 2, 10.0)]
     assert serial.memory[AUTHORIZATION_STATE_ADDRESS] == 2
     assert serial.memory[WRONG_KEY_COUNTER_ADDRESS] == 0
+
+
+def test_authorization_journals_empty_queues_before_each_seed_attempt(tmp_path):
+    session, _serial, journal = _authorization_session(
+        tmp_path,
+        initial_seed_busy=1,
+        initial_seed_busy_state=0,
+    )
+    session._authorize_once()
+
+    queue_events = [
+        fields for event, fields in journal.events
+        if event == "d2xx_queue_status"
+    ]
+    assert [fields["phase"] for fields in queue_events] == [
+        "before_initial_write_seed_attempt_1",
+        "before_initial_write_seed_attempt_2",
+    ]
+    assert all(
+        fields["available"]
+        and fields["rx_bytes"] == 0
+        and fields["tx_bytes"] == 0
+        for fields in queue_events
+    )
 
 
 def test_initial_a1_that_enters_key_state_never_sends_another_0x90(tmp_path):
@@ -539,7 +772,10 @@ def test_exhausted_clean_a1_state_confirms_low_fallback_without_0x90_cleanup(
         initial_seed_busy_state=0,
     )
 
-    with pytest.raises(PartialWriteTimeout, match="initial write seed unavailable"):
+    sleeps = []
+    session._sleep = lambda seconds: sleeps.append(seconds)
+
+    with pytest.raises(InitialWriteSeedUnavailable, match="initial write seed unavailable"):
         session._authorize_once()
 
     requests_before_recovery = list(serial.requests)
@@ -548,7 +784,8 @@ def test_exhausted_clean_a1_state_confirms_low_fallback_without_0x90_cleanup(
     assert session.state is SessionState.LOW_READY
     assert [
         args for _baud, command, args in serial.requests if command == SEED_KEY_COMMAND
-    ] == [b"BMW\x1e"] * MAX_INITIAL_SEED_ATTEMPTS
+    ] == [b"BMW\x1e", b"BMW\x1e"]
+    assert sleeps == [10.0]
     assert not any(
         command == SEED_KEY_COMMAND
         for _baud, command, _args in serial.requests[len(requests_before_recovery):]

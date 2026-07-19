@@ -1,43 +1,55 @@
 #ifndef AppVersion
-  #define AppVersion "0.1.0b1"
+  #define AppVersion "0.1.0b4"
 #endif
 #ifndef AppDisplayVersion
-  #define AppDisplayVersion "0.1.0 Beta 1"
+  #define AppDisplayVersion "0.1.0 Beta 4"
 #endif
 #ifndef AppNumericVersion
-  #define AppNumericVersion "0.1.0.1"
+  #define AppNumericVersion "0.1.0.4"
 #endif
 #ifndef SourceDir
-  #define SourceDir "..\release\BimmerStein-ECU-Tool-0.1.0b1-Windows-x64"
+  #define SourceDir "..\release\BimmerStein-ECU-Tool-0.1.0b4-Windows-x64"
 #endif
 #ifndef OutputDir
   #define OutputDir "..\release"
 #endif
+#ifndef PackageSuffix
+  #define PackageSuffix ""
+#endif
+#ifdef NuitkaExperimental
+  #define SetupAppId "{{53C48669-F8A0-4C31-A2C1-E4AF447F71CA}"
+  #define SetupAppName "BimmerStein ECU Tool (Nuitka Experimental)"
+  #define InstallerDescription "BimmerStein ECU Tool Experimental Nuitka Installer"
+#else
+  #define SetupAppId "{{2FB57080-7F5F-4C36-B723-55377DC11A55}"
+  #define SetupAppName "BimmerStein ECU Tool"
+  #define InstallerDescription "BimmerStein ECU Tool Beta Installer"
+#endif
 
 [Setup]
-AppId={{2FB57080-7F5F-4C36-B723-55377DC11A55}
-AppName=BimmerStein ECU Tool
+AppId={#SetupAppId}
+AppName={#SetupAppName}
 AppVersion={#AppVersion}
-AppVerName=BimmerStein ECU Tool {#AppDisplayVersion}
+AppVerName={#SetupAppName} {#AppDisplayVersion}
 AppPublisher=CAATZ
 AppPublisherURL=https://github.com/CAATZ/BimmerStein-ECU-Tool
 AppSupportURL=https://github.com/CAATZ/BimmerStein-ECU-Tool/issues
 AppUpdatesURL=https://github.com/CAATZ/BimmerStein-ECU-Tool/releases
 VersionInfoVersion={#AppNumericVersion}
 VersionInfoCompany=CAATZ
-VersionInfoDescription=BimmerStein ECU Tool Beta Installer
-VersionInfoProductName=BimmerStein ECU Tool
+VersionInfoDescription={#InstallerDescription}
+VersionInfoProductName={#SetupAppName}
 VersionInfoProductVersion={#AppNumericVersion}
-DefaultDirName={localappdata}\Programs\BimmerStein ECU Tool
-DefaultGroupName=BimmerStein ECU Tool
+DefaultDirName={localappdata}\Programs\{#SetupAppName}
+DefaultGroupName={#SetupAppName}
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
 OutputDir={#OutputDir}
-OutputBaseFilename=BimmerStein-ECU-Tool-{#AppVersion}-Windows-x64-Setup
+OutputBaseFilename=BimmerStein-ECU-Tool-{#AppVersion}-Windows-x64{#PackageSuffix}-Setup
 SetupIconFile=..\assets\bimmerstein_ecu_tool.ico
-UninstallDisplayIcon={app}\BimmerStein-ECU-Tool-{#AppVersion}.ico
+UninstallDisplayIcon={app}\BimmerStein-ECU-Tool-{#AppVersion}{#PackageSuffix}.ico
 LicenseFile={#SourceDir}\LICENSE.txt
 InfoBeforeFile={#SourceDir}\RELEASE_NOTES.md
 Compression=lzma2/ultra64
@@ -52,11 +64,11 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\assets\bimmerstein_ecu_tool.ico"; DestDir: "{app}"; DestName: "BimmerStein-ECU-Tool-{#AppVersion}.ico"; Flags: ignoreversion
+Source: "..\assets\bimmerstein_ecu_tool.ico"; DestDir: "{app}"; DestName: "BimmerStein-ECU-Tool-{#AppVersion}{#PackageSuffix}.ico"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\BimmerStein ECU Tool"; Filename: "{app}\BimmerStein ECU Tool.exe"; WorkingDir: "{app}"; IconFilename: "{app}\BimmerStein-ECU-Tool-{#AppVersion}.ico"
-Name: "{autodesktop}\BimmerStein ECU Tool"; Filename: "{app}\BimmerStein ECU Tool.exe"; WorkingDir: "{app}"; IconFilename: "{app}\BimmerStein-ECU-Tool-{#AppVersion}.ico"; Tasks: desktopicon
+Name: "{group}\{#SetupAppName}"; Filename: "{app}\BimmerStein ECU Tool.exe"; WorkingDir: "{app}"; IconFilename: "{app}\BimmerStein-ECU-Tool-{#AppVersion}{#PackageSuffix}.ico"
+Name: "{autodesktop}\{#SetupAppName}"; Filename: "{app}\BimmerStein ECU Tool.exe"; WorkingDir: "{app}"; IconFilename: "{app}\BimmerStein-ECU-Tool-{#AppVersion}{#PackageSuffix}.ico"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\BimmerStein ECU Tool.exe"; Description: "Launch BimmerStein ECU Tool"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\BimmerStein ECU Tool.exe"; Description: "Launch {#SetupAppName}"; Flags: nowait postinstall skipifsilent

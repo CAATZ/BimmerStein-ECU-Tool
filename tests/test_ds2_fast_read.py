@@ -6,6 +6,7 @@ from collections import Counter
 
 import pytest
 
+import ds2_native_fast_reentry as native_reentry
 from ds2_fast_contracts import (
     ContractViolation,
     FrameValidationError,
@@ -26,6 +27,7 @@ from ds2_fast_plans import (
 from ds2_fast_read import (
     CAPTURED_RATE_PROFILE,
     FastReadError,
+    NativeFastReadReentryNotReady,
     NativeFastReadSession,
     NativeFastReadTransport,
     SELECTOR_COMMAND,
@@ -35,7 +37,21 @@ from ds2_fast_read import (
     TOKEN_ADDRESS,
     TOKEN_LENGTH,
     UnsafeReadOnlyCommand,
+    read_partial_d2xx,
 )
+from ds2_write_authorization import (
+    AUTHORIZATION_STATE_ADDRESS,
+    NATIVE_FAST_REENTRY_LATCH_ADDRESS,
+    NATIVE_FAST_REENTRY_TIMER_ADDRESS,
+    WRONG_KEY_COUNTER_ADDRESS,
+)
+
+
+@pytest.fixture(autouse=True)
+def _clean_native_reentry_registry():
+    native_reentry._reset_for_tests()
+    yield
+    native_reentry._reset_for_tests()
 
 
 class ReadOnlyStockSerial:
@@ -55,6 +71,7 @@ class ReadOnlyStockSerial:
         corrupt_selector=None,
         bad_echo_command=None,
         change_identity_after_cleanup=False,
+        reentry_states=None,
     ):
         assert len(token) == TOKEN_LENGTH
         self.token = bytes(token)
@@ -66,6 +83,18 @@ class ReadOnlyStockSerial:
         self.bad_echo_command = bad_echo_command
         self.bad_echo_used = False
         self.change_identity_after_cleanup = bool(change_identity_after_cleanup)
+        self.reentry_states = list(
+            reentry_states
+            or [
+                {
+                    "e658": 0,
+                    "e659": 0xCC,
+                    "e74b": 0,
+                    "e72e": 0,
+                }
+            ]
+        )
+        self.reentry_index = 0
         self._baud = CAPTURED_RATE_PROFILE.low
         self.timeout = 1.5
         self._open = True
@@ -82,6 +111,9 @@ class ReadOnlyStockSerial:
             ((address * 17 + 3) & 0xFF) for address in range(FULL_IMAGE_SIZE)
         )
         self.memory[TOKEN_ADDRESS : TOKEN_ADDRESS + TOKEN_LENGTH] = self.token
+
+    def _reentry_state(self):
+        return self.reentry_states[min(self.reentry_index, len(self.reentry_states) - 1)]
 
     @property
     def baudrate(self):
@@ -106,6 +138,9 @@ class ReadOnlyStockSerial:
 
     def reset_input_buffer(self):
         self._pending.clear()
+
+    def queue_status(self):
+        return len(self._pending), 0, 0
 
     def flush(self):
         pass
@@ -153,7 +188,18 @@ class ReadOnlyStockSerial:
             assert len(args) == 5
             address = int.from_bytes(args[:4], "big")
             count = args[4]
-            data = bytearray(self.memory[address : address + count])
+            marker = self._reentry_state()
+            if address == AUTHORIZATION_STATE_ADDRESS and count == 1:
+                data = bytearray((marker["e658"],))
+            elif address == WRONG_KEY_COUNTER_ADDRESS and count == 1:
+                data = bytearray((marker["e74b"],))
+            elif address == NATIVE_FAST_REENTRY_TIMER_ADDRESS and count == 2:
+                data = bytearray(int(marker["e72e"]).to_bytes(2, "little"))
+            elif address == NATIVE_FAST_REENTRY_LATCH_ADDRESS and count == 1:
+                data = bytearray((marker["e659"],))
+                self.reentry_index += 1
+            else:
+                data = bytearray(self.memory[address : address + count])
             self.read_hits[address] += 1
             self._response(ResponseStatus.ACK, data)
         elif frame.command == SELECTOR_COMMAND:
@@ -189,14 +235,28 @@ class ReadOnlyStockSerial:
         return len(raw)
 
 
-def _session(serial, *, progress=None):
-    transport = NativeFastReadTransport(serial)
+def _session(
+    serial,
+    *,
+    progress=None,
+    event_cb=None,
+    sleeper=None,
+    monotonic=None,
+    **session_kwargs,
+):
+    transport = NativeFastReadTransport(serial, event_cb=event_cb)
+    timing_kwargs = {}
+    if monotonic is not None:
+        timing_kwargs["monotonic"] = monotonic
     return NativeFastReadSession(
         transport,
         progress_cb=progress,
+        event_cb=event_cb,
         post_cleanup_delay=0,
         post_cleanup_poll=0,
-        sleeper=lambda _seconds: None,
+        sleeper=sleeper or (lambda _seconds: None),
+        **timing_kwargs,
+        **session_kwargs,
     )
 
 
@@ -262,12 +322,14 @@ def test_open_d2xx_propagates_factory_failure_without_pyserial_fallback():
         NativeFastReadTransport.open_d2xx("COM1", serial_factory=factory)
 
 
-def test_partial_read_uses_old_rate_acks_and_finishes_at_confirmed_low():
+def test_partial_read_restores_low_and_confirms_identity_after_b0():
     serial = ReadOnlyStockSerial(post_cleanup_busy=2)
     progress = []
+    sleeps = []
     session = _session(
         serial,
         progress=lambda done, total, label: progress.append((done, total, label)),
+        sleeper=sleeps.append,
     )
 
     result = session.read_partial()
@@ -298,6 +360,186 @@ def test_partial_read_uses_old_rate_acks_and_finishes_at_confirmed_low():
         if command == SELECTOR_COMMAND and args == b"BMW"
     ]
     assert cleanup == [9600]
+    cleanup_index = serial.requests.index((9600, SELECTOR_COMMAND, b"BMW"))
+    assert serial.requests[cleanup_index + 1 :] == [
+        (9600, 0x00, b""),
+        (9600, 0x00, b""),
+        (9600, 0x00, b""),
+    ]
+    assert sleeps[-1] == pytest.approx(0)
+
+
+def test_partial_read_records_empty_queues_after_captured_b0_cleanup():
+    serial = ReadOnlyStockSerial()
+    events = []
+    session = _session(
+        serial,
+        event_cb=lambda event, fields: events.append((event, dict(fields))),
+    )
+
+    session.read_partial()
+
+    queue_event = next(
+        fields for event, fields in events
+        if event == "d2xx_queue_status"
+        and fields["phase"] == "post_read_cleanup_b0"
+    )
+    assert queue_event == {
+        "phase": "post_read_cleanup_b0",
+        "available": True,
+        "rx_bytes": 0,
+        "tx_bytes": 0,
+        "event_count": 0,
+    }
+
+
+def test_standalone_read_arms_same_port_and_next_read_consumes_latch(monkeypatch):
+    first_serial = ReadOnlyStockSerial()
+    second_serial = ReadOnlyStockSerial()
+    serials = [first_serial, second_serial]
+
+    def open_transport(_port, *, echo=True, event_cb=None):
+        del echo
+        return NativeFastReadTransport(serials.pop(0), event_cb=event_cb)
+
+    monkeypatch.setattr(
+        NativeFastReadTransport,
+        "open_d2xx",
+        staticmethod(open_transport),
+    )
+
+    read_partial_d2xx("COM1")
+    assert native_reentry.reentry_required("com1")
+    assert first_serial.read_hits[NATIVE_FAST_REENTRY_TIMER_ADDRESS] == 0
+    assert first_serial.read_hits[NATIVE_FAST_REENTRY_LATCH_ADDRESS] == 0
+
+    read_partial_d2xx("com1")
+    assert second_serial.read_hits[NATIVE_FAST_REENTRY_TIMER_ADDRESS] == 1
+    assert second_serial.read_hits[NATIVE_FAST_REENTRY_LATCH_ADDRESS] == 1
+    assert native_reentry.reentry_required("COM1")
+
+
+def test_pending_read_reentry_waits_for_shared_latch_before_selector():
+    serial = ReadOnlyStockSerial(
+        reentry_states=[
+            {"e658": 0, "e659": 0, "e74b": 0, "e72e": 3},
+            {"e658": 0, "e659": 0, "e74b": 0, "e72e": 2},
+            {
+                "e658": 0,
+                "e659": 0xCC,
+                "e74b": 0,
+                "e72e": 0,
+            },
+        ]
+    )
+    progress = []
+    events = []
+    sleeps = []
+    session = _session(
+        serial,
+        progress=lambda done, total, label: progress.append((done, total, label)),
+        event_cb=lambda event, fields: events.append((event, dict(fields))),
+        sleeper=sleeps.append,
+        reentry_required=True,
+    )
+
+    session.read_partial()
+
+    marker_events = [
+        fields
+        for event, fields in events
+        if event == "native_fast_read_reentry_marker"
+    ]
+    assert [(item["e72e"], item["e659"]) for item in marker_events] == [
+        (3, 0),
+        (2, 0),
+        (0, 0xCC),
+    ]
+    assert any(
+        event == "native_fast_read_reentry_ready" for event, _fields in events
+    )
+    assert [item[2] for item in progress if item[:2] == (0, 0)] == [
+        "Waiting for ECU native-fast readiness (E72E=3, E659=0x00)",
+        "Waiting for ECU native-fast readiness (E72E=2, E659=0x00)",
+    ]
+    first_selector = next(
+        index
+        for index, (_baud, command, _args) in enumerate(serial.requests)
+        if command == SELECTOR_COMMAND
+    )
+    last_gate_read = max(
+        index
+        for index, (_baud, command, args) in enumerate(serial.requests)
+        if command == 0x06
+        and int.from_bytes(args[:4], "big")
+        in (NATIVE_FAST_REENTRY_TIMER_ADDRESS, NATIVE_FAST_REENTRY_LATCH_ADDRESS)
+    )
+    assert last_gate_read < first_selector
+    assert sum(1 for value in sleeps if value == pytest.approx(1.0)) == 2
+
+
+def test_ready_shared_latch_enters_fast_mode_without_artificial_delay():
+    serial = ReadOnlyStockSerial(
+        reentry_states=[{"e658": 0, "e659": 0xCC, "e74b": 0, "e72e": 0}]
+    )
+    session = _session(serial, reentry_required=True)
+
+    result = session.read_partial()
+
+    assert len(result.data) == TUNE_END - TUNE_START
+    assert session.fast_selector_attempted is True
+    assert session.link is LinkRate.LOW
+    assert session.state is SessionState.COMPLETE
+    assert any(command == SELECTOR_COMMAND for _baud, command, _args in serial.requests)
+    assert serial.baudrate == CAPTURED_RATE_PROFILE.low
+
+
+def test_reentry_latch_timeout_fails_before_selector_without_recovery_probe():
+    serial = ReadOnlyStockSerial(
+        reentry_states=[{"e658": 0, "e659": 0, "e74b": 0, "e72e": 5}]
+    )
+    clock = [0.0]
+
+    def sleep(seconds):
+        clock[0] += seconds
+
+    session = _session(
+        serial,
+        sleeper=sleep,
+        monotonic=lambda: clock[0],
+        reentry_timeout=2.0,
+        reentry_poll=1.0,
+        reentry_required=True,
+    )
+
+    with pytest.raises(NativeFastReadReentryNotReady, match="within 2 seconds"):
+        session.read_full()
+
+    assert clock[0] == pytest.approx(2.0)
+    assert session.fast_selector_attempted is False
+    assert session.link is LinkRate.LOW
+    assert session.state is SessionState.LOW_READY
+    assert all(command != SELECTOR_COMMAND for _baud, command, _args in serial.requests)
+
+
+@pytest.mark.parametrize(
+    ("marker", "message"),
+    (
+        ({"e658": 2, "e659": 0, "e74b": 0, "e72e": 0}, "E658=2"),
+        ({"e658": 0, "e659": 0, "e74b": 2, "e72e": 0}, "E74B >= 2"),
+    ),
+)
+def test_reentry_safety_marker_blocks_before_selector(marker, message):
+    serial = ReadOnlyStockSerial(reentry_states=[marker])
+    session = _session(serial, reentry_required=True)
+
+    with pytest.raises(NativeFastReadReentryNotReady, match=message):
+        session.read_partial()
+
+    assert session.fast_selector_attempted is False
+    assert session.link is LinkRate.LOW
+    assert session.state is SessionState.LOW_READY
+    assert all(command != SELECTOR_COMMAND for _baud, command, _args in serial.requests)
 
 
 def test_production_full_read_is_one_pass_with_three_high_rate_probes():
@@ -322,6 +564,8 @@ def test_production_full_read_is_one_pass_with_three_high_rate_probes():
     assert serial.read_hits[0x20000] == 1
     assert serial.read_hits[TOKEN_ADDRESS] == 3
     assert all(command != 0x07 for _baud, command, _args in serial.requests)
+    cleanup_index = serial.requests.index((9600, SELECTOR_COMMAND, b"BMW"))
+    assert serial.requests[cleanup_index + 1 :] == [(9600, 0x00, b""), (9600, 0x00, b"")]
 
 
 def test_corrupt_high_selector_ack_recovers_by_probing_the_actual_high_rate():
@@ -353,6 +597,19 @@ def test_post_cleanup_identity_change_is_never_reported_as_success():
     session = _session(serial)
 
     with pytest.raises(ContractViolation, match="identity differs"):
+        session.read_partial()
+
+    assert session.state is not SessionState.COMPLETE
+
+
+def test_failed_read_recovery_still_rejects_changed_identity():
+    serial = ReadOnlyStockSerial(
+        corrupt_selector=SELECTOR_HIGH,
+        change_identity_after_cleanup=True,
+    )
+    session = _session(serial)
+
+    with pytest.raises(FrameValidationError, match="checksum"):
         session.read_partial()
 
     assert session.recovery_used is True

@@ -33,10 +33,12 @@ BimmerStein ECU Tool brings BMW MS41 flashing, diagnostics, configuration, patch
 - Install and use Soft-BSL for supported high-speed operations.
 - Recover an unbootable ECU through the separate hardware-BSL workflow.
 
-The supported release target is **Windows x64**. The application is distributed as both a per-user
-installer and a complete one-folder portable package. In portable mode, the executable must remain
-beside its `_internal` directory. The required Visual C++ runtime is included in both distributions,
-so no separate runtime installation is required.
+The supported release target is **Windows x64**. The recommended release is distributed as both a
+per-user PyInstaller installer and a complete one-folder portable package. In that portable mode,
+the executable must remain beside its `_internal` directory. A separately labeled **experimental
+Nuitka** installer and portable ZIP are also available as a second compatibility option. The
+required Visual C++ runtime is included in every Windows package, so no separate runtime
+installation is required.
 
 ## Safety
 
@@ -71,6 +73,9 @@ least 10 seconds, then ignition ON.
 Hardware-BSL and armed Soft-BSL boot-region operations are advanced recovery-sensitive workflows.
 Intel 28F200 erase/program also requires the correct external VPP/RP# supply; AMD/JEDEC parts do
 not use that Intel programming-voltage requirement.
+
+For the bench wiring and hardware connections used by the BSL-Unbricker tab, see
+[CAATZ/MS41-BSL-Unbricker](https://github.com/CAATZ/MS41-BSL-Unbricker).
 
 ## Soft-BSL: persistent high-speed ECU access
 
@@ -162,11 +167,15 @@ or write to the wrong calibration addresses.
 
 ## Installation
 
-1. Download the Windows installer or the complete portable ZIP.
-2. For the installer, run the versioned `Windows-x64-Setup.exe`; it installs for the current user
-   without requiring administrator access and offers an optional desktop shortcut.
-3. For portable use, extract the complete ZIP and keep the executable beside `_internal`.
-4. Install the driver for the intended FTDI adapter, then run `BimmerStein ECU Tool.exe`.
+1. Download the regular `Windows-x64-Setup.exe` installer (recommended), or the corresponding
+   complete portable ZIP.
+2. Run the installer; it installs for the current user without requiring administrator access and
+   offers an optional desktop shortcut.
+3. For regular portable use, extract the complete ZIP and keep the executable beside `_internal`.
+4. The assets containing `Nuitka-Experimental` are a separately installed **experimental** second
+   option for compatibility testing. Keep their entire extracted folder together and report that
+   backend when describing a startup or packaging problem.
+5. Install the driver for the intended FTDI adapter, then run `BimmerStein ECU Tool.exe`.
 
 D2XX is preferred for native-fast DS2, Soft-BSL, and hardware BSL. Normal DS2 and supported
 hardware-BSL paths can use pyserial where the optimized D2XX path is unavailable.

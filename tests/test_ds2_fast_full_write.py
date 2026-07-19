@@ -23,6 +23,9 @@ from ds2_fast_partial_write import (
 from ds2_fast_slim_write import SlimNativeFastFullWriteSession
 from ds2_write_authorization import (
     AUTHORIZATION_STATE_ADDRESS,
+    INITIAL_SEED_RETRY_DELAY,
+    NATIVE_FAST_REENTRY_LATCH_ADDRESS,
+    NATIVE_FAST_REENTRY_TIMER_ADDRESS,
     WRONG_KEY_COUNTER_ADDRESS,
 )
 from tests.test_ds2_fast_partial_write import (
@@ -285,6 +288,122 @@ def test_full_authorization_failure_is_reported_as_power_cycle_required(
     finish = next(fields for event, fields in journal.events if event == "journal_finished")
     assert finish["power_cycle_required"] is True
     assert finish["safe_legacy_fallback"] is False
+
+
+def test_full_program_only_uses_single_native_challenge_and_never_reads_e659(
+    tmp_path,
+):
+    session, serial, _journal = _authorization_full_session(tmp_path)
+    session.timing = FullWriteTiming(
+        initial_seed_retry_delay=0,
+        pre_arm_delay=0,
+        post_selector_delay=0,
+        poll_delay=0,
+        post_program_erase_delay=0,
+        between_program_requests=0,
+        post_tune_erase_delay=0,
+        post_tune_poll_delay=0,
+    )
+
+    assert session._authorize_once() == "new_authorization"
+
+    seed_key_payloads = [
+        args
+        for _baud, command, args in serial.requests
+        if command == SEED_KEY_COMMAND
+    ]
+    assert seed_key_payloads[0] == b"BMW\x1e"
+    assert seed_key_payloads.count(b"BMW\x1e") == 1
+    assert len(seed_key_payloads) == 2
+    read_addresses = [
+        int.from_bytes(args[:4], "big")
+        for _baud, command, args in serial.requests
+        if command == 0x06
+    ]
+    assert 0xE659 not in read_addresses
+    assert session.write_authorized
+
+
+@pytest.mark.parametrize("program_only", (False, True))
+def test_full_and_program_only_inherit_shared_pending_reentry_gate(
+    tmp_path, program_only
+):
+    session, serial, _journal = _authorization_full_session(
+        tmp_path,
+        native_reentry_states=(
+            {"e72e": 2, "e659": 0},
+            {"e72e": 1, "e659": 0},
+            {"e72e": 0, "e659": 0xCC},
+        ),
+    )
+    session.program_only = program_only
+    session.reentry_required = True
+    session.timing = FullWriteTiming(
+        initial_seed_retry_delay=0,
+        native_fast_reentry_poll_interval=0,
+        native_fast_reentry_timeout=15,
+        pre_arm_delay=0,
+        post_selector_delay=0,
+        poll_delay=0,
+        post_program_erase_delay=0,
+        between_program_requests=0,
+        post_tune_erase_delay=0,
+        post_tune_poll_delay=0,
+    )
+
+    assert session._authorize_once() == "new_authorization"
+
+    timer_reads = [
+        index
+        for index, (_baud, command, args) in enumerate(serial.requests)
+        if command == 0x06
+        and int.from_bytes(args[:4], "big")
+        == NATIVE_FAST_REENTRY_TIMER_ADDRESS
+    ]
+    latch_reads = [
+        index
+        for index, (_baud, command, args) in enumerate(serial.requests)
+        if command == 0x06
+        and int.from_bytes(args[:4], "big")
+        == NATIVE_FAST_REENTRY_LATCH_ADDRESS
+    ]
+    challenge_indices = [
+        index
+        for index, (_baud, command, args) in enumerate(serial.requests)
+        if command == SEED_KEY_COMMAND and args == b"BMW\x1e"
+    ]
+    assert len(timer_reads) == 3
+    assert len(latch_reads) == 3
+    assert len(challenge_indices) == 1
+    assert max(timer_reads + latch_reads) < challenge_indices[0]
+    assert serial.flash_requests == []
+
+
+@pytest.mark.parametrize("program_only", (False, True))
+def test_full_and_program_only_inherit_state_qualified_10_second_retry(
+    tmp_path, program_only
+):
+    session, serial, _journal = _authorization_full_session(
+        tmp_path,
+        initial_seed_busy=1,
+        initial_seed_busy_state=0,
+    )
+    session.program_only = program_only
+    sleeps = []
+    session._sleep = lambda seconds: sleeps.append(seconds)
+
+    assert session._authorize_once() == "new_authorization"
+
+    assert [
+        args
+        for _baud, command, args in serial.requests
+        if command == SEED_KEY_COMMAND and args == b"BMW\x1e"
+    ] == [b"BMW\x1e", b"BMW\x1e"]
+    assert sleeps == [10.0]
+    assert INITIAL_SEED_RETRY_DELAY == 10.0
+    assert serial.flash_requests == []
+    assert session.write_authorized
+    assert session.state is SessionState.AUTHORIZED_LOW
 
 
 def test_full_write_direct_high_optional_verify_and_stays_high(tmp_path):

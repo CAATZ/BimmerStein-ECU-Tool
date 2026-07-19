@@ -277,6 +277,31 @@ def test_full_write_capture_satisfies_all_688_flash_contracts():
         )
 
 
+def test_full_write_low_capture_uses_one_initial_challenge_and_no_e659_gate():
+    frames, rejects = load_saleae_frames(
+        _capture("Fast Full Write First Step 9600.csv")
+    )
+    assert rejects == 0
+    host_frames = [frame.data for frame in frames if frame.direction == "HOST"]
+    authorization_payloads = [
+        frame[3:-1]
+        for frame in host_frames
+        if frame[2] == 0x90
+    ]
+    read_addresses = [
+        int.from_bytes(frame[3:7], "big")
+        for frame in host_frames
+        if frame[2] == 0x06
+    ]
+
+    assert authorization_payloads[0] == b"BMW\x1e"
+    assert authorization_payloads.count(b"BMW\x1e") == 1
+    assert len(authorization_payloads[1]) == 4
+    assert authorization_payloads[2] == b"BMW"
+    assert authorization_payloads[3][0] == 0x12
+    assert 0xE659 not in read_addresses
+
+
 def _partial_write_high_frames():
     raw = _capture("Fast Partial Write (Complete - RAW).csv")
     mid = _capture("Fast Partial Write Second Step 19200.csv")

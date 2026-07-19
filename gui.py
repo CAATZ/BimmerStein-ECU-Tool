@@ -45,6 +45,7 @@ import patch_service
 import identity
 import ds2_fast_read
 import ds2_native_fast_service
+from ds2_write_authorization import AUTHORIZATION_STATE_ADDRESS
 import softbsl_service
 import softbsl_install
 import bsl_service
@@ -63,6 +64,10 @@ LOG_DIR = str(mutable_path("logs"))
 VERIFY_OFF_MESSAGE = (
     "Read-back verification skipped (Verify off). ECU-side finalization completed."
 )
+
+
+class StockWriteNotStarted(RuntimeError):
+    """A stock DS2 write was stopped before any erase/program command."""
 
 
 def configure_application(app):
@@ -310,12 +315,17 @@ class _GuiPrompt(QObject):
     on the MAIN thread (via a queued signal) and blocks the worker until the
     operator clicks OK."""
     _ask = pyqtSignal(str)
+    _retry = pyqtSignal(str)
+    _phase1_reentry = pyqtSignal(str, str)
 
     def __init__(self, parent):
         super().__init__(parent)
         self._widget = parent
         self._evt = threading.Event()
+        self._retry_answer = False
         self._ask.connect(self._show)          # queued → runs on the main thread
+        self._retry.connect(self._show_retry)  # queued → runs on the main thread
+        self._phase1_reentry.connect(self._show_phase1_reentry)
 
     def _show(self, msg):
         text = str(msg).strip()
@@ -329,11 +339,59 @@ class _GuiPrompt(QObject):
         QMessageBox.information(self._widget, title, text)
         self._evt.set()
 
+    def _show_retry(self, msg):
+        answer = QMessageBox.warning(
+            self._widget,
+            "ECU Not Ready After Ignition Cycle",
+            str(msg).strip(),
+            QMessageBox.Retry | QMessageBox.Cancel,
+            QMessageBox.Retry,
+        )
+        self._retry_answer = answer == QMessageBox.Retry
+        self._evt.set()
+
+    def _show_phase1_reentry(self, port, msg):
+        """Release COM for an ignition cycle, then offer one explicit retry."""
+        self._retry_answer = False
+        try:
+            self._widget._prepare_softbsl_phase1_reentry_prompt(str(port))
+            answer = QMessageBox.warning(
+                self._widget,
+                "Soft-BSL Installation Needs an Ignition Cycle",
+                str(msg).strip(),
+                QMessageBox.Retry | QMessageBox.Cancel,
+                QMessageBox.Cancel,
+            )
+            if answer == QMessageBox.Retry:
+                self._retry_answer = bool(
+                    self._widget._reacquire_softbsl_port_after_phase1_reentry(
+                        str(port)
+                    )
+                )
+        finally:
+            self._evt.set()
+
     def __call__(self, msg=""):
         self._evt.clear()
         self._ask.emit(str(msg))
         self._evt.wait()                        # worker blocks until the modal is dismissed
         return ""
+
+    def retry_cancel(self, msg=""):
+        """Ask whether a failed physical-step verification should be retried."""
+        self._retry_answer = False
+        self._evt.clear()
+        self._retry.emit(str(msg))
+        self._evt.wait()
+        return self._retry_answer
+
+    def phase1_reentry_retry_cancel(self, port, msg=""):
+        """Run the install-only marker recovery prompt on the Qt main thread."""
+        self._retry_answer = False
+        self._evt.clear()
+        self._phase1_reentry.emit(str(port), str(msg))
+        self._evt.wait()
+        return self._retry_answer
 
 
 class _GuiConfirm(QObject):
@@ -486,6 +544,10 @@ class MS41FlashGUI(QMainWindow):
         self._native_write_recovery = None  # retained D2XX/session after a post-erase failure
         self._softbsl_write_recovery = None # retained Soft-BSL RAM agent after a post-erase failure
         self._softbsl_install_recovery = None # retained Phase-1/2 installer transport
+        # A completed stock write leaves volatile authorization active until a
+        # real OFF -> 10 s -> ON cycle.  Gate a subsequent write on RAM state so
+        # it cannot reuse that stale authorization and enter flash programming.
+        self._post_write_cycle_pending = False
         self._identity_boot_data = None  # current 16 KB file-order BOOT identity/descriptor cache
         self._identity_sector_data = None # complete live erase sector: BOTTOM SA1 8 KB or TOP SA7 64 KB
         self._identity_sector_off = None  # file offset owning _identity_sector_data
@@ -495,6 +557,8 @@ class MS41FlashGUI(QMainWindow):
         self._identity_isn   = None   # fresh live 4-digit DME ISN (EWS workflow only)
         self._identity_isn_key = None # connection fingerprint that owns the live ISN
         self._last_full_read_key = None
+        self._ecu_softbsl_marker = None
+        self._ecu_softbsl_hook_present = False
         self._softbsl_image = None
         self._softbsl_xbank_base = None
         self._softbsl_xbank_base_source = ""
@@ -522,24 +586,25 @@ class MS41FlashGUI(QMainWindow):
 
         # ── Connection bar ──────────────────────────────────────────────
         conn_group = QGroupBox("ECU Connection  (BMW DS2 — 9600 8E2, K-Line or direct tap)")
-        conn_lay   = QHBoxLayout(conn_group)
+        conn_lay = QVBoxLayout(conn_group)
+        conn_controls = QHBoxLayout()
 
-        conn_lay.addWidget(QLabel("Port:"))
+        conn_controls.addWidget(QLabel("Port:"))
         self.cb_port = QComboBox()
         self.cb_port.setMinimumWidth(140)
         self.cb_port.currentTextChanged.connect(self._on_port_selection_changed)
-        conn_lay.addWidget(self.cb_port)
+        conn_controls.addWidget(self.cb_port)
 
         btn_refresh = QPushButton("⟳")
         btn_refresh.setFixedWidth(30)
         btn_refresh.setToolTip("Refresh port list")
         btn_refresh.clicked.connect(self._refresh_ports)
-        conn_lay.addWidget(btn_refresh)
+        conn_controls.addWidget(btn_refresh)
 
         self.btn_connect = QPushButton("Connect")
         self.btn_connect.setCheckable(True)
         self.btn_connect.clicked.connect(self._on_connect_toggle)
-        conn_lay.addWidget(self.btn_connect)
+        conn_controls.addWidget(self.btn_connect)
 
         self.chk_direct_tap = QCheckBox("Direct tap (no echo)")
         self.chk_direct_tap.setToolTip(
@@ -547,15 +612,29 @@ class MS41FlashGUI(QMainWindow):
             "single-wire K-Line.  The K-Line echoes our TX back; a direct tap does not — so check\n"
             "this when wired straight onto the ECU (same tap as the BSL unbricker).  Leave unchecked\n"
             "for a normal K-Line / OBD-II adapter.  Set it before connecting.")
-        conn_lay.addWidget(self.chk_direct_tap)
+        conn_controls.addWidget(self.chk_direct_tap)
 
-        conn_lay.addStretch()
+        self.lbl_intended_use = QLabel(
+            "OFF-ROAD, COMPETITION, RESEARCH, AND BENCH USE ONLY"
+        )
+        self.lbl_intended_use.setAlignment(Qt.AlignCenter)
+        self.lbl_intended_use.setStyleSheet(
+            "color:#e8c46a; font-size:10px; font-weight:bold; padding:2px 4px;"
+        )
+        self.lbl_intended_use.setToolTip(
+            "Do not use this software to modify a vehicle operated on public roads. "
+            "The user is responsible for compliance with applicable emissions, safety, "
+            "registration, and other laws."
+        )
+        conn_controls.addWidget(self.lbl_intended_use, 1)
+
         self.lbl_status = QLabel("● Disconnected")
         self.lbl_status.setStyleSheet("color:#999; font-weight:bold;")
-        conn_lay.addWidget(self.lbl_status)
+        conn_controls.addWidget(self.lbl_status)
         self.lbl_variant = QLabel("")
         self.lbl_variant.setStyleSheet("color:#7ec8e3; font-weight:bold; padding-left:10px;")
-        conn_lay.addWidget(self.lbl_variant)
+        conn_controls.addWidget(self.lbl_variant)
+        conn_lay.addLayout(conn_controls)
         root.addWidget(conn_group)
 
         # ── Log pane (shared) ───────────────────────────────────────────
@@ -637,24 +716,9 @@ class MS41FlashGUI(QMainWindow):
         self.progress_bar   = QProgressBar()
         self.progress_label = QLabel("")
         self.progress_bar.setVisible(False)
-        prog_lay = QHBoxLayout()
-        prog_lay.addWidget(self.progress_bar)
-        prog_lay.addWidget(self.progress_label)
-        root.addLayout(prog_lay)
-
-        self.lbl_intended_use = QLabel(
-            "OFF-ROAD, COMPETITION, RESEARCH, AND BENCH USE ONLY"
-        )
-        self.lbl_intended_use.setAlignment(Qt.AlignCenter)
-        self.lbl_intended_use.setStyleSheet(
-            "color:#e8c46a; font-size:10px; font-weight:bold; padding:2px 4px;"
-        )
-        self.lbl_intended_use.setToolTip(
-            "Do not use this software to modify a vehicle operated on public roads. "
-            "The user is responsible for compliance with applicable emissions, safety, "
-            "registration, and other laws."
-        )
-        root.addWidget(self.lbl_intended_use)
+        self.progress_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        root.addWidget(self.progress_bar)
+        root.addWidget(self.progress_label)
 
         self._set_ecu_buttons_enabled(False)
         self._update_transfer_mode()   # sets the initial disabled-tooltip before any connect
@@ -1074,6 +1138,22 @@ class MS41FlashGUI(QMainWindow):
                 softbsl_marker_raw = self._ds2.read_mem(ecu_info.BANK_MARKER_ADDR, ecu_info.BANK_MARKER_LEN)
             except Exception:
                 pass
+            softbsl_hook_present = False
+            softbsl_hook_check_failed = False
+            if ecu_info.decode_bank_marker(softbsl_marker_raw):
+                try:
+                    softbsl_hook_present = self._live_patch_present(
+                        self._ds2, "door_magic")
+                except Exception as error:
+                    softbsl_hook_check_failed = True
+                    log_fn(
+                        "Soft-BSL loader marker is present, but the normal-mode 0x2A "
+                        f"hook could not be confirmed ({error}). Automatic transfers "
+                        "will use DS2.", "warn")
+                if not softbsl_hook_present and not softbsl_hook_check_failed:
+                    log_fn(
+                        "Soft-BSL loader marker is present without the complete 0x2A "
+                        "program hook. Automatic transfers will use DS2.", "warn")
             chip_sig_for_fast = b""
             try:
                 chip_sig_for_fast = self._ds2.read_mem(ecu_info.DRV_SIG_ADDR, ecu_info.DRV_SIG_LEN)
@@ -1082,7 +1162,8 @@ class MS41FlashGUI(QMainWindow):
             new_fields = self._read_new_info_fields(self._ds2, log_fn)
             identity_source = self._read_live_identity_source(self._ds2, log_fn)
             return (ident, cal_id, vin, prog_is_ms41_3, new_fields,
-                    softbsl_marker_raw, chip_sig_for_fast, identity_source)
+                    softbsl_marker_raw, chip_sig_for_fast, identity_source,
+                    softbsl_hook_present)
 
         self._run_task(
             task,
@@ -1107,6 +1188,7 @@ class MS41FlashGUI(QMainWindow):
         self._ecu_cal_id          = None
         self._ecu_vin             = None
         self._ecu_softbsl_marker  = None
+        self._ecu_softbsl_hook_present = False
         self._ecu_chip_sig        = b""
         self._flash_chip_note.setText(self._flash_chip_label_text(b""))
         self._update_transfer_mode()
@@ -1152,6 +1234,29 @@ class MS41FlashGUI(QMainWindow):
         return bytes(sig) == SS1V2_PROG_SIG
 
     @staticmethod
+    def _live_patch_present(ds2, patch_id: str) -> bool:
+        """Confirm every descriptor edit directly from the normally-running ECU.
+
+        Patch descriptors use full-file offsets. Normal DS2 program reads use the
+        ECU's block-swapped address space, so each edit is read at ``off ^ 0x4000``.
+        A short or failed read is an error; callers fail safe to the stock DS2 route.
+        """
+        patch = patch_service.definitions().get(patch_id)
+        if patch is None:
+            raise ValueError(f"unknown patch descriptor: {patch_id}")
+        for edit in patch["edits"]:
+            expected = bytes.fromhex(edit["data"])
+            address = int(edit["off"]) ^ 0x4000
+            actual = bytes(ds2.read_mem(address, len(expected)))
+            if len(actual) != len(expected):
+                raise ValueError(
+                    f"short {patch_id} read at 0x{address:05X}: "
+                    f"expected {len(expected)}, received {len(actual)}")
+            if actual != expected:
+                return False
+        return True
+
+    @staticmethod
     def _read_live_identity_source(ds2, log_fn):
         """Read only the live per-unit identity bytes needed for a base-image graft.
 
@@ -1175,13 +1280,15 @@ class MS41FlashGUI(QMainWindow):
             return None
 
     def _on_connected(self, ident=b"", cal_id="", vin="", prog_is_ms41_3=False, new_fields=None,
-                     softbsl_marker_raw=b"", chip_sig=b"", identity_source=None):
+                     softbsl_marker_raw=b"", chip_sig=b"", identity_source=None,
+                     softbsl_hook_present=False):
         self._reset_live_config_state()
         self._d2xx_checked = True
         self._d2xx_ok = bool(self._ds2 and getattr(self._ds2, "uses_d2xx", False))
         self._update_d2xx_warning()
         self._ecu_identity_source = bytes(identity_source) if identity_source else None
         self._ecu_softbsl_marker = ecu_info.decode_bank_marker(softbsl_marker_raw)
+        self._ecu_softbsl_hook_present = bool(softbsl_hook_present)
         self._ecu_chip_sig = chip_sig
         self._flash_chip_note.setText(self._flash_chip_label_text(chip_sig))
         self._update_transfer_mode()
@@ -1230,7 +1337,8 @@ class MS41FlashGUI(QMainWindow):
             b.setEnabled(True)
         self.btn_id_read_flash_ecu.setEnabled(self._fast_read_available())
         self.btn_id_read_flash_ecu.setToolTip(
-            "Requires the installed Soft-BSL loader. Reads the 16 KB BOOT identity window "
+            "Requires the installed Soft-BSL loader and its normal-mode 0x2A hook. "
+            "Reads the 16 KB BOOT identity window "
             "on BOTTOM, or the complete 64 KB fused SA7 sector on 29F400 TOP, with automatic "
             "high-to-low baud fallback. DS2 is not used for BOOT access.")
         # Config-tab buttons follow the file/ECU mode rules, not a blanket enable.
@@ -1238,11 +1346,13 @@ class MS41FlashGUI(QMainWindow):
         self.btn_read_tune.setToolTip(
             "Read the 24 KB calibration/tune partition. Uses Soft-BSL when installed; "
             "otherwise native DS2 enters 187,500 directly through D2XX and falls back "
-            "to normal DS2 only after confirmed low recovery.")
+            "to normal DS2 only after confirmed low recovery. Saves automatically to Bins, "
+            "then offers an additional copy elsewhere.")
         self.btn_read_full.setToolTip(
             "Read the complete mapped ROM once into a 256 KB image. Uses "
             "Soft-BSL when installed; otherwise native DS2 enters 187,500 directly "
-            "through D2XX with confirmed-low fallback.")
+            "through D2XX with confirmed-low fallback. Saves automatically to Bins, "
+            "then offers an additional copy elsewhere.")
         self.btn_write_tune.setEnabled(True)
         self.btn_write_tune.setToolTip(
             "Write the 24 KB calibration/tune partition using the active transfer path.\n"
@@ -1273,10 +1383,17 @@ class MS41FlashGUI(QMainWindow):
                 and not self._task_busy))
 
     def _fast_read_available(self):
-        """Fast Soft-BSL read is usable iff the loader was detected at connect and the selected
-        adapter actually opened through D2XX (mid/high is never attempted through pyserial). Same gate the
-        Partial/Full fast-transfer path uses."""
-        return bool(getattr(self, "_ecu_softbsl_marker", None)) and getattr(self, "_d2xx_ok", False)
+        """Whether the complete normal-mode Soft-BSL entry path is usable.
+
+        The boot marker alone is insufficient: command 0x2A can reach the loader
+        only when the exact ``door_magic`` program hook is also present. High baud
+        additionally requires the adapter to have opened through D2XX.
+        """
+        return bool(
+            getattr(self, "_ecu_softbsl_marker", None)
+            and getattr(self, "_ecu_softbsl_hook_present", False)
+            and getattr(self, "_d2xx_ok", False)
+        )
 
     def _native_fast_ds2_available(self):
         """The stock-ECU native fast path requires the selected adapter to be D2XX."""
@@ -1293,12 +1410,23 @@ class MS41FlashGUI(QMainWindow):
     def _update_transfer_mode(self):
         """Describe the automatic Soft-BSL/native-fast/legacy transfer route."""
         marker = getattr(self, "_ecu_softbsl_marker", None)
+        hook_present = getattr(self, "_ecu_softbsl_hook_present", False)
         if self._fast_read_available():
             self.lbl_transfer_mode.setText("Transfer: Soft-BSL RAM agent, high baud (fast, auto)")
             self.lbl_transfer_mode.setStyleSheet("color:#9ece6a; padding:4px;")
-            self.lbl_transfer_mode.setToolTip("This ECU has the Soft-BSL loader and this adapter opened through D2XX, "
-                                              "so reads/writes use the RAM agent at high baud. Falls "
-                                              "back to a lower baud automatically if the link is noisy.")
+            self.lbl_transfer_mode.setToolTip(
+                "This ECU has the Soft-BSL loader and complete normal-mode 0x2A hook, "
+                "and this adapter opened through D2XX, so reads/writes use the RAM "
+                "agent at high baud. Falls back to a lower baud automatically if the "
+                "link is noisy.")
+        elif marker and not hook_present and self._native_fast_ds2_available():
+            self.lbl_transfer_mode.setText(
+                "Transfer: Native DS2 187,500 — Soft-BSL hook not detected")
+            self.lbl_transfer_mode.setStyleSheet("color:#e8c46a; padding:4px;")
+            self.lbl_transfer_mode.setToolTip(
+                "The Soft-BSL loader marker exists, but the complete normal-mode 0x2A "
+                "program hook was not confirmed. Soft-BSL entry is unavailable, so "
+                "reads and writes use native-fast DS2 with normal 9600 fallback.")
         elif self._native_fast_ds2_available():
             self.lbl_transfer_mode.setText(
                 "Transfer: Native DS2 187,500 (fast, direct; 9600 fallback)")
@@ -1307,6 +1435,14 @@ class MS41FlashGUI(QMainWindow):
                 "The stock ECU is entered directly from normal DS2 using selector 0x01. "
                 "The host requests the ECU-exact 187,500-baud tier and validates "
                 "communication before transfer. No 19,200 tier is used.")
+        elif marker and not hook_present:
+            self.lbl_transfer_mode.setText(
+                "Transfer: DS2 9600 — Soft-BSL hook not detected")
+            self.lbl_transfer_mode.setStyleSheet("color:#e8c46a; padding:4px;")
+            self.lbl_transfer_mode.setToolTip(
+                "The Soft-BSL loader marker exists, but the complete normal-mode 0x2A "
+                "program hook was not confirmed. Soft-BSL entry is unavailable, and "
+                "D2XX native-fast DS2 is unavailable, so transfers use DS2 at 9600 baud.")
         elif marker:
             self.lbl_transfer_mode.setText("Transfer: DS2 9600 (slow) — D2XX unavailable")
             self.lbl_transfer_mode.setStyleSheet("color:#e8c46a; padding:4px;")
@@ -1326,7 +1462,7 @@ class MS41FlashGUI(QMainWindow):
     def _update_bootloader_checkbox_state(self):
         """The boot/parameter region is protected against the resident DS2 driver
         (ds2.py:979) — there is no plain-DS2 fallback, so this checkbox only makes sense
-        when the fast Soft-BSL path is available (loader installed + active D2XX transport)."""
+        when the complete Soft-BSL path is available (loader + 0x2A hook + D2XX)."""
         if self._fast_read_available():
             self.chk_bootloader_write.setEnabled(True)
             if getattr(self, "_ecu_softbsl_marker", None) == "T":
@@ -1340,7 +1476,8 @@ class MS41FlashGUI(QMainWindow):
             self.chk_bootloader_write.setEnabled(False)
             self.chk_bootloader_write.setChecked(False)
             self.chk_bootloader_write.setToolTip(
-                "Requires Soft-BSL (loader installed + D2XX); DS2 cannot write this region.")
+                "Requires Soft-BSL (loader + normal-mode 0x2A hook + D2XX); "
+                "DS2 cannot write this region.")
         self._update_boot_identity_checkbox_state()
 
     def _update_boot_identity_checkbox_state(self):
@@ -1409,17 +1546,39 @@ class MS41FlashGUI(QMainWindow):
     def _bootloader_write_file_warning(self, data: bytes):
         """None if the file being flashed carries both persistent Soft-BSL entry components;
         otherwise a warning string (informational — the caller still allows proceeding)."""
-        patches = patch_service.definitions()
-        missing = []
-        if "softbsl_loader" in patches and not patch_service.is_applied(data, patches["softbsl_loader"]):
-            missing.append("the Soft-BSL loader")
-        if "door_magic" in patches and not patch_service.is_applied(data, patches["door_magic"]):
-            missing.append("the 0x2A dispatcher door")
+        missing_ids = self._softbsl_missing_after_full_write(
+            data, write_bootloader=True)
+        labels = {
+            "softbsl_loader": "the Soft-BSL loader",
+            "door_magic": "the 0x2A dispatcher door",
+        }
+        missing = [labels[patch_id] for patch_id in missing_ids]
         if not missing:
             return None
         return (f"This file does not contain {' and '.join(missing)}. After a successful write, "
                 "Soft-BSL entry may no longer be available; an interrupted boot-region write "
                 "may require hardware BSL recovery.")
+
+    @staticmethod
+    def _softbsl_missing_after_full_write(data: bytes, *, write_bootloader: bool):
+        """Persistent Soft-BSL components absent from the effective post-write image.
+
+        Every full write replaces program-high, so the normal-mode ``door_magic``
+        entry must exist in the selected image. A simple full write preserves SA1
+        and therefore preserves the connected ECU's already-working loader. When
+        BOOT/SA1 is explicitly written, the selected image must carry the current
+        supported loader as well.
+        """
+        patches = patch_service.definitions()
+        missing = []
+        if write_bootloader:
+            loader = patches.get("softbsl_loader")
+            if loader is None or not patch_service.is_applied(data, loader):
+                missing.append("softbsl_loader")
+        hook = patches.get("door_magic")
+        if hook is None or not patch_service.is_applied(data, hook):
+            missing.append("door_magic")
+        return tuple(missing)
 
     def _boot_region_flash_block(self, image, ecu_evidence):
         """None if flashing `image` over a path that won't write the boot/SA1 region is safe;
@@ -1546,23 +1705,41 @@ class MS41FlashGUI(QMainWindow):
     # Flash read / write
     # -------------------------------------------------------------------
 
+    def _offer_additional_read_copy(self, data, entry, label, dialog_title="Read Complete"):
+        """Offer an optional external copy after Bins owns the authoritative read."""
+        save_copy = QMessageBox.question(
+            self, dialog_title,
+            f"Saved {label} automatically to Bins:\n{entry.filename}\n\n"
+            f"Backup folder:\n{BACKUP_DIR}\n\n"
+            "Would you like to save an additional copy elsewhere?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if save_copy != QMessageBox.Yes:
+            return
+        copy_path, _ = QFileDialog.getSaveFileName(
+            self, f"Save Additional {label} Copy", entry.filename,
+            "Binary Files (*.bin);;All Files (*)")
+        if not copy_path:
+            return
+        try:
+            with open(copy_path, "wb") as handle:
+                handle.write(data)
+        except OSError as error:
+            QMessageBox.warning(
+                self, "Copy Failed",
+                f"The Bins copy is safe, but the additional copy could not be saved:\n{error}")
+            return
+        self._log(f"Additional {label} copy saved: {copy_path}", "ok")
+
     def _on_read(self, mode: str):
         if not self._ds2:
             QMessageBox.warning(self, "Not Connected", "Connect to the ECU first.")
             return
         is_full = (mode == "full")
-        label   = "Full ROM (256KB)" if is_full else "Tune (24KB)"
-        ecu_id  = getattr(self, "_ecu_id", None) or "ECU"
-        suffix  = "full.bin" if is_full else "tune.bin"
-        hint    = os.path.join(os.path.expanduser("~"), f"ms41_{ecu_id}_{suffix}")
-        path, _ = QFileDialog.getSaveFileName(
-            self, f"Save {label}", hint, "Binary Files (*.bin);;All Files (*)"
-        )
-        if not path: return
+        label = "Full ROM (256 KB)" if is_full else "Tune (24 KB)"
+        expected_size = MS41ECU.FULL_ROM_SIZE if is_full else MS41ECU.TUNE_SIZE
 
         transfer_route = self._auto_transfer_route()
         chip_family = self._fast_chip_family() if transfer_route == "softbsl" else None
-        data_box    = [None]
 
         def task(log_fn, progress_fn):
             if is_full:
@@ -1597,28 +1774,38 @@ class MS41FlashGUI(QMainWindow):
                 else:
                     log_fn("Reading 24 KB calibration partition (DS2 @0x10000)…")
                     data = self._ds2_read("tune", progress_fn, log_fn)
-            data_box[0] = bytes(data)
-            with open(path, "wb") as f:
-                f.write(data)
+            data = bytes(data)
+            if len(data) != expected_size:
+                raise RuntimeError(
+                    f"{label} read returned {len(data):,} bytes; expected {expected_size:,}")
             ok, details = verify_checksum(bytearray(data))
             for d in details:
-                log_fn(d)
-            log_fn(f"Saved {len(data)} bytes → {path}")
-            return f"{'Full' if is_full else 'Partial'} read complete: {os.path.basename(path)}"
+                level = (
+                    "debug"
+                    if d.startswith("Boot/program checksums are outside the partial")
+                    else "info"
+                )
+                log_fn(d, level)
+            log_fn(f"Read and validated {len(data):,} bytes; saving automatically to Bins.")
+            return data
 
-        def on_read_success(msg):
-            self._session_backup_read = True
-            if is_full and data_box[0]:
-                try:
-                    entry = self._record_full_ecu_read(data_box[0], source="ECU read")
-                    self._log(f"Auto-archived to backups: {entry.filename}", "ok")
-                except Exception as error:
-                    self._log(f"Full read saved, but automatic Bins archive failed: {error}", "warn")
-                    QMessageBox.warning(
-                        self, "Automatic Archive Failed",
-                        f"The full flash image was saved successfully, but could not be added "
-                        f"to Bins:\n{error}")
-            self._log(msg, "ok")
+        def on_read_success(data):
+            try:
+                if is_full:
+                    entry = self._record_full_ecu_read(data, source="ECU read")
+                else:
+                    entry = self._backup_save_bytes(
+                        bytearray(data), "tune", source="ECU read")
+                    self._refresh_backup_table()
+                    self._session_backup_read = True
+            except Exception as error:
+                self._log(f"{label} automatic Bins save failed: {error}", "error")
+                QMessageBox.critical(
+                    self, "Automatic Save Failed",
+                    f"The {label} was read, but could not be saved to Bins:\n{error}")
+                return
+            self._log(f"{label} read complete: {entry.path}", "ok")
+            self._offer_additional_read_copy(data, entry, label)
 
         self._run_task(task, on_success=on_read_success)
 
@@ -1773,6 +1960,7 @@ class MS41FlashGUI(QMainWindow):
 
     def _finish_flash_success(self, title: str, message: str):
         """Persist the terminal success result before opening the modal instructions."""
+        self._post_write_cycle_pending = True
         self._log(message, "ok")
         self._show_flash_complete(title, message)
 
@@ -1941,6 +2129,10 @@ class MS41FlashGUI(QMainWindow):
             if backup_entry_box[0] is not None:
                 self._session_backup_read = True
                 self._refresh_backup_table()
+            if isinstance(error_msg, StockWriteNotStarted):
+                self._log(f"Calibration write not started: {error_msg}", "warn")
+                QMessageBox.warning(self, "Calibration Write Not Started", str(error_msg))
+                return
             self._log(f"Calibration write failed: {error_msg}", "error")
             if self._offer_active_flash_recovery(
                     f"The calibration write failed after erase began:\n{error_msg}"):
@@ -2221,6 +2413,11 @@ class MS41FlashGUI(QMainWindow):
             return
 
         image_bytes = bytes(image)
+        softbsl_missing_after_write = (
+            self._softbsl_missing_after_full_write(
+                image_bytes, write_bootloader=will_write_boot)
+            if fast_route else ()
+        )
         backup_entry_box = [None]
         self._invalidate_current_full_read("full ROM write started")
 
@@ -2259,7 +2456,8 @@ class MS41FlashGUI(QMainWindow):
                         port, image_bytes, "full", self._softbsl_prompt, lf, baud="high",
                         progress_cb=pf, do_verify=verify_write,
                         write_bootloader=will_write_boot, chip_family=chip_family),
-                    log_fn, progress_fn)
+                    log_fn, progress_fn,
+                    restore_after_success=not softbsl_missing_after_write)
             elif native_route:
                 log_fn(
                     "Using stock native DS2 with direct 187500 entry and a short "
@@ -2295,16 +2493,26 @@ class MS41FlashGUI(QMainWindow):
             self._finish_flash_success("Full ROM Write Complete", msg)
             if on_write_success is not None:
                 on_write_success()
-            if native_route:
-                # Successful stock full writes intentionally remain at high
-                # rate. Drop the stale connected state; the popup instructs the
-                # required physical cycle before reconnecting.
+            if softbsl_missing_after_write:
+                missing_text = ", ".join(softbsl_missing_after_write)
+                self._log(
+                    "The written image no longer contains a complete Soft-BSL entry "
+                    f"path ({missing_text}). Disconnected so the next connection "
+                    "detects the ECU's actual transfer route.", "warn")
+            if native_route or softbsl_missing_after_write:
+                # Stock full writes remain at high rate. A Soft-BSL write whose
+                # effective target loses the loader or normal-mode hook is also
+                # left disconnected so Connect performs fresh route detection.
                 self._disconnect()
 
         def on_failure(error_msg):
             if backup_entry_box[0] is not None:
                 self._session_backup_read = True
                 self._refresh_backup_table()
+            if isinstance(error_msg, StockWriteNotStarted):
+                self._log(f"Full ROM write not started: {error_msg}", "warn")
+                QMessageBox.warning(self, "Full ROM Write Not Started", str(error_msg))
+                return
             self._log(f"Full ROM write failed: {error_msg}", "error")
             if self._offer_active_flash_recovery(
                     f"The full write failed after erase began:\n{error_msg}"):
@@ -2474,6 +2682,7 @@ class MS41FlashGUI(QMainWindow):
         )
 
     def _on_live_stop(self):
+        was_polling = self._poller is not None
         self._live_timer.stop()
         rows = self._poller.csv_rows if self._poller else 0
         if self._poller:
@@ -2487,7 +2696,8 @@ class MS41FlashGUI(QMainWindow):
         self._live_log_basename = ""
         self.lbl_live_status.setText(stop_msg)
         self.lbl_live_status.setStyleSheet("color:#888; font-style:italic;")
-        self._log("Live data polling stopped", "info")
+        if was_polling:
+            self._log("Live data polling stopped", "info")
 
     def _refresh_live_display(self):
         if not self._poller:
@@ -3109,7 +3319,7 @@ class MS41FlashGUI(QMainWindow):
     def _invalidate_current_full_read(self, reason=None):
         """Stop treating the archived full read as an exact image of the live ECU."""
         if getattr(self, "_last_full_read", None) is not None and reason:
-            self._log(f"Current-session full-read cache invalidated: {reason}", "warn")
+            self._log(f"Current-session full-read cache invalidated: {reason}", "debug")
         self._last_full_read = None
         self._last_full_read_key = None
 
@@ -4043,6 +4253,10 @@ class MS41FlashGUI(QMainWindow):
             self._finish_flash_success("Config Written", msg)
 
         def on_failure(err):
+            if isinstance(err, StockWriteNotStarted):
+                self._log(f"Config write not started: {err}", "warn")
+                QMessageBox.warning(self, "ECU Config Write Not Started", str(err))
+                return
             self._log(f"Config write FAILED: {err}", "error")
             if self._offer_active_flash_recovery(
                     f"The config/tune write failed after erase began:\n{err}"):
@@ -5255,13 +5469,47 @@ class MS41FlashGUI(QMainWindow):
             return None
         return port
 
-    def _release_softbsl_port(self, port):
-        """Release Soft-BSL and restore a DS2 session handed off to it."""
+    def _release_softbsl_port(self, port, *, restore_ds2=True):
+        """Release Soft-BSL and optionally restore a handed-off DS2 session."""
         self._port_owner.release("softbsl")
         if getattr(self, "_softbsl_handoff_port", None) == port:
             self._softbsl_handoff_port = None
-            self._port_owner.acquire("flasher")
-            self._reopen_ds2_with_retry(port, self._log)
+            if restore_ds2:
+                self._port_owner.acquire("flasher")
+                self._reopen_ds2_with_retry(port, self._log)
+
+    def _prepare_softbsl_phase1_reentry_prompt(self, port):
+        """Disconnect and release COM before the install-only ignition prompt."""
+        self._softbsl_handoff_port = None
+        try:
+            if (
+                self._ds2 is not None
+                or self._connection_port is not None
+                or self.btn_connect.isChecked()
+            ):
+                signals_were_blocked = self.btn_connect.blockSignals(True)
+                try:
+                    self._disconnect()
+                finally:
+                    self.btn_connect.blockSignals(signals_were_blocked)
+        finally:
+            # The worker reaches this callback only after cmd_deploy_splice has
+            # unwound, closing its probe and the native service's D2XX handle.
+            self._port_owner.release("softbsl")
+
+    def _reacquire_softbsl_port_after_phase1_reentry(self, port):
+        """Retake logical ownership without reopening ordinary 9600-baud DS2."""
+        try:
+            self._port_owner.acquire("softbsl")
+        except PortBusyError as error:
+            QMessageBox.warning(
+                self,
+                "Soft-BSL Installation Cancelled",
+                f"The serial port could not be reacquired because it is held by "
+                f"'{error.holder}'. The installation will stop without writing the ECU.",
+            )
+            return False
+        return True
 
     def _fast_chip_family(self):
         """The detected flash driver family ('amd'/'intel'/None) for picking the soft-BSL agent —
@@ -5309,10 +5557,14 @@ class MS41FlashGUI(QMainWindow):
             QTimer.singleShot(0, lambda: self._start_native_flash_recovery(confirmed=True))
         return True
 
-    def _run_via_softbsl(self, op_fn, log_fn, progress_fn):
+    def _run_via_softbsl(
+            self, op_fn, log_fn, progress_fn, *, restore_after_success=True):
         """Switch the shared app transport from framed DS2 to RAM-agent mode,
-        then reopen framed DS2 after ordinary completion.  A post-erase write failure retains
-        the RAM-agent handle and port ownership for an in-place recovery instead."""
+        then normally reopen framed DS2 after ordinary completion. A caller that
+        knows its completed target removes the persistent Soft-BSL entry path may
+        leave the app disconnected so the next connection performs fresh route
+        detection. Pre-erase failures still restore DS2, while post-erase failures
+        retain the RAM-agent handle and port ownership for in-place recovery."""
         # This method runs inside WorkerThread. Never read a QWidget here: the
         # selected port is snapshotted on the GUI thread when the DS2 session opens.
         if (self._softbsl_write_recovery is not None
@@ -5333,8 +5585,11 @@ class MS41FlashGUI(QMainWindow):
         self._port_owner.release("flasher")
         self._port_owner.acquire("softbsl")
         hold_for_recovery = False
+        completed = False
         try:
-            return op_fn(port, progress_fn, log_fn)
+            result = op_fn(port, progress_fn, log_fn)
+            completed = True
+            return result
         except softbsl_service.SoftBSLWriteRecoveryRequired as error:
             # Do not close/reopen/downshift here: the agent is already RAM-resident at the
             # active baud and the erased target must be re-flashed before ignition is cycled.
@@ -5344,8 +5599,9 @@ class MS41FlashGUI(QMainWindow):
         finally:
             if not hold_for_recovery:
                 self._port_owner.release("softbsl")
-                self._port_owner.acquire("flasher")
-                self._reopen_ds2_with_retry(port, log_fn)
+                if restore_after_success or not completed:
+                    self._port_owner.acquire("flasher")
+                    self._reopen_ds2_with_retry(port, log_fn)
 
     def _run_via_native_fast_ds2(self, op_fn, log_fn, progress_fn):
         """Hand the connected K-Line adapter to the stock native-fast session."""
@@ -5365,22 +5621,43 @@ class MS41FlashGUI(QMainWindow):
         finally:
             self._port_owner.release("native_fast_ds2")
             self._port_owner.acquire("flasher")
+            progress_fn(0, 0, "Reopening normal DS2 at 9600")
             self._reopen_ds2_with_retry(port, log_fn)
 
     def _native_fast_read_with_fallback(self, which, log_fn, progress_fn):
         """Try direct 187500 native DS2, then restart wholly at normal DS2 if safe."""
         def event_cb(event, fields):
-            if event == "host_baud_changed":
-                log_fn(
-                    f"Native DS2 host baud: {fields.get('old'):,} → {fields.get('new'):,} "
-                    f"({fields.get('reason', '')}).")
-            elif event == "automatic_read_recovery":
+            # All transport events remain in the durable native-fast journal.
+            # Mirror only state changes that help the operator decide what to do.
+            if event == "automatic_read_recovery":
                 level = "warn" if fields.get("recovered") else "error"
                 log_fn(
                     "Native DS2 read recovery "
                     + ("confirmed normal low state." if fields.get("recovered")
                        else "could not confirm normal low state."),
                     level)
+            elif event == "native_fast_read_reentry_wait_started":
+                log_fn(
+                    "Waiting for the ECU native-fast completion latch "
+                    f"(E72E={fields.get('e72e')}, "
+                    f"E659=0x{fields.get('e659', 0):02X})."
+                )
+            elif event == "native_fast_read_reentry_ready":
+                log_fn(
+                    "Native-fast selector rearmed after "
+                    f"{fields.get('elapsed_s', 0):.2f} seconds "
+                    f"(E72E={fields.get('e72e')}, "
+                    f"E659=0x{fields.get('e659', 0):02X}).",
+                    "ok",
+                )
+            elif event == "native_fast_read_reentry_blocked":
+                log_fn(
+                    "Native-fast selector entry blocked before rate change: "
+                    f"{fields.get('reason', 'unknown state')} "
+                    f"(E72E={fields.get('e72e')}, "
+                    f"E659=0x{fields.get('e659', 0):02X}).",
+                    "warn",
+                )
 
         try:
             result = self._run_via_native_fast_ds2(
@@ -5397,6 +5674,11 @@ class MS41FlashGUI(QMainWindow):
                 progress_fn,
             )
             return bytes(result.file_image if which == "full" else result.data)
+        except ds2_fast_read.NativeFastReadReentryNotReady:
+            # This is an ECU-side stale/rearming state, not a transport
+            # capability failure.  Reopening normal DS2 is safe, but silently
+            # falling back would hide the required ignition cycle.
+            raise
         except Exception as error:
             # The read-only native session performs bounded high/low recovery.
             # Only a successfully reopened normal DS2 session authorizes a
@@ -5450,6 +5732,7 @@ class MS41FlashGUI(QMainWindow):
                 self._port_owner.release("native_fast_ds2")
                 self._port_owner.acquire("flasher")
                 if not succeeded or reopen_after_success:
+                    progress_fn(0, 0, "Reopening normal DS2 at 9600")
                     self._reopen_ds2_with_retry(port, log_fn)
 
     def _native_fast_write_with_fallback(
@@ -5469,6 +5752,7 @@ class MS41FlashGUI(QMainWindow):
                 f"A {recovery_kind} flash recovery session is already active. Retry that "
                 "recovery before starting another write."
             )
+        self._require_previous_write_cycle(log_fn)
         reopen_after_success = which == "tune"
 
         def operation(port, pf, _lf):
@@ -5497,6 +5781,20 @@ class MS41FlashGUI(QMainWindow):
         except ds2_native_fast_service.NativeWriteRecoveryRequired:
             raise
         except ds2_native_fast_service.NativeFastPreEraseFailure as error:
+            if error.reentry_not_ready:
+                raise StockWriteNotStarted(
+                    f"{error}. Normal DS2 at 9600 was restored and nothing was "
+                    "erased. Turn ignition OFF, wait at least 10 seconds, turn "
+                    "ignition ON, then retry."
+                ) from error
+            if error.seed_unavailable:
+                raise StockWriteNotStarted(
+                    "The ECU remained safely locked and did not make a write seed "
+                    "available. Normal DS2 at 9600 was restored and nothing was erased. "
+                    "A slow-write fallback would repeat the same authorization request, "
+                    "so it was not attempted. Turn ignition OFF, wait at least 10 seconds, "
+                    "turn ignition ON, then retry."
+                ) from error
             if not error.safe_legacy_fallback or self._ds2 is None:
                 raise RuntimeError(
                     f"Native fast write failed before erase, but normal low state "
@@ -5766,6 +6064,27 @@ class MS41FlashGUI(QMainWindow):
 
         self._run_task(task, on_success=on_success, on_failure=on_failure)
 
+    def _mark_ds2_reconnect_failed(self):
+        """Expose a failed handoff restore as a real, reusable disconnection.
+
+        Preserve cached ECU/file evidence for a same-ECU reconnect, but never
+        leave the logical ``flasher`` owner or green connection UI behind when
+        no DS2 transport exists.
+        """
+        self._ds2 = None
+        self._port_owner.release("flasher")
+        self._connection_port = None
+        self._d2xx_checked = False
+        self._d2xx_ok = False
+        self._update_d2xx_warning()
+        self.lbl_status.setText("● Disconnected")
+        self.lbl_status.setStyleSheet("color:#999; font-weight:bold;")
+        self.lbl_variant.setText("")
+        self.btn_connect.setText("Connect")
+        self.btn_connect.setChecked(False)
+        self._set_ecu_buttons_enabled(False)
+        self._update_softbsl_install_options()
+
     def _reopen_ds2_with_retry(self, port, log_fn, attempts=12, delay=0.3):
         """Reopen the plain DS2 connection after a Fast op. The soft-BSL recovery WDT-reboots the
         ECU, so for the first ~1-2 s the port may open while the ECU is still booting and not yet
@@ -5783,7 +6102,7 @@ class MS41FlashGUI(QMainWindow):
                 self._d2xx_ok = bool(getattr(self._ds2, "uses_d2xx", False))
                 if attempt > 1:
                     log_fn(f"ECU back up after the Fast operation (attempt {attempt}).", "ok")
-                return
+                return True
             except Exception as e:
                 last_err = e
                 try:
@@ -5795,6 +6114,8 @@ class MS41FlashGUI(QMainWindow):
                 time.sleep(delay)
         log_fn(f"Could not reconnect to {port} after the Fast operation ({last_err}). "
               f"Key-cycle the ECU and press Connect.", "error")
+        self._mark_ds2_reconnect_failed()
+        return False
 
     def _on_softbsl_cross_bank(self):
         if not self._softbsl_image:
@@ -6117,23 +6438,46 @@ class MS41FlashGUI(QMainWindow):
                        on_failure=lambda error: self._on_softbsl_install_failure(port, error))
 
     def _on_softbsl_install_success(self, port):
-        """Restore the shared DS2 session before reporting a verified install to the user."""
-        self._release_softbsl_port(port)
+        """Leave the app disconnected after a verified persistent installation."""
         self._log("Soft-BSL installation completed and verified.", "ok")
-        if self._ds2 is not None:
-            QMessageBox.information(
-                self, "Soft-BSL Installed",
-                "Soft-BSL was installed and verified successfully.\n\n"
-                "The normal DS2 connection has also been restored.")
-        else:
-            QMessageBox.warning(
-                self, "Soft-BSL Installed — Reconnect Required",
-                "Soft-BSL was installed and verified successfully, but the normal DS2 session "
-                "did not reconnect automatically.\n\nKey-cycle the ECU if needed, then press Connect "
-                "before using the other tabs.")
+        self._release_softbsl_port(port, restore_ds2=False)
+        # The Connect toggle remains checked during the install handoff. Block
+        # its toggled(False) signal so this explicit teardown runs exactly once.
+        signals_were_blocked = self.btn_connect.blockSignals(True)
+        try:
+            self._disconnect()
+        finally:
+            self.btn_connect.blockSignals(signals_were_blocked)
+        QMessageBox.information(
+            self, "Soft-BSL Installed",
+            "Soft-BSL was installed and verified successfully.\n\n"
+            "The ECU connection was closed intentionally. Press Connect to identify the new "
+            "installation; supported reads and writes will then use Soft-BSL automatically.")
 
     def _on_softbsl_install_failure(self, port, error):
         """Retain post-erase sessions; release the port for ordinary failures."""
+        if isinstance(error, softbsl_install.SoftBSLInstallCancelled):
+            self._release_softbsl_port(port)
+            self._log(f"Soft-BSL installation paused safely: {error}", "warn")
+            if getattr(error, "phase", None) == "pre_phase1":
+                QMessageBox.information(
+                    self,
+                    "Soft-BSL Installation Cancelled",
+                    "The installation was cancelled before the temporary Phase 1 write. "
+                    "No challenge, selector, erase, or flash command was sent, and nothing "
+                    "was erased.\n\nThe ECU connection remains closed. Press Connect when "
+                    "you are ready to identify the ECU again.",
+                )
+                return
+            QMessageBox.information(
+                self,
+                "Soft-BSL Installation Paused",
+                "The temporary Phase 1 entry path was written, but Phase 2 was not started. "
+                "No persistent-image erase occurred.\n\n"
+                "Complete the ignition OFF → wait approximately 10 seconds → ignition ON "
+                "cycle, reconnect if necessary, and run Install Soft-BSL again.",
+            )
+            return
         if isinstance(error, softbsl_install.SoftBSLInstallRecoveryRequired):
             self._softbsl_install_recovery = error.recovery
             self._log(f"Soft-BSL installation incomplete: {error}", "error")
@@ -6224,7 +6568,8 @@ class MS41FlashGUI(QMainWindow):
         rl = QHBoxLayout(rg)
         read_note = QLabel(
             "Full: visible 256 KB bank → standard file order; unmapped window filled with 0xFF.\n"
-            "Tune: CPU/DS2 0x10000–0x15FFF → standard 24 KB file. Both go to Bins.")
+            "Tune: CPU/DS2 0x10000–0x15FFF → standard 24 KB file. "
+            "Both save automatically to Bins; an optional extra copy is offered.")
         read_note.setWordWrap(True)
         read_note.setStyleSheet("color:#888;")
         rl.addWidget(read_note, 1)
@@ -6232,11 +6577,13 @@ class MS41FlashGUI(QMainWindow):
             "Read Full Flash (256 KB)…", "#2a5d3a", self._on_bsl_read_full)
         self.btn_bsl_read_full.setToolTip(
             "Read the complete visible 256 KB flash bank through the direct ASC0 hardware-BSL "
-            "tap. The saved image is converted to standard file order and is directly reusable.")
+            "tap. The image is converted to standard file order and saved automatically to Bins; "
+            "you can then save an additional copy elsewhere.")
         self.btn_bsl_read_tune = self._op_btn(
             "Read Tune (24 KB)…", "#2a5d3a", self._on_bsl_read_tune)
         self.btn_bsl_read_tune.setToolTip(
-            "Read CPU/DS2 addresses 0x10000–0x15FFF as the standard 24 KB calibration partial.")
+            "Read CPU/DS2 addresses 0x10000–0x15FFF as the standard 24 KB calibration partial "
+            "and save it automatically to Bins; you can then save an additional copy elsewhere.")
         rl.addWidget(self.btn_bsl_read_full)
         rl.addWidget(self.btn_bsl_read_tune)
         lay.addWidget(rg)
@@ -6309,7 +6656,7 @@ class MS41FlashGUI(QMainWindow):
         self.cb_bsl_baud.currentIndexChanged.connect(self._invalidate_bsl_plan)
         self._on_bsl_geometry_changed()
 
-        self.tabs.addTab(tab, "  BSL-Unbricker  ")
+        self._bsl_tab_index = self.tabs.addTab(tab, "  BSL-Unbricker  ")
 
     def _acquire_bsl_port(self):
         port = self.cb_bsl_port.currentText()
@@ -6550,17 +6897,27 @@ class MS41FlashGUI(QMainWindow):
         kind = "full 256 KB flash" if mode == "full" else "24 KB tune"
         stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         suggested = f"ms41_bsl_{mode}_{stamp}.bin"
-        path, _ = QFileDialog.getSaveFileName(
-            self, f"Save BSL {kind.title()} Read", suggested,
-            "Binary (*.bin);;All Files (*)")
-        if not path:
-            return
         port = self._acquire_bsl_port()
         if not port:
+            return
+        try:
+            fd, path = tempfile.mkstemp(prefix=f"bimmerstein_bsl_{mode}_", suffix=".bin")
+            os.close(fd)
+        except OSError as error:
+            self._port_owner.release("bsl")
+            QMessageBox.critical(
+                self, "BSL Read Failed",
+                f"Could not prepare temporary storage for the {kind}:\n{error}")
             return
         chip, half = self._bsl_chip_half()
         baud = self._bsl_baud()
         read_fn = bsl_service.dump_full if mode == "full" else bsl_service.dump_tune
+
+        def remove_temporary_output():
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
         def task(log_fn, progress_fn):
             log_fn(
@@ -6580,29 +6937,30 @@ class MS41FlashGUI(QMainWindow):
 
         def on_success(data):
             self._port_owner.release("bsl")
-            entry = None
             try:
                 entry = self._backup_mgr.add_data(
-                    data, os.path.basename(path), source="BSL-Unbricker read",
+                    data, suggested, source="BSL-Unbricker read",
                     notes=(f"Hardware BSL direct ASC0 {mode} read at {baud:,} baud; "
                            f"chip={chip}, half={half}"))
-                self._refresh_backup_table()
             except Exception as error:
-                self._log(f"BSL read was saved, but Bins catalogue failed: {error}", "warn")
-                QMessageBox.warning(
-                    self, "BSL Read Saved — Catalogue Failed",
-                    f"The {kind} was saved successfully to:\n{path}\n\n"
-                    f"It could not be added to Bins:\n{error}")
+                remove_temporary_output()
+                self._log(f"BSL read automatic Bins save failed: {error}", "error")
+                QMessageBox.critical(
+                    self, "Automatic Save Failed",
+                    f"The {kind} was read, but could not be saved to Bins:\n{error}")
                 return
+            remove_temporary_output()
+            self._refresh_backup_table()
             self._log(
-                f"BSL {mode} read complete: {path} (Bins: {entry.filename})", "ok")
-            QMessageBox.information(
-                self, "BSL Read Complete",
-                f"Saved the {kind} to:\n{path}\n\n"
-                f"Catalogued in Bins as:\n{entry.filename}")
+                f"BSL {mode} read complete: {entry.path}", "ok")
+            copy_label = (
+                "BSL Full Flash (256 KB)" if mode == "full" else "BSL Tune (24 KB)")
+            self._offer_additional_read_copy(
+                data, entry, copy_label, dialog_title="BSL Read Complete")
 
         def on_failure(error):
             self._port_owner.release("bsl")
+            remove_temporary_output()
             self._log(f"BSL {mode} read failed: {error}", "error")
             QMessageBox.critical(
                 self, "BSL Read Failed",
@@ -7022,6 +7380,12 @@ class MS41FlashGUI(QMainWindow):
         btn_add.setMaximumWidth(140)
         self.btn_backup_flash = self._op_btn("Flash to ECU",    "#7a1f1f",  self._on_backup_flash)
         self.btn_backup_flash.setMaximumWidth(150)
+        self.btn_backup_open_bsl = self._op_btn(
+            "Open in BSL-Unbricker", "#3d3d3d", self._on_backup_open_in_bsl)
+        self.btn_backup_open_bsl.setMaximumWidth(190)
+        self.btn_backup_open_bsl.setToolTip(
+            "Load the selected Bin as the BSL reference image and open the BSL-Unbricker tab. "
+            "This only prepares the tab; it does not open hardware or flash anything.")
         self.btn_backup_config = self._op_btn("Edit Config",   "#3d3d3d",  self._on_backup_edit_config)
         self.btn_backup_config.setMaximumWidth(130)
         self.btn_backup_config.setToolTip(
@@ -7036,6 +7400,7 @@ class MS41FlashGUI(QMainWindow):
         btn_bar.addWidget(self.btn_backup_ecu)
         btn_bar.addWidget(btn_add)
         btn_bar.addWidget(self.btn_backup_flash)
+        btn_bar.addWidget(self.btn_backup_open_bsl)
         btn_bar.addWidget(self.btn_backup_config)
         btn_bar.addWidget(self.btn_backup_notes)
         btn_bar.addWidget(self.btn_backup_del)
@@ -7275,6 +7640,39 @@ class MS41FlashGUI(QMainWindow):
         else:
             self._ds2_write_tune(data, os.path.basename(entry.path))
 
+    def _on_backup_open_in_bsl(self):
+        """Load the selected catalogue file as a reference without starting hardware BSL."""
+        entry = self._selected_backup()
+        if not entry:
+            return
+        path = os.path.abspath(entry.path)
+        if not os.path.isfile(path):
+            QMessageBox.critical(
+                self, "File Missing", f"Selected Bin file was not found:\n{path}")
+            return
+        try:
+            size = os.path.getsize(path)
+        except OSError as error:
+            QMessageBox.critical(
+                self, "File Unavailable", f"Could not inspect the selected Bin:\n{error}")
+            return
+        if size not in (MS41ECU.TUNE_SIZE, MS41ECU.FULL_ROM_SIZE):
+            QMessageBox.critical(
+                self, "Unsupported BSL Reference",
+                f"Selected Bin is {size:,} bytes. Use a 24,576-byte tune or "
+                "262,144-byte full ROM.")
+            return
+
+        self._bsl_ref = path
+        self._bsl_ref_lbl.setText(os.path.basename(path))
+        if size == MS41ECU.TUNE_SIZE:
+            tune_index = self.cb_bsl_region.findText("tune")
+            if tune_index >= 0:
+                self.cb_bsl_region.setCurrentIndex(tune_index)
+        self._invalidate_bsl_plan()
+        self.tabs.setCurrentIndex(self._bsl_tab_index)
+        self._log(f"BSL reference loaded from Bins: {os.path.basename(path)}")
+
     def _on_backup_edit_config(self):
         """Load the selected backup into the ECU Config tab (FILE mode) and switch to it."""
         entry = self._selected_backup()
@@ -7330,6 +7728,7 @@ class MS41FlashGUI(QMainWindow):
         self.btn_backup_ecu.setEnabled(idle and connected)
         self.btn_backup_flash.setEnabled(idle and connected and has_selection)
         # Local file operations — work offline, just need a selected row.
+        self.btn_backup_open_bsl.setEnabled(idle and has_selection)
         self.btn_backup_config.setEnabled(idle and has_selection)
         self.btn_backup_notes.setEnabled(idle and has_selection)
         self.btn_backup_del.setEnabled(idle and has_selection)
@@ -7594,8 +7993,48 @@ class MS41FlashGUI(QMainWindow):
 
     def _ds2_write(self, which: str, image_bytes, progress_fn, log_fn):
         """Write 'full' or 'tune' over DS2 (9600)."""
+        self._require_previous_write_cycle(log_fn)
         fn = self._ds2.write_full if which == "full" else self._ds2.write_partial
         fn(image_bytes, progress_cb=progress_fn, log_fn=log_fn)
+
+    def _require_previous_write_cycle(self, log_fn) -> None:
+        """Prove a requested post-write power cycle before another stock write.
+
+        A successful write can leave E658=2 even after the partial-write path
+        has returned to normal DS2 at 9600.  Reusing that authorization for a
+        brand-new operation is unsafe: live testing reached programming and
+        then failed in the next finalizer.  This guard runs before ownership is
+        handed to either native-fast or conventional DS2 write code.
+        """
+        if not self._post_write_cycle_pending:
+            return
+        if self._ds2 is None:
+            raise StockWriteNotStarted(
+                "A previous write still requires ignition OFF for at least 10 seconds, "
+                "then ON. Reconnect after that cycle before starting another write."
+            )
+        try:
+            state_raw = self._ds2.read_mem(AUTHORIZATION_STATE_ADDRESS, 1)
+        except Exception as error:
+            raise StockWriteNotStarted(
+                "Could not confirm that the required post-write ignition cycle completed. "
+                "Turn ignition OFF for at least 10 seconds, turn it ON, reconnect, and retry. "
+                "Nothing was erased by this attempt."
+            ) from error
+        if len(state_raw) != 1:
+            raise StockWriteNotStarted(
+                "Post-write authorization check returned an invalid response. Nothing was "
+                "erased; complete the OFF / 10 seconds / ON cycle and reconnect."
+            )
+        state = state_raw[0]
+        if state != 0:
+            raise StockWriteNotStarted(
+                "The previous write authorization is still active "
+                f"(E658={state}). Nothing was erased by this attempt. Turn ignition OFF, "
+                "wait at least 10 seconds, turn ignition ON, then retry."
+            )
+        self._post_write_cycle_pending = False
+        log_fn("Required post-write ignition cycle confirmed (E658=0).", "ok")
 
     def _read_image_auto(self, which: str, log_fn, progress_fn):
         """Use Soft-BSL, otherwise native fast DS2, otherwise normal DS2."""
@@ -7651,6 +8090,12 @@ class MS41FlashGUI(QMainWindow):
                 self._ds2_verify_after_write("tune", bytes(image_bytes), log_fn, progress_fn)
 
     def _run_task(self, task_fn, on_success=None, on_failure=None):
+        # A live-data poller owns the same DS2 link from a background thread.
+        # Stop and join it before any ECU task so authorization recovery can
+        # provide a genuinely silent bus interval and no request races a port
+        # handoff or baud transition.
+        if self._poller is not None:
+            self._on_live_stop()
         self._task_busy = True
         self._set_all_buttons_enabled(False)
         self.progress_bar.setVisible(True)
@@ -7674,7 +8119,10 @@ class MS41FlashGUI(QMainWindow):
                     elif isinstance(result, str):
                         self._log(result, "ok")
                 else:
-                    self._log(f"ERROR: {result}", "error")
+                    if isinstance(result, StockWriteNotStarted):
+                        self._log(f"Write not started: {result}", "warn")
+                    else:
+                        self._log(f"ERROR: {result}", "error")
                     if on_failure:
                         on_failure(result)
                     else:
@@ -7686,17 +8134,42 @@ class MS41FlashGUI(QMainWindow):
         self._worker.start()
 
     def _on_progress(self, done: int, total: int, label: str):
+        if total == 0:
+            # Finalization, baud return, and reconnect are active protocol
+            # phases, but they do not transfer another byte range.  Preserve
+            # the completed bar and keep the current work visible by label.
+            self.progress_label.setText(label)
+            return
         if total > 0:
             self.progress_bar.setValue(int(done * 100 / total))
-            self.progress_label.setText(
-                f"{label}  {done//1024}/{total//1024} KB"
-            )
+            if done == 0 and total == 1:
+                # Native-fast phase transitions are status-only updates.  They
+                # deliberately reset the completed base-read bar without
+                # pretending that authorization or erase settling are bytes.
+                self.progress_label.setText(label)
+            else:
+                self.progress_label.setText(
+                    f"{label}  {done//1024}/{total//1024} KB"
+                )
 
     # -------------------------------------------------------------------
     # Logging
     # -------------------------------------------------------------------
 
     def _log(self, msg: str, level: str = "info"):
+        text = str(msg)
+        level = str(level).lower()
+        # DEBUG is the machine-facing tier: retain it for beta reports while
+        # keeping the compact operator log focused on actionable information.
+        if self._log_file:
+            ts = datetime.datetime.now().strftime("%H:%M:%S")
+            try:
+                self._log_file.write(f"[{ts}] [{level.upper():5s}] {text}\n")
+                self._log_file.flush()
+            except Exception:
+                pass
+        if level == "debug":
+            return
         colours = {
             "info":  "#d4d4d4",
             "ok":    "#6adf6a",
@@ -7705,16 +8178,9 @@ class MS41FlashGUI(QMainWindow):
             "debug": "#888888",
         }
         colour  = colours.get(level, "#d4d4d4")
-        escaped = str(msg).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+        escaped = text.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
         self.log_view.append(f'<span style="color:{colour};">{escaped}</span>')
         self.log_view.moveCursor(QTextCursor.End)
-        if self._log_file:
-            ts = datetime.datetime.now().strftime("%H:%M:%S")
-            try:
-                self._log_file.write(f"[{ts}] [{level.upper():5s}] {msg}\n")
-                self._log_file.flush()
-            except Exception:
-                pass
 
     def _start_session_log(self):
         os.makedirs(LOG_DIR, exist_ok=True)
@@ -7725,6 +8191,7 @@ class MS41FlashGUI(QMainWindow):
             header = (
                 f"BimmerStein ECU Tool — Session log\n"
                 f"Started : {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"DEBUG entries are retained here but hidden from the in-app log window.\n"
                 f"{'=' * 60}\n\n"
             )
             self._log_file.write(header)
@@ -7800,17 +8267,16 @@ class MS41FlashGUI(QMainWindow):
         # Don't silently close over a running read/write/flash — a half-written flash can need
         # re-flashing to recover. Let the user abort the close instead.
         recovery_kind, recovery = self._active_write_recovery()
-        if recovery is not None:
-            QMessageBox.critical(
-                self,
-                "Flash Recovery Active",
-                f"A post-erase {recovery_kind} flash recovery session is still active.\n\n"
-                "DO NOT TURN IGNITION OFF, disconnect the adapter, or close BimmerStein ECU Tool. "
-                "Use Retry Flash Recovery first.",
-            )
-            event.ignore()
-            return
         if getattr(self, "_task_busy", False):
+            if recovery is not None:
+                QMessageBox.warning(
+                    self,
+                    "Flash Recovery In Progress",
+                    f"The {recovery_kind} recovery retry is still running. Wait for it "
+                    "to return before retrying again or abandoning the retained session.",
+                )
+                event.ignore()
+                return
             if QMessageBox.warning(
                     self, "Operation In Progress",
                     "A read / write / flash is still running. Closing now can interrupt it and leave "
@@ -7819,6 +8285,48 @@ class MS41FlashGUI(QMainWindow):
                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
                 event.ignore()
                 return
+        if recovery is not None:
+            answer = QMessageBox.warning(
+                self,
+                "Flash Recovery Active",
+                f"A post-erase {recovery_kind} flash recovery session is still active.\n\n"
+                "If ignition is still ON, do not close the application; use Retry Flash "
+                "Recovery first.\n\n"
+                "If you have already turned ignition OFF for at least 10 seconds, recovered "
+                "the ECU by another method, or otherwise know the retained session is no "
+                "longer usable, choose Close to abandon it and exit.",
+                QMessageBox.Close | QMessageBox.Cancel,
+                QMessageBox.Cancel,
+            )
+            if answer != QMessageBox.Close:
+                event.ignore()
+                return
+            try:
+                recovery.close_after_confirmed_power_cycle()
+            except Exception as error:
+                self._log(
+                    f"Retained {recovery_kind} session close reported: {error}",
+                    "warn",
+                )
+            for attribute in (
+                "_softbsl_install_recovery",
+                "_softbsl_write_recovery",
+                "_native_write_recovery",
+            ):
+                if getattr(self, attribute, None) is recovery:
+                    setattr(self, attribute, None)
+            for owner in ("native_fast_ds2", "softbsl"):
+                try:
+                    self._port_owner.release(owner)
+                except Exception:
+                    pass
+            self.btn_native_recovery.setVisible(False)
+            self.btn_native_recovery.setEnabled(False)
+            self._log(
+                f"Abandoned the retained {recovery_kind} session after explicit close "
+                "confirmation.",
+                "warn",
+            )
         self._on_live_stop()
         self._disconnect()                       # closes the DS2 handle + releases the 'flasher' owner
         # Defensively release the soft-BSL owner too: a Fast op normally releases it in its own finally,
