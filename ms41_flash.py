@@ -64,14 +64,8 @@ Examples:
 
 def launch_gui():
     try:
-        from PyQt5.QtWidgets import QApplication
-        from gui import MS41FlashGUI, configure_application, install_exception_handler
-        app = QApplication(sys.argv)
-        configure_application(app)
-        install_exception_handler()
-        window = MS41FlashGUI()
-        window.show()
-        sys.exit(app.exec_())
+        from gui import run_gui
+        sys.exit(run_gui())
     except ImportError:
         print("PyQt5 not installed. Install with: pip install PyQt5")
         sys.exit(1)

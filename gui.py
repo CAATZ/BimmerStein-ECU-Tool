@@ -8355,11 +8355,15 @@ class MS41FlashGUI(QMainWindow):
         return btn
 
 
-if __name__ == "__main__":
+def run_gui() -> int:
     from PyQt5.QtWidgets import QApplication
     app = QApplication(sys.argv)
     configure_application(app)
     install_exception_handler()
-    w   = MS41FlashGUI()
-    w.show()
-    sys.exit(app.exec_())
+    window = MS41FlashGUI()
+    window.show()
+    return app.exec_()
+
+
+if __name__ == "__main__":
+    raise SystemExit(run_gui())
