@@ -20,8 +20,10 @@ def test_decode_vin_from_ref():
 
 
 def test_ms41_vin_decoder_uses_the_identity_contract():
-    full = ref("MS41.1")
-    assert MS41ECU.vin_from_image(full) == identity.decode_vin(full)
+    vin = SYNTHETIC_IDENTITIES["MS41.1"][1]
+    full = bytearray(identity.FULL_ROM_SIZE)
+    full[identity.VIN_OFF:identity.VIN_OFF + identity.VIN_LEN] = identity.encode_vin(vin)
+    assert MS41ECU.vin_from_image(full) == vin
 
 
 def test_set_vin_writes_only_vin_bytes():
