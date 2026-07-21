@@ -4090,20 +4090,13 @@ def test_config_full_patch_passes_original_archive_to_guarded_writer(monkeypatch
         w.close()
 
 
-def _select_one_buildable_patch(w):
-    for pid, cb in w._patch_checkboxes.items():
-        if pid not in w._patch_installed_ids and cb.isEnabled():
-            cb.setChecked(True)
-            return pid
-    raise AssertionError("no selectable patch on the MS41.3 base")
-
-
 def test_patches_build_archives_to_bins_and_offers_flash(monkeypatch):
     app, w = _gui()
     try:
         import patch_service
-        w._set_patch_base(ref("MS41.3"), "test")
-        _select_one_buildable_patch(w)
+        w._patch_base = b"base"
+        w._patch_installed_ids = set()
+        w._patch_checkboxes = {"test": w.chk_correct_cksum}
         monkeypatch.setattr(patch_service, "build_image",
                             lambda base, sel: (b"\xFF" * 262144, ["ok"]))
         archived = {}
@@ -4113,6 +4106,9 @@ def test_patches_build_archives_to_bins_and_offers_flash(monkeypatch):
                             lambda data, name, **k: (archived.update(source=k.get("source"),
                                                                      n=len(data)), FakeEntry())[1])
         monkeypatch.setattr(w, "_refresh_backup_table", lambda: None)
+        copied = {}
+        monkeypatch.setattr(w, "_offer_additional_read_copy",
+                            lambda data, entry, label, **k: copied.update(label=label, n=len(data)))
         monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: QMessageBox.Yes))
         monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
         w._ds2 = object()                      # "connected" -> offers to flash
@@ -4123,6 +4119,7 @@ def test_patches_build_archives_to_bins_and_offers_flash(monkeypatch):
 
         assert archived["n"] == 262144
         assert archived["source"].startswith("patched:")
+        assert copied == {"label": "Patched Full ROM (256 KB)", "n": 262144}
         assert flashed["name"] == "ms41_patched_test.bin"   # flashed the freshly-built image
         assert flashed["n"] == 262144
     finally:
@@ -4133,24 +4130,22 @@ def test_patches_build_archives_and_skips_flash_when_disconnected(monkeypatch):
     app, w = _gui()
     try:
         import patch_service
-        w._set_patch_base(ref("MS41.3"), "test")
-        _select_one_buildable_patch(w)
+        w._patch_base = b"base"
+        w._patch_installed_ids = set()
+        w._patch_checkboxes = {"test": w.chk_correct_cksum}
         monkeypatch.setattr(patch_service, "build_image", lambda base, sel: (b"\xFF" * 262144, []))
         class FakeEntry:
             filename = "x.bin"
         monkeypatch.setattr(w._backup_mgr, "add_data", lambda data, name, **k: FakeEntry())
         monkeypatch.setattr(w, "_refresh_backup_table", lambda: None)
+        monkeypatch.setattr(w, "_offer_additional_read_copy", lambda *a, **k: None)
         monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: QMessageBox.Yes))
-        info = {}
-        monkeypatch.setattr(QMessageBox, "information",
-                            staticmethod(lambda *a, **k: info.update(shown=True)))
         w._ds2 = None                          # not connected -> archive only, no flash prompt
         flashed = {}
         monkeypatch.setattr(w, "_ds2_write_full", lambda *a: flashed.update(ran=True))
 
         w._on_patches_build()
 
-        assert info.get("shown") is True
         assert "ran" not in flashed
     finally:
         w.close()

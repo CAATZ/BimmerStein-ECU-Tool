@@ -7342,6 +7342,8 @@ class MS41FlashGUI(QMainWindow):
         self.patches_log.append(f"Built + archived to Bins: {entry.filename}  ({', '.join(selected)})")
         for line in buildlog:
             self.patches_log.append("  " + line)
+        self._offer_additional_read_copy(
+            out, entry, "Patched Full ROM (256 KB)", dialog_title="Build Complete")
 
         # Offer to flash it straight to the connected ECU (same auto soft-BSL/DS2 routing + variant /
         # identity guards as any full write on the Flash tab).
@@ -7353,12 +7355,6 @@ class MS41FlashGUI(QMainWindow):
                     "Soft-BSL, native-fast DS2, or normal DS2 as available.",
                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
                 self._ds2_write_full(bytearray(out), entry.filename)
-        else:
-            QMessageBox.information(
-                self, "Build Complete",
-                f"Built and archived to Bins:\n  {entry.filename}\n\nPatches: {', '.join(selected)}\n\n"
-                f"Connect to an ECU to flash it (Bins → Flash to ECU), or open the file via "
-                f"Bins → Open Folder.")
 
     # ── Backups tab ──────────────────────────────────────────────────────
 
