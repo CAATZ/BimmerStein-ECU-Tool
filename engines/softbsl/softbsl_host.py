@@ -1104,11 +1104,14 @@ class SoftBSL:
                            f"(last: {last}). Key-cycle + retry, or check the door is flashed.")
 
     # -- high level: select the right half, then flash one image --
-    def select_half(self, target, prompt):
+    def select_half(self, target, prompt, chip=None):
         cur = self.identify()
         if cur not in HALF_NAME:
             raise SoftBSLError(f"identify returned 0x{ord(cur):02X} - agent not responding cleanly")
-        self.log(f"visible half: {cur!r} ({HALF_NAME[cur]})")
+        if chip == "28f200":
+            self.log(f"image marker: {cur!r} (working image; Intel 28F200)")
+        else:
+            self.log(f"visible half: {cur!r} ({HALF_NAME[cur]})")
         if cur != target:
             prompt(f"  Flip the cockpit switch to the {target!r} ({HALF_NAME[target]}) half, "
                    f"then press Enter... ")
@@ -1147,7 +1150,7 @@ class SoftBSL:
             self.log(f"install: assuming visible half = {assume_half!r} (param1 marker may be blank; "
                      f"agent treats FF as bottom). Skipping the cockpit-switch identify.")
         else:
-            self.select_half(target, prompt)
+            self.select_half(target, prompt, chip=chip)
 
         if baud != "low" and not baud_is_set:
             self.set_baud(baud)

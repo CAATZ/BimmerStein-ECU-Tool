@@ -258,7 +258,7 @@ def test_reset_sends_redundant_magic_as_one_contiguous_burst(monkeypatch):
 def _fake_softbsl(monkeypatch):
     from engines.softbsl import softbsl_host as sh
     sb = sh.SoftBSL(ds2=types.SimpleNamespace(), log=lambda *a, **k: None)
-    monkeypatch.setattr(sb, "select_half", lambda target, prompt: None)
+    monkeypatch.setattr(sb, "select_half", lambda target, prompt, chip=None: None)
     monkeypatch.setattr(sb, "set_baud", lambda tier: None)
     monkeypatch.setattr(sb, "arm_bootloader", lambda: None)
     monkeypatch.setattr(sb, "erase", lambda addr: 1)                 # 1 = OK status
@@ -266,6 +266,20 @@ def _fake_softbsl(monkeypatch):
     monkeypatch.setattr(sb, "crc_read", lambda addr, n: b"\x00" * n) # dummy read-back
     monkeypatch.setattr(sb, "reset", lambda: None)
     return sh, sb
+
+
+def test_select_half_uses_single_device_label_for_28f200(monkeypatch):
+    from engines.softbsl import softbsl_host as sh
+    logs = []
+    sb = sh.SoftBSL(ds2=types.SimpleNamespace(), log=logs.append)
+    monkeypatch.setattr(sb, "identify", lambda: "B")
+
+    sb.select_half("B", lambda _message: None, chip="28f200")
+    assert logs == ["image marker: 'B' (working image; Intel 28F200)"]
+
+    logs.clear()
+    sb.select_half("B", lambda _message: None, chip="29f400")
+    assert logs == ["visible half: 'B' (bottom/working)"]
 
 
 def test_flash_image_calls_progress_cb_program_and_verify(monkeypatch):
