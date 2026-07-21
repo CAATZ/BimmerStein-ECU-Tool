@@ -8,6 +8,24 @@ shared by BimmerStein applications.
 
 ## [Unreleased]
 
+## [0.1.0b5] - 2026-07-21
+
+### Added
+
+- Patched full-ROM builds are still archived automatically to Bins and now also
+  offer an optional additional copy in a user-selected location.
+
+### Fixed
+
+- Extracting or merging a Partial / Full image no longer switches to the Flash
+  tab after the offline operation completes.
+- Flash-tab option checkboxes now use even vertical spacing.
+
+### Changed
+
+- Reused the canonical VIN decoder and shared source-GUI startup path without
+  changing their public interfaces or behavior.
+
 ## [0.1.0b4] - 2026-07-19
 
 ### Added
