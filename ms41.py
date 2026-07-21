@@ -30,7 +30,7 @@ Identification (verified against real dumps + RomRaider MS41 definitions):
             (DS2 0x1D07 maps to file 0x5D07 via the 0x4000 block swap).
 """
 
-import re
+import identity
 
 # CAL ID location and variant mapping (RomRaider MS41 definitions, verified).
 CALID_ADDR_256K = 0x1400E   # full 256 KB ROM
@@ -57,10 +57,8 @@ ECU_ID_ADDR = 0x6025
 # full ROM (= DS2 address 0x1D07 via the 0x4000 block swap; see ds2.read_vin).
 # Only present in a 256 KB full ROM (it lives in the program/bootloader region,
 # not the 24 KB tune).  Decodes to the 17-character VIN.
-VIN_ADDR  = 0x5D07
-VIN_BYTES = 13
-_VIN_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-_VIN_RE = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$")
+VIN_ADDR  = identity.VIN_OFF
+VIN_BYTES = identity.VIN_LEN
 
 # MS41.3 calibration-resident identity marker. File 0x11F60 =
 # DS2 0x15F60 = cal 0x5F60, inside the tune partition (DS2 0x10000-0x15FFF), so a tune write
@@ -195,19 +193,7 @@ class MS41ECU:
         field.  Mirrors ds2.DS2Interface._decode_vin so an offline full-ROM
         backup yields the same VIN a live read would.
         """
-        if len(data) < VIN_ADDR + VIN_BYTES:
-            return None
-        raw = bytes(data[VIN_ADDR:VIN_ADDR + VIN_BYTES]).rjust(15, b"\x00")
-        chars = []
-        for i in range(0, 15, 3):
-            x = (raw[i] << 16) | (raw[i + 1] << 8) | raw[i + 2]
-            for s in (18, 12, 6, 0):
-                idx = (x >> s) & 0x3F
-                if idx >= len(_VIN_CHARS):     # unprogrammed/garbage 6-bit group
-                    return None
-                chars.append(_VIN_CHARS[idx])
-        vin = "".join(chars)[3:]
-        return vin if _VIN_RE.match(vin) else None
+        return identity.decode_vin(data)
 
     @staticmethod
     def has_ss1v2_program(data: bytes) -> bool:

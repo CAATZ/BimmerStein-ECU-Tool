@@ -1,6 +1,7 @@
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import identity
+from ms41 import MS41ECU
 from tests.conftest import SYNTHETIC_IDENTITIES, ref
 
 
@@ -16,6 +17,11 @@ def test_vin_round_trip():
 
 def test_decode_vin_from_ref():
     assert identity.decode_vin(ref("MS41.1")) == SYNTHETIC_IDENTITIES["MS41.1"][1]
+
+
+def test_ms41_vin_decoder_uses_the_identity_contract():
+    full = ref("MS41.1")
+    assert MS41ECU.vin_from_image(full) == identity.decode_vin(full)
 
 
 def test_set_vin_writes_only_vin_bytes():
