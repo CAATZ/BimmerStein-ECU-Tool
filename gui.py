@@ -844,10 +844,10 @@ class MS41FlashGUI(QMainWindow):
         self.chk_backup_before_write.setToolTip(
             "Optional. Read the selected tune or full ROM once and save it in Bins "
             "before writing. The flash does not require a backup.")
-        extra_row.addWidget(self.chk_backup_before_write)
+        extra_row.addWidget(self.chk_backup_before_write, alignment=Qt.AlignTop)
         self.chk_verify = QCheckBox("Verify flash after write  (reads back and compares byte-for-byte)")
         self.chk_verify.setStyleSheet("color:#aaa; padding:4px;")
-        extra_row.addWidget(self.chk_verify)
+        extra_row.addWidget(self.chk_verify, alignment=Qt.AlignTop)
         extra_row.addStretch()
         self.btn_reset_adapt = self._op_btn(
             "Reset Adaptations", "#4a3a00", self._on_reset_adaptations
@@ -4362,7 +4362,6 @@ class MS41FlashGUI(QMainWindow):
         if not out: return
         with open(out, "wb") as f:
             f.write(partial)
-        self.tabs.setCurrentIndex(0)  # bring log/flash into view
         self._log(f"Extracted 24 KB partial ({variant}, CAL {calid}) "
                   f"→ {os.path.basename(out)}", "ok")
         QMessageBox.information(self, "Partial Extracted",
@@ -4438,7 +4437,6 @@ class MS41FlashGUI(QMainWindow):
         with open(out, "wb") as f:
             f.write(merged)
         ok, _ = verify_checksum(merged)
-        self.tabs.setCurrentIndex(0)
         self._log(f"Merged partial into full → {os.path.basename(out)} "
                   f"(checksums {'OK' if ok else 'NOT verified'})", "ok" if ok else "warn")
         QMessageBox.information(self, "Merge Complete",
