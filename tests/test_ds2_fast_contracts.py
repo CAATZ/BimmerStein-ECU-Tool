@@ -5,11 +5,13 @@ import pytest
 from ds2_fast_contracts import (
     CommitUnknownError,
     ContractViolation,
+    DS2_MAX_FRAME_LENGTH,
     FastOperation,
     FlashOperation,
     FlashRequest,
     FrameValidationError,
     LinkRate,
+    MAX_FLASH_DATA,
     MissingResponseError,
     ResponseStatus,
     SessionState,
@@ -131,14 +133,31 @@ def test_full_erase_poll_and_program_echo_their_operations():
         )
         assert reply.operation == operation
 
-    request = FlashRequest(FlashOperation.FULL_PROGRAM, 0x2000, b"x" * 231)
+    request = FlashRequest(
+        FlashOperation.FULL_PROGRAM, 0x2000, b"x" * MAX_FLASH_DATA
+    )
     reply = validate_flash_exchange(
         FastOperation.FULL_WRITE,
         request,
-        _flash_response(0x02, 0x20E7, 231),
+        _flash_response(0x02, 0x20F3, MAX_FLASH_DATA),
         echo_complete=True,
     )
-    assert reply.address == 0x20E7
+    assert reply.address == 0x20F3
+
+
+def test_program_payload_fills_the_accepted_ds2_frame_ceiling():
+    request = FlashRequest(
+        FlashOperation.FULL_PROGRAM, 0x2000, b"x" * MAX_FLASH_DATA
+    )
+
+    assert MAX_FLASH_DATA == 243
+    assert len(request.frame) == DS2_MAX_FRAME_LENGTH == 0xFC
+    with pytest.raises(ValueError, match="1..243"):
+        FlashRequest(
+            FlashOperation.FULL_PROGRAM,
+            0x2000,
+            b"x" * (MAX_FLASH_DATA + 1),
+        )
 
 
 def test_partial_and_full_program_contracts_cannot_be_interchanged():
@@ -153,16 +172,18 @@ def test_partial_and_full_program_contracts_cannot_be_interchanged():
 @pytest.mark.parametrize(
     "operation,address,count,status,match",
     (
-        (0x03, 0x20E7, 231, 0x01, "operation"),
-        (0x02, 0x20E6, 231, 0x01, "address/cursor"),
-        (0x02, 0x20E7, 230, 0x01, "count"),
-        (0x02, 0x20E7, 231, 0x03, "flash status"),
+        (0x03, 0x20F3, 243, 0x01, "operation"),
+        (0x02, 0x20F2, 243, 0x01, "address/cursor"),
+        (0x02, 0x20F3, 242, 0x01, "count"),
+        (0x02, 0x20F3, 243, 0x03, "flash status"),
     ),
 )
 def test_full_program_rejects_every_wrong_reply_field(
     operation, address, count, status, match
 ):
-    request = FlashRequest(FlashOperation.FULL_PROGRAM, 0x2000, b"x" * 231)
+    request = FlashRequest(
+        FlashOperation.FULL_PROGRAM, 0x2000, b"x" * MAX_FLASH_DATA
+    )
     with pytest.raises(ContractViolation, match=match):
         validate_flash_exchange(
             FastOperation.FULL_WRITE,

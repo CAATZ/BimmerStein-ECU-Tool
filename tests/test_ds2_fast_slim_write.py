@@ -1,8 +1,15 @@
 """Production-policy tests for the slim stock-ECU native DS2 writers."""
 
+import pytest
+
 from ds2_fast_contracts import LinkRate, SessionState
-from ds2_fast_full_write import NativeFastFullWriteTransport
-from ds2_fast_partial_write import NativeFastPartialWriteTransport, TOKEN_ADDRESS, TOKEN_LENGTH
+from ds2_fast_full_write import FullWriteError, NativeFastFullWriteTransport
+from ds2_fast_partial_write import (
+    NativeFastPartialWriteTransport,
+    PartialWriteStateError,
+    TOKEN_ADDRESS,
+    TOKEN_LENGTH,
+)
 from ds2_fast_plans import (
     PROGRAM_HIGH_START,
     TUNE_END,
@@ -142,6 +149,32 @@ def test_slim_partial_progress_reports_cumulative_payload_bytes(tmp_path):
     assert any("9600" in label or "low" in label for label in status_labels)
 
 
+def test_slim_partial_finalizer_failure_disables_destructive_replay(
+    monkeypatch, tmp_path
+):
+    session, _serial, _journal, _target = _partial_session(
+        tmp_path, verify_write=False
+    )
+
+    def fail_after_finalizer_entry():
+        session._set_state(
+            state=SessionState.WRITE_FINALIZE_HIGH,
+            link=LinkRate.HIGH,
+            reason="injected finalizer failure",
+        )
+        raise RuntimeError("injected finalizer failure")
+
+    monkeypatch.setattr(session, "_finalize", fail_after_finalizer_entry)
+
+    with pytest.raises(RuntimeError, match="injected finalizer failure"):
+        session.execute()
+
+    assert session.failure_state is SessionState.WRITE_FINALIZE_HIGH
+    assert session.can_recover_in_place is False
+    with pytest.raises(PartialWriteStateError, match="during or after finalization"):
+        session.recover_in_place()
+
+
 def test_slim_full_without_verify_stays_high_and_does_not_read_back(tmp_path):
     session, serial, journal = _full_session(tmp_path, verify_write=False)
 
@@ -167,6 +200,30 @@ def test_slim_full_verify_reads_only_the_affected_ranges_once(tmp_path):
     assert _read_requests_at(serial, 0x02000) == 1
     assert _read_requests_at(serial, 0x10000) == 1
     assert _read_requests_at(serial, 0x20000) == 1
+
+
+def test_slim_full_finalizer_failure_disables_destructive_replay(
+    monkeypatch, tmp_path
+):
+    session, _serial, _journal = _full_session(tmp_path, verify_write=False)
+
+    def fail_after_finalizer_entry():
+        session._set_state(
+            state=SessionState.WRITE_FINALIZE_HIGH,
+            link=LinkRate.HIGH,
+            reason="injected finalizer failure",
+        )
+        raise RuntimeError("injected finalizer failure")
+
+    monkeypatch.setattr(session, "_finalize_full", fail_after_finalizer_entry)
+
+    with pytest.raises(RuntimeError, match="injected finalizer failure"):
+        session.execute()
+
+    assert session.failure_state is SessionState.WRITE_FINALIZE_HIGH
+    assert session.can_recover_in_place is False
+    with pytest.raises(FullWriteError, match="during or after finalization"):
+        session.recover_in_place()
 
 
 def test_slim_full_progress_is_one_monotonic_program_and_calibration_total(

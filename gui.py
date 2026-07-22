@@ -1578,7 +1578,7 @@ class MS41FlashGUI(QMainWindow):
             return None, info
         return source, info
 
-    def _conversion_coding_family(self, archived_full=None):
+    def _live_coding_family(self, archived_full=None):
         """Return the live three-byte family retained by a boot-preserving write."""
         cached = archived_full or getattr(self, "_last_full_read", None)
         if cached is not None and len(cached) == MS41ECU.FULL_ROM_SIZE:
@@ -2113,7 +2113,6 @@ class MS41FlashGUI(QMainWindow):
         native_route = transfer_route == "native_ds2"
         verify_write = self.chk_verify.isChecked()
         backup_before_write = self.chk_backup_before_write.isChecked()
-        chip_family = self._fast_chip_family() if fast_route else None
         if fast_route:
             transport = "Soft-BSL RAM agent (fast baud with automatic fallback)"
         elif native_route:
@@ -2149,33 +2148,13 @@ class MS41FlashGUI(QMainWindow):
                     bytearray(backup_data), "tune", source="ECU read (pre-write)")
                 log_fn(f"Pre-write backup saved: {backup_entry_box[0].filename}", "ok")
             log_fn("Starting partial (24 KB) write sequence…")
-            if fast_route:
-                log_fn("Using the Soft-BSL RAM agent with automatic baud fallback.", "ok")
-                # A 24 KB tune partial goes through the soft-BSL PARTIAL writer (agent counterpart of
-                # write_partial: erase the cal block + write 24 KB to the running bank). It must NOT go
-                # through run_flash/flash_image, which require a full 256 KB image with a bank marker
-                # (the "no valid bank-ID marker @0x5FFC" error a partial otherwise triggers).
-                self._run_via_softbsl(
-                    lambda port, pf, lf: softbsl_service.write_tune(
-                        port, image_bytes, lf, baud="high",
-                        progress_cb=pf, do_verify=verify_write, chip_family=chip_family),
-                    log_fn, progress_fn)
-            elif native_route:
-                log_fn(
-                    "Using stock native DS2 with direct 187500 entry and a short "
-                    "high-rate stability check.", "ok")
-                self._native_fast_write_with_fallback(
-                    "tune",
-                    image_bytes,
-                    self._fast_chip_family(),
-                    log_fn,
-                    progress_fn,
-                    verify_write=verify_write,
-                )
-            else:
-                self._ds2_write("tune", image_bytes, progress_fn, log_fn)
-                if verify_write:
-                    self._ds2_verify_after_write("tune", image_bytes, log_fn, progress_fn)
+            self._write_tune_auto(
+                image_bytes,
+                log_fn,
+                progress_fn,
+                verify_write=verify_write,
+                route=transfer_route,
+            )
             if verify_write:
                 return "Calibration write completed and read-back verification passed."
             return f"Calibration write completed. {VERIFY_OFF_MESSAGE}"
@@ -2207,7 +2186,8 @@ class MS41FlashGUI(QMainWindow):
 
     def _ds2_write_full(self, data: bytearray, filename: str, *,
                         require_boot_write=False, preserve_boot_identity=None,
-                        archived_prewrite_image=None, on_write_success=None):
+                        archived_prewrite_image=None, on_write_success=None,
+                        disconnect_after_success=False):
         """Validate and route a full 256 KB ROM write.
 
         ``require_boot_write`` is used by workflows whose intended edit lives inside file
@@ -2218,7 +2198,8 @@ class MS41FlashGUI(QMainWindow):
         file's identity instead of grafting the currently connected ECU identity over the edit.
         ``archived_prewrite_image`` is an already-catalogued live full read; when supplied,
         the optional pre-write backup read is not repeated. ``on_write_success`` is called on
-        the GUI thread only after the full writer reports success.
+        the GUI thread only after the full writer reports success. ``disconnect_after_success``
+        releases the ECU connection after the shared ignition-cycle prompt.
         """
         from ms41 import MS41ECU
 
@@ -2355,6 +2336,7 @@ class MS41FlashGUI(QMainWindow):
                 "ok",
             )
 
+        family_changed = False
         if will_write_boot:
             start = MS41ECU.CODING_FAMILY_FILE_ADDR
             coding_family = bytes(image[start:start + 3])
@@ -2373,40 +2355,42 @@ class MS41FlashGUI(QMainWindow):
                     "error",
                 )
                 return
-            normalized = prepared != image
+            family_changed = prepared != image
             image = prepared
             self._log(
                 "Target boot coding family "
                 f"{coding_family.decode('ascii')} "
                 + (
                     "was grafted into mismatched program/calibration records."
-                    if normalized
+                    if family_changed
                     else "already matches the program/calibration records."
                 ),
-                "warn" if normalized else "ok",
+                "warn" if family_changed else "ok",
             )
-        elif is_variant_conversion:
+        else:
             try:
-                coding_family = self._conversion_coding_family(
+                coding_family = self._live_coding_family(
                     archived_prewrite_image
                 )
-                image = MS41ECU.graft_coding_family(image, coding_family)
+                prepared = MS41ECU.graft_coding_family(image, coding_family)
             except Exception as error:
                 QMessageBox.critical(
                     self,
-                    "Conversion Coding Family Unavailable",
+                    "Coding Family Unavailable",
                     "The connected ECU's three-byte coding-family value could not be "
                     "read. It is required because this write preserves the existing "
                     "boot/parameter region. Nothing was erased.\n\n"
                     f"{error}",
                 )
                 self._log(
-                    f"Full write blocked — conversion coding-family graft failed: {error}",
+                    f"Full write blocked — coding-family graft failed: {error}",
                     "error",
                 )
                 return
+            family_changed = prepared != image
+            image = prepared
             self._log(
-                "Conversion coding family grafted from live DS2 0x1CF4: "
+                "Boot-preserving coding family grafted from live DS2 0x1CF4: "
                 f"{coding_family.decode('ascii')}.",
                 "ok",
             )
@@ -2416,7 +2400,7 @@ class MS41FlashGUI(QMainWindow):
             self._log(f"Identity grafted from the connected ECU "
                       f"(serial {identity_info.serial or '?'}).", "ok")
 
-        if self.chk_correct_cksum.isChecked():
+        if self.chk_correct_cksum.isChecked() or family_changed:
             image, cdet = correct_checksums(image)
             for detail in cdet:
                 self._log(detail)
@@ -2620,7 +2604,7 @@ class MS41FlashGUI(QMainWindow):
                     "The written image no longer contains a complete Soft-BSL entry "
                     f"path ({missing_text}). Disconnected so the next connection "
                     "detects the ECU's actual transfer route.", "warn")
-            if native_route or softbsl_missing_after_write:
+            if disconnect_after_success or native_route or softbsl_missing_after_write:
                 # Stock full writes remain at high rate. A Soft-BSL write whose
                 # effective target loses the loader or normal-mode hook is also
                 # left disconnected so Connect performs fresh route detection.
@@ -4506,8 +4490,16 @@ class MS41FlashGUI(QMainWindow):
                 self._log("Merge cancelled — CAL ID mismatch.", "warn")
                 return
 
-        # inverse descramble: the partial is CPU/DS2-order, scatter it back to file order
+        # Inverse descramble, then keep the donor boot/program/cal family coherent.
         merged = MS41ECU.tune_into_full(full, partial)
+        start = MS41ECU.CODING_FAMILY_FILE_ADDR
+        try:
+            merged = MS41ECU.graft_coding_family(
+                merged, bytes(full[start:start + 3])
+            )
+        except ValueError as error:
+            QMessageBox.critical(self, "Invalid Donor Coding Family", str(error))
+            return
 
         if self.chk_merge_fix.isChecked():
             merged, cdet = correct_checksums(merged)
@@ -5623,6 +5615,22 @@ class MS41FlashGUI(QMainWindow):
         recovery_kind, recovery = self._active_write_recovery()
         if recovery is None:
             return False
+        if not getattr(recovery, "retry_supported", True):
+            self.btn_native_recovery.setVisible(False)
+            self.btn_native_recovery.setEnabled(False)
+            QMessageBox.critical(
+                self,
+                "FLASH INCOMPLETE — RETRY DISABLED",
+                f"{failure_summary}\n\n"
+                "The write had already entered finalization. That changes the ECU "
+                "handler state, so another erase/write command cannot be safely sent "
+                "through this retained session.\n\n"
+                "The adapter remains open for safety. When you are ready to abandon "
+                "this session, close the application, turn ignition OFF for at least "
+                "10 seconds, turn it ON, and reconnect with Force Slow DS2 (ECU "
+                "Recovery). If slow DS2 is unavailable, use hardware BSL recovery.",
+            )
+            return True
         self.btn_native_recovery.setVisible(True)
         self.btn_native_recovery.setEnabled(True)
         answer = QMessageBox.warning(
@@ -6091,6 +6099,18 @@ class MS41FlashGUI(QMainWindow):
                 "No live native-fast recovery session is available.",
             )
             return
+        if not recovery.retry_supported:
+            self.btn_native_recovery.setVisible(False)
+            self.btn_native_recovery.setEnabled(False)
+            QMessageBox.warning(
+                self,
+                "Native Recovery Replay Disabled",
+                "The failed write had already entered finalization, so the retained "
+                "ECU handler is not qualified for another erase/write replay.\n\n"
+                "Close only when you are ready to cycle ignition and attempt Force "
+                "Slow DS2 (ECU Recovery), or hardware BSL recovery if needed.",
+            )
+            return
         verify_note = (
             "Read-back verification will run because Verify was selected."
             if getattr(recovery.session, "verify_write", False)
@@ -6138,15 +6158,26 @@ class MS41FlashGUI(QMainWindow):
 
         def on_failure(error_msg):
             self._log(f"Native flash recovery failed: {error_msg}", "error")
-            self.btn_native_recovery.setVisible(True)
-            self.btn_native_recovery.setEnabled(True)
-            QMessageBox.critical(
-                self,
-                "RECOVERY INCOMPLETE — KEEP IGNITION ON",
-                f"Recovery failed again:\n{error_msg}\n\n"
-                "DO NOT TURN IGNITION OFF or disconnect the adapter. The recovery "
-                "session remains open and can be retried.",
-            )
+            retry_supported = recovery.retry_supported
+            self.btn_native_recovery.setVisible(retry_supported)
+            self.btn_native_recovery.setEnabled(retry_supported)
+            if retry_supported:
+                QMessageBox.critical(
+                    self,
+                    "RECOVERY INCOMPLETE — KEEP IGNITION ON",
+                    f"Recovery failed again:\n{error_msg}\n\n"
+                    "DO NOT TURN IGNITION OFF or disconnect the adapter. The recovery "
+                    "session remains open and can be retried.",
+                )
+            else:
+                QMessageBox.critical(
+                    self,
+                    "RECOVERY REPLAY DISABLED",
+                    f"Recovery failed during or after finalization:\n{error_msg}\n\n"
+                    "The retained ECU handler is no longer qualified for another "
+                    "erase/write replay. Close only when ready to cycle ignition and "
+                    "attempt Force Slow DS2 (ECU Recovery), or hardware BSL recovery.",
+                )
 
         self._run_task(task, on_success=on_success, on_failure=on_failure)
 
@@ -7497,9 +7528,11 @@ class MS41FlashGUI(QMainWindow):
             if flash_now == QMessageBox.Yes:
                 if boot_region_changed:
                     self._ds2_write_full(
-                        bytearray(out), entry.filename, require_boot_write=True)
+                        bytearray(out), entry.filename, require_boot_write=True,
+                        disconnect_after_success=True)
                 else:
-                    self._ds2_write_full(bytearray(out), entry.filename)
+                    self._ds2_write_full(
+                        bytearray(out), entry.filename, disconnect_after_success=True)
 
         self._patch_removed_ids.clear()
         self._patch_change_base = self._patch_base
@@ -8190,9 +8223,24 @@ class MS41FlashGUI(QMainWindow):
         progress_fn,
         *,
         verify_write,
+        route=None,
     ):
         """Write a tune through the same automatic route as the Flash tab."""
-        route = self._auto_transfer_route()
+        family = self._live_coding_family()
+        prepared = MS41ECU.graft_coding_family(bytes(image_bytes), family)
+        if prepared != bytes(image_bytes):
+            log_fn(
+                "Calibration coding family normalized to live boot family "
+                f"{family.decode('ascii')}.",
+                "warn",
+            )
+            prepared, details = correct_checksums(
+                prepared, correct_program=False
+            )
+            for detail in details:
+                log_fn(detail)
+        image_bytes = bytes(prepared)
+        route = route or self._auto_transfer_route()
         if route == "softbsl":
             log_fn("Fast (Soft-BSL) write — RAM agent, high baud (auto).", "ok")
             fam = self._fast_chip_family()
@@ -8384,10 +8432,15 @@ class MS41FlashGUI(QMainWindow):
         self._update_softbsl_crossbank_button()
         self._update_transfer_mode()
         _recovery_kind, active_recovery = self._active_write_recovery()
-        recovery_available = bool(enabled and active_recovery is not None)
+        recovery_active = active_recovery is not None
+        recovery_available = bool(
+            enabled
+            and recovery_active
+            and getattr(active_recovery, "retry_supported", True)
+        )
         self.btn_native_recovery.setVisible(recovery_available)
         self.btn_native_recovery.setEnabled(recovery_available)
-        if recovery_available:
+        if recovery_active:
             self.btn_connect.setEnabled(False)
             self.cb_port.setEnabled(False)
             self.chk_direct_tap.setEnabled(False)
@@ -8415,12 +8468,20 @@ class MS41FlashGUI(QMainWindow):
                 event.ignore()
                 return
         if recovery is not None:
+            retry_instruction = (
+                "If ignition is still ON, do not close the application; use Retry Flash "
+                "Recovery first."
+                if getattr(recovery, "retry_supported", True)
+                else
+                "Same-session replay is unavailable because finalization had begun. "
+                "Close only when you are ready to abandon the retained handler and "
+                "perform the recovery ignition cycle."
+            )
             answer = QMessageBox.warning(
                 self,
                 "Flash Recovery Active",
                 f"A post-erase {recovery_kind} flash recovery session is still active.\n\n"
-                "If ignition is still ON, do not close the application; use Retry Flash "
-                "Recovery first.\n\n"
+                f"{retry_instruction}\n\n"
                 "If you have already turned ignition OFF for at least 10 seconds, recovered "
                 "the ECU by another method, or otherwise know the retained session is no "
                 "longer usable, choose Close to abandon it and exit.",

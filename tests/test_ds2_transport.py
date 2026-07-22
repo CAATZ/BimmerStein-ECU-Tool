@@ -3,6 +3,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ds2
 import live_data
 from ds2 import DS2Interface, _xor
+from ds2_fast_contracts import MAX_FLASH_DATA
+from ds2_fast_plans import ds2_image_to_file_layout
 import ctypes
 import pytest
 
@@ -94,6 +96,86 @@ def _legacy_0x90_payloads(harness):
         event[2]
         for event in harness.events
         if event[0] == "execute" and event[1] == 0x90
+    ]
+
+
+def test_legacy_writer_uses_the_shared_243_byte_ceiling():
+    assert MAX_FLASH_DATA == DS2Interface.WRITE_CHUNK == 243
+
+
+def test_legacy_program_writer_trims_the_final_block(monkeypatch):
+    d = DS2Interface("COM1")
+    writes = []
+    monkeypatch.setattr(
+        d,
+        "_write_block",
+        lambda address, data, log_fn=None: writes.append((address, bytes(data))),
+    )
+    image = bytearray(b"\xFF" * 0x4000)
+    image[0] = 0
+    image[MAX_FLASH_DATA + 4] = 0
+
+    written, skipped = d._write_program_sectors(bytes(image), 0, len(image))
+
+    assert (written, skipped) == (2, 0)
+    assert [(address, len(data)) for address, data in writes] == [(0, 243), (243, 5)]
+
+
+def test_legacy_partial_writer_trims_the_final_block(monkeypatch):
+    d = DS2Interface("COM1")
+    writes = []
+    monkeypatch.setattr(d, "read_mem", lambda *_args: b"\x00")
+    monkeypatch.setattr(d, "_erase_sector", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(d, "status", lambda: b"")
+    monkeypatch.setattr(d, "verify_program_region", lambda **_kwargs: (True, 1))
+    monkeypatch.setattr(
+        d,
+        "_write_block",
+        lambda address, data, log_fn=None: writes.append((address, bytes(data))),
+    )
+    tune = bytearray(b"\xFF" * d.PARTIAL_SIZE)
+    tune[0] = 0
+    tune[MAX_FLASH_DATA + 4] = 0
+
+    d.write_partial(bytes(tune), skip_unlock=True, skip_prepare=True)
+
+    assert [(address, len(data)) for address, data in writes] == [
+        (d.PARTIAL_DS2_ADDR, 243),
+        (d.PARTIAL_DS2_ADDR + 243, 5),
+    ]
+
+
+def test_legacy_full_writer_trims_the_tune_tail(monkeypatch):
+    d = DS2Interface("COM1")
+    writes = []
+    monkeypatch.setattr(d, "read_mem", lambda *_args: b"\x00")
+    monkeypatch.setattr(d, "_erase_sector", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(d, "status", lambda: b"")
+    monkeypatch.setattr(d, "verify_program_region", lambda **_kwargs: (True, 1))
+    monkeypatch.setattr(
+        d,
+        "_write_block",
+        lambda address, data, log_fn=None: writes.append((address, bytes(data))),
+    )
+    ds2_image = bytearray(b"\xFF" * d.FULL_SIZE)
+    ds2_image[0x2000] = 0
+    ds2_image[d._TUNE_DS2_START] = 0
+    ds2_image[d._TUNE_DS2_START + MAX_FLASH_DATA + 4] = 0
+
+    d.write_full(
+        ds2_image_to_file_layout(ds2_image),
+        skip_unlock=True,
+        skip_prepare=True,
+    )
+
+    tune_writes = [
+        (address, len(data))
+        for address, data in writes
+        if d._TUNE_DS2_START <= address <= d._TUNE_DS2_END
+    ]
+    assert tune_writes == [
+        (d._TUNE_DS2_START, 243),
+        (d._TUNE_DS2_START + 243, 5),
     ]
 
 

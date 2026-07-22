@@ -333,6 +333,40 @@ def test_failed_retained_recovery_keeps_transport_and_seals_new_journal(
     assert journal.fields["transport_retained"] is True
 
 
+def test_finalizer_failure_recovery_refuses_replay_before_opening_journal(
+    monkeypatch, tmp_path
+):
+    transport = FakeTransport()
+
+    class FinalizerFailedSession:
+        can_recover_in_place = False
+
+        def recover_in_place(self):
+            raise AssertionError("destructive replay must not be attempted")
+
+    recovery = service.NativeWriteRecovery(
+        port="COM1",
+        transport=transport,
+        session=FinalizerFailedSession(),
+        target=b"immutable",
+        journal_path=tmp_path / "old.jsonl",
+        error=RuntimeError("finalizer rejected the image"),
+    )
+    monkeypatch.setattr(
+        service,
+        "_new_journal",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("recovery journal must not be opened")
+        ),
+    )
+
+    with pytest.raises(service.NativeFastServiceError, match="same-session replay"):
+        service.resume_recovery(recovery)
+
+    assert recovery.retry_supported is False
+    assert transport.is_open is True
+
+
 def test_successful_retained_recovery_closes_transport(monkeypatch, tmp_path):
     journal = FakeJournal(tmp_path / "recovery-ok.jsonl", FastOperation.PARTIAL_WRITE)
     transport = FakeTransport()

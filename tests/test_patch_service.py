@@ -40,6 +40,7 @@ def test_available_patches_filters_by_version():
     assert cg["ok"] is True and cg["title"] and cg["target"] == "MS41.3"
     assert "recoverable flash-listen mode" in cg["user_description"]
     assert "@0x" not in cg["user_description"]
+    assert next(p for p in avail if p["id"] == "alphan_failsafe")["tested"] is False
     ic = next(p for p in avail if p["id"] == "ignition_cut_v7")
     assert ic["status"] == "EMULATOR VERIFIED - ON-CAR TEST REQUIRED"
     assert ic["tested"] is False

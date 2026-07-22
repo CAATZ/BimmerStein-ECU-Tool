@@ -3074,6 +3074,37 @@ def test_post_erase_dialog_offers_retry_or_keeps_session_pending(
         w.close()
 
 
+def test_finalizer_failure_hides_unsafe_retry_and_points_to_slow_recovery(
+    monkeypatch,
+):
+    app, w = _gui()
+    try:
+        recovery = type(
+            "Recovery",
+            (),
+            {"is_open": True, "retry_supported": False},
+        )()
+        w._native_write_recovery = recovery
+        shown = {}
+        monkeypatch.setattr(
+            QMessageBox,
+            "critical",
+            staticmethod(lambda *args, **kwargs: shown.update(args=args) or QMessageBox.Ok),
+        )
+
+        assert w._offer_active_flash_recovery("Injected finalizer failure") is True
+
+        assert w._native_write_recovery is recovery
+        assert w.btn_native_recovery.isHidden() is True
+        assert w.btn_native_recovery.isEnabled() is False
+        assert "entered finalization" in shown["args"][2]
+        assert "Force Slow DS2" in shown["args"][2]
+        assert "hardware BSL recovery" in shown["args"][2]
+    finally:
+        w._native_write_recovery = None
+        w.close()
+
+
 @pytest.mark.parametrize(
     "operation,family,verify_requested",
     [("tune", "intel", False), ("image", "amd", True)],
@@ -3404,6 +3435,10 @@ def test_main_tab_native_read_restores_low_ds2_for_following_native_write(
         progress = []
         reopened = []
         open_attempts = []
+        tune_target = bytearray(b"\xFF" * gui.MS41ECU.TUNE_SIZE)
+        for address in (0x0D, 0x17, 0x27, 0x37):
+            tune_target[address] = ord("6")
+        tune_target = bytes(tune_target)
 
         class InitiallyConnectedDS2:
             def close(self):
@@ -3449,7 +3484,7 @@ def test_main_tab_native_read_restores_low_ds2_for_following_native_write(
             return type("ReadResult", (), {"data": b"R" * 24576})()
 
         def native_write(port, target, *, verify_write, progress_cb):
-            assert (port, target, verify_write) == ("COM1", b"target", False)
+            assert (port, target, verify_write) == ("COM1", tune_target, False)
             assert w._port_owner.owner == "native_fast_ds2"
             assert w._ds2 is None
             events.append("native_write")
@@ -3492,8 +3527,9 @@ def test_main_tab_native_read_restores_low_ds2_for_following_native_write(
         assert not any("Native DS2 host baud" in item[0] for item in logs)
 
         restored_after_read = w._ds2
+        monkeypatch.setattr(w, "_live_coding_family", lambda: b"606")
         result = w._write_tune_auto(
-            b"target",
+            tune_target,
             lambda *args: logs.append(args),
             lambda *args: progress.append(args),
             verify_write=False,
@@ -3505,7 +3541,7 @@ def test_main_tab_native_read_restores_low_ds2_for_following_native_write(
         assert progress == [
             (24576, 24576, "fast_partial_read"),
             (0, 0, "Reopening normal DS2 at 9600"),
-            (len(b"target"), len(b"target"), "native_partial_write"),
+            (len(tune_target), len(tune_target), "native_partial_write"),
             (0, 0, "Reopening normal DS2 at 9600"),
         ]
         assert w._port_owner.owner == "flasher"
@@ -4202,7 +4238,10 @@ def test_patches_build_archives_to_bins_and_offers_flash(monkeypatch):
         monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
         w._ds2 = object()                      # "connected" -> offers to flash
         flashed = {}
-        monkeypatch.setattr(w, "_ds2_write_full", lambda data, name: flashed.update(name=name, n=len(data)))
+        monkeypatch.setattr(
+            w, "_ds2_write_full",
+            lambda data, name, **kwargs:
+                flashed.update(name=name, n=len(data), kwargs=kwargs))
 
         w._on_patches_build()
 
@@ -4211,6 +4250,7 @@ def test_patches_build_archives_to_bins_and_offers_flash(monkeypatch):
         assert copied == {"label": "Patched Full ROM (256 KB)", "n": 262144}
         assert flashed["name"] == "ms41_patched_test.bin"   # flashed the freshly-built image
         assert flashed["n"] == 262144
+        assert flashed["kwargs"] == {"disconnect_after_success": True}
     finally:
         w.close()
 
@@ -4259,7 +4299,10 @@ def test_patches_build_boot_change_offers_guarded_boot_write(monkeypatch):
         assert "hardware BSL" in message
         assert questions == []
         assert flashed["data"] == bytes(built)
-        assert flashed["kwargs"] == {"require_boot_write": True}
+        assert flashed["kwargs"] == {
+            "require_boot_write": True,
+            "disconnect_after_success": True,
+        }
 
         flashed.clear()
         monkeypatch.setattr(
@@ -4328,7 +4371,10 @@ def test_patches_builds_and_flashes_boot_patch_removal_only(monkeypatch):
         assert flashed == {
             "data": removed_image,
             "name": FakeEntry.filename,
-            "kwargs": {"require_boot_write": True},
+            "kwargs": {
+                "require_boot_write": True,
+                "disconnect_after_success": True,
+            },
         }
         assert w._patch_removed_ids == set()
         assert not w.btn_patches_build.isEnabled()

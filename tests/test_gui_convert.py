@@ -20,6 +20,7 @@ import ecu_info
 from ms41 import (
     CODING_FAMILY_CAL_ADDRS,
     CODING_FAMILY_FILE_ADDR,
+    CODING_FAMILY_PARTIAL_ADDRS,
     CODING_FAMILY_PROGRAM_ADDRS,
 )
 
@@ -209,7 +210,7 @@ def test_conversion_without_a_prior_full_read_is_allowed_when_boot_is_preserved(
 
 
 @pytest.mark.parametrize("route", ("ds2", "native_ds2", "softbsl"))
-def test_boot_preserving_conversion_graft_reaches_every_full_write_route(
+def test_boot_preserving_family_graft_reaches_every_full_write_route(
     monkeypatch, route
 ):
     app, w = _gui()
@@ -225,7 +226,7 @@ def test_boot_preserving_conversion_graft_reaches_every_full_write_route(
         w._ds2 = _CodingFamilyDS2(b"606")
         monkeypatch.setattr(w, "_auto_transfer_route", lambda: route)
         monkeypatch.setattr(
-            gui.MS41ECU, "detect_variant", staticmethod(lambda _data: "MS41.2")
+            gui.MS41ECU, "detect_variant", staticmethod(lambda _data: "MS41.1")
         )
         monkeypatch.setattr(
             gui.MS41ECU, "check_hybrid", staticmethod(lambda _data: None)
@@ -282,7 +283,67 @@ def test_boot_preserving_conversion_graft_reaches_every_full_write_route(
             assert written[address] == ord("6")
         assert w._ds2.reads == [(gui.MS41ECU.CODING_FAMILY_DS2_ADDR, 3)]
         if route == "native_ds2":
-            assert captured["native_kwargs"]["variant_conversion"] is True
+            assert captured["native_kwargs"]["variant_conversion"] is False
+    finally:
+        w._ds2 = None
+        w.close()
+
+
+@pytest.mark.parametrize("route", ("ds2", "native_ds2", "softbsl"))
+def test_partial_family_graft_reaches_every_write_route(monkeypatch, route):
+    app, w = _gui()
+    try:
+        target = bytearray(b"\xFF" * gui.MS41ECU.TUNE_SIZE)
+        for address in CODING_FAMILY_PARTIAL_ADDRS:
+            target[address] = ord("9")
+
+        w._ds2 = _CodingFamilyDS2(b"606")
+        monkeypatch.setattr(w, "_auto_transfer_route", lambda: route)
+        monkeypatch.setattr(
+            gui,
+            "correct_checksums",
+            lambda data, **_kwargs: (bytearray(data), ["calibration checksum corrected"]),
+        )
+        captured = {}
+        logs = []
+        monkeypatch.setattr(
+            w,
+            "_ds2_write",
+            lambda kind, image, *a, **k: captured.update(kind=kind, image=image),
+        )
+        monkeypatch.setattr(
+            w,
+            "_native_fast_write_with_fallback",
+            lambda kind, image, family, *a, **k: captured.update(
+                kind=kind, image=image
+            ),
+        )
+        monkeypatch.setattr(
+            gui.softbsl_service,
+            "write_tune",
+            lambda port, image, *a, **k: captured.update(kind="tune", image=image),
+        )
+        monkeypatch.setattr(
+            w,
+            "_run_via_softbsl",
+            lambda operation, log_fn, progress_fn, **kwargs:
+                operation("COM1", progress_fn, log_fn),
+        )
+
+        w._write_tune_auto(
+            target,
+            lambda *args: logs.append(args),
+            lambda *_args: None,
+            verify_write=False,
+        )
+
+        assert captured["kind"] == "tune"
+        assert all(
+            captured["image"][address] == ord("6")
+            for address in CODING_FAMILY_PARTIAL_ADDRS
+        )
+        assert w._ds2.reads == [(gui.MS41ECU.CODING_FAMILY_DS2_ADDR, 3)]
+        assert any("normalized to live boot family 606" in entry[0] for entry in logs)
     finally:
         w._ds2 = None
         w.close()
@@ -626,6 +687,11 @@ def test_full_writer_reuses_archived_prewrite_image_without_duplicate_read(monke
     app, w = _gui()
     try:
         image = bytearray(b"\xFF" * gui.MS41ECU.FULL_ROM_SIZE)
+        image[CODING_FAMILY_FILE_ADDR:CODING_FAMILY_FILE_ADDR + 3] = b"606"
+        for address in CODING_FAMILY_PROGRAM_ADDRS:
+            image[address:address + 3] = b"606"
+        for address in CODING_FAMILY_CAL_ADDRS:
+            image[address] = ord("6")
         w.chk_backup_before_write.setChecked(True)
         monkeypatch.setattr(gui, "verify_checksum", lambda data: (True, []))
         monkeypatch.setattr(
@@ -647,17 +713,22 @@ def test_full_writer_reuses_archived_prewrite_image_without_duplicate_read(monke
         monkeypatch.setattr(
             QMessageBox, "information", staticmethod(lambda *a, **k: QMessageBox.Ok))
         captured = _stub_run_task(monkeypatch, w)
-        callback = []
+        events = []
+        monkeypatch.setattr(
+            w, "_show_flash_complete",
+            lambda *_args: events.append("ignition-cycle prompt"))
+        monkeypatch.setattr(w, "_disconnect", lambda: events.append("disconnect"))
 
         w._ds2_write_full(
             image, "config-full.bin",
             archived_prewrite_image=bytes(image),
-            on_write_success=lambda: callback.append(True))
+            on_write_success=lambda: events.append("callback"),
+            disconnect_after_success=True)
 
         assert captured["ran"] is True
         assert captured["kind"] == "full"
         assert captured["image"] == bytes(image)
-        assert callback == [True]
+        assert events == ["ignition-cycle prompt", "callback", "disconnect"]
     finally:
         w.close()
 

@@ -28,21 +28,23 @@ Write/flash commands:
     0x07  FLASH_OP   — sub-command byte selects operation:
               sub 0x0F  erase-sector poll   (send ×2 before erase)
               sub 0x06  erase sector        (single 0x4000 / 16 KB sector)
-              sub 0x02  write block         (up to 231 data bytes per frame)
+              sub 0x02  write block         (up to 243 data bytes per frame)
 
-Full partial-write sequence (verified, byte-for-byte from capture):
+Partial-write sequence (captured control flow with production payload sizing):
     0xA2  prepare → 0x06 read_mem(0x2001,12) → 0x0D status
     → 0x90 BMW+XX → 0x90 KEY (unlock)
     → 0x06 read_mem(0x1CF4,3) → 0x06 read_mem(0x1000E,2)
     → 0x07/0x0F poll ×2 → 0x07/0x06 erase sector
     → 0x00 identify → 0x0D status
-    → 0x07/0x02 write blocks (231 bytes each, skip all-0xFF chunks)
+    → 0x07/0x02 write blocks (up to 243 bytes each, skip all-0xFF chunks)
 """
 
 import sys
 import time
 import logging
 from enum import IntEnum
+
+from ds2_fast_contracts import MAX_FLASH_DATA
 
 try:
     import serial
@@ -777,7 +779,6 @@ class DS2Interface:
         return bytes(out)
 
     # ── MS41 write-unlock (seed-key) ─────────────────────────────────────────
-    # Reverse-engineered from sub_436a30 in the Galetto disassembly.
     # The ECU stores TX frame (8 bytes) + RX frame (46 bytes) as a 54-byte
     # buffer at arg1+0x25004e.
     # KEY[i] = (buf[XX+8+i] + buf[49+i] + buf[26+i]) & 0xFF  for i in 0..3
@@ -967,11 +968,12 @@ class DS2Interface:
     # ── flash / write commands ───────────────────────────────────────────────
     # All 0x07 responses are 10 bytes:
     #   [0x12, 0x0A, 0xA0, sub, addr_hi, addr_mid, addr_lo, count, 0x01, XOR]
-    # For write (sub=0x02): addr_hi/mid/lo = NEXT expected write address,
-    # count = 0xE7 (always).  Verified byte-for-byte from partial-write capture.
+    # For write (sub=0x02): addr_hi/mid/lo = NEXT expected write address and
+    # count echoes the accepted request length. Captures used 0xE7; production
+    # uses up to 0xF3, yielding the accepted 0xFC-byte DS2 frame ceiling.
 
-    WRITE_CHUNK   = 231    # 0xE7 bytes of payload per write frame
-    WRITE_RETRIES = 3      # resend a failed write block up to 3× (matches Galetto)
+    WRITE_CHUNK   = MAX_FLASH_DATA
+    WRITE_RETRIES = 3
 
     def _prepare(self) -> bytes:
         """0xA2 prepare-for-write command.  ECU returns status 0xFF (normal)."""
@@ -1013,13 +1015,12 @@ class DS2Interface:
             log_fn(f"Flash sector at DS2 0x{ds2_addr:06X} erased")
 
     def _write_block(self, ds2_addr: int, data: bytes, log_fn=None) -> None:
-        """Write one flash block (1..231 bytes) at ds2_addr.
+        """Write one flash block (1..243 bytes) at ds2_addr.
 
-        The ECU ACKs with [sub=0x02, next_addr(3), 0xE7, 0x01].
+        The ECU ACKs with [sub=0x02, next_addr(3), accepted_count, 0x01].
 
         Resends the same block up to WRITE_RETRIES times on a NAK or comms
-        error before giving up — mirrors the Galetto write loop, which retries
-        each block ~3× before failing.  Resending the same frame to the same
+        error before giving up. Resending the same frame to the same
         address is safe: on freshly-erased flash it is idempotent, and the frame
         carries its address explicitly so a retry targets the same bytes.
         Raises DS2NegativeResponse / DS2Error only after all attempts fail.
@@ -1073,8 +1074,8 @@ class DS2Interface:
           * Entirely-0xFF aligned sectors are skipped (resume lands on the next
             sector's aligned base).
           * A sector containing any data is written from its (clamped) base in
-            <=231-byte blocks that never cross the 0x4000 boundary, up to and
-            including the block holding the last non-FF byte.  Leading/internal
+            <=243-byte blocks that never cross the 0x4000 boundary, ending at
+            the last non-FF byte.  Leading/internal
             0xFF inside a data sector IS written (it's a no-op on erased flash and
             keeps the run contiguous); trailing 0xFF whole-blocks are not.
 
@@ -1100,7 +1101,7 @@ class DS2Interface:
             last_data_end = off + last
             w = off
             while w < last_data_end:
-                sz = min(self.WRITE_CHUNK, sec_end - w)
+                sz = min(self.WRITE_CHUNK, sec_end - w, last_data_end - w)
                 self._write_block(w, bytes(ds2[w:w + sz]), log_fn=log_fn)
                 written += 1
                 w += sz
@@ -1255,15 +1256,13 @@ class DS2Interface:
         #      a non-aligned address are what fail — see write_full Phase 1.)
         _log("Writing tune data…")
         n               = len(data)
-        # Factory scheme: WRITE_CHUNK (231-byte) blocks straight through, skipping
-        # any all-0xFF block.  The
-        # trailing FF tail is all-0xFF blocks, so it is skipped and never NAK'd 0xB0.
+        data_end        = len(data.rstrip(b"\xFF"))
         off             = 0
         chunks_written  = 0
         chunks_skipped  = 0
 
-        while off < n:
-            sz    = min(self.WRITE_CHUNK, n - off)
+        while off < data_end:
+            sz    = min(self.WRITE_CHUNK, data_end - off)
             chunk = data[off:off + sz]
 
             if chunk == b"\xFF" * sz:
@@ -1275,6 +1274,9 @@ class DS2Interface:
             off += sz
             if progress_cb:
                 progress_cb(off, n, "Flash write")
+
+        if progress_cb and off < n:
+            progress_cb(n, n, "Flash write")
 
         _log(f"Tune write complete: {chunks_written} blocks written, "
              f"{chunks_skipped} skipped (all-0xFF)")
@@ -1437,8 +1439,11 @@ class DS2Interface:
         written2 = skipped2 = 0
         _log("Writing tune/cal data (Phase 2)…")
         off = self._TUNE_DS2_START
-        while off <= self._TUNE_DS2_END:
-            sz    = min(self.WRITE_CHUNK, self._TUNE_DS2_END - off + 1)
+        tune_data_end = self._TUNE_DS2_START + len(
+            bytes(ds2[self._TUNE_DS2_START:self._TUNE_DS2_END + 1]).rstrip(b"\xFF")
+        )
+        while off < tune_data_end:
+            sz    = min(self.WRITE_CHUNK, tune_data_end - off)
             chunk = bytes(ds2[off:off + sz])
             if chunk == b"\xFF" * sz:
                 skipped2 += 1
@@ -1449,6 +1454,9 @@ class DS2Interface:
             if progress_cb:
                 progress_cb(prog_bytes + (off - self._TUNE_DS2_START),
                             grand_total, "DS2 full write")
+
+        if progress_cb and off <= self._TUNE_DS2_END:
+            progress_cb(grand_total, grand_total, "DS2 full write")
 
         _log(f"Phase 2 complete: {written2} blocks written, {skipped2} skipped.")
         _log(f"Full ROM write done: {written1+written2} blocks written total.")

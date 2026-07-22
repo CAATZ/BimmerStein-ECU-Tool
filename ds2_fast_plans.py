@@ -13,6 +13,7 @@ from ds2_fast_contracts import (
     FastOperation,
     FlashOperation,
     FlashRequest,
+    MAX_FLASH_DATA,
     READ_MEMORY_COMMAND,
     encode_ds2_frame,
 )
@@ -21,7 +22,6 @@ from ds2_fast_contracts import (
 FULL_IMAGE_SIZE = 0x40000
 ROM_BLOCK_SIZE = 0x4000
 MAX_READ_DATA = 247
-MAX_WRITE_DATA = 231
 
 TUNE_START = 0x10000
 TUNE_SIZE = 0x6000
@@ -302,7 +302,6 @@ def _sparse_program_requests(
     *,
     start: int,
     operation: FlashOperation,
-    trim_final: bool,
 ) -> Tuple[FlashRequest, ...]:
     """Fixed-size sparse chunks, clamped at every 0x4000 boundary."""
 
@@ -318,9 +317,9 @@ def _sparse_program_requests(
             (address & ~(ROM_BLOCK_SIZE - 1)) + ROM_BLOCK_SIZE,
             start + len(data),
         )
-        grid_count = min(MAX_WRITE_DATA, boundary - address)
+        grid_count = min(MAX_FLASH_DATA, boundary - address)
         count = grid_count
-        if trim_final and offset < last_data_end < offset + count:
+        if offset < last_data_end < offset + count:
             count = last_data_end - offset
         chunk = data[offset : offset + count]
         if chunk != b"\xFF" * count:
@@ -354,7 +353,7 @@ def _program_window_requests(
             address = unit_start
             data_end = unit_start + last_data
             while address < data_end:
-                count = min(MAX_WRITE_DATA, unit_end - address)
+                count = min(MAX_FLASH_DATA, unit_end - address, data_end - address)
                 request = FlashRequest(
                     int(FlashOperation.FULL_PROGRAM),
                     address,
@@ -394,7 +393,6 @@ def build_fast_partial_write_plan(
         tune,
         start=TUNE_START,
         operation=FlashOperation.PARTIAL_PROGRAM,
-        trim_final=False,
     )
     return PartialWritePlan(
         operation=FastOperation.PARTIAL_WRITE,
@@ -475,7 +473,6 @@ def build_fast_full_write_plan(
         target_ds2[TUNE_START:TUNE_END],
         start=TUNE_START,
         operation=FlashOperation.FULL_PROGRAM,
-        trim_final=True,
     )
     poll_program = FlashRequest(
         int(FlashOperation.POLL), PROGRAM_CONTROL_ADDRESS

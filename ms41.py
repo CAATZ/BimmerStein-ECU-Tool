@@ -108,6 +108,7 @@ CODING_FAMILY_DS2_ADDR = 0x1CF4
 CODING_FAMILY_FILE_ADDR = 0x5CF4
 CODING_FAMILY_PROGRAM_ADDRS = (0x6006, 0x6012, 0x601E)
 CODING_FAMILY_CAL_ADDRS = (0x1400D, 0x14017, 0x14027, 0x14037)
+CODING_FAMILY_PARTIAL_ADDRS = (0x000D, 0x0017, 0x0027, 0x0037)
 
 
 class MS41ECU:
@@ -122,17 +123,16 @@ class MS41ECU:
 
     @staticmethod
     def graft_coding_family(target: bytes, source_family: bytes) -> bytearray:
-        """Make a target ROM compatible with a preserved source boot region.
+        """Make a full ROM or 24 KB tune compatible with a preserved boot.
 
         ``source_family`` is the live three-byte value read at DS2 0x1CF4.
         The full triplet is repeated in three program descriptors; its final
-        digit prefixes four calibration records.  This is required only when a
-        conversion preserves the ECU's boot/parameter region.  A true boot
-        overwrite must keep the target ROM's own internally consistent values.
+        digit prefixes four calibration records. A true boot overwrite uses
+        the replacement image's boot family instead of the live value.
         """
-        if len(target) != MS41ECU.FULL_ROM_SIZE:
+        if len(target) not in (MS41ECU.FULL_ROM_SIZE, MS41ECU.TUNE_SIZE):
             raise ValueError(
-                f"coding-family graft expects a {MS41ECU.FULL_ROM_SIZE} B full ROM, "
+                "coding-family graft expects a 24 KB tune or 256 KB full ROM, "
                 f"got {len(target)}"
             )
         family = bytes(source_family)
@@ -141,9 +141,13 @@ class MS41ECU:
                 "live coding-family value must be exactly three ASCII digits"
             )
         output = bytearray(target)
-        for address in CODING_FAMILY_PROGRAM_ADDRS:
-            output[address:address + 3] = family
-        for address in CODING_FAMILY_CAL_ADDRS:
+        if len(output) == MS41ECU.FULL_ROM_SIZE:
+            for address in CODING_FAMILY_PROGRAM_ADDRS:
+                output[address:address + 3] = family
+            addresses = CODING_FAMILY_CAL_ADDRS
+        else:
+            addresses = CODING_FAMILY_PARTIAL_ADDRS
+        for address in addresses:
             output[address] = family[2]
         return output
 

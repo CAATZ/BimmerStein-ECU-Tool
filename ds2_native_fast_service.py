@@ -61,6 +61,12 @@ class NativeWriteRecovery:
     def is_open(self) -> bool:
         return bool(getattr(self.transport, "is_open", False))
 
+    @property
+    def retry_supported(self) -> bool:
+        """Whether the retained ECU handler is still qualified for replay."""
+        value = getattr(self.session, "can_recover_in_place", None)
+        return True if value is None else bool(value)
+
     def close_after_confirmed_power_cycle(self) -> None:
         """Release only after the operator has physically cycled/recovered the ECU."""
         self.transport.close()
@@ -347,6 +353,12 @@ def resume_recovery(recovery: NativeWriteRecovery, *, progress_cb=None):
     """Continue a held post-erase operation without cycling or reopening COM."""
     if not recovery.is_open:
         raise NativeFastServiceError("the retained native recovery transport is closed")
+    if not recovery.retry_supported:
+        raise NativeFastServiceError(
+            "the write failed during or after finalization; same-session replay is "
+            "disabled because the retained ECU handler is no longer in a qualified "
+            "write state"
+        )
     operation = (
         FastOperation.FULL_WRITE
         if isinstance(recovery.session, SlimNativeFastFullWriteSession)

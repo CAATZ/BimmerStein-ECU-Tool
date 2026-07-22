@@ -199,9 +199,19 @@ class SlimNativeFastPartialWriteSession(
         self.destructive_started = False
         self.restore_verified = False
         self.flash_completed = False
+        self.failure_state: Optional[SessionState] = None
         self.cleanup_attempted = False
         self.safe_legacy_fallback = False
         self.verify_write = bool(verify_write)
+
+    @property
+    def can_recover_in_place(self) -> bool:
+        """Whether the failed ECU handler is still qualified for tune replay."""
+        return bool(
+            self.destructive_started
+            and not self.flash_completed
+            and self.failure_state is SessionState.HIGH_PARTIAL_WRITE
+        )
 
     def _verify_requested_tune(self) -> int:
         actual = self._read_range(
@@ -282,6 +292,7 @@ class SlimNativeFastPartialWriteSession(
             )
             return result
         except Exception as error:
+            self.failure_state = self.state
             commit_unknown = isinstance(error, CommitUnknownError)
             cancelled = isinstance(error, PartialWriteCancelled)
             recovered = False
@@ -323,6 +334,11 @@ class SlimNativeFastPartialWriteSession(
     def recover_in_place(self) -> SlimPartialWriteResult:
         if not self.destructive_started or self.plan is None:
             raise PartialWriteStateError("no destructive partial-write state is available")
+        if not self.can_recover_in_place:
+            raise PartialWriteStateError(
+                "partial write failed during or after finalization; the retained "
+                "handler is not qualified for a destructive replay"
+            )
         if not self.transport.is_open:
             raise PartialWriteStateError("retained partial-write transport is closed")
         if self.journal.closed:
@@ -360,6 +376,7 @@ class SlimNativeFastPartialWriteSession(
             )
             return result
         except Exception as error:
+            self.failure_state = self.state
             if not self.journal.closed:
                 self.journal.finish(
                     "commit_unknown" if isinstance(error, CommitUnknownError) else "failed",
@@ -432,6 +449,7 @@ class SlimNativeFastFullWriteSession(
         self.cleanup_attempted = False
         self.restore_verified = False
         self.flash_completed = False
+        self.failure_state: Optional[SessionState] = None
         self.safe_legacy_fallback = False
         self.verify_write = bool(verify_write)
         self.variant_conversion = bool(variant_conversion)
@@ -440,6 +458,18 @@ class SlimNativeFastFullWriteSession(
         # this explicit so retained-session recovery can never silently switch
         # a program-only operation into a full program+tune erase.
         self.program_only = False
+
+    @property
+    def can_recover_in_place(self) -> bool:
+        """Whether the failed ECU handler is still qualified for full replay."""
+        return bool(
+            self.destructive_started
+            and not self.flash_completed
+            and self.failure_state in (
+                SessionState.HIGH_FULL_PROGRAM,
+                SessionState.HIGH_FULL_TUNE,
+            )
+        )
 
     def _validate_family(self) -> str:
         if self.connected_family not in ("amd", "intel"):
@@ -695,6 +725,7 @@ class SlimNativeFastFullWriteSession(
             )
             return result
         except Exception as error:
+            self.failure_state = self.state
             commit_unknown = isinstance(error, CommitUnknownError)
             recovered = False
             if not self.destructive_started:
@@ -803,6 +834,7 @@ class SlimNativeFastFullWriteSession(
             )
             return result
         except Exception as error:
+            self.failure_state = self.state
             commit_unknown = isinstance(error, CommitUnknownError)
             recovered = False
             if not self.destructive_started:
@@ -844,6 +876,11 @@ class SlimNativeFastFullWriteSession(
     def recover_in_place(self) -> SlimFullWriteResult:
         if not self.destructive_started or self.plan is None:
             raise FullWriteError("no destructive full-write state is available")
+        if not self.can_recover_in_place:
+            raise FullWriteError(
+                "full write failed during or after finalization; the retained "
+                "handler is not qualified for a destructive replay"
+            )
         if not self.transport.is_open:
             raise FullWriteError("retained full-write transport is closed")
         if self.journal.closed:
@@ -914,6 +951,7 @@ class SlimNativeFastFullWriteSession(
             )
             return result
         except Exception as error:
+            self.failure_state = self.state
             if not self.journal.closed:
                 self.journal.finish(
                     "commit_unknown" if isinstance(error, CommitUnknownError) else "failed",

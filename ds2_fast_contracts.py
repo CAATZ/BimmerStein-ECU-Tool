@@ -17,7 +17,8 @@ DS2_MIN_FRAME_LENGTH = 4
 DS2_MAX_FRAME_LENGTH = 0xFC
 FLASH_COMMAND = 0x07
 READ_MEMORY_COMMAND = 0x06
-MAX_FLASH_DATA = 231
+# 243 data bytes produce a 252-byte (0xFC) DS2 frame, the accepted frame ceiling.
+MAX_FLASH_DATA = 243
 
 
 class FastDS2Error(Exception):

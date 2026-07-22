@@ -4,7 +4,7 @@ from collections import Counter
 
 import pytest
 
-from ds2_fast_contracts import FastOperation, FlashOperation
+from ds2_fast_contracts import FastOperation, FlashOperation, MAX_FLASH_DATA
 from ds2_fast_plans import (
     FINAL_POLL_ADDRESS,
     FULL_IMAGE_SIZE,
@@ -38,7 +38,7 @@ def _assert_no_program_request_crosses_a_rom_block(requests):
     for request in requests:
         if not request.is_program:
             continue
-        assert request.count <= 231
+        assert request.count <= MAX_FLASH_DATA
         assert request.address // ROM_BLOCK_SIZE == (
             request.address + request.count - 1
         ) // ROM_BLOCK_SIZE
@@ -118,12 +118,14 @@ def test_partial_write_reference_reproduces_the_proven_live_plan():
     assert plan.erase.address == TUNE_ERASE_ADDRESS
     assert plan.final_poll.operation == FlashOperation.POLL
     assert plan.final_poll.address == FINAL_POLL_ADDRESS
-    assert len(plan.program) == 79
-    assert sum(request.count for request in plan.program) == 18_232
+    assert len(plan.program) == 77
+    assert sum(request.count for request in plan.program) == 18_373
     assert Counter(request.count for request in plan.program) == {
-        231: 78,
-        214: 1,
+        243: 75,
+        103: 1,
+        45: 1,
     }
+    assert plan.program[-1].address + plan.program[-1].count == 0x15F80
     assert plan.effective_sector == tune + erase_tail
     _assert_no_program_request_crosses_a_rom_block(plan.program)
 
@@ -158,8 +160,25 @@ def test_full_write_reference_has_exact_control_addresses_and_primer():
         TUNE_ERASE_ADDRESS,
     ]
     assert plan.final_poll.address == FINAL_POLL_ADDRESS
-    assert len(plan.data_requests) == 679
+    assert len(plan.data_requests) == 651
     _assert_no_program_request_crosses_a_rom_block(plan.data_requests)
+
+
+def test_write_plans_trim_the_final_request_to_the_last_non_ff_byte():
+    tune = bytearray(b"\xFF" * TUNE_SIZE)
+    tune[0] = 0
+    tune[MAX_FLASH_DATA + 4] = 0
+    partial = build_fast_partial_write_plan(
+        bytes(tune), b"\xFF" * (TUNE_SECTOR_END - TUNE_END)
+    )
+    assert [request.count for request in partial.program] == [243, 5]
+
+    ds2_image = bytearray(b"\xFF" * FULL_IMAGE_SIZE)
+    ds2_image[PROGRAM_LOW_START] = 0
+    ds2_image[PROGRAM_LOW_START + MAX_FLASH_DATA + 4] = 0
+    image = ds2_image_to_file_layout(ds2_image)
+    full = build_fast_full_write_plan(image, image, program_only=True)
+    assert [request.count for request in full.program] == [243, 5]
 
 
 @pytest.mark.parametrize(
