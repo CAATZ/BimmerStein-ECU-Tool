@@ -326,7 +326,8 @@ checksums, and archives the composed image into Bins.
 - **Untested** means emulator validation exists but physical vehicle testing has not been completed.
 - Boot-region patches require a transfer path that can actually deliver their bytes.
 
-Ignition Cut V7 and Launch Control V4 ignition mode intentionally remain marked **Untested**.
+Ignition Cut V7, Launch Control V4 ignition mode, and AlphaN MAF-failsafe intentionally remain
+marked **Untested**.
 Launch Control V4 fuel mode has held its configured 4000 RPM setpoint
 during vehicle testing. Field-failed Ignition Cut V6 remains visible only when installed so it can
 be removed before V7 is applied.

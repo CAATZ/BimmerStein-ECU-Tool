@@ -187,8 +187,8 @@ def test_release_packaging_requires_explicit_license_gates():
     assert "b[1-9]\\d*" in build_text
 
     building = (ROOT / "BUILDING.md").read_text(encoding="utf-8")
-    assert "-Version 0.1.0b7" in building
-    assert "v0.1.0b7" in building
+    assert "-Version 0.1.0b8" in building
+    assert "v0.1.0b8" in building
     assert "BimmerStein ECU Tool Nuitka" in building
 
 
@@ -198,18 +198,20 @@ def test_inno_installer_uses_bimmerstein_identity_and_per_user_install():
     )
     assert "AppName={#SetupAppName}" in installer
     assert '#define SetupAppName "BimmerStein ECU Tool"' in installer
-    assert '#define SetupAppName "BimmerStein ECU Tool (Nuitka)"' in installer
+    assert 'SetupAppName "BimmerStein ECU Tool (' not in installer
     assert "AppPublisher=CAATZ" in installer
     assert "PrivilegesRequired=lowest" in installer
     assert "ArchitecturesAllowed=x64compatible" in installer
     assert "ArchitecturesInstallIn64BitMode=x64compatible" in installer
-    assert "DefaultDirName={localappdata}\\Programs\\{#SetupAppName}" in installer
+    assert "DefaultDirName={localappdata}\\Programs\\{#SetupInstallDirName}" in installer
     assert "BimmerStein-ECU-Tool-{#AppVersion}-Windows-x64{#PackageSuffix}-Setup" in installer
     assert "SetupIconFile=..\\assets\\bimmerstein_ecu_tool.ico" in installer
     assert "LicenseFile={#SourceDir}\\LICENSE.txt" in installer
     assert "InfoBeforeFile={#SourceDir}\\RELEASE_NOTES.md" in installer
     assert 'Name: "desktopicon"' in installer
     assert 'Filename: "{app}\\BimmerStein ECU Tool.exe"' in installer
+    assert 'Name: "{group}\\{#SetupAppName}"' in installer
+    assert 'Name: "{autodesktop}\\{#SetupAppName}"' in installer
 
     builder = (ROOT / "packaging" / "build_installer.ps1").read_text(
         encoding="utf-8"
@@ -236,6 +238,7 @@ def test_nuitka_build_is_explicit_and_separate():
     assert '"--backend", "nuitka"' not in build  # PowerShell invokes these as separate tokens.
     assert '"packaging\\verify_dist.py" --backend nuitka' in build
     assert "BimmerStein ECU Tool Nuitka" in build
+    assert '"--file-description=BimmerStein ECU Tool"' in build
     assert "BimmerStein MS41 Patch Definitions.xml" in build
 
     entry = (ROOT / "packaging" / "nuitka_entry.py").read_text(encoding="utf-8")

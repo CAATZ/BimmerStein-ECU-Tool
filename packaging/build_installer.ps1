@@ -127,11 +127,7 @@ try {
     $versionInfo = (Get-Item -LiteralPath $installer).VersionInfo
     $productName = $versionInfo.ProductName.Trim()
     $productVersion = $versionInfo.ProductVersion.Trim()
-    $expectedProductName = if ($isNuitka) {
-        "BimmerStein ECU Tool (Nuitka)"
-    } else {
-        "BimmerStein ECU Tool"
-    }
+    $expectedProductName = "BimmerStein ECU Tool"
     if ($productName -ne $expectedProductName) {
         throw "Installer product metadata is incorrect: $($versionInfo.ProductName)"
     }

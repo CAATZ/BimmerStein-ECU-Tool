@@ -93,7 +93,7 @@ try {
         "--report=$buildDir\nuitka-report.xml",
         "--company-name=CAATZ",
         "--product-name=BimmerStein ECU Tool",
-        "--file-description=BimmerStein ECU Tool (Nuitka)",
+        "--file-description=BimmerStein ECU Tool",
         "--file-version=$numericVersion",
         "--product-version=$numericVersion",
         "--copyright=Copyright (C) 2026 CAATZ",

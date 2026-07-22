@@ -71,7 +71,7 @@ adjacent `_internal` directory.
 To compile the Nuitka portable package:
 
 ```powershell
-.\build_windows_nuitka.ps1 -Version 0.1.0b7
+.\build_windows_nuitka.ps1 -Version 0.1.0b8
 ```
 
 Its output is `dist\BimmerStein ECU Tool Nuitka\`. It is a flat Nuitka
@@ -111,11 +111,11 @@ After the release owner has selected a version, create the final ZIP with the
 GPLv3 licensing gate selected for the public beta:
 
 Beta versions use the same compact `bN` suffix as BimmerStein Tuning Suite.
-The current beta is `0.1.0b7`, with Git tag `v0.1.0b7`.
+The current beta is `0.1.0b8`, with Git tag `v0.1.0b8`.
 
 ```powershell
 .\packaging\prepare_release.ps1 `
-    -Version 0.1.0b7 `
+    -Version 0.1.0b8 `
     -PyQtLicenseBasis GPLv3 `
     -IncludeNuitka `
     -IsccPath "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
@@ -128,11 +128,12 @@ backend, project license, bundled-definition status, and selected PyQt5 basis in
 `RELEASE-METADATA.json`, and writes the portable ZIPs, per-user installer EXEs,
 individual checksum files, and one complete `SHA256SUMS.txt` under `release\`.
 
-The PyInstaller and Nuitka installers use distinct product identities and
-installation directories so they can coexist. Both use the BimmerStein icon,
-install under the current user's local application-data folder without
-requiring administrator access, create a Start Menu shortcut, and offer an
-optional desktop shortcut. Nuitka artifacts use the `-Nuitka` suffix. Use
+The PyInstaller and Nuitka installers retain distinct internal identities and
+installation directories. Both use the BimmerStein icon and the same
+user-facing application and shortcut name, install under the current user's
+local application-data folder without requiring administrator access, create a
+Start Menu shortcut, and offer an optional desktop shortcut. Nuitka artifacts
+use the `-Nuitka` suffix. Use
 `-SkipInstaller` only when intentionally preparing a portable-only build.
 
 This script does not commit, push, tag, or publish anything.

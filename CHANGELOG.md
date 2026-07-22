@@ -8,6 +8,25 @@ shared by BimmerStein applications.
 
 ## [Unreleased]
 
+## [0.1.0b8] - 2026-07-22
+
+### Fixed
+
+- Hardened stock-DS2 write recovery so retry behavior remains phase-aware after
+  erasure and finalization, with explicit slow-DS2 and bench recovery guidance.
+- Normalized mixed coding-family images before partial, full, conversion, and
+  offline-merge writes, including the matching checksum updates.
+- Disconnected after a successful patch flash and required an ignition cycle
+  before the next ECU operation.
+
+### Changed
+
+- Increased native DS2 program payloads to 243 data bytes for both supported
+  flash families while preserving exact final-frame handling.
+- Marked AlphaN MAF-failsafe as untested in the patch catalog and documentation.
+- Unified the installed application, Start Menu, and desktop shortcut names
+  across both Windows packaging backends.
+
 ## [0.1.0b7] - 2026-07-21
 
 ### Fixed

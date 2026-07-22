@@ -157,7 +157,8 @@ The Patches tab detects installed and deprecated revisions, validates dependenci
 collisions, corrects checksums, and archives the composed image in Bins.
 
 > [!WARNING]
-> **HIGHLY EXPERIMENTAL — UNTESTED.** Ignition Cut V7 and Launch Control V4 are currently untested
+> **HIGHLY EXPERIMENTAL — UNTESTED.** Ignition Cut V7, Launch Control V4, and AlphaN
+> MAF-failsafe are currently untested
 > and may work incorrectly or may not work at all. Unexpected engine behavior, stalling, failure to
 > limit RPM, or other unintended results are possible. Test only in controlled off-road or bench
 > conditions, begin conservatively, monitor the engine closely, and keep a verified stock image and
