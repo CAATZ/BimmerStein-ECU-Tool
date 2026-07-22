@@ -100,6 +100,15 @@ _VARIANT_FAMILY = {
     "MS41.2": "ID12", "MS41.3": "ID12",
 }
 
+# The protected boot/parameter region exposes the live three-byte coding-family
+# value at DS2 0x1CF4 (= file 0x5CF4).  When that region is preserved during a
+# cross-variant full write, the same value must be copied into the target
+# program descriptors and calibration headers before checksums are corrected.
+CODING_FAMILY_DS2_ADDR = 0x1CF4
+CODING_FAMILY_FILE_ADDR = 0x5CF4
+CODING_FAMILY_PROGRAM_ADDRS = (0x6006, 0x6012, 0x601E)
+CODING_FAMILY_CAL_ADDRS = (0x1400D, 0x14017, 0x14027, 0x14037)
+
 
 class MS41ECU:
     """MS41 ROM-image utilities (static).  Not a live-ECU interface — see ds2.py."""
@@ -108,6 +117,35 @@ class MS41ECU:
     TUNE_SIZE     = 24  * 1024   # 24576  bytes
     TUNE_OFFSET   = 0x014000     # file-order base of the DENSE cal block (first 16 KB only)
     TUNE_DS2_BASE = 0x010000     # the ECU tune partition is CPU/DS2-order @ 0x10000-0x15FFF
+    CODING_FAMILY_DS2_ADDR = CODING_FAMILY_DS2_ADDR
+    CODING_FAMILY_FILE_ADDR = CODING_FAMILY_FILE_ADDR
+
+    @staticmethod
+    def graft_coding_family(target: bytes, source_family: bytes) -> bytearray:
+        """Make a target ROM compatible with a preserved source boot region.
+
+        ``source_family`` is the live three-byte value read at DS2 0x1CF4.
+        The full triplet is repeated in three program descriptors; its final
+        digit prefixes four calibration records.  This is required only when a
+        conversion preserves the ECU's boot/parameter region.  A true boot
+        overwrite must keep the target ROM's own internally consistent values.
+        """
+        if len(target) != MS41ECU.FULL_ROM_SIZE:
+            raise ValueError(
+                f"coding-family graft expects a {MS41ECU.FULL_ROM_SIZE} B full ROM, "
+                f"got {len(target)}"
+            )
+        family = bytes(source_family)
+        if len(family) != 3 or not family.isdigit():
+            raise ValueError(
+                "live coding-family value must be exactly three ASCII digits"
+            )
+        output = bytearray(target)
+        for address in CODING_FAMILY_PROGRAM_ADDRS:
+            output[address:address + 3] = family
+        for address in CODING_FAMILY_CAL_ADDRS:
+            output[address] = family[2]
+        return output
 
     @staticmethod
     def tune_from_full(full: bytes) -> bytes:

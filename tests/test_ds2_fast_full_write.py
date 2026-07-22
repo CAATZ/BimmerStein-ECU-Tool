@@ -2,6 +2,7 @@ import pytest
 
 from ds2_fast_contracts import (
     CommitUnknownError,
+    ContractViolation,
     FastOperation,
     FlashOperation,
     LinkRate,
@@ -23,6 +24,7 @@ from ds2_fast_partial_write import (
 from ds2_fast_slim_write import SlimNativeFastFullWriteSession
 from ds2_write_authorization import (
     AUTHORIZATION_STATE_ADDRESS,
+    FLASH_MODE_MARKER_ADDRESS,
     INITIAL_SEED_RETRY_DELAY,
     NATIVE_FAST_REENTRY_LATCH_ADDRESS,
     NATIVE_FAST_REENTRY_TIMER_ADDRESS,
@@ -57,9 +59,11 @@ def _assert_rom_matches_except_live_authorization_state(serial, source):
     }
     assert differing_offsets == {
         AUTHORIZATION_STATE_ADDRESS,
+        FLASH_MODE_MARKER_ADDRESS,
         WRONG_KEY_COUNTER_ADDRESS,
     }
     assert actual[AUTHORIZATION_STATE_ADDRESS] == 2
+    assert actual[FLASH_MODE_MARKER_ADDRESS] == 0
     assert actual[WRONG_KEY_COUNTER_ADDRESS] == 0
 
 class FullMemoryJournal(MemoryJournal):
@@ -70,6 +74,10 @@ class FullMemoryJournal(MemoryJournal):
 
 class FullWriteStockSerial(PartialWriteStockSerial):
     full_status_payload = True
+
+    def __init__(self, *args, flash_status_by_request=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.flash_status_by_request = dict(flash_status_by_request or {})
 
     def _handle_seed_key(self, args):
         if args == b"BMW\x0A":
@@ -106,10 +114,11 @@ class FullWriteStockSerial(PartialWriteStockSerial):
 
         if flash_index == self.missing_flash_response_at:
             return
+        status = self.flash_status_by_request.get((int(operation), address), 0x01)
         payload = (
             bytes((int(operation),))
             + int(cursor).to_bytes(3, "big")
-            + bytes((count, 1))
+            + bytes((count, status))
         )
         self._response(0xA0, payload)
 
@@ -120,6 +129,7 @@ def _session(
     connected_family="intel",
     serial_kwargs=None,
     verify_write=True,
+    variant_conversion=False,
 ):
     source = _image_fixture()
     token = source.ds2_image[TOKEN_ADDRESS : TOKEN_ADDRESS + TOKEN_LENGTH]
@@ -139,6 +149,7 @@ def _session(
         journal,
         connected_family=connected_family,
         verify_write=verify_write,
+        variant_conversion=variant_conversion,
         timing=ZERO_TIMING,
         sleeper=lambda _seconds: None,
     )
@@ -424,6 +435,58 @@ def test_full_write_direct_high_optional_verify_and_stays_high(tmp_path):
         if command == SEED_KEY_COMMAND and len(args) == TOKEN_LENGTH + 1
     ]
     assert selectors == [0x01]
+
+
+def test_confirmed_conversion_accepts_0e_only_at_the_two_pre_tune_polls(tmp_path):
+    session, _serial, journal, _source = _session(
+        tmp_path,
+        serial_kwargs={
+            "flash_status_by_request": {
+                (int(FlashOperation.POLL), 0x000100): 0x0E,
+            }
+        },
+        variant_conversion=True,
+    )
+
+    result = session.execute()
+
+    assert result.final_state is SessionState.POWER_CYCLE_REQUIRED
+    accepted = [
+        fields
+        for event, fields in journal.events
+        if event == "conversion_midpoint_status_accepted"
+    ]
+    assert len(accepted) == 2
+    assert {fields["scope"] for fields in accepted} == {"pre_tune_poll_only"}
+
+
+def test_same_variant_write_keeps_pre_tune_0e_strict(tmp_path):
+    session, _serial, _journal, _source = _session(
+        tmp_path,
+        serial_kwargs={
+            "flash_status_by_request": {
+                (int(FlashOperation.POLL), 0x000100): 0x0E,
+            }
+        },
+    )
+
+    with pytest.raises(ContractViolation, match="flash status 0x0E"):
+        session.execute()
+
+
+def test_conversion_does_not_accept_0e_after_the_tune_write(tmp_path):
+    session, _serial, _journal, _source = _session(
+        tmp_path,
+        serial_kwargs={
+            "flash_status_by_request": {
+                (int(FlashOperation.POLL), TUNE_START): 0x0E,
+            }
+        },
+        variant_conversion=True,
+    )
+
+    with pytest.raises(ContractViolation, match="flash status 0x0E"):
+        session.execute()
 
 
 def test_full_write_ambiguous_program_erase_retains_high_recovery_session(tmp_path):

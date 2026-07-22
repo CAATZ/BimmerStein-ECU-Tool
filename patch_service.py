@@ -10,6 +10,11 @@ from engines.patcher import patch_ms41
 
 PatchError = patch_ms41.PatchError
 
+# This bootstrap is an internal Soft-BSL installation detail, not a general-purpose
+# firmware patch. Keep its definition available to the installer while omitting it
+# from the Patches-tab catalogue, where baking it into a BIN can cause collisions.
+PATCH_TAB_HIDDEN_IDS = frozenset({"door_0x43"})
+
 
 def definitions():
     """Return the internal patch definitions used by every application workflow."""
@@ -72,6 +77,8 @@ def available_patches(data):
 
     out = []
     for pid, p in sorted(all_patches.items()):
+        if pid in PATCH_TAB_HIDDEN_IDS:
+            continue
         installed = pid in installed_ids
         required_by = sorted(
             other_id for other_id in effective_ids

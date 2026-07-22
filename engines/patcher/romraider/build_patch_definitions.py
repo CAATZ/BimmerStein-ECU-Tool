@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Inject the current MS41.2/MS41.3 patch controls into a RomRaider definition.
+"""Build standalone or combined RomRaider definitions for current patches.
 
-The input definition is kept byte-for-byte apart from the three target ROM
-blocks.  SS1v2 and the 24 KB ID12 use calibration-relative addresses; the
-256 KB ID12 receives the ECU's bank-XOR full-read mapping.
+Standalone output contains only BimmerStein patch controls.  Combined output
+keeps the input definition byte-for-byte apart from the target ROM blocks.
 """
 
 from __future__ import annotations
@@ -16,6 +15,7 @@ import xml.etree.ElementTree as ET
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_FRAGMENT = HERE / "ms412_ignition_cut_v7_launch_control_v4.xml"
+DEFAULT_OUTPUT = HERE / "BimmerStein MS41 Patch Definitions.xml"
 BEGIN = "<!-- OPENMS41 V7/V4 PATCH TABLES BEGIN -->"
 END = "<!-- OPENMS41 V7/V4 PATCH TABLES END -->"
 LEGACY_MARKERS = [
@@ -30,6 +30,54 @@ LEGACY_MARKERS = [
 ]
 ROM_RE = re.compile(r"<rom\b[^>]*>.*?</rom>", re.DOTALL | re.IGNORECASE)
 ADDRESS_RE = re.compile(r'(storageaddress\s*=\s*")0x([0-9a-f]+)(")', re.IGNORECASE)
+
+DTD = """<!DOCTYPE roms [
+<!ELEMENT roms ( rom+ ) >
+<!ELEMENT rom ( romid, table+ ) >
+<!ATTLIST rom base CDATA #IMPLIED>
+<!ELEMENT romid ( xmlid, internalidaddress, internalidstring, caseid?, ecuid, year, market, make, model, submodel, transmission, flashmethod?, memmodel, filesize, obsolete? ) >
+<!ELEMENT xmlid (#PCDATA) >
+<!ELEMENT internalidaddress (#PCDATA) >
+<!ELEMENT internalidstring (#PCDATA) >
+<!ELEMENT caseid (#PCDATA) >
+<!ELEMENT ecuid (#PCDATA) >
+<!ELEMENT year (#PCDATA) >
+<!ELEMENT market (#PCDATA) >
+<!ELEMENT make (#PCDATA) >
+<!ELEMENT model (#PCDATA) >
+<!ELEMENT submodel (#PCDATA) >
+<!ELEMENT transmission (#PCDATA) >
+<!ELEMENT flashmethod (#PCDATA) >
+<!ELEMENT memmodel (#PCDATA) >
+<!ELEMENT filesize (#PCDATA) >
+<!ELEMENT obsolete (#PCDATA) >
+<!ELEMENT table ( #PCDATA | scaling | table | description | data | state )* >
+<!ATTLIST table type NMTOKENS #IMPLIED name CDATA #IMPLIED category CDATA #IMPLIED storagetype CDATA #IMPLIED endian (little | big) #IMPLIED sizex CDATA #IMPLIED sizey CDATA #IMPLIED userlevel (1 | 2 | 3 | 4 | 5) #IMPLIED logparam CDATA #IMPLIED storageaddress CDATA #IMPLIED >
+<!ELEMENT scaling EMPTY >
+<!ATTLIST scaling units CDATA #REQUIRED expression CDATA #REQUIRED to_byte CDATA #REQUIRED format CDATA #REQUIRED fineincrement CDATA #REQUIRED coarseincrement CDATA #REQUIRED >
+<!ELEMENT description (#PCDATA) >
+<!ELEMENT data (#PCDATA) >
+<!ELEMENT state (#PCDATA) >
+<!ATTLIST state name CDATA #REQUIRED data CDATA #REQUIRED >
+]>"""
+
+VANOS_TABLE = """<table type="2D" name="VANOS Retrofit - Minimum RPM (Closed Throttle)" category="VANOS Retrofit" storagetype="uint8" sizey="1" storageaddress="0x3000">
+  <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Engage Above" sizey="1"><data>RPM</data></table>
+  <description>Minimum RPM for closed-throttle VANOS engagement added by the tested MS41.0 VANOSRT1 retrofit. Raw 0xFF preserves stock behavior; use only after that patch is installed.</description>
+</table>"""
+
+IGNITION_LAUNCH_VARIANTS = (
+    ("BIMMERSTEIN_MS413_SS1V2_24K", "33BB", "SS1v2", "SHINDE1", "MS41.3 SS1v2 + BimmerStein patches (24KB)", "24kb", False),
+    ("BIMMERSTEIN_MS413_SS1V2_256K", "173BB", "SS1v2", "SHINDE1", "MS41.3 SS1v2 + BimmerStein patches (256KB)", "256kb", True),
+    ("BIMMERSTEIN_MS412_ID12_24K", "E", "12", "1406464", "MS41.2 ID12 + BimmerStein patches (24KB)", "24kb", False),
+    ("BIMMERSTEIN_MS412_ID12_256K", "1400E", "12", "1406464", "MS41.2 ID12 + BimmerStein patches (256KB)", "256kb", True),
+)
+
+VANOS_VARIANTS = (
+    ("BIMMERSTEIN_MS410_VANOSRT1_24K", "3008", "VANOSRT1", "24kb", False),
+    ("BIMMERSTEIN_MS410_VANOSRT1_256K", "17008", "VANOSRT1", "256kb", True),
+)
 
 
 def full_read_address(storage_address: int) -> int:
@@ -78,6 +126,58 @@ def _payload(fragment: str, *, full_read: bool) -> str:
     )
 
 
+def _rom(
+    *, xmlid: str, id_address: str, id_string: str, ecuid: str,
+    submodel: str, filesize: str, tables: str,
+) -> str:
+    return f"""<rom>
+  <romid>
+    <xmlid>{xmlid}</xmlid>
+    <internalidaddress>{id_address}</internalidaddress>
+    <internalidstring>{id_string}</internalidstring>
+    <ecuid>{ecuid}</ecuid>
+    <year>1996-1999</year>
+    <market>All</market>
+    <make>BMW</make>
+    <model>E36/E39/Z3</model>
+    <submodel>{submodel}</submodel>
+    <transmission>MT/AT</transmission>
+    <memmodel>80C166W-M-T3</memmodel>
+    <filesize>{filesize}</filesize>
+  </romid>
+{tables}
+</rom>"""
+
+
+def build_standalone_definition(fragment: str) -> str:
+    """Return a complete definition containing only patch-added calibrations."""
+    patch_tables = _tables_only(fragment).strip()
+    roms = []
+    for xmlid, id_address, id_string, ecuid, submodel, filesize, full_read in IGNITION_LAUNCH_VARIANTS:
+        tables = _for_full_read(patch_tables) if full_read else patch_tables
+        roms.append(_rom(
+            xmlid=xmlid, id_address=id_address, id_string=id_string,
+            ecuid=ecuid, submodel=submodel, filesize=filesize, tables=tables,
+        ))
+    for xmlid, id_address, id_string, filesize, full_read in VANOS_VARIANTS:
+        tables = _for_full_read(VANOS_TABLE) if full_read else VANOS_TABLE
+        roms.append(_rom(
+            xmlid=xmlid, id_address=id_address, id_string=id_string,
+            ecuid="1429861", submodel=f"MS41.0 1429861 + VANOSRT1 ({filesize.upper()})",
+            filesize=filesize, tables=tables,
+        ))
+    result = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        f"{DTD}\n"
+        "<!-- Patch-only definition. Install the matching firmware patch before editing. -->\n"
+        "<roms>\n\n"
+        + "\n\n".join(roms)
+        + "\n\n</roms>\n"
+    )
+    ET.fromstring(result)
+    return result
+
+
 def inject_definition(source: str, fragment: str) -> str:
     """Return *source* with one current patch block in each supported ROM."""
     wanted = {("SS1v2", "24kb"), ("12", "24kb"), ("12", "256kb")}
@@ -117,17 +217,31 @@ def inject_definition(source: str, fragment: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("source", type=Path)
-    parser.add_argument("output", type=Path)
+    parser.add_argument(
+        "paths", type=Path, nargs="*",
+        help="standalone: [output]; combined: source output",
+    )
     parser.add_argument("--fragment", type=Path, default=DEFAULT_FRAGMENT)
+    parser.add_argument(
+        "--standalone", action="store_true",
+        help=f"write a patch-only definition (default output: {DEFAULT_OUTPUT.name})",
+    )
     args = parser.parse_args()
 
-    source = args.source.read_text(encoding="utf-8-sig")
     fragment = args.fragment.read_text(encoding="utf-8")
-    result = inject_definition(source, fragment)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(result, encoding="utf-8", newline="")
-    print(f"wrote {args.output} ({len(result.encode('utf-8'))} bytes)")
+    if args.standalone:
+        if len(args.paths) > 1:
+            parser.error("--standalone accepts at most one output path")
+        output = args.paths[0] if args.paths else DEFAULT_OUTPUT
+        result = build_standalone_definition(fragment)
+    else:
+        if len(args.paths) != 2:
+            parser.error("combined mode requires source and output paths")
+        source, output = args.paths
+        result = inject_definition(source.read_text(encoding="utf-8-sig"), fragment)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(result, encoding="utf-8", newline="")
+    print(f"wrote {output} ({len(result.encode('utf-8'))} bytes)")
     return 0
 
 

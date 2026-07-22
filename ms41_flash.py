@@ -94,19 +94,7 @@ def run_offline(args):
             data = bytearray(f.read())
         if len(data) != MS41ECU.FULL_ROM_SIZE:
             print("Checksum correction needs a full 256 KB ROM image."); sys.exit(1)
-        is_ms413 = MS41ECU.detect_variant(data) == "MS41.3"
-        patched, details = correct_checksums(data, correct_program=not is_ms413)
-        if is_ms413:
-            if patched[0x605C] == 0xFF:
-                details.append(
-                    "MS41.3: boot and calibration checksums corrected; program checksum "
-                    "left unchanged because stock program verification is disabled."
-                )
-            else:
-                details.append(
-                    "MS41.3: boot and calibration checksums corrected; program checksum "
-                    "left unchanged, but program verification is enabled in this image."
-                )
+        patched, details = correct_checksums(data)
         out = args.output if args.output else args.fix_file.replace(".bin", "_cksum.bin")
         with open(out, "wb") as f:
             f.write(patched)

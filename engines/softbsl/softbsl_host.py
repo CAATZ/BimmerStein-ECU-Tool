@@ -191,8 +191,8 @@ def _flash_scope(scope="full", half="lower", chip=None):
     devices use SA0-SA6 and 29F400 upper uses SA7-SA10. Scopes:
       full    = whole half. program = program-high only (tune-safe). tune = the cal sector.
       program_checked = internal checksum-aware program scope: param2 + program-high.
-      softbsl = boot/param1 loader + program-high door (checksum-disabled targets, bottom only).
-      softbsl_ms412 = the same plus param2/program-low for MS41.2's enabled program CRC.
+      softbsl = boot/param1 loader + program-high door (legacy bottom-only scope).
+      softbsl_ms412 = the same plus param2/program-low for the corrected program CRC.
       sa1 = the boot/param1 block (legacy scope name)."""
     chip = "29f400" if chip in (None, "auto") else chip
     if half == "upper":
@@ -257,7 +257,7 @@ def _flash_scope(scope="full", half="lower", chip=None):
         secs = [s for s in ERASE_BOTTOM if s[0] in (0x00000, 0x20000, 0x30000)]   # SA1, SA5, SA6
         return secs, 0, IMAGE_SIZE
     if scope == "softbsl_ms412":
-        # MS41.2 stores its enabled whole-program CRC in param2 (file 0x6050 / CPU 0x2050).
+        # The whole-program CRC lives in param2 (file 0x6050 / CPU 0x2050).
         # Erase/rewrite SA2 along with SA1 + program-high while leaving calibration untouched.
         secs = [s for s in ERASE_BOTTOM
                 if s[0] in (0x00000, 0x02000, 0x20000, 0x30000)]
@@ -282,9 +282,8 @@ def _scope_prog_ok(scope, cpu):
 
 
 def _effective_flash_scope(scope, image):
-    """Include param2 when a program-only image has its program CRC gate enabled."""
-    if (scope == "program" and len(image) == IMAGE_SIZE
-            and image[checksum.CHECKSUM_SWITCH_ADDR] != checksum.CK_DISABLED):
+    """Include param2 whenever a full-image program checksum is being deployed."""
+    if scope == "program" and len(image) == IMAGE_SIZE:
         return "program_checked"
     return scope
 
@@ -296,7 +295,7 @@ _SCOPE_LABEL = {
     "tune": "tune-only (SA4 cal)",
     "sa1": "SA1/param1 boot sector ONLY (BRICK-CLASS; cal/program untouched)",
     "softbsl": "soft-BSL install: SA1 (driver + 0x5A loader) + SA5/SA6 (0x2A door); CAL/boot/params UNTOUCHED (BRICK-CLASS: writes SA1)",
-    "softbsl_ms412": "MS41.2 soft-BSL install: SA1 + SA2 program checksum + SA5/SA6; CAL UNTOUCHED (BRICK-CLASS: writes SA1)",
+    "softbsl_ms412": "checksum-aware soft-BSL install: SA1 + SA2 program checksum + SA5/SA6; CAL UNTOUCHED (BRICK-CLASS: writes SA1)",
 }
 
 
@@ -309,7 +308,7 @@ def _scope_label(scope, chip=None, half="lower"):
             "tune": "28F main-D calibration block (96K erase)",
             "sa1": "28F boot/param1 block (8K; BRICK-CLASS)",
             "softbsl": "Soft-BSL install: 28F boot/param1 8K + main-E 128K",
-            "softbsl_ms412": "MS41.2 Soft-BSL install: 28F boot/param1 8K + param2 8K + main-E 128K",
+            "softbsl_ms412": "Checksum-aware Soft-BSL install: 28F boot/param1 8K + param2 8K + main-E 128K",
         }[scope]
     if half == "upper":
         return {
@@ -319,7 +318,7 @@ def _scope_label(scope, chip=None, half="lower"):
             "tune": "TOP tune-only (SA8 calibration)",
             "sa1": "TOP fused SA7 identity/boot sector (64K; BRICK-CLASS)",
             "softbsl": "TOP Soft-BSL install scope (unsupported; use full TOP write)",
-            "softbsl_ms412": "TOP MS41.2 Soft-BSL install scope (unsupported; use full TOP write)",
+            "softbsl_ms412": "TOP checksum-aware Soft-BSL install scope (unsupported; use full TOP write)",
         }[scope]
     return _SCOPE_LABEL[scope]
 
@@ -2976,10 +2975,8 @@ def _ms41_install_scope(version, preserve_cal=True):
     """Calibration-safe persistent-install scope for a consistent target version."""
     if not preserve_cal:
         return "full"
-    if version == "MS41.2":
+    if version in ("MS41.2", "MS41.3"):
         return "softbsl_ms412"
-    if version == "MS41.3":
-        return "softbsl"
     raise SoftBSLError(f"no calibration-safe Soft-BSL install scope for {version!r}")
 
 
@@ -3205,8 +3202,8 @@ def cmd_install(args):
         return ns
 
     # ── PRE-FLIGHT VERSION GATE (mirrors cal_guard_gate.asm / ms41_variant.check_hybrid) ──
-    # A consistent live ECU matching the composed target keeps its calibration. MS41.2's scope also
-    # rewrites param2/SA2 because its enabled program CRC is stored at file 0x6050 (CPU 0x2050).
+    # A consistent live ECU matching the composed target keeps its calibration. The install scope
+    # rewrites param2/SA2 because the corrected program CRC is stored at file 0x6050 (CPU 0x2050).
     # Cross-version targets require an explicit full conversion; hybrids always fail closed.
     preserve_cal = bool(getattr(args, "preserve_cal", True))
     install_scope = _ms41_install_scope(target_version, preserve_cal)
@@ -3263,13 +3260,9 @@ def cmd_install(args):
                      f"Recover to a consistent image (BSL-Unbricker) before installing soft-BSL.")
         if cal_v == target_version and prog_v == target_version:
             if preserve_cal:
-                if target_version == "MS41.2":
-                    scope_text = ("28F boot/param1 + param2/checksum + main-E"
-                                  if args.chip == "28f200"
-                                  else "29F SA1 + SA2/checksum + SA5/SA6")
-                else:
-                    scope_text = ("28F boot/param1 + main-E"
-                                  if args.chip == "28f200" else "29F SA1 + SA5/SA6")
+                scope_text = ("28F boot/param1 + param2/checksum + main-E"
+                              if args.chip == "28f200"
+                              else "29F SA1 + SA2/checksum + SA5/SA6")
                 _emit(f"  -> {target_version} confirmed: CAL-SKIP install ({scope_text}; calibration untouched).")
             else:
                 install_scope = "full"

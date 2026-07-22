@@ -18,7 +18,7 @@ try {
     $env:BIMMERSTEIN_VERSION = $Version
     & $python -c "import nuitka, PyQt5, reportlab"
     if ($LASTEXITCODE -ne 0) {
-        throw "Experimental Nuitka build dependencies are missing. Run: .venv\Scripts\python.exe -m pip install -r requirements-build.txt"
+        throw "Nuitka build dependencies are missing. Run: .venv\Scripts\python.exe -m pip install -r requirements-build.txt"
     }
 
     & $python "packaging\generate_icon.py"
@@ -42,7 +42,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Automated tests failed." }
     }
 
-    $appDir = Join-Path $root "dist\BimmerStein ECU Tool Nuitka Experimental"
+    $appDir = Join-Path $root "dist\BimmerStein ECU Tool Nuitka"
     $buildDir = Join-Path $root "build\BimmerSteinECUToolNuitka"
     foreach ($target in @($appDir, $buildDir)) {
         $fullTarget = [System.IO.Path]::GetFullPath($target)
@@ -86,20 +86,21 @@ try {
         "--include-data-files=$root\engines\softbsl\*.hex=engines/softbsl/",
         "--include-data-file=$root\engines\softbsl\stage1_manifest.json=engines/softbsl/stage1_manifest.json",
         "--include-data-file=$root\engines\softbsl\agent_manifest.json=engines/softbsl/agent_manifest.json",
+        "--include-data-file=$root\engines\patcher\romraider\BimmerStein MS41 Patch Definitions.xml=BimmerStein MS41 Patch Definitions.xml",
         "--windows-icon-from-ico=$root\assets\bimmerstein_ecu_tool.ico",
         "--output-filename=BimmerStein ECU Tool.exe",
         "--output-dir=$outputDir",
         "--report=$buildDir\nuitka-report.xml",
         "--company-name=CAATZ",
         "--product-name=BimmerStein ECU Tool",
-        "--file-description=BimmerStein ECU Tool (Nuitka Experimental)",
+        "--file-description=BimmerStein ECU Tool (Nuitka)",
         "--file-version=$numericVersion",
         "--product-version=$numericVersion",
         "--copyright=Copyright (C) 2026 CAATZ",
         "$root\packaging\nuitka_entry.py"
     )
     & $python @nuitkaArguments
-    if ($LASTEXITCODE -ne 0) { throw "Experimental Nuitka build failed." }
+    if ($LASTEXITCODE -ne 0) { throw "Nuitka build failed." }
 
     $builtApp = Join-Path $outputDir "nuitka_entry.dist"
     if (-not (Test-Path -LiteralPath (Join-Path $builtApp "BimmerStein ECU Tool.exe") -PathType Leaf)) {
@@ -141,13 +142,12 @@ try {
     Copy-Item -LiteralPath "LICENSE" -Destination (Join-Path $appDir "LICENSE.txt")
     Copy-Item -LiteralPath "RELEASE_NOTES.md" -Destination $appDir
     Copy-Item -LiteralPath "THIRD_PARTY_NOTICES.md" -Destination $appDir
-    Copy-Item -LiteralPath "packaging\NUITKA_EXPERIMENTAL_NOTICE.txt" -Destination (Join-Path $appDir "EXPERIMENTAL-NOTICE.txt")
     Copy-Item -LiteralPath "output\pdf\BimmerStein-ECU-Tool-User-Manual.pdf" -Destination $appDir
 
     & $python "packaging\verify_dist.py" --backend nuitka $appDir
-    if ($LASTEXITCODE -ne 0) { throw "Experimental Nuitka packaged-runtime verification failed." }
+    if ($LASTEXITCODE -ne 0) { throw "Nuitka packaged-runtime verification failed." }
 
-    Write-Host "Experimental Nuitka package ready: dist\BimmerStein ECU Tool Nuitka Experimental"
+    Write-Host "Nuitka package ready: dist\BimmerStein ECU Tool Nuitka"
 }
 finally {
     Remove-Item Env:BIMMERSTEIN_VERSION -ErrorAction SilentlyContinue

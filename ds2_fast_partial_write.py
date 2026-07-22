@@ -390,6 +390,7 @@ class NativeFastPartialWriteTransport:
         state: SessionState,
         contract: Optional[StatusResponseContract] = None,
         flash_request: Optional[FlashRequest] = None,
+        flash_allowed_statuses=frozenset((0x01,)),
         first_byte_timeout: Optional[float] = None,
     ) -> Union[DS2Response, FlashReply]:
         args = bytes(args)
@@ -472,6 +473,7 @@ class NativeFastPartialWriteTransport:
                     rate=rate,
                     state=state,
                     label=label,
+                    allowed_statuses=frozenset(flash_allowed_statuses),
                 )
                 result: Union[DS2Response, FlashReply] = reply
                 response = reply.response
@@ -549,6 +551,7 @@ class NativeFastPartialWriteTransport:
         label: str,
         rate: LinkRate,
         state: SessionState,
+        allowed_statuses=frozenset((0x01,)),
         first_byte_timeout: Optional[float] = None,
     ) -> FlashReply:
         result = self._exchange(
@@ -558,6 +561,7 @@ class NativeFastPartialWriteTransport:
             rate=rate,
             state=state,
             flash_request=request,
+            flash_allowed_statuses=frozenset(allowed_statuses),
             first_byte_timeout=first_byte_timeout,
         )
         if not isinstance(result, FlashReply):

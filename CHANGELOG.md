@@ -8,6 +8,30 @@ shared by BimmerStein applications.
 
 ## [Unreleased]
 
+## [0.1.0b6] - 2026-07-21
+
+### Added
+
+- Bundled the standalone BimmerStein MS41 patch definition in both Windows
+  packaging backends for RomRaider and BimmerStein Tuning Suite.
+- Added explicit slow-DS2 ECU recovery selection and complete cross-variant
+  identity grafting for full-ROM conversion.
+
+### Fixed
+
+- Enabled program checksum correction for MS41.3 and removed obsolete MS41.0
+  operation gates.
+- Preserved a usable patched build when removing patches and offered the
+  required boot-sector write path when boot-region patch bytes change.
+- Restored deterministic UI fitting without changing the established window
+  proportions.
+
+### Changed
+
+- Promoted the Nuitka installer and portable ZIP to a supported packaging
+  option while retaining the PyInstaller build.
+- Kept the Soft-BSL-only loader patch out of the general Patches tab.
+
 ## [0.1.0b5] - 2026-07-21
 
 ### Added
@@ -30,10 +54,8 @@ shared by BimmerStein applications.
 
 ### Added
 
-- Added an explicitly labeled experimental Nuitka Windows installer and
-  portable ZIP as a second packaging option. The established PyInstaller build
-  remains the recommended download, and the two installer identities can
-  coexist for compatibility testing.
+- Added a Nuitka Windows installer and portable ZIP as a second packaging
+  option with a distinct installer identity.
 
 ### Fixed
 

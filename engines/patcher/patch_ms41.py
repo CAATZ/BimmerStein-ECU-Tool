@@ -63,6 +63,8 @@ def recompute_flags(patch, target):
     """Checksum work requested globally and specifically for the selected firmware target."""
     flags = set(patch.get("recompute", []))
     flags.update(patch.get("recompute_by_target", {}).get(target, []))
+    if target == "MS41.3":
+        flags.add("program")
     return flags
 
 
@@ -304,8 +306,7 @@ def build(base_data, patch_ids, patches=None, marker=None):
     Pure: no file I/O, no printing, no sys.exit. Raises PatchError on any rejection
     (unknown patch, unsupported target, bad base, unmet requires, conflict, byte collision,
     unresolved cave splice, or an expect-byte mismatch). marker (None/'B'/'T') sets the
-    bank-ID byte @0x5FFC. Checksums are recomputed from the final image; target-specific
-    descriptors enable the otherwise-live MS41.2 program checksum explicitly.
+    bank-ID byte @0x5FFC. Checksums are recomputed from the final image.
     """
     if patches is None:
         patches = load_patches()
@@ -371,7 +372,7 @@ def build(base_data, patch_ids, patches=None, marker=None):
             log.append("warn: " + w)
 
     # verify every expect, then apply
-    recompute = set()
+    recompute = {"program"} if target == "MS41.3" else set()
     for p in chosen:
         for e in p["edits"]:
             off = e["off"]; exp = bytes.fromhex(e["expect"])

@@ -1,5 +1,5 @@
 """
-checksum.py — BMW MS41.0/.1/.2 ROM checksum verification and correction.
+checksum.py — BMW MS41.0/.1/.2/.3 ROM checksum verification and correction.
 
 The full algorithm was reverse-engineered with the help of the Siemens_MS41_Checksum
 project and the pyms41 project, and VERIFIED byte-for-byte against real dumps:
@@ -35,8 +35,8 @@ so they can be corrected independently and in any order.
 Separately, a checksum-ENABLE switch byte exists at file 0x605C
 (0x30 = ECU verifies at boot / stock, 0xFF = verification disabled).
 
-MS41.3 uses a different program/cal layout — this module verifies/corrects it on
-a best-effort basis and flags when results look inconsistent.
+The same boot, program, and calibration correction policy is applied to every
+supported MS41 variant. The switch at 0x605C remains independent image state.
 """
 
 import struct
@@ -224,11 +224,9 @@ def correct_checksums(data: bytearray, correct_program: bool = True
     Recompute and write MS41 checksums.  256 KB ROM: boot + calibration + program.
     24 KB partial: calibration table only (the only checksums in the partial).
 
-    The CALIBRATION-table algorithm is verified for MS41.0/.1/.2 AND MS41.3 (a
-    checksum-corrected MS41.3 partial reads 16/16 with it).  The BOOT-sector CRC is
-    also verified across variants.  The PROGRAM checksum is only verified for
-    MS41.0/.1/.2; pass correct_program=False (e.g. for an MS41.3 full ROM, whose
-    program-checksum layout is not yet confirmed) to leave it untouched.
+    Full images use the same boot, program, and calibration correction policy for
+    MS41.0/.1/.2/.3. ``correct_program=False`` remains available only for callers
+    intentionally operating on calibration-only data.
 
     Returns (corrected_copy, details).  Only checksum storage bytes are written.
     """

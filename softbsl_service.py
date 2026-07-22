@@ -61,6 +61,18 @@ class SoftBSLWriteRecoveryRequired(SoftBSLError):
         )
 
 
+class SoftBSLFallbackExhausted(SoftBSLError):
+    """Every requested Soft-BSL baud tier failed before an erase boundary."""
+
+    def __init__(self, label, tiers, error):
+        super().__init__(
+            f"{label} exhausted the Soft-BSL baud fallback "
+            f"({', '.join(tiers)}): {error}. For a tune or boot-preserving full-ROM "
+            "recovery, select 'Force Slow DS2 (ECU Recovery)' and retry. "
+            "Boot/identity/TOP operations still require Soft-BSL."
+        )
+
+
 class FlashFamilyMismatchError(RuntimeError):
     """An image's installed flash-driver family is unsafe for the live ECU."""
 
@@ -191,10 +203,17 @@ def _with_baud_fallback(attempt, start_baud, log, label):
             if tier != "low" and "low" in tiers[i + 1:]:
                 log(f"{label}: D2XX could not open the selected adapter ({e}). "
                     "Skipping unsupported pyserial fast tiers and retrying at 9600 baud.")
-                return attempt("low")
+                try:
+                    return attempt("low")
+                except SoftBSLWriteRecoveryRequired:
+                    raise
+                except SoftBSLError as low_error:
+                    raise SoftBSLFallbackExhausted(label, tiers, low_error) from low_error
             raise
         except SoftBSLError as e:
             if tier == tiers[-1]:
+                if len(tiers) > 1:
+                    raise SoftBSLFallbackExhausted(label, tiers, e) from e
                 raise
             log(f"{label}: '{tier}' baud failed before erase ({e}).")
 

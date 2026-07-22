@@ -1,0 +1,406 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE roms [
+<!ELEMENT roms ( rom+ ) >
+<!ELEMENT rom ( romid, table+ ) >
+<!ATTLIST rom base CDATA #IMPLIED>
+<!ELEMENT romid ( xmlid, internalidaddress, internalidstring, caseid?, ecuid, year, market, make, model, submodel, transmission, flashmethod?, memmodel, filesize, obsolete? ) >
+<!ELEMENT xmlid (#PCDATA) >
+<!ELEMENT internalidaddress (#PCDATA) >
+<!ELEMENT internalidstring (#PCDATA) >
+<!ELEMENT caseid (#PCDATA) >
+<!ELEMENT ecuid (#PCDATA) >
+<!ELEMENT year (#PCDATA) >
+<!ELEMENT market (#PCDATA) >
+<!ELEMENT make (#PCDATA) >
+<!ELEMENT model (#PCDATA) >
+<!ELEMENT submodel (#PCDATA) >
+<!ELEMENT transmission (#PCDATA) >
+<!ELEMENT flashmethod (#PCDATA) >
+<!ELEMENT memmodel (#PCDATA) >
+<!ELEMENT filesize (#PCDATA) >
+<!ELEMENT obsolete (#PCDATA) >
+<!ELEMENT table ( #PCDATA | scaling | table | description | data | state )* >
+<!ATTLIST table type NMTOKENS #IMPLIED name CDATA #IMPLIED category CDATA #IMPLIED storagetype CDATA #IMPLIED endian (little | big) #IMPLIED sizex CDATA #IMPLIED sizey CDATA #IMPLIED userlevel (1 | 2 | 3 | 4 | 5) #IMPLIED logparam CDATA #IMPLIED storageaddress CDATA #IMPLIED >
+<!ELEMENT scaling EMPTY >
+<!ATTLIST scaling units CDATA #REQUIRED expression CDATA #REQUIRED to_byte CDATA #REQUIRED format CDATA #REQUIRED fineincrement CDATA #REQUIRED coarseincrement CDATA #REQUIRED >
+<!ELEMENT description (#PCDATA) >
+<!ELEMENT data (#PCDATA) >
+<!ELEMENT state (#PCDATA) >
+<!ATTLIST state name CDATA #REQUIRED data CDATA #REQUIRED >
+]>
+<!-- Patch-only definition. Install the matching firmware patch before editing. -->
+<roms>
+
+<rom>
+  <romid>
+    <xmlid>BIMMERSTEIN_MS413_SS1V2_24K</xmlid>
+    <internalidaddress>33BB</internalidaddress>
+    <internalidstring>SS1v2</internalidstring>
+    <ecuid>SHINDE1</ecuid>
+    <year>1996-1999</year>
+    <market>All</market>
+    <make>BMW</make>
+    <model>E36/E39/Z3</model>
+    <submodel>MS41.3 SS1v2 + BimmerStein patches (24KB)</submodel>
+    <transmission>MT/AT</transmission>
+    <memmodel>80C166W-M-T3</memmodel>
+    <filesize>24kb</filesize>
+  </romid>
+<table type="Switch" name="Ignition Cut - Switch Input" category="Ignition Cut" sizey="1" storageaddress="0x2A65">
+  <state name="Off" data="FF" />
+  <state name="Always On (RPM limiter)" data="00" />
+  <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
+  <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
+  <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
+  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control V4 may independently request spark cut through fd5a.7.</description>
+</table>
+
+<table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x2A66">
+  <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Cut Above" sizey="1"><data>RPM</data></table>
+  <description>Spark-cut threshold stored as RPM/32. Example: 6880 RPM = raw 0xD7.</description>
+</table>
+
+<table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x352C">
+  <state name="Off" data="FF" />
+  <state name="Always On (flat limiter)" data="00" />
+  <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
+  <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
+  <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
+  <description>Arms Launch Control V4. The clutch input arms the latch; speed and throttle release it.</description>
+</table>
+
+<table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x352D">
+  <state name="Fuel cut (stock injector limiter)" data="00" />
+  <state name="Ignition cut (Ignition Cut V7)" data="01" />
+  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode raises fd5a.7 at the soft threshold and requires Ignition Cut V7.</description>
+</table>
+
+<table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x352E">
+  <state name="Active-high (depressed = 5V)" data="00" />
+  <state name="Active-low (depressed = 0V)" data="01" />
+  <description>Electrical sense of the clutch or toggle input.</description>
+</table>
+
+<table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x352F">
+  <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Begin Staged Fuel Cut" sizey="1"><data>RPM</data></table>
+  <description>Lower launch threshold stored as RPM/32. Fuel mode begins the stock staged injector cut here; ignition mode requests spark cut here. Example: 4000 RPM = raw 0x7D.</description>
+</table>
+
+<table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3533">
+  <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Full Fuel Cut Above" sizey="1"><data>RPM</data></table>
+  <description>Upper fuel-mode threshold stored as RPM/32. It must be at or above Soft Cut RPM; firmware clamps a lower value to the soft threshold. Raw 0xFF is the unconfigured sentinel and safely uses Soft Cut RPM + 96 RPM, saturating instead of wrapping.</description>
+</table>
+
+<table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3530">
+  <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
+  <table type="Static Y Axis" name="Arm Below" sizey="1"><data>km/h</data></table>
+  <description>Near-standstill arming guard. A clutch press at or above this speed does not arm a cleared latch.</description>
+</table>
+
+<table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3531">
+  <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
+  <table type="Static Y Axis" name="Release Above" sizey="1"><data>km/h</data></table>
+  <description>Releases the launch latch once vehicle speed reaches this value. Must be greater than Arm Speed.</description>
+</table>
+
+<table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3532">
+  <scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0" fineincrement="1" coarseincrement="10" />
+  <table type="Static Y Axis" name="Throttle Above" sizey="1"><data>TPS%</data></table>
+  <description>Continuous throttle gate. Dropping below this value immediately clears the launch latch.</description>
+</table>
+</rom>
+
+<rom>
+  <romid>
+    <xmlid>BIMMERSTEIN_MS413_SS1V2_256K</xmlid>
+    <internalidaddress>173BB</internalidaddress>
+    <internalidstring>SS1v2</internalidstring>
+    <ecuid>SHINDE1</ecuid>
+    <year>1996-1999</year>
+    <market>All</market>
+    <make>BMW</make>
+    <model>E36/E39/Z3</model>
+    <submodel>MS41.3 SS1v2 + BimmerStein patches (256KB)</submodel>
+    <transmission>MT/AT</transmission>
+    <memmodel>80C166W-M-T3</memmodel>
+    <filesize>256kb</filesize>
+  </romid>
+<table type="Switch" name="Ignition Cut - Switch Input" category="Ignition Cut" sizey="1" storageaddress="0x16A65">
+  <state name="Off" data="FF" />
+  <state name="Always On (RPM limiter)" data="00" />
+  <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
+  <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
+  <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
+  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control V4 may independently request spark cut through fd5a.7.</description>
+</table>
+
+<table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x16A66">
+  <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Cut Above" sizey="1"><data>RPM</data></table>
+  <description>Spark-cut threshold stored as RPM/32. Example: 6880 RPM = raw 0xD7.</description>
+</table>
+
+<table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x1752C">
+  <state name="Off" data="FF" />
+  <state name="Always On (flat limiter)" data="00" />
+  <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
+  <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
+  <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
+  <description>Arms Launch Control V4. The clutch input arms the latch; speed and throttle release it.</description>
+</table>
+
+<table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x1752D">
+  <state name="Fuel cut (stock injector limiter)" data="00" />
+  <state name="Ignition cut (Ignition Cut V7)" data="01" />
+  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode raises fd5a.7 at the soft threshold and requires Ignition Cut V7.</description>
+</table>
+
+<table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x1752E">
+  <state name="Active-high (depressed = 5V)" data="00" />
+  <state name="Active-low (depressed = 0V)" data="01" />
+  <description>Electrical sense of the clutch or toggle input.</description>
+</table>
+
+<table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x1752F">
+  <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Begin Staged Fuel Cut" sizey="1"><data>RPM</data></table>
+  <description>Lower launch threshold stored as RPM/32. Fuel mode begins the stock staged injector cut here; ignition mode requests spark cut here. Example: 4000 RPM = raw 0x7D.</description>
+</table>
+
+<table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17533">
+  <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Full Fuel Cut Above" sizey="1"><data>RPM</data></table>
+  <description>Upper fuel-mode threshold stored as RPM/32. It must be at or above Soft Cut RPM; firmware clamps a lower value to the soft threshold. Raw 0xFF is the unconfigured sentinel and safely uses Soft Cut RPM + 96 RPM, saturating instead of wrapping.</description>
+</table>
+
+<table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17530">
+  <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
+  <table type="Static Y Axis" name="Arm Below" sizey="1"><data>km/h</data></table>
+  <description>Near-standstill arming guard. A clutch press at or above this speed does not arm a cleared latch.</description>
+</table>
+
+<table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17531">
+  <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
+  <table type="Static Y Axis" name="Release Above" sizey="1"><data>km/h</data></table>
+  <description>Releases the launch latch once vehicle speed reaches this value. Must be greater than Arm Speed.</description>
+</table>
+
+<table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17532">
+  <scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0" fineincrement="1" coarseincrement="10" />
+  <table type="Static Y Axis" name="Throttle Above" sizey="1"><data>TPS%</data></table>
+  <description>Continuous throttle gate. Dropping below this value immediately clears the launch latch.</description>
+</table>
+</rom>
+
+<rom>
+  <romid>
+    <xmlid>BIMMERSTEIN_MS412_ID12_24K</xmlid>
+    <internalidaddress>E</internalidaddress>
+    <internalidstring>12</internalidstring>
+    <ecuid>1406464</ecuid>
+    <year>1996-1999</year>
+    <market>All</market>
+    <make>BMW</make>
+    <model>E36/E39/Z3</model>
+    <submodel>MS41.2 ID12 + BimmerStein patches (24KB)</submodel>
+    <transmission>MT/AT</transmission>
+    <memmodel>80C166W-M-T3</memmodel>
+    <filesize>24kb</filesize>
+  </romid>
+<table type="Switch" name="Ignition Cut - Switch Input" category="Ignition Cut" sizey="1" storageaddress="0x2A65">
+  <state name="Off" data="FF" />
+  <state name="Always On (RPM limiter)" data="00" />
+  <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
+  <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
+  <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
+  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control V4 may independently request spark cut through fd5a.7.</description>
+</table>
+
+<table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x2A66">
+  <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Cut Above" sizey="1"><data>RPM</data></table>
+  <description>Spark-cut threshold stored as RPM/32. Example: 6880 RPM = raw 0xD7.</description>
+</table>
+
+<table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x352C">
+  <state name="Off" data="FF" />
+  <state name="Always On (flat limiter)" data="00" />
+  <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
+  <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
+  <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
+  <description>Arms Launch Control V4. The clutch input arms the latch; speed and throttle release it.</description>
+</table>
+
+<table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x352D">
+  <state name="Fuel cut (stock injector limiter)" data="00" />
+  <state name="Ignition cut (Ignition Cut V7)" data="01" />
+  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode raises fd5a.7 at the soft threshold and requires Ignition Cut V7.</description>
+</table>
+
+<table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x352E">
+  <state name="Active-high (depressed = 5V)" data="00" />
+  <state name="Active-low (depressed = 0V)" data="01" />
+  <description>Electrical sense of the clutch or toggle input.</description>
+</table>
+
+<table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x352F">
+  <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Begin Staged Fuel Cut" sizey="1"><data>RPM</data></table>
+  <description>Lower launch threshold stored as RPM/32. Fuel mode begins the stock staged injector cut here; ignition mode requests spark cut here. Example: 4000 RPM = raw 0x7D.</description>
+</table>
+
+<table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3533">
+  <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Full Fuel Cut Above" sizey="1"><data>RPM</data></table>
+  <description>Upper fuel-mode threshold stored as RPM/32. It must be at or above Soft Cut RPM; firmware clamps a lower value to the soft threshold. Raw 0xFF is the unconfigured sentinel and safely uses Soft Cut RPM + 96 RPM, saturating instead of wrapping.</description>
+</table>
+
+<table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3530">
+  <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
+  <table type="Static Y Axis" name="Arm Below" sizey="1"><data>km/h</data></table>
+  <description>Near-standstill arming guard. A clutch press at or above this speed does not arm a cleared latch.</description>
+</table>
+
+<table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3531">
+  <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
+  <table type="Static Y Axis" name="Release Above" sizey="1"><data>km/h</data></table>
+  <description>Releases the launch latch once vehicle speed reaches this value. Must be greater than Arm Speed.</description>
+</table>
+
+<table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3532">
+  <scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0" fineincrement="1" coarseincrement="10" />
+  <table type="Static Y Axis" name="Throttle Above" sizey="1"><data>TPS%</data></table>
+  <description>Continuous throttle gate. Dropping below this value immediately clears the launch latch.</description>
+</table>
+</rom>
+
+<rom>
+  <romid>
+    <xmlid>BIMMERSTEIN_MS412_ID12_256K</xmlid>
+    <internalidaddress>1400E</internalidaddress>
+    <internalidstring>12</internalidstring>
+    <ecuid>1406464</ecuid>
+    <year>1996-1999</year>
+    <market>All</market>
+    <make>BMW</make>
+    <model>E36/E39/Z3</model>
+    <submodel>MS41.2 ID12 + BimmerStein patches (256KB)</submodel>
+    <transmission>MT/AT</transmission>
+    <memmodel>80C166W-M-T3</memmodel>
+    <filesize>256kb</filesize>
+  </romid>
+<table type="Switch" name="Ignition Cut - Switch Input" category="Ignition Cut" sizey="1" storageaddress="0x16A65">
+  <state name="Off" data="FF" />
+  <state name="Always On (RPM limiter)" data="00" />
+  <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
+  <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
+  <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
+  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control V4 may independently request spark cut through fd5a.7.</description>
+</table>
+
+<table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x16A66">
+  <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Cut Above" sizey="1"><data>RPM</data></table>
+  <description>Spark-cut threshold stored as RPM/32. Example: 6880 RPM = raw 0xD7.</description>
+</table>
+
+<table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x1752C">
+  <state name="Off" data="FF" />
+  <state name="Always On (flat limiter)" data="00" />
+  <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
+  <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
+  <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
+  <description>Arms Launch Control V4. The clutch input arms the latch; speed and throttle release it.</description>
+</table>
+
+<table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x1752D">
+  <state name="Fuel cut (stock injector limiter)" data="00" />
+  <state name="Ignition cut (Ignition Cut V7)" data="01" />
+  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode raises fd5a.7 at the soft threshold and requires Ignition Cut V7.</description>
+</table>
+
+<table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x1752E">
+  <state name="Active-high (depressed = 5V)" data="00" />
+  <state name="Active-low (depressed = 0V)" data="01" />
+  <description>Electrical sense of the clutch or toggle input.</description>
+</table>
+
+<table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x1752F">
+  <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Begin Staged Fuel Cut" sizey="1"><data>RPM</data></table>
+  <description>Lower launch threshold stored as RPM/32. Fuel mode begins the stock staged injector cut here; ignition mode requests spark cut here. Example: 4000 RPM = raw 0x7D.</description>
+</table>
+
+<table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17533">
+  <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Full Fuel Cut Above" sizey="1"><data>RPM</data></table>
+  <description>Upper fuel-mode threshold stored as RPM/32. It must be at or above Soft Cut RPM; firmware clamps a lower value to the soft threshold. Raw 0xFF is the unconfigured sentinel and safely uses Soft Cut RPM + 96 RPM, saturating instead of wrapping.</description>
+</table>
+
+<table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17530">
+  <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
+  <table type="Static Y Axis" name="Arm Below" sizey="1"><data>km/h</data></table>
+  <description>Near-standstill arming guard. A clutch press at or above this speed does not arm a cleared latch.</description>
+</table>
+
+<table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17531">
+  <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
+  <table type="Static Y Axis" name="Release Above" sizey="1"><data>km/h</data></table>
+  <description>Releases the launch latch once vehicle speed reaches this value. Must be greater than Arm Speed.</description>
+</table>
+
+<table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17532">
+  <scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0" fineincrement="1" coarseincrement="10" />
+  <table type="Static Y Axis" name="Throttle Above" sizey="1"><data>TPS%</data></table>
+  <description>Continuous throttle gate. Dropping below this value immediately clears the launch latch.</description>
+</table>
+</rom>
+
+<rom>
+  <romid>
+    <xmlid>BIMMERSTEIN_MS410_VANOSRT1_24K</xmlid>
+    <internalidaddress>3008</internalidaddress>
+    <internalidstring>VANOSRT1</internalidstring>
+    <ecuid>1429861</ecuid>
+    <year>1996-1999</year>
+    <market>All</market>
+    <make>BMW</make>
+    <model>E36/E39/Z3</model>
+    <submodel>MS41.0 1429861 + VANOSRT1 (24KB)</submodel>
+    <transmission>MT/AT</transmission>
+    <memmodel>80C166W-M-T3</memmodel>
+    <filesize>24kb</filesize>
+  </romid>
+<table type="2D" name="VANOS Retrofit - Minimum RPM (Closed Throttle)" category="VANOS Retrofit" storagetype="uint8" sizey="1" storageaddress="0x3000">
+  <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Engage Above" sizey="1"><data>RPM</data></table>
+  <description>Minimum RPM for closed-throttle VANOS engagement added by the tested MS41.0 VANOSRT1 retrofit. Raw 0xFF preserves stock behavior; use only after that patch is installed.</description>
+</table>
+</rom>
+
+<rom>
+  <romid>
+    <xmlid>BIMMERSTEIN_MS410_VANOSRT1_256K</xmlid>
+    <internalidaddress>17008</internalidaddress>
+    <internalidstring>VANOSRT1</internalidstring>
+    <ecuid>1429861</ecuid>
+    <year>1996-1999</year>
+    <market>All</market>
+    <make>BMW</make>
+    <model>E36/E39/Z3</model>
+    <submodel>MS41.0 1429861 + VANOSRT1 (256KB)</submodel>
+    <transmission>MT/AT</transmission>
+    <memmodel>80C166W-M-T3</memmodel>
+    <filesize>256kb</filesize>
+  </romid>
+<table type="2D" name="VANOS Retrofit - Minimum RPM (Closed Throttle)" category="VANOS Retrofit" storagetype="uint8" sizey="1" storageaddress="0x17000">
+  <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Engage Above" sizey="1"><data>RPM</data></table>
+  <description>Minimum RPM for closed-throttle VANOS engagement added by the tested MS41.0 VANOSRT1 retrofit. Raw 0xFF preserves stock behavior; use only after that patch is installed.</description>
+</table>
+</rom>
+
+</roms>

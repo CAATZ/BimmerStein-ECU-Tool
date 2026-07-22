@@ -34,7 +34,8 @@ def test_available_patches_filters_by_version():
     assert "ignition_cut_v7" in ids                  # final-stage P1L revision
     assert "launch_control_v3" not in ids            # V3 is retained only for removal
     assert "launch_control_v4" in ids                # independent soft + hard limiter
-    assert len(avail) == 8                            # the 8 selectable MS41.3 patches
+    assert "door_0x43" not in ids                    # installer-only Soft-BSL bootstrap
+    assert len(avail) == 7                            # the 7 user-facing MS41.3 patches
     cg = next(p for p in avail if p["id"] == "cal_guard")
     assert cg["ok"] is True and cg["title"] and cg["target"] == "MS41.3"
     assert "recoverable flash-listen mode" in cg["user_description"]
@@ -58,11 +59,19 @@ def test_available_patches_exposes_only_latest_ms412_ports():
     ids = {p["id"] for p in avail}
 
     assert ids == {
-        "amd_flash", "cal_guard", "door_0x43", "door_magic",
+        "amd_flash", "cal_guard", "door_magic",
         "ignition_cut_v7", "launch_control_v4_ms412", "softbsl_loader",
     }
     assert all(p["target"] == "MS41.2" for p in avail)
     assert not any(p.get("deprecated") for p in avail)
+
+
+def test_softbsl_bootstrap_definition_is_kept_but_hidden_from_patch_catalogue():
+    assert "door_0x43" in patch_service.definitions()
+    for variant in ("MS41.2", "MS41.3"):
+        assert "door_0x43" not in {
+            patch["id"] for patch in patch_service.available_patches(ref(variant))
+        }
 
 
 def test_ms410_vanos_patch_is_selectable_and_hardware_tested():
@@ -290,8 +299,8 @@ def test_legacy_loader_is_removable_and_new_loader_replaces_it():
         expected = bytes.fromhex(edit["expect"])
         assert cleaned[off:off + len(expected)] == expected
     checksum_status = patch_ms41.checksum.checksum_status(cleaned)
-    assert checksum_status["boot"] and checksum_status["cal"]
-    assert checksum_status["program"] or checksum_status["prog_disabled"]
+    assert checksum_status["boot"] and checksum_status["program"] and checksum_status["cal"]
+    assert checksum_status["prog_disabled"]
     relocated_image, _ = patch_service.build_image(cleaned, ["softbsl_loader"])
     relocated = {p["id"]: p for p in patch_service.available_patches(relocated_image)}
     assert "softbsl_loader_legacy" not in relocated
@@ -360,7 +369,8 @@ def test_build_image_can_stack_a_new_patch_onto_an_already_patched_base():
 def test_revert_legacy_v1_then_apply_v7():
     v1_base, _ = patch_service.build_image(ref("MS41.3"), ["ignition_cut"])
     cleaned = patch_service.revert_patch(v1_base, "ignition_cut")
-    assert cleaned == ref("MS41.3")                     # exact stock bytes restored
+    corrected_stock, _ = patch_ms41.checksum.correct_checksums(ref("MS41.3"))
+    assert cleaned == bytes(corrected_stock)             # stock bytes plus corrected program CRC
 
     ic = next(p for p in patch_service.available_patches(cleaned) if p["id"] == "ignition_cut_v7")
     assert ic["legacy"] == []                            # V1 gone, no longer flagged
@@ -373,7 +383,8 @@ def test_revert_legacy_v1_then_apply_v7():
 def test_revert_legacy_v2_then_apply_v7():
     v2_base, _ = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v2"])
     cleaned = patch_service.revert_patch(v2_base, "ignition_cut_v2")
-    assert cleaned == ref("MS41.3")                     # exact stock bytes restored
+    corrected_stock, _ = patch_ms41.checksum.correct_checksums(ref("MS41.3"))
+    assert cleaned == bytes(corrected_stock)             # stock bytes plus corrected program CRC
     out, _ = patch_service.build_image(cleaned, ["ignition_cut_v7"])
     assert len(out) == patch_ms41.FULL
 

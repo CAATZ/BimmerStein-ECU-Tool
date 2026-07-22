@@ -53,13 +53,13 @@ read-back verification.
 
 | Area | Supported scope | Important boundary |
 | --- | --- | --- |
-| ECU families | BMW MS41.1, MS41.2, and MS41.3 | MS41.0 identification, analysis, and selected workflows remain explicitly guarded where untested. |
+| ECU families | BMW MS41.0, MS41.1, MS41.2, and MS41.3 | Full-ROM conversion is supported across all four variants. |
 | Normal communications | BMW DS2 over K-Line, 9600 baud, 8E2 | DS2 is not KWP2000. |
 | Stock fast transfers | Native-fast DS2 through an FTDI D2XX connection | The ECU-exact requested high rate is 187,500 baud. |
 | Soft-BSL | Persistent loader plus RAM agents | Installation modifies firmware and requires the guided workflow. |
 | Hardware BSL | Intel 28F200 and AMD/JEDEC 29F200/29F400 | Uses a separate direct ASC0 tap, not the normal K-Line connection. |
 | File sizes | 256 KB full ROM and 24 KB tune | Choose the operation matching the file and intended region. |
-| Host platform | Windows x64 installer or portable release | The regular PyInstaller package is recommended. Assets labeled `Nuitka-Experimental` are a second compatibility-testing option. |
+| Host platform | Windows x64 installer or portable release | PyInstaller and Nuitka packages contain the same application features. |
 
 ### Flash-chip families
 
@@ -75,14 +75,13 @@ read-back verification.
 
 ### Windows installer
 
-1. Download the regular versioned `Windows-x64-Setup.exe` installer (recommended).
+1. Download either versioned Windows x64 installer.
 2. Run it for a per-user installation with no administrator access required.
 3. Install the driver for the intended FTDI adapter, then launch **BimmerStein ECU Tool**.
 
-Assets whose names contain `Nuitka-Experimental` are an explicitly **experimental** second option.
-That installer uses a distinct product identity and installation directory so it can coexist with the
-regular build for compatibility testing. Report the selected backend when describing startup or
-packaging behavior.
+Assets whose names contain `-Nuitka` use the Nuitka backend. That installer uses a distinct product
+identity and installation directory so it can coexist with the PyInstaller build. Report the
+selected backend when describing startup or packaging behavior.
 
 ### Portable Windows package
 
@@ -91,8 +90,8 @@ packaging behavior.
 3. Run `BimmerStein ECU Tool.exe` from the extracted application folder.
 
 Do not move only the executable. PyQt, protocol resources, patch descriptors, and RAM-agent
-payloads are stored under `_internal` in the regular package and beside the executable in the flat
-experimental Nuitka package. Keep the selected package's complete extracted folder together.
+payloads are stored under `_internal` in the PyInstaller package and beside the executable in the
+flat Nuitka package. Keep the selected package's complete extracted folder together.
 
 The executable may not be code-signed. Windows can show an unknown-publisher warning. Confirm the
 release filename and matching `.zip.sha256` value before continuing.
@@ -110,10 +109,10 @@ The portable application creates mutable data beside the executable:
 - `backups/` for saved reads, generated images, and recovery material.
 - `logs/` for session logs and diagnostic detail.
 
-The ROM Analyzer stores user-imported calibration definitions under
+Every package includes `BimmerStein MS41 Patch Definitions.xml` beside the executable for use with
+RomRaider or BimmerStein Tuning Suite. The ROM Analyzer stores user-imported definitions under
 `%LOCALAPPDATA%\BimmerStein ECU Tool\definitions\`. This keeps the selected definition available
-when the portable application folder is replaced during an update. No calibration definition is
-included with the application.
+when the portable application folder is replaced during an update.
 
 Treat full ROMs and logs as private. They can contain a VIN, calibration identity, ECU identity,
 and operation history.
@@ -294,10 +293,8 @@ code and calibration from different MS41 variants and is blocked from normal fla
 
 - **Full to Partial** extracts the standard 24 KB tune from a 256 KB image.
 - **Partial into Full** replaces the calibration in a selected full base.
-- Variant conversions preserve or replace identity only according to the explicit workflow.
-
-MS41.0 conversions and boot-region replacement remain guarded where hardware validation is
-incomplete. Read every warning before continuing.
+- Variant conversions preserve or replace identity only according to the explicit workflow. The
+  same conversion policy applies to MS41.0, MS41.1, MS41.2, and MS41.3.
 
 ### Bins
 
@@ -338,14 +335,12 @@ safe behavior on an engine.
 
 <!-- pagebreak -->
 
-### Required external definitions
+### Bundled patch definition
 
-Installing or removing these firmware patches does not provide the corresponding tuning
-definitions. To configure Ignition Cut or Launch Control parameters in RomRaider, source a
-compatible definition separately and verify that it matches the ECU variant, calibration ID, and
-installed patch revision. Corresponding ready-to-use Ignition Cut and Launch Control definitions
-are not bundled with the Windows release. A mismatched definition can expose incorrect tables or
-write to the wrong calibration addresses.
+The release includes `BimmerStein MS41 Patch Definitions.xml` beside the executable. Load it into
+RomRaider or BimmerStein Tuning Suite to configure calibration items added by the matching patches.
+Install the firmware patch first and verify the ECU variant, calibration ID, and patch revision. A
+mismatched definition can expose incorrect tables or write to the wrong calibration addresses.
 
 ### Safe composition
 

@@ -211,6 +211,7 @@ def write_full_d2xx(
     *,
     connected_family: str,
     verify_write: bool = False,
+    variant_conversion: bool = False,
     progress_cb=None,
     event_cb=None,
 ):
@@ -231,6 +232,7 @@ def write_full_d2xx(
             journal,
             connected_family=connected_family,
             verify_write=verify_write,
+            variant_conversion=variant_conversion,
             reentry_required=pending,
             reentry_ready_cb=lambda: clear_reentry_required(port),
             progress_cb=_progress_adapter(progress_cb),

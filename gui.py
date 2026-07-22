@@ -26,9 +26,10 @@ from PyQt5.QtWidgets import (
     QCheckBox, QSpinBox,
     QLineEdit, QInputDialog, QDialog, QScrollArea
 )
-from PyQt5.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer, QUrl
+from PyQt5.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer, QUrl, QCoreApplication
 from PyQt5.QtGui import (
     QFont, QColor, QTextCursor, QBrush, QDesktopServices, QIcon, QPalette,
+    QGuiApplication,
 )
 
 from ms41 import MS41ECU, SS1V2_PROG_SIG, SS1V2_PROG_SIG_ADDR
@@ -64,6 +65,38 @@ LOG_DIR = str(mutable_path("logs"))
 VERIFY_OFF_MESSAGE = (
     "Read-back verification skipped (Verify off). ECU-side finalization completed."
 )
+MAIN_WINDOW_WIDTH = 980
+MAIN_WINDOW_PREFERRED_HEIGHT = 960
+MAIN_CANVAS_MIN_HEIGHT = 700
+
+
+def configure_high_dpi():
+    """Set one DPI policy before QApplication is constructed."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        except (AttributeError, OSError):
+            pass
+    QCoreApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QCoreApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+
+
+configure_high_dpi()
+
+
+class _MainScrollArea(QScrollArea):
+    """Keep the normal canvas fluid while preserving it below its design size."""
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.widget() is not None:
+            viewport = self.viewport().size()
+            self.widget().resize(
+                max(MAIN_WINDOW_WIDTH, viewport.width()),
+                max(MAIN_CANVAS_MIN_HEIGHT, viewport.height()),
+            )
 
 
 class StockWriteNotStarted(RuntimeError):
@@ -514,7 +547,7 @@ class MS41FlashGUI(QMainWindow):
         self.setWindowTitle("BimmerStein ECU Tool")
         if os.path.exists(APP_ICON_PATH):
             self.setWindowIcon(QIcon(APP_ICON_PATH))
-        self.setMinimumSize(980, 700)
+        self.resize(MAIN_WINDOW_WIDTH, MAIN_WINDOW_PREFERRED_HEIGHT)
         self._ds2                 = None
         self._worker              = None
         self._dtcs                = []
@@ -573,16 +606,29 @@ class MS41FlashGUI(QMainWindow):
         self._build_ui()
         self._refresh_ports()
 
+    def show_fitted(self):
+        """Show normally, or maximize when the designed canvas cannot fit."""
+        available = self.screen().availableGeometry()
+        if available.width() < self.width() or available.height() < self.height():
+            self.showMaximized()
+        else:
+            self.show()
+
     # -------------------------------------------------------------------
     # UI Construction
     # -------------------------------------------------------------------
 
     def _build_ui(self):
         central = QWidget()
-        self.setCentralWidget(central)
+        central.setMinimumSize(MAIN_WINDOW_WIDTH, MAIN_CANVAS_MIN_HEIGHT)
         root = QVBoxLayout(central)
         root.setSpacing(6)
         root.setContentsMargins(10, 10, 10, 10)
+
+        self._main_scroll = _MainScrollArea()
+        self._main_scroll.setFrameShape(QScrollArea.NoFrame)
+        self._main_scroll.setWidget(central)
+        self.setCentralWidget(self._main_scroll)
 
         # ── Connection bar ──────────────────────────────────────────────
         conn_group = QGroupBox("ECU Connection  (BMW DS2 — 9600 8E2, K-Line or direct tap)")
@@ -778,9 +824,8 @@ class MS41FlashGUI(QMainWindow):
             self._on_fix_file
         )
         self.btn_fix_file.setToolTip(
-            "Correct the boot, program, and calibration checksums enforced by the selected "
-            "MS41 variant. On MS41.3, boot and calibration checksums are corrected while "
-            "the stock-disabled program checksum remains unchanged. Only checksum bytes change."
+            "Correct the boot, program, and calibration checksums for every MS41 variant. "
+            "Only checksum bytes change."
         )
         self.btn_disable_cksum = self._op_btn(
             "🚫  Disable Program Checksum Verification  (offline)", "#3d3d3d",
@@ -808,11 +853,18 @@ class MS41FlashGUI(QMainWindow):
         self.chk_correct_cksum.setToolTip(
             "Recompute all MS41 checksums on the image before flashing so the ECU's "
             "start-up verification passes (recommended). No-op for an unmodified "
-            "backup. For MS41.3, boot and calibration checksums are corrected while "
-            "the disabled program checksum is left unchanged.")
+            "backup.")
         opt_row.addWidget(self.chk_correct_cksum)
 
         opt_row.addStretch()
+        self.chk_force_slow_ds2 = QCheckBox("Force Slow DS2 (ECU Recovery)")
+        self.chk_force_slow_ds2.setStyleSheet("color:#e8c46a; padding:4px;")
+        self.chk_force_slow_ds2.setToolTip(
+            "Bypass Soft-BSL and native-fast DS2 for automatic tune/full reads and "
+            "boot-preserving writes. Uses conventional DS2 at 9600 baud. Plain DS2 "
+            "cannot write the boot/parameter region, identity sector, or TOP bank.")
+        self.chk_force_slow_ds2.toggled.connect(self._update_transfer_mode)
+        opt_row.addWidget(self.chk_force_slow_ds2)
         lay.addLayout(opt_row)
 
         # ── Boot-region write row (requires Soft-BSL) ──────────────────────
@@ -1401,6 +1453,9 @@ class MS41FlashGUI(QMainWindow):
 
     def _auto_transfer_route(self):
         """Return the preferred route without conflating Soft-BSL and native DS2."""
+        if (getattr(self, "chk_force_slow_ds2", None) is not None
+                and self.chk_force_slow_ds2.isChecked()):
+            return "legacy_ds2"
         if self._fast_read_available():
             return "softbsl"
         if self._native_fast_ds2_available():
@@ -1411,7 +1466,17 @@ class MS41FlashGUI(QMainWindow):
         """Describe the automatic Soft-BSL/native-fast/legacy transfer route."""
         marker = getattr(self, "_ecu_softbsl_marker", None)
         hook_present = getattr(self, "_ecu_softbsl_hook_present", False)
-        if self._fast_read_available():
+        force_slow = bool(
+            getattr(self, "chk_force_slow_ds2", None)
+            and self.chk_force_slow_ds2.isChecked()
+        )
+        if force_slow:
+            self.lbl_transfer_mode.setText("Transfer: DS2 9600 (forced ECU recovery)")
+            self.lbl_transfer_mode.setStyleSheet("color:#e8c46a; padding:4px;")
+            self.lbl_transfer_mode.setToolTip(
+                "Force Slow DS2 is selected. Automatic tune/full reads and "
+                "boot-preserving writes bypass Soft-BSL and native-fast DS2.")
+        elif self._fast_read_available():
             self.lbl_transfer_mode.setText("Transfer: Soft-BSL RAM agent, high baud (fast, auto)")
             self.lbl_transfer_mode.setStyleSheet("color:#9ece6a; padding:4px;")
             self.lbl_transfer_mode.setToolTip(
@@ -1463,7 +1528,11 @@ class MS41FlashGUI(QMainWindow):
         """The boot/parameter region is protected against the resident DS2 driver
         (ds2.py:979) — there is no plain-DS2 fallback, so this checkbox only makes sense
         when the complete Soft-BSL path is available (loader + 0x2A hook + D2XX)."""
-        if self._fast_read_available():
+        force_slow = bool(
+            getattr(self, "chk_force_slow_ds2", None)
+            and self.chk_force_slow_ds2.isChecked()
+        )
+        if self._fast_read_available() and not force_slow:
             self.chk_bootloader_write.setEnabled(True)
             if getattr(self, "_ecu_softbsl_marker", None) == "T":
                 tip = ("Writes the complete fused TOP SA7 sector (file 0x0000-0xFFFF) through "
@@ -1477,7 +1546,7 @@ class MS41FlashGUI(QMainWindow):
             self.chk_bootloader_write.setChecked(False)
             self.chk_bootloader_write.setToolTip(
                 "Requires Soft-BSL (loader + normal-mode 0x2A hook + D2XX); "
-                "DS2 cannot write this region.")
+                "Force Slow DS2 cannot write this region.")
         self._update_boot_identity_checkbox_state()
 
     def _update_boot_identity_checkbox_state(self):
@@ -1509,38 +1578,30 @@ class MS41FlashGUI(QMainWindow):
             return None, info
         return source, info
 
-    @staticmethod
-    def _conversion_warning_policy(ecu_variant, file_variant, write_boot):
-        """Return (dialog title, risk text, involves_ms410) for a full-ROM conversion.
+    def _conversion_coding_family(self, archived_full=None):
+        """Return the live three-byte family retained by a boot-preserving write."""
+        cached = archived_full or getattr(self, "_last_full_read", None)
+        if cached is not None and len(cached) == MS41ECU.FULL_ROM_SIZE:
+            start = MS41ECU.CODING_FAMILY_FILE_ADDR
+            family = bytes(cached[start:start + 3])
+        else:
+            if self._ds2 is None:
+                raise RuntimeError("normal DS2 is not connected")
+            family = bytes(
+                self._ds2.read_mem(MS41ECU.CODING_FAMILY_DS2_ADDR, 3)
+            )
+        if len(family) != 3 or not family.isdigit():
+            shown = family.hex(" ") if family else "no data"
+            raise RuntimeError(f"invalid live coding-family value ({shown})")
+        return family
 
-        MS41.1/.2/.3 are mutually supported. A conversion in either direction involving
-        MS41.0 is allowed, but remains untested: preserving the source boot window carries an
-        explicit compatibility/brick warning, while replacing it carries the normal brick-class
-        boot-write warning plus an untested-conversion warning.
-        """
-        involves_ms410 = "MS41.0" in (ecu_variant, file_variant)
-        if involves_ms410 and write_boot:
-            return (
-                "Untested MS41.0 Conversion — Boot Write",
-                "MS41.0 and the other MS41 variants use compatible hardware, and this "
-                "operation includes the target ROM's boot/parameter region. However, this exact "
-                "conversion has not yet been validated on an ECU. The boot write is brick-class "
-                "and a failure may require hardware BSL recovery.",
-                True,
-            )
-        if involves_ms410:
-            return (
-                "Untested MS41.0 Conversion — Brick Risk",
-                "This conversion has not yet been validated while preserving the connected "
-                "ECU's existing boot/parameter region. That boot code may be incompatible with "
-                "the target program. The ECU may not boot and may require hardware BSL recovery.",
-                True,
-            )
+    @staticmethod
+    def _conversion_warning_policy():
+        """Return the common confirmation text for a full-ROM conversion."""
         return (
             "Confirm Variant Conversion",
-            "MS41.1/MS41.2/MS41.3 full-ROM conversion is supported on the selected "
+            "MS41.0/MS41.1/MS41.2/MS41.3 full-ROM conversion is supported on the selected "
             "transfer path.",
-            False,
         )
 
     def _bootloader_write_file_warning(self, data: bytes):
@@ -2150,7 +2211,8 @@ class MS41FlashGUI(QMainWindow):
         """Validate and route a full 256 KB ROM write.
 
         ``require_boot_write`` is used by workflows whose intended edit lives inside file
-        0x4000-0x5FFF (currently Identity/EWS). It never weakens the normal boot-write gates:
+        0x4000-0x5FFF (such as Identity/EWS or a boot-region patch). It never weakens the
+        normal boot-write gates:
         Soft-BSL/D2XX is required and the file warning, typed acknowledgement, and final
         confirmation still run. ``preserve_boot_identity=False`` deliberately writes the ROM
         file's identity instead of grafting the currently connected ECU identity over the edit.
@@ -2166,44 +2228,7 @@ class MS41FlashGUI(QMainWindow):
                 raise ValueError(
                     "archived_prewrite_image must be an archived 256 KB full ROM")
 
-        # Correct every checksum the stock target enforces.  MS41.3's program
-        # algorithm is not confirmed, so leave that field alone; its stock gate
-        # at file 0x605C normally disables the program check.
         image = bytearray(data)
-        variant = MS41ECU.detect_variant(image)
-        if self.chk_correct_cksum.isChecked():
-            do_prog = not (variant == "MS41.3")
-            image, cdet = correct_checksums(image, correct_program=do_prog)
-            for d in cdet:
-                self._log(d)
-            if not do_prog:
-                if image[0x605C] == 0xFF:
-                    self._log(
-                        "MS41.3: boot and calibration checksums corrected; program "
-                        "checksum left unchanged because the stock program check is disabled.",
-                        "ok",
-                    )
-                else:
-                    self._log(
-                        "MS41.3: program checksum left unchanged, but its disable gate "
-                        "is not 0xFF; checksum validation must pass or be explicitly overridden.",
-                        "warn",
-                    )
-
-        # Verify checksums on the final image
-        ok, cs_details = verify_checksum(image)
-        for d in cs_details:
-            self._log(d)
-        if not ok:
-            ans = QMessageBox.warning(self, "Checksum Not Valid",
-                "The ROM image checksum is not valid after correction.\n\n"
-                "Flashing a ROM with a bad checksum may prevent the ECU from booting.\n\n"
-                "Proceed anyway?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if ans != QMessageBox.Yes:
-                self._log("DS2 full write cancelled — checksum not valid.", "warn")
-                return
-
         # ── Hybrid ROM check — HARD BLOCK, no override ──────────────────────────
         # Detect ROMs assembled from program and calibration of different variants
         # (e.g. MS41.1 program + MS41.3 cal).  These will brick the ECU.
@@ -2238,11 +2263,11 @@ class MS41FlashGUI(QMainWindow):
         if require_boot_write and not fast_route:
             QMessageBox.critical(
                 self, "Soft-BSL Boot Write Required",
-                "This image changes VIN/ISN data inside the ECU's boot/parameter region "
+                "This operation changes bytes inside the ECU's boot/parameter region "
                 "(file 0x4000-0x5FFF). DS2 cannot write that region.\n\n"
                 "Install Soft-BSL and reconnect with an FTDI D2XX-capable adapter, then retry. "
                 "Hardware BSL remains the recovery alternative.")
-            self._log("Full write blocked — the requested Identity/EWS edit requires an armed "
+            self._log("Full write blocked — the requested operation requires an armed "
                       "Soft-BSL boot-region write.", "error")
             return
         will_write_boot = fast_route and (require_boot_write or boot_checkbox_requested)
@@ -2282,6 +2307,9 @@ class MS41FlashGUI(QMainWindow):
         file_variant = MS41ECU.detect_variant(image)
         ecu_variant = (getattr(self, "_ecu_program_variant", None)
                        or getattr(self, "_ecu_variant", None))
+        is_variant_conversion = bool(
+            file_variant and ecu_variant and file_variant != ecu_variant
+        )
         if file_variant is None:
             ans = QMessageBox.warning(self, "Unrecognised ROM",
                 "This file is not recognised as a valid MS41 ROM.\n\n"
@@ -2290,7 +2318,7 @@ class MS41FlashGUI(QMainWindow):
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if ans != QMessageBox.Yes:
                 return
-        elif ecu_variant and file_variant != ecu_variant:
+        elif is_variant_conversion:
             if will_write_boot:
                 if preserve_boot_identity:
                     identity_note = (
@@ -2307,8 +2335,7 @@ class MS41FlashGUI(QMainWindow):
                     "region and will remain untouched; no full read is required.")
                 boot_note = "The ECU's existing boot/parameter region will be preserved."
 
-            title, risk_note, ms410 = self._conversion_warning_policy(
-                ecu_variant, file_variant, will_write_boot)
+            title, risk_note = self._conversion_warning_policy()
             ans = QMessageBox.warning(self, title,
                 f"Connected ECU : {ecu_variant}\n"
                 f"ROM file      : {file_variant}\n\n"
@@ -2323,14 +2350,107 @@ class MS41FlashGUI(QMainWindow):
                 self._log(f"Full write cancelled — conversion {ecu_variant} → "
                           f"{file_variant} not confirmed.", "warn")
                 return
-            self._log(f"Variant conversion confirmed: {ecu_variant} → {file_variant}." +
-                      (" MS41.0 path is untested." if ms410 else ""),
-                      "warn" if ms410 else "ok")
+            self._log(
+                f"Variant conversion confirmed: {ecu_variant} → {file_variant}.",
+                "ok",
+            )
+
+        if will_write_boot:
+            start = MS41ECU.CODING_FAMILY_FILE_ADDR
+            coding_family = bytes(image[start:start + 3])
+            try:
+                prepared = MS41ECU.graft_coding_family(image, coding_family)
+            except Exception as error:
+                QMessageBox.critical(
+                    self,
+                    "Invalid Boot Coding Family",
+                    "The selected image's boot/parameter region does not contain a valid "
+                    "three-digit coding-family value at file 0x5CF4. The boot-region "
+                    f"write was blocked before erase.\n\n{error}",
+                )
+                self._log(
+                    f"Full write blocked — target boot coding family is invalid: {error}",
+                    "error",
+                )
+                return
+            normalized = prepared != image
+            image = prepared
+            self._log(
+                "Target boot coding family "
+                f"{coding_family.decode('ascii')} "
+                + (
+                    "was grafted into mismatched program/calibration records."
+                    if normalized
+                    else "already matches the program/calibration records."
+                ),
+                "warn" if normalized else "ok",
+            )
+        elif is_variant_conversion:
+            try:
+                coding_family = self._conversion_coding_family(
+                    archived_prewrite_image
+                )
+                image = MS41ECU.graft_coding_family(image, coding_family)
+            except Exception as error:
+                QMessageBox.critical(
+                    self,
+                    "Conversion Coding Family Unavailable",
+                    "The connected ECU's three-byte coding-family value could not be "
+                    "read. It is required because this write preserves the existing "
+                    "boot/parameter region. Nothing was erased.\n\n"
+                    f"{error}",
+                )
+                self._log(
+                    f"Full write blocked — conversion coding-family graft failed: {error}",
+                    "error",
+                )
+                return
+            self._log(
+                "Conversion coding family grafted from live DS2 0x1CF4: "
+                f"{coding_family.decode('ascii')}.",
+                "ok",
+            )
 
         if preserve_boot_identity:
             image = identity.graft_identity(image, identity_source)
             self._log(f"Identity grafted from the connected ECU "
                       f"(serial {identity_info.serial or '?'}).", "ok")
+
+        if self.chk_correct_cksum.isChecked():
+            image, cdet = correct_checksums(image)
+            for detail in cdet:
+                self._log(detail)
+
+        ok, cs_details = verify_checksum(image)
+        for detail in cs_details:
+            self._log(detail)
+        if not ok:
+            ans = QMessageBox.warning(
+                self,
+                "Checksum Not Valid",
+                "The ROM image checksum is not valid after correction.\n\n"
+                "Flashing a ROM with a bad checksum may prevent the ECU from booting.\n\n"
+                "Proceed anyway?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if ans != QMessageBox.Yes:
+                self._log("DS2 full write cancelled — checksum not valid.", "warn")
+                return
+
+        hybrid_err = MS41ECU.check_hybrid(image)
+        if hybrid_err:
+            QMessageBox.critical(
+                self,
+                "Hybrid ROM — Flash Blocked",
+                "The prepared conversion image became internally inconsistent:\n\n"
+                f"  {hybrid_err}\n\nNothing was erased.",
+            )
+            self._log(
+                f"Full write blocked — prepared conversion is hybrid: {hybrid_err}",
+                "error",
+            )
+            return
 
         # ── Boot / SA1 patch gate ────────────────────────────────────────────
         # DS2 (and un-armed soft-BSL) leave file 0x4000-0x5FFF (SA1/boot) intact. If this image
@@ -2469,6 +2589,7 @@ class MS41FlashGUI(QMainWindow):
                     log_fn,
                     progress_fn,
                     verify_write=verify_write,
+                    variant_conversion=is_variant_conversion,
                 )
             else:
                 self._ds2_write("full", image_bytes, progress_fn, log_fn)
@@ -3975,26 +4096,10 @@ class MS41FlashGUI(QMainWindow):
             self._config_data, changes, profile=self._config_profile)
         for l in log:
             self._log(l)
-        # Recompute checksums (variant-gated, like the rest of the tool)
         if self.chk_config_fix.isChecked():
-            variant = MS41ECU.detect_variant(patched)
-            do_program = not (variant == "MS41.3" and len(patched) == MS41ECU.FULL_ROM_SIZE)
-            patched, cdet = correct_checksums(patched, correct_program=do_program)
+            patched, cdet = correct_checksums(patched)
             for d in cdet:
                 self._log(d)
-            if not do_program:
-                if patched[0x605C] == 0xFF:
-                    self._log(
-                        "MS41.3: boot and calibration checksums corrected; program checksum "
-                        "left unchanged because stock program verification is disabled.",
-                        "ok",
-                    )
-                else:
-                    self._log(
-                        "MS41.3: boot and calibration checksums corrected; program checksum "
-                        "left unchanged, but program verification is enabled in this image.",
-                        "warn",
-                    )
         stem = os.path.splitext(os.path.basename(self._config_path))[0]
         out, _ = QFileDialog.getSaveFileName(
             self, "Save configured image", f"{stem}_config.bin",
@@ -4154,10 +4259,7 @@ class MS41FlashGUI(QMainWindow):
             return
 
         if self.chk_config_fix.isChecked():
-            variant = MS41ECU.detect_variant(patched)
-            correct_program = not (variant == "MS41.3")
-            patched, checksum_log = correct_checksums(
-                patched, correct_program=correct_program)
+            patched, checksum_log = correct_checksums(patched)
             for line in checksum_log:
                 self._log(line)
 
@@ -4408,25 +4510,9 @@ class MS41FlashGUI(QMainWindow):
         merged = MS41ECU.tune_into_full(full, partial)
 
         if self.chk_merge_fix.isChecked():
-            # MS41.3 enforces boot and calibration checksums while its stock
-            # program-checksum gate is disabled.
-            ms413 = MS41ECU.detect_variant(merged) == "MS41.3"
-            merged, cdet = correct_checksums(merged, correct_program=not ms413)
+            merged, cdet = correct_checksums(merged)
             for d in cdet:
                 self._log(d)
-            if ms413:
-                if merged[0x605C] == 0xFF:
-                    self._log(
-                        "MS41.3: calibration and boot checksums corrected; program checksum "
-                        "left unchanged because stock program verification is disabled.",
-                        "ok",
-                    )
-                else:
-                    self._log(
-                        "MS41.3: calibration and boot checksums corrected; program checksum "
-                        "left unchanged, but program verification is enabled in this image.",
-                        "warn",
-                    )
 
         stem   = os.path.splitext(os.path.basename(full_path))[0]
         out, _ = QFileDialog.getSaveFileName(
@@ -5742,6 +5828,7 @@ class MS41FlashGUI(QMainWindow):
         progress_fn,
         *,
         verify_write,
+        variant_conversion=False,
     ):
         """Try native high rate, then restart at 9600 only if no erase began."""
         recovery_kind, recovery = self._active_write_recovery()
@@ -5766,6 +5853,7 @@ class MS41FlashGUI(QMainWindow):
                 bytes(image_bytes),
                 connected_family=connected_family,
                 verify_write=verify_write,
+                variant_conversion=variant_conversion,
                 progress_cb=pf,
             )
 
@@ -6346,12 +6434,8 @@ class MS41FlashGUI(QMainWindow):
             # conversion is a FULL write that replaces the calibration.
             variant = (self._ecu_program_variant or self._ecu_variant
                        or "an unsupported/unknown MS41 variant")
-            conversion_target = target_version or "MS41.3"
             target_label = target_version or "the selected MS41.2/MS41.3 target"
-            conversion_title, conversion_risk, involves_ms410 = self._conversion_warning_policy(
-                variant, conversion_target, True)
-            if not involves_ms410:
-                conversion_title = f"Confirm {target_label} Conversion"
+            conversion_title, conversion_risk = self._conversion_warning_policy()
             if QMessageBox.warning(
                     self, conversion_title,
                     f"This ECU appears to be {variant}; the Soft-BSL target is {target_label}.\n\n"
@@ -6978,6 +7062,8 @@ class MS41FlashGUI(QMainWindow):
         self._patch_rows = {}
         self._patch_installed_ids = set()
         self._patch_entries = {}
+        self._patch_removed_ids = set()
+        self._patch_change_base = None
         self._patch_dependency_sync = False
 
         bar = QHBoxLayout()
@@ -7027,11 +7113,14 @@ class MS41FlashGUI(QMainWindow):
 
         self.tabs.addTab(tab, "  Patches  ")
 
-    def _set_patch_base(self, data, source):
+    def _set_patch_base(self, data, source, *, reset_changes=True):
         data = bytes(data)
         r = MS41ECU.resolve_version(data)
         self._patch_base = data
         self._patch_base_source = source
+        if reset_changes:
+            self._patch_removed_ids.clear()
+            self._patch_change_base = data
         txt = f"Base: {source}  —  program {r['program'] or '?'} / cal {r['cal'] or '?'}"
         if r["hybrid"]:
             txt += f"   ⚠ HYBRID: {r['hybrid']}"
@@ -7059,7 +7148,12 @@ class MS41FlashGUI(QMainWindow):
             self.patches_log.append(f"REMOVE FAILED: {e}")
             return
         self.patches_log.append(f"Removed {patch_id} — restored stock bytes.")
-        self._set_patch_base(new_data, f"{self._patch_base_source} (patch removed: {patch_id})")
+        self._patch_removed_ids.add(patch_id)
+        self._set_patch_base(
+            new_data,
+            f"{self._patch_base_source} (patch removed: {patch_id})",
+            reset_changes=False,
+        )
 
     @staticmethod
     def _badge(text, bg, fg):
@@ -7079,7 +7173,12 @@ class MS41FlashGUI(QMainWindow):
         if not avail:
             self._patch_placeholder.setText("No patches match this base's version.")
             self._patch_placeholder.setVisible(True)
-            self.btn_patches_build.setEnabled(False)
+            pending_removals = bool(self._patch_removed_ids)
+            self.btn_patches_build.setEnabled(
+                pending_removals and self._patch_base is not None)
+            if pending_removals:
+                self.btn_patches_build.setToolTip(
+                    "Build and archive the image with the pending patch removals.")
             return
         self._patch_placeholder.setVisible(False)
         self._patch_entries = {patch["id"]: patch for patch in avail}
@@ -7233,8 +7332,11 @@ class MS41FlashGUI(QMainWindow):
             for required_id in self._patch_entries.get(pid, {}).get("requires", [])
             if required_id not in selected_or_installed
         }
+        pending_removals = bool(self._patch_removed_ids)
         self.btn_patches_build.setEnabled(
-            bool(selected) and self._patch_base is not None and not missing)
+            bool(selected or pending_removals)
+            and self._patch_base is not None
+            and not missing)
         if missing:
             definitions = patch_service.definitions()
             names = [
@@ -7243,6 +7345,9 @@ class MS41FlashGUI(QMainWindow):
             ]
             self.btn_patches_build.setToolTip(
                 "Required patch unavailable or blocked by a conflict: " + ", ".join(names))
+        elif pending_removals:
+            self.btn_patches_build.setToolTip(
+                "Build and archive the selected additions and pending patch removals.")
         else:
             self.btn_patches_build.setToolTip(
                 "Build and archive the selected patches. Available required patches are "
@@ -7300,7 +7405,8 @@ class MS41FlashGUI(QMainWindow):
         # get applied; whatever's already baked into the loaded base passes through untouched.
         selected = [pid for pid, cb in self._patch_checkboxes.items()
                     if cb.isChecked() and pid not in self._patch_installed_ids]
-        if not selected or not self._patch_base:
+        removed = sorted(self._patch_removed_ids)
+        if (not selected and not removed) or not self._patch_base:
             return
         loaded = patch_service.definitions()
         untested = [
@@ -7319,42 +7425,85 @@ class MS41FlashGUI(QMainWindow):
                     "Emulator verification does not replace vehicle testing. Continue?",
                     QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
                 return
-        try:
-            out, buildlog = patch_service.build_image(self._patch_base, selected)
-        except patch_service.PatchError as e:
-            QMessageBox.critical(self, "Build Failed", str(e))
-            self.patches_log.append(f"BUILD FAILED: {e}")
-            return
+        if selected:
+            try:
+                out, buildlog = patch_service.build_image(self._patch_base, selected)
+            except patch_service.PatchError as e:
+                QMessageBox.critical(self, "Build Failed", str(e))
+                self.patches_log.append(f"BUILD FAILED: {e}")
+                return
+        else:
+            out = bytes(self._patch_base)
+            buildlog = []
+
+        change_parts = []
+        if selected:
+            change_parts.append("added " + ", ".join(selected))
+        if removed:
+            change_parts.append("removed " + ", ".join(removed))
+        change_summary = "; ".join(change_parts)
 
         # Auto-archive the built image to the Bins catalogue (traceable, and no path to pick). add_data
         # derives the variant / CAL ID / ECU ID / VIN / checksum straight from the patched image.
         ts   = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        name = "ms41_patched_" + "_".join(selected) + f"_{ts}.bin"
+        name_parts = selected + [f"removed_{pid}" for pid in removed]
+        name = "ms41_patched_" + "_".join(name_parts) + f"_{ts}.bin"
         try:
             entry = self._backup_mgr.add_data(
-                out, name, source="patched: " + "+".join(selected),
-                notes="Patched build: " + ", ".join(selected))
+                out, name, source="patched: " + change_summary,
+                notes="Patched build: " + change_summary)
         except Exception as e:
             QMessageBox.critical(self, "Build Failed", f"Built the image but could not archive it: {e}")
             self.patches_log.append(f"ARCHIVE FAILED: {e}")
             return
         self._refresh_backup_table()
-        self.patches_log.append(f"Built + archived to Bins: {entry.filename}  ({', '.join(selected)})")
+        self.patches_log.append(
+            f"Built + archived to Bins: {entry.filename}  ({change_summary})")
         for line in buildlog:
             self.patches_log.append("  " + line)
         self._offer_additional_read_copy(
             out, entry, "Patched Full ROM (256 KB)", dialog_title="Build Complete")
 
+        comparison_base = self._patch_change_base or self._patch_base
+        boot_region_changed = (
+            out[patch_service.SA1_LO:patch_service.SA1_HI]
+            != comparison_base[patch_service.SA1_LO:patch_service.SA1_HI]
+        )
+
         # Offer to flash it straight to the connected ECU (same auto soft-BSL/DS2 routing + variant /
         # identity guards as any full write on the Flash tab).
         if self._ds2 is not None:
-            if QMessageBox.question(
+            if boot_region_changed:
+                flash_now = QMessageBox.warning(
+                    self, "BRICK-CLASS — Flash Boot-Region Patch?",
+                    f"Built and archived to Bins:\n  {entry.filename}\n\n"
+                    f"Changes: {change_summary}\n\n"
+                    "This build changes the boot/parameter region. A normal full-ROM write "
+                    "preserves that region and would leave these patch changes unapplied.\n\n"
+                    "Applying them requires a brick-class boot-region write through the "
+                    "RAM-resident Soft-BSL agent. The Flash-tab family and identity checks, "
+                    "typed WRITE BOOT confirmation, backup/verification choices, and recovery "
+                    "handling will run next. An interruption may require Soft-BSL recovery or "
+                    "hardware BSL.\n\nFlash the patched image and include the boot region now?",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            else:
+                flash_now = QMessageBox.question(
                     self, "Flash Patched Image?",
-                    f"Built and archived to Bins:\n  {entry.filename}\n\nPatches: {', '.join(selected)}\n\n"
+                    f"Built and archived to Bins:\n  {entry.filename}\n\n"
+                    f"Changes: {change_summary}\n\n"
                     "Flash it to the connected ECU now? The automatic transfer path uses "
                     "Soft-BSL, native-fast DS2, or normal DS2 as available.",
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
-                self._ds2_write_full(bytearray(out), entry.filename)
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if flash_now == QMessageBox.Yes:
+                if boot_region_changed:
+                    self._ds2_write_full(
+                        bytearray(out), entry.filename, require_boot_write=True)
+                else:
+                    self._ds2_write_full(bytearray(out), entry.filename)
+
+        self._patch_removed_ids.clear()
+        self._patch_change_base = self._patch_base
+        self._on_patch_selection_changed()
 
     # ── Backups tab ──────────────────────────────────────────────────────
 
@@ -7753,22 +7902,7 @@ class MS41FlashGUI(QMainWindow):
             QMessageBox.warning(self, "Wrong Size",
                 "Checksum correction needs a 256 KB full ROM or a 24 KB partial.")
             return
-        # MS41.3 enforces boot and calibration checksums while its stock
-        # program-checksum gate is disabled.
-        is_ms413_full = (MS41ECU.detect_variant(data) == "MS41.3"
-                         and len(data) == MS41ECU.FULL_ROM_SIZE)
-        patched, details = correct_checksums(data, correct_program=not is_ms413_full)
-        if is_ms413_full:
-            if patched[0x605C] == 0xFF:
-                details.append(
-                    "MS41.3: boot and calibration checksums corrected; program checksum "
-                    "left unchanged because stock program verification is disabled."
-                )
-            else:
-                details.append(
-                    "MS41.3: boot and calibration checksums corrected; program checksum "
-                    "left unchanged, but program verification is enabled in this image."
-                )
+        patched, details = correct_checksums(data)
         out, _ = QFileDialog.getSaveFileName(
             self, "Save checksum-corrected image",
             path.replace(".bin", "_cksum.bin"),
@@ -8233,6 +8367,7 @@ class MS41FlashGUI(QMainWindow):
         self._update_softbsl_crossbank_button()
 
     def _set_all_buttons_enabled(self, enabled: bool):
+        self.chk_force_slow_ds2.setEnabled(enabled)
         if enabled and self._ds2 is not None:
             self._set_ds2_buttons_enabled()          # DS2 connected: enable ECU ops
         else:
@@ -8355,7 +8490,7 @@ def run_gui() -> int:
     configure_application(app)
     install_exception_handler()
     window = MS41FlashGUI()
-    window.show()
+    window.show_fitted()
     return app.exec_()
 
 

@@ -1298,15 +1298,13 @@ def _variant_guard(bsl, args, ref, regions):
 def _checksum_guard(args, ref, regions):
     """Verify (and with --fix-checksums, correct) the reference's MS41 checksums — file-only, no
     hardware.  Prints status; returns (ref_maybe_fixed, hard_block).  A bad checksum whose ECU
-    verification is DISABLED only warns (e.g. the MS41.3 program checksum)."""
+    verification is disabled only warns."""
     if len(ref) not in (cks.FULL_ROM_SIZE, cks.TUNE_SIZE):
         _emit(f"  checksums     : ref is {len(ref)} B (not a full ROM or 24KB partial) — SKIPPED.")
         return ref, False
 
     if args.fix_checksums:
-        var = MS41ECU.detect_variant(ref) if MS41ECU else None
-        corr_prog = (var != "MS41.3")              # MS41.3 program-checksum layout unconfirmed (+ disabled)
-        fixed, notes = cks.correct_checksums(bytearray(ref), correct_program=corr_prog)
+        fixed, notes = cks.correct_checksums(bytearray(ref))
         ref = bytes(fixed)
         for n in notes:
             _emit(f"  fix-checksums : {n}")

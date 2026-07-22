@@ -485,7 +485,7 @@ def test_29f_install_scope_keeps_two_program_high_sectors():
     assert [addr for addr, _name, _protected in sectors] == [0x20000, 0x30000, 0x00000]
 
 
-def test_ms412_install_scope_rewrites_program_checksum_block_without_cal():
+def test_checksum_aware_install_scope_rewrites_program_checksum_block_without_cal():
     intel, lo, hi = softbsl_install._sb._flash_scope(
         "softbsl_ms412", chip="28f200")
     amd, amd_lo, amd_hi = softbsl_install._sb._flash_scope(
@@ -496,18 +496,18 @@ def test_ms412_install_scope_rewrites_program_checksum_block_without_cal():
     assert (lo, hi) == (amd_lo, amd_hi) == (0, 0x40000)
     assert all(addr != 0x10000 for addr, _name, _protected in intel + amd)
 
-    # File 0x6050 maps to CPU 0x2050 and holds MS41.2's enabled program CRC.
+    # File 0x6050 maps to CPU 0x2050 and holds the program CRC.
     assert softbsl_install._sb._softbsl_prog_ok(0x2050, include_program_low=True)
     assert not softbsl_install._sb._softbsl_prog_ok(0x2050)
 
 
-def test_program_only_write_becomes_checksum_aware_for_ms412():
+def test_program_only_write_is_checksum_aware_for_ms412_and_ms413():
     from tests.conftest import ref
 
     assert softbsl_install._sb._effective_flash_scope(
         "program", ref("MS41.2")) == "program_checked"
     assert softbsl_install._sb._effective_flash_scope(
-        "program", ref("MS41.3")) == "program"
+        "program", ref("MS41.3")) == "program_checked"
 
     intel, lo, hi = softbsl_install._sb._flash_scope(
         "program_checked", chip="28f200")
@@ -542,14 +542,16 @@ def test_softbsl_checksum_gate_requires_ms412_program_crc_when_enabled():
     assert softbsl_install._sb._check_image_checksums(ms413)[0] is True
 
 
-def test_ms413_cal_preservation_is_an_explicit_install_scope_gate():
-    assert softbsl_install._sb._ms413_install_scope(True) == "softbsl"
+def test_ms413_cal_preservation_includes_the_program_checksum_block():
+    assert softbsl_install._sb._ms413_install_scope(True) == "softbsl_ms412"
     assert softbsl_install._sb._ms413_install_scope(False) == "full"
 
 
 def test_ms412_cal_preservation_selects_the_checksum_aware_scope():
     assert softbsl_install._sb._ms41_install_scope("MS41.2", True) == "softbsl_ms412"
     assert softbsl_install._sb._ms41_install_scope("MS41.2", False) == "full"
+    assert softbsl_install._sb._ms41_install_scope("MS41.3", True) == "softbsl_ms412"
+    assert softbsl_install._sb._ms41_install_scope("MS41.3", False) == "full"
 
 
 def test_persistent_composer_builds_ms412_and_migrates_deprecated_loaders():

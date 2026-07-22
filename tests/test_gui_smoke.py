@@ -7,9 +7,12 @@ import pytest
 from ms41 import MS41ECU
 
 try:
-    from PyQt5.QtCore import QEvent, QThread
-    from PyQt5.QtGui import QPalette
-    from PyQt5.QtWidgets import QApplication, QMessageBox, QInputDialog, QFileDialog, QPushButton
+    from PyQt5.QtCore import QCoreApplication, QEvent, QThread, Qt
+    from PyQt5.QtGui import QGuiApplication, QPalette
+    from PyQt5.QtWidgets import (
+        QApplication, QMessageBox, QInputDialog, QFileDialog, QPushButton,
+        QScrollArea,
+    )
     import gui
     _HAS_QT = True
 except Exception:
@@ -89,9 +92,73 @@ def test_status_only_progress_preserves_completed_bar_when_total_is_zero():
 def test_shared_progress_status_has_its_own_row_below_full_width_bar():
     app, window = _gui()
     try:
-        root = window.centralWidget().layout()
+        root = window.centralWidget().widget().layout()
         assert root.indexOf(window.progress_bar) >= 0
         assert root.indexOf(window.progress_label) == root.indexOf(window.progress_bar) + 1
+    finally:
+        window.close()
+
+
+def test_high_dpi_policy_and_small_screen_overflow_are_explicit():
+    assert QCoreApplication.testAttribute(Qt.AA_EnableHighDpiScaling)
+    assert QCoreApplication.testAttribute(Qt.AA_UseHighDpiPixmaps)
+    assert QGuiApplication.highDpiScaleFactorRoundingPolicy() == (
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
+
+    app, window = _gui()
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            user32 = ctypes.windll.user32
+            user32.GetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+            user32.AreDpiAwarenessContextsEqual.argtypes = (
+                ctypes.c_void_p, ctypes.c_void_p)
+            user32.AreDpiAwarenessContextsEqual.restype = ctypes.c_bool
+            assert user32.AreDpiAwarenessContextsEqual(
+                user32.GetThreadDpiAwarenessContext(), ctypes.c_void_p(-4))
+
+        scroll = window.centralWidget()
+        assert isinstance(scroll, QScrollArea)
+        assert window.width() == 980
+        assert window.height() == 960
+        assert scroll.widget().minimumWidth() == 980
+        assert scroll.widget().minimumHeight() == 700
+
+        window.show()
+        app.processEvents()
+        assert scroll.horizontalScrollBar().maximum() == 0
+        assert scroll.verticalScrollBar().maximum() == 0
+
+        window.resize(700, 500)
+        app.processEvents()
+        assert scroll.horizontalScrollBar().maximum() > 0
+        assert scroll.verticalScrollBar().maximum() > 0
+    finally:
+        window.close()
+
+
+def test_show_fitted_only_maximizes_when_the_design_does_not_fit():
+    app, window = _gui()
+    try:
+        calls = []
+        window.show = lambda: calls.append("normal")
+        window.showMaximized = lambda: calls.append("maximized")
+
+        geometry = type("Geometry", (), {"width": lambda self: 979,
+                                          "height": lambda self: 959})()
+        window.screen = lambda: type(
+            "Screen", (), {"availableGeometry": lambda self: geometry})()
+        window.show_fitted()
+        assert calls == ["maximized"]
+
+        calls.clear()
+        geometry = type("Geometry", (), {"width": lambda self: 980,
+                                          "height": lambda self: 960})()
+        window.screen = lambda: type(
+            "Screen", (), {"availableGeometry": lambda self: geometry})()
+        window.show_fitted()
+        assert calls == ["normal"]
     finally:
         window.close()
 
@@ -1061,8 +1128,9 @@ def test_patches_tab_lists_the_ms41_3_patches():
     try:
         w._set_patch_base(ref("MS41.3"), "test")
         assert "cal_guard" in w._patch_checkboxes
+        assert "door_0x43" not in w._patch_checkboxes
         assert "vanos_minrpm_ms410" not in w._patch_checkboxes   # MS41.0 target
-        assert len(w._patch_checkboxes) == 8   # 8 selectable MS41.3 patches (matches test_patch_service)
+        assert len(w._patch_checkboxes) == 7   # 7 user-facing MS41.3 patches
         pending_badges = {
             label.text()
             for label in w._patch_rows["ignition_cut_v7"].findChildren(gui.QLabel)
@@ -1189,6 +1257,7 @@ def test_patches_tab_removes_field_failed_v6_and_enables_v7(monkeypatch):
 
         assert "ignition_cut_v6" not in w._patch_checkboxes
         assert w._patch_checkboxes["ignition_cut_v7"].isEnabled()
+        assert w.btn_patches_build.isEnabled()
         assert "Removed ignition_cut_v6" in w.patches_log.toPlainText()
     finally:
         w.close()
@@ -1215,6 +1284,7 @@ def test_patches_tab_removes_deprecated_loader_and_enables_relocation(monkeypatc
 
         assert "softbsl_loader_legacy" not in w._patch_checkboxes
         assert w._patch_checkboxes["softbsl_loader"].isEnabled()
+        assert w.btn_patches_build.isEnabled()
         assert "Removed softbsl_loader_legacy" in w.patches_log.toPlainText()
     finally:
         w.close()
@@ -2038,7 +2108,7 @@ def test_softbsl_install_factory_prompts_convert_picks_grafted_base(monkeypatch,
         w.close()
 
 
-def test_softbsl_install_ms41_0_uses_boot_write_untested_warning(monkeypatch):
+def test_softbsl_install_ms41_0_uses_common_conversion_confirmation(monkeypatch):
     app, w = _gui()
     try:
         w._ecu_program_variant = None
@@ -2055,11 +2125,10 @@ def test_softbsl_install_ms41_0_uses_boot_write_untested_warning(monkeypatch):
         w._on_softbsl_install()
 
         title, message = shown[0]
-        assert "MS41.0 Conversion" in title
-        assert "Boot Write" in title
-        assert "compatible hardware" in message
-        assert "not yet been validated" in message
-        assert "target boot/parameter region" in message
+        assert title == "Confirm Variant Conversion"
+        assert "MS41.0/MS41.1/MS41.2/MS41.3" in message
+        assert "supported" in message
+        assert "not yet been validated" not in message
         assert w._port_owner.is_free()
     finally:
         w.close()
@@ -2694,6 +2763,26 @@ def test_transfer_mode_shows_softbsl_when_marker_and_d2xx_present():
         w._update_transfer_mode()
         assert w._fast_read_available() is True
         assert "Soft-BSL" in w.lbl_transfer_mode.text()
+    finally:
+        w.close()
+
+
+def test_force_slow_ds2_overrides_softbsl_and_disables_boot_write():
+    app, w = _gui()
+    try:
+        w._d2xx_ok = True
+        w._ecu_softbsl_marker = "B"
+        w._ecu_softbsl_hook_present = True
+        w._update_transfer_mode()
+        assert w._auto_transfer_route() == "softbsl"
+
+        w.chk_bootloader_write.setChecked(True)
+        w.chk_force_slow_ds2.setChecked(True)
+
+        assert w._auto_transfer_route() == "legacy_ds2"
+        assert "forced ECU recovery" in w.lbl_transfer_mode.text()
+        assert w.chk_bootloader_write.isChecked() is False
+        assert w.chk_bootloader_write.isEnabled() is False
     finally:
         w.close()
 
@@ -4094,7 +4183,7 @@ def test_patches_build_archives_to_bins_and_offers_flash(monkeypatch):
     app, w = _gui()
     try:
         import patch_service
-        w._patch_base = b"base"
+        w._patch_base = b"\xFF" * 262144
         w._patch_installed_ids = set()
         w._patch_checkboxes = {"test": w.chk_correct_cksum}
         monkeypatch.setattr(patch_service, "build_image",
@@ -4123,6 +4212,128 @@ def test_patches_build_archives_to_bins_and_offers_flash(monkeypatch):
         assert flashed["name"] == "ms41_patched_test.bin"   # flashed the freshly-built image
         assert flashed["n"] == 262144
     finally:
+        w.close()
+
+
+def test_patches_build_boot_change_offers_guarded_boot_write(monkeypatch):
+    app, w = _gui()
+    try:
+        import patch_service
+        base = b"\xFF" * 262144
+        built = bytearray(base)
+        built[patch_service.SA1_LO] = 0xEA
+        w._patch_base = base
+        w._patch_installed_ids = set()
+        w._patch_checkboxes = {"cal_guard": w.chk_correct_cksum}
+        monkeypatch.setattr(
+            patch_service, "build_image", lambda base, selected: (bytes(built), ["ok"]))
+
+        class FakeEntry:
+            filename = "ms41_patched_cal_guard.bin"
+
+        monkeypatch.setattr(w._backup_mgr, "add_data", lambda *a, **k: FakeEntry())
+        monkeypatch.setattr(w, "_refresh_backup_table", lambda: None)
+        monkeypatch.setattr(w, "_offer_additional_read_copy", lambda *a, **k: None)
+        warnings = []
+        monkeypatch.setattr(
+            QMessageBox, "warning",
+            staticmethod(lambda _parent, title, message, *a, **k:
+                         warnings.append((title, message)) or QMessageBox.Yes))
+        questions = []
+        monkeypatch.setattr(
+            QMessageBox, "question",
+            staticmethod(lambda *a, **k: questions.append(a) or QMessageBox.Yes))
+        w._ds2 = object()
+        flashed = {}
+        monkeypatch.setattr(
+            w, "_ds2_write_full",
+            lambda data, name, **kwargs:
+                flashed.update(data=bytes(data), name=name, kwargs=kwargs))
+
+        w._on_patches_build()
+
+        title, message = warnings[-1]
+        assert "BRICK-CLASS" in title
+        assert "boot/parameter region" in message
+        assert "typed WRITE BOOT" in message
+        assert "hardware BSL" in message
+        assert questions == []
+        assert flashed["data"] == bytes(built)
+        assert flashed["kwargs"] == {"require_boot_write": True}
+
+        flashed.clear()
+        monkeypatch.setattr(
+            QMessageBox, "warning",
+            staticmethod(lambda _parent, title, message, *a, **k:
+                         warnings.append((title, message)) or QMessageBox.No))
+        w._on_patches_build()
+        assert flashed == {}
+    finally:
+        w.close()
+
+
+def test_patches_builds_and_flashes_boot_patch_removal_only(monkeypatch):
+    app, w = _gui()
+    try:
+        import patch_service
+
+        installed, _ = patch_service.build_image(ref("MS41.3"), ["cal_guard"])
+        w._set_patch_base(installed, "cal-guard-installed")
+        monkeypatch.setattr(
+            QMessageBox, "question",
+            staticmethod(lambda *_args, **_kwargs: QMessageBox.Yes),
+        )
+
+        w._on_patch_remove("cal_guard")
+
+        removed_image = bytes(w._patch_base)
+        assert w._patch_removed_ids == {"cal_guard"}
+        assert w.btn_patches_build.isEnabled()
+        assert not patch_service.is_applied(
+            removed_image, patch_service.definitions()["cal_guard"])
+
+        archived = {}
+
+        class FakeEntry:
+            filename = "ms41_patched_removed_cal_guard.bin"
+
+        def archive(data, name, **kwargs):
+            archived.update(data=bytes(data), name=name, kwargs=kwargs)
+            return FakeEntry()
+
+        monkeypatch.setattr(w._backup_mgr, "add_data", archive)
+        monkeypatch.setattr(w, "_refresh_backup_table", lambda: None)
+        monkeypatch.setattr(w, "_offer_additional_read_copy", lambda *a, **k: None)
+        warnings = []
+        monkeypatch.setattr(
+            QMessageBox, "warning",
+            staticmethod(lambda _parent, title, message, *a, **k:
+                         warnings.append((title, message)) or QMessageBox.Yes),
+        )
+        w._ds2 = object()
+        flashed = {}
+        monkeypatch.setattr(
+            w, "_ds2_write_full",
+            lambda data, name, **kwargs:
+                flashed.update(data=bytes(data), name=name, kwargs=kwargs),
+        )
+
+        w._on_patches_build()
+
+        assert archived["data"] == removed_image
+        assert "removed_cal_guard" in archived["name"]
+        assert archived["kwargs"]["source"] == "patched: removed cal_guard"
+        assert warnings[-1][0].startswith("BRICK-CLASS")
+        assert "Changes: removed cal_guard" in warnings[-1][1]
+        assert flashed == {
+            "data": removed_image,
+            "name": FakeEntry.filename,
+            "kwargs": {"require_boot_write": True},
+        }
+        assert w._patch_removed_ids == set()
+        assert not w.btn_patches_build.isEnabled()
+    finally:
+        w._ds2 = None
         w.close()
 
 

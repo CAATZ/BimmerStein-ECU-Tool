@@ -17,6 +17,7 @@ def test_windows_spec_uses_gui_entry_and_excludes_private_material():
     assert 'version=str(ROOT / "build" / "windows_version_info.txt")' in text
     assert "disable_windowed_traceback=True" in text
     assert 'ROOT / "engines" / "patcher" / "patches"' in text
+    assert '"BimmerStein MS41 Patch Definitions.xml"' in text
     assert 'ROOT / "THIRD_PARTY_LICENSES"' in text
     assert '"agent.hex"' in text and '"agent_28f.hex"' in text
     assert '"stage1_payload.hex"' in text and '"stage1_manifest.json"' in text
@@ -68,6 +69,8 @@ def test_distribution_verifier_rejects_runtime_data_from_release_package():
     assert "MSVC_RUNTIME_FILES" in text
     assert "does not match its unmodified build dependency" in text
     assert "vc_runtime_files_unmodified" in text
+    assert "bundled patch definition does not match tracked source" in text
+    assert "ET.parse(patch_definition)" in text
 
 
 def test_msvc_runtime_verifier_rejects_modified_dependency_copy(tmp_path, monkeypatch):
@@ -163,30 +166,30 @@ def test_release_packaging_requires_explicit_license_gates():
     assert 'project_license = "GPL-3.0-only"' in text
     assert 'intended_use = "off-road-only"' in text
     assert "DefinitionRedistributionApproved" not in text
-    assert "calibration_definitions_bundled = $false" in text
+    assert "calibration_definitions_bundled = $true" in text
     assert "verify_dist.py" in text
     assert "b[1-9]\\d*" in text
     assert '"BimmerStein-ECU-Tool-$Version-Windows-x64"' in text
-    assert '"BimmerStein-ECU-Tool-$Version-Windows-x64-Nuitka-Experimental"' in text
+    assert '"BimmerStein-ECU-Tool-$Version-Windows-x64-Nuitka"' in text
     assert "version = $Version" in text
     assert "build_backend = $Backend" in text
-    assert "experimental = $Experimental" in text
+    assert "experimental =" not in text
     assert 'vc_runtime_deployment = "application-local"' in text
     assert "vc_runtime_files_unmodified = $true" in text
     assert "vc_runtime_files = $verification.msvc_runtime" in text
     assert "build_installer.ps1" in text
     assert "SkipInstaller" in text
     assert "IsccPath" in text
-    assert "IncludeExperimentalNuitka" in text
+    assert "IncludeNuitka" in text
     assert "build_windows_nuitka.ps1" in text
 
     build_text = (ROOT / "build_windows.ps1").read_text(encoding="utf-8")
     assert "b[1-9]\\d*" in build_text
 
     building = (ROOT / "BUILDING.md").read_text(encoding="utf-8")
-    assert "-Version 0.1.0b4" in building
-    assert "v0.1.0b4" in building
-    assert "Nuitka Experimental" in building
+    assert "-Version 0.1.0b6" in building
+    assert "v0.1.0b6" in building
+    assert "BimmerStein ECU Tool Nuitka" in building
 
 
 def test_inno_installer_uses_bimmerstein_identity_and_per_user_install():
@@ -195,7 +198,7 @@ def test_inno_installer_uses_bimmerstein_identity_and_per_user_install():
     )
     assert "AppName={#SetupAppName}" in installer
     assert '#define SetupAppName "BimmerStein ECU Tool"' in installer
-    assert '#define SetupAppName "BimmerStein ECU Tool (Nuitka Experimental)"' in installer
+    assert '#define SetupAppName "BimmerStein ECU Tool (Nuitka)"' in installer
     assert "AppPublisher=CAATZ" in installer
     assert "PrivilegesRequired=lowest" in installer
     assert "ArchitecturesAllowed=x64compatible" in installer
@@ -220,11 +223,11 @@ def test_inno_installer_uses_bimmerstein_identity_and_per_user_install():
     assert "WaitForExit" in builder
     assert "compilerProcess.ExitCode" in builder
     assert '[ValidateSet("pyinstaller", "nuitka")]' in builder
-    assert '"-Nuitka-Experimental"' in builder
+    assert '"-Nuitka"' in builder
     assert '"packaging\\verify_dist.py" --backend $Backend' in builder
 
 
-def test_experimental_nuitka_build_is_explicit_and_separate():
+def test_nuitka_build_is_explicit_and_separate():
     build = (ROOT / "build_windows_nuitka.ps1").read_text(encoding="utf-8")
     assert '"--mode=standalone"' in build
     assert '"--msvc=latest"' in build
@@ -232,24 +235,18 @@ def test_experimental_nuitka_build_is_explicit_and_separate():
     assert '"--include-windows-runtime-dlls=yes"' in build
     assert '"--backend", "nuitka"' not in build  # PowerShell invokes these as separate tokens.
     assert '"packaging\\verify_dist.py" --backend nuitka' in build
-    assert "NUITKA_EXPERIMENTAL_NOTICE.txt" in build
-    assert "BimmerStein ECU Tool Nuitka Experimental" in build
+    assert "BimmerStein ECU Tool Nuitka" in build
+    assert "BimmerStein MS41 Patch Definitions.xml" in build
 
     entry = (ROOT / "packaging" / "nuitka_entry.py").read_text(encoding="utf-8")
     assert "sys.frozen = True" in entry
     assert "MS41FlashGUI" in entry
+    assert "window.show_fitted()" in entry
 
     requirements = (ROOT / "requirements-build.txt").read_text(encoding="utf-8")
     assert "nuitka==4.1.3" in requirements
     assert "ordered-set==4.1.0" in requirements
     assert "zstandard==0.25.0" in requirements
-
-    notice = (ROOT / "packaging" / "NUITKA_EXPERIMENTAL_NOTICE.txt").read_text(
-        encoding="utf-8"
-    )
-    assert "Experimental Nuitka Build" in notice
-    assert "PyInstaller installer is the recommended" in notice
-
 
 def test_public_project_license_and_docs_are_gplv3():
     license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
@@ -287,7 +284,7 @@ def test_public_docs_include_product_specific_disclaimer():
         assert "Nothing in this disclaimer limits the rights granted" in text, path
 
 
-def test_public_docs_state_patch_tuning_definitions_are_external():
+def test_public_docs_state_patch_tuning_definition_is_bundled():
     public_docs = (
         ROOT / "README.md",
         ROOT / "RELEASE_NOTES.md",
@@ -298,16 +295,16 @@ def test_public_docs_state_patch_tuning_definitions_are_external():
         normalized = " ".join(text.split())
         lowered = normalized.lower()
         assert "ignition cut" in lowered and "launch control" in lowered, path
-        assert "not bundled" in normalized, path
-        assert "source a compatible definition separately" in lowered, path
+        assert "BimmerStein MS41 Patch Definitions.xml" in normalized, path
+        assert "beside the executable" in lowered, path
 
 
-def test_manual_declares_nuitka_package_experimental():
+def test_manual_declares_both_packaging_backends():
     text = (ROOT / "manual" / "USER_MANUAL.md").read_text(encoding="utf-8")
     normalized = " ".join(text.split())
-    assert "regular PyInstaller package is recommended" in normalized
-    assert "Nuitka-Experimental" in text
-    assert "explicitly **experimental** second option" in normalized
+    assert "PyInstaller and Nuitka packages" in normalized
+    assert "-Nuitka" in text
+    assert "distinct product identity" in normalized
     assert "E659=0xCC" in text
 
 

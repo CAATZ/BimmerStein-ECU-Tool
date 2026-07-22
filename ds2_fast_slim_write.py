@@ -386,6 +386,7 @@ class SlimNativeFastFullWriteSession(
         *,
         connected_family: str,
         verify_write: bool,
+        variant_conversion: bool = False,
         rates: RateProfile = PRODUCTION_RATE_PROFILE,
         timing: FullWriteTiming = FullWriteTiming(),
         challenge: int = INITIAL_CHALLENGE,
@@ -433,6 +434,7 @@ class SlimNativeFastFullWriteSession(
         self.flash_completed = False
         self.safe_legacy_fallback = False
         self.verify_write = bool(verify_write)
+        self.variant_conversion = bool(variant_conversion)
         # Phase-1 bootstrap deployment uses the same native-fast full-write
         # control surface, but deliberately omits the tune-sector phase.  Keep
         # this explicit so retained-session recovery can never silently switch
@@ -613,8 +615,24 @@ class SlimNativeFastFullWriteSession(
             link=LinkRate.HIGH,
             reason="program array complete; tune phase started",
         )
+        midpoint_statuses = (
+            frozenset((0x01, 0x0E))
+            if self.variant_conversion
+            else frozenset((0x01,))
+        )
         for index, request in enumerate(plan.tune_polls_before, 1):
-            self._flash_full(request, f"full_tune_control_poll_{index}")
+            reply = self._flash_full(
+                request,
+                f"full_tune_control_poll_{index}",
+                allowed_statuses=midpoint_statuses,
+            )
+            if reply.status == 0x0E:
+                self._record(
+                    "conversion_midpoint_status_accepted",
+                    status="0x0E",
+                    address=f"0x{request.address:06X}",
+                    scope="pre_tune_poll_only",
+                )
             self._sleep(self.timing.poll_delay)
         self._progress("Erasing calibration region (phase 2 of 2)", 0, 0)
         self._flash_full(plan.tune_erase, "full_tune_sector_erase", 5.0)

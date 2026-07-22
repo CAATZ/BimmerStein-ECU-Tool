@@ -66,6 +66,11 @@ try {
         throw "PyInstaller did not collect the tracked third-party license inventory."
     }
     Move-Item -LiteralPath $collectedLicenses -Destination $publicLicenses
+    $collectedDefinition = Join-Path $appDir "_internal\BimmerStein MS41 Patch Definitions.xml"
+    if (-not (Test-Path -LiteralPath $collectedDefinition -PathType Leaf)) {
+        throw "PyInstaller did not collect the patch definition."
+    }
+    Move-Item -LiteralPath $collectedDefinition -Destination $appDir
 
     $releaseReadme = Get-Content -Raw -LiteralPath "README.md" -Encoding utf8
     $releaseReadme = $releaseReadme.Replace(

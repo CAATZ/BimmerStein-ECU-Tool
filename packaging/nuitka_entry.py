@@ -1,4 +1,4 @@
-"""Frozen entry point shared by the experimental Nuitka package."""
+"""Frozen entry point for the Nuitka package."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def main() -> int:
     configure_application(app)
     install_exception_handler()
     window = MS41FlashGUI()
-    window.show()
+    window.show_fitted()
     return app.exec_()
 
 

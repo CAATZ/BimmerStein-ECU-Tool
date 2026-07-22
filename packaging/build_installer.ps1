@@ -18,8 +18,8 @@ Set-StrictMode -Version Latest
 
 $root = Split-Path -Parent $PSScriptRoot
 $releaseRoot = Join-Path $root "release"
-$isExperimental = $Backend -eq "nuitka"
-$packageSuffix = if ($isExperimental) { "-Nuitka-Experimental" } else { "" }
+$isNuitka = $Backend -eq "nuitka"
+$packageSuffix = if ($isNuitka) { "-Nuitka" } else { "" }
 $releaseName = "BimmerStein-ECU-Tool-$Version-Windows-x64$packageSuffix"
 if (-not $SourceDir) {
     $SourceDir = Join-Path $releaseRoot $releaseName
@@ -107,8 +107,8 @@ try {
         "/DOutputDir=$outputPath",
         "packaging\BimmerSteinECUTool.iss"
     )
-    if ($isExperimental) {
-        $compilerArguments = @("/DNuitkaExperimental") + $compilerArguments
+    if ($isNuitka) {
+        $compilerArguments = @("/DNuitkaBuild") + $compilerArguments
     }
     $compilerArgumentText = ($compilerArguments | ForEach-Object {
         '"' + $_.Replace('"', '\"') + '"'
@@ -127,8 +127,8 @@ try {
     $versionInfo = (Get-Item -LiteralPath $installer).VersionInfo
     $productName = $versionInfo.ProductName.Trim()
     $productVersion = $versionInfo.ProductVersion.Trim()
-    $expectedProductName = if ($isExperimental) {
-        "BimmerStein ECU Tool (Nuitka Experimental)"
+    $expectedProductName = if ($isNuitka) {
+        "BimmerStein ECU Tool (Nuitka)"
     } else {
         "BimmerStein ECU Tool"
     }

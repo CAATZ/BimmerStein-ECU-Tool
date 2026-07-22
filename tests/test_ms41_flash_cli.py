@@ -3,11 +3,11 @@ from types import SimpleNamespace
 import pytest
 
 import ms41_flash
-from checksum import verify_checksum
+from checksum import checksum_status, verify_checksum
 from tests.conftest import ref
 
 
-def test_cli_corrects_ms413_enforced_checksums_and_preserves_program_field(
+def test_cli_corrects_all_ms413_checksums(
         tmp_path, capsys):
     image = bytearray(ref("MS41.3clean"))
     image[0x14020] ^= 0x01
@@ -27,8 +27,8 @@ def test_cli_corrects_ms413_enforced_checksums_and_preserves_program_field(
 
     assert stopped.value.code == 0
     corrected = output.read_bytes()
-    assert corrected[0x6050:0x6052] == program_checksum
+    assert corrected[0x6050:0x6052] != program_checksum
+    assert checksum_status(corrected)["program"] is True
     assert verify_checksum(corrected)[0] is True
     console = capsys.readouterr().out
-    assert "boot and calibration checksums corrected" in console
-    assert "stock program verification is disabled" in console
+    assert "Program corrected" in console

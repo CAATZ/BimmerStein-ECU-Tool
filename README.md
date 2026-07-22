@@ -33,12 +33,10 @@ BimmerStein ECU Tool brings BMW MS41 flashing, diagnostics, configuration, patch
 - Install and use Soft-BSL for supported high-speed operations.
 - Recover an unbootable ECU through the separate hardware-BSL workflow.
 
-The supported release target is **Windows x64**. The recommended release is distributed as both a
-per-user PyInstaller installer and a complete one-folder portable package. In that portable mode,
-the executable must remain beside its `_internal` directory. A separately labeled **experimental
-Nuitka** installer and portable ZIP are also available as a second compatibility option. The
-required Visual C++ runtime is included in every Windows package, so no separate runtime
-installation is required.
+The supported release target is **Windows x64**. PyInstaller and Nuitka builds are distributed as
+per-user installers and complete portable packages. The PyInstaller executable must remain beside
+its `_internal` directory; the Nuitka build uses a flat application folder. The required Visual C++
+runtime is included in every Windows package, so no separate runtime installation is required.
 
 ## Safety
 
@@ -63,7 +61,7 @@ least 10 seconds, then ignition ON.
 
 | Area | Scope |
 | --- | --- |
-| ECU software | BMW MS41.1, MS41.2, and MS41.3; guarded MS41.0 analysis and selected workflows |
+| ECU software | BMW MS41.0, MS41.1, MS41.2, and MS41.3 |
 | Normal diagnostics | BMW DS2 over K-Line, 9600 baud, 8E2 |
 | Stock fast transfer | Native-fast DS2 through FTDI D2XX, requesting the ECU-exact 187,500 baud rate |
 | Soft-BSL | Persistent loader and Intel/AMD RAM agents |
@@ -158,23 +156,20 @@ The Patches tab labels these revisions **UNTESTED**. Deprecated field revisions,
 non-working Ignition Cut V6, remain detectable and remove-only so an older installation can still be
 removed safely during migration.
 
-Installing or removing these firmware patches does not provide the corresponding tuning
-definitions. To configure Ignition Cut or Launch Control parameters in RomRaider, source a
-compatible definition separately and verify that it matches the ECU variant, calibration ID, and
-installed patch revision. Corresponding ready-to-use Ignition Cut and Launch Control definitions
-are not bundled with the Windows release. Using a mismatched definition can expose incorrect tables
-or write to the wrong calibration addresses.
+Every Windows package includes `BimmerStein MS41 Patch Definitions.xml` beside the executable for
+RomRaider or BimmerStein Tuning Suite. It covers the calibration items introduced by supported
+patches; install the matching firmware patch before editing those tables and verify the ECU variant,
+calibration ID, and patch revision. A mismatched definition can expose incorrect tables or write to
+the wrong calibration addresses.
 
 ## Installation
 
-1. Download the regular `Windows-x64-Setup.exe` installer (recommended), or the corresponding
-   complete portable ZIP.
+1. Download either versioned Windows x64 installer, or its corresponding complete portable ZIP.
 2. Run the installer; it installs for the current user without requiring administrator access and
    offers an optional desktop shortcut.
-3. For regular portable use, extract the complete ZIP and keep the executable beside `_internal`.
-4. The assets containing `Nuitka-Experimental` are a separately installed **experimental** second
-   option for compatibility testing. Keep their entire extracted folder together and report that
-   backend when describing a startup or packaging problem.
+3. For portable use, extract the complete ZIP and keep the entire application folder together.
+4. Assets containing `-Nuitka` use the Nuitka backend and install under a distinct product identity
+   so both builds can coexist. Report the selected backend when describing a packaging problem.
 5. Install the driver for the intended FTDI adapter, then run `BimmerStein ECU Tool.exe`.
 
 D2XX is preferred for native-fast DS2, Soft-BSL, and hardware BSL. Normal DS2 and supported

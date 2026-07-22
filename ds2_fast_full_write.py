@@ -206,12 +206,20 @@ class NativeFastFullWriteSession(NativeFastPartialWriteSession):
         self._sleep(self.timing.post_selector_delay)
         self._read_mem(0x1CF4, 3, label="full_high_preamble_0x1CF4")
 
-    def _flash_full(self, request: FlashRequest, label: str, timeout: float = None):
+    def _flash_full(
+        self,
+        request: FlashRequest,
+        label: str,
+        timeout: float = None,
+        *,
+        allowed_statuses=frozenset((0x01,)),
+    ):
         return self.transport.flash(
             request,
             label=label,
             rate=self.link,
             state=self.state,
+            allowed_statuses=frozenset(allowed_statuses),
             first_byte_timeout=timeout,
         )
 

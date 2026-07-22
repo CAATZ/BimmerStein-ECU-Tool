@@ -7,7 +7,7 @@ param(
     [ValidateSet("Commercial", "GPLv3")]
     [string]$PyQtLicenseBasis,
 
-    [switch]$IncludeExperimentalNuitka,
+    [switch]$IncludeNuitka,
 
     [switch]$SkipTests,
 
@@ -29,8 +29,7 @@ function Stage-ReleasePackage {
     param(
         [Parameter(Mandatory = $true)][string]$SourceApp,
         [Parameter(Mandatory = $true)][string]$ReleaseName,
-        [Parameter(Mandatory = $true)][ValidateSet("pyinstaller", "nuitka")][string]$Backend,
-        [Parameter(Mandatory = $true)][bool]$Experimental
+        [Parameter(Mandatory = $true)][ValidateSet("pyinstaller", "nuitka")][string]$Backend
     )
 
     $releaseDir = Join-Path $releaseRoot $ReleaseName
@@ -57,11 +56,10 @@ function Stage-ReleasePackage {
         version = $Version
         platform = "Windows x64"
         build_backend = $Backend
-        experimental = $Experimental
         project_license = "GPL-3.0-only"
         intended_use = "off-road-only"
         pyqt_license_basis = $PyQtLicenseBasis
-        calibration_definitions_bundled = $false
+        calibration_definitions_bundled = $true
         vc_runtime_deployment = "application-local"
         vc_runtime_files_unmodified = $true
         vc_runtime_files = $verification.msvc_runtime
@@ -110,19 +108,15 @@ try {
     $packages += Stage-ReleasePackage `
         -SourceApp (Join-Path $root "dist\BimmerStein ECU Tool") `
         -ReleaseName "BimmerStein-ECU-Tool-$Version-Windows-x64" `
-        -Backend pyinstaller `
-        -Experimental $false
+        -Backend pyinstaller
 
-    if ($IncludeExperimentalNuitka) {
-        # The standard build above owns the source validation gate. Avoid running
-        # the same full suite twice while compiling the alternate frozen backend.
+    if ($IncludeNuitka) {
         & $nuitkaBuildScript -Version $Version -SkipTests
-        if ($LASTEXITCODE -ne 0) { throw "Experimental Nuitka package build failed." }
+        if ($LASTEXITCODE -ne 0) { throw "Nuitka package build failed." }
         $packages += Stage-ReleasePackage `
-            -SourceApp (Join-Path $root "dist\BimmerStein ECU Tool Nuitka Experimental") `
-            -ReleaseName "BimmerStein-ECU-Tool-$Version-Windows-x64-Nuitka-Experimental" `
-            -Backend nuitka `
-            -Experimental $true
+            -SourceApp (Join-Path $root "dist\BimmerStein ECU Tool Nuitka") `
+            -ReleaseName "BimmerStein-ECU-Tool-$Version-Windows-x64-Nuitka" `
+            -Backend nuitka
     }
 
     $artifacts = [System.Collections.Generic.List[string]]::new()
@@ -146,9 +140,6 @@ try {
         Write-Host "Release package: $($package.Archive)"
     }
     Write-Host "Release manifest: $(Join-Path $releaseRoot 'SHA256SUMS.txt')"
-    if ($IncludeExperimentalNuitka) {
-        Write-Warning "The Nuitka installer and portable ZIP are EXPERIMENTAL; the regular PyInstaller installer remains recommended."
-    }
 }
 finally {
     Pop-Location

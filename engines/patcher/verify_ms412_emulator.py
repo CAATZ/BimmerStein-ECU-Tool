@@ -84,7 +84,8 @@ def _build_413():
     image, _log = patch_ms41.build(
         stock, ["ignition_cut_v7", "launch_control_v4"], marker="B")
     status = checksum.checksum_status(image)
-    assert status["boot"] and status["cal"] and status["prog_disabled"], status
+    assert status["boot"] and status["program"] and status["cal"], status
+    assert status["prog_disabled"], status
     return image
 
 
@@ -115,7 +116,8 @@ def _case_image_413(values):
         image[cal_offsets[name]] = value & 0xFF
     image, _details = checksum.correct_checksums(image)
     status = checksum.checksum_status(image)
-    assert status["boot"] and status["cal"] and status["prog_disabled"], status
+    assert status["boot"] and status["program"] and status["cal"], status
+    assert status["prog_disabled"], status
     return bytes(image)
 
 

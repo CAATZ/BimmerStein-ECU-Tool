@@ -35,8 +35,8 @@ exposed by the local runtime; `libffi-8.dll` identifies its ABI only.
 
 - Project: Riverbank Computing PyQt5
 - Installed package metadata: GPL version 3 or a commercial Riverbank license
-- Use: desktop user interface; bundled into the PyInstaller and experimental
-  Nuitka Windows packages
+- Use: desktop user interface; bundled into the PyInstaller and Nuitka Windows
+  packages
 
 The public beta uses the free GPLv3 edition of PyQt5 and the application is
 distributed under GNU GPL version 3 (`GPL-3.0-only`). The complete application
@@ -87,12 +87,11 @@ instead of presenting the text as a byte-identical wheel artifact.
 - License material:
   `THIRD_PARTY_LICENSES/PyInstaller-6.21.0-COPYING.txt`
 
-### Nuitka 4.1.3 runtime (experimental build only)
+### Nuitka 4.1.3 runtime
 
 - Project: Nuitka by Kay Hayen
 - Installed compiler metadata: GNU Affero General Public License version 3
-- Use: build-time compiler and the runtime code linked into the separately
-  labeled experimental Nuitka executable
+- Use: build-time compiler and runtime code linked into the Nuitka executable
 - License material:
   `THIRD_PARTY_LICENSES/Nuitka-4.1.3-LICENSE-RUNTIME.txt`
 
@@ -159,13 +158,14 @@ The project does not need a Python D2XX package and does not intentionally
 bundle `ftd2xx.dll`. If the DLL is redistributed in the future, review FTDI's
 current redistribution terms first.
 
-## User-supplied definition data
+## Definition data
 
-BimmerStein ECU Tool does not bundle a calibration-definition XML. The ROM
-Analyzer can import RomRaider-format MS41 definition files selected by the user
-and stores a private registered copy under the user's local application-data
-folder. Users remain responsible for sourcing and using those files under their
-applicable terms. The application's GPLv3 license does not cover imported data.
+The release bundles `BimmerStein MS41 Patch Definitions.xml`, generated from the
+project's patch descriptors for use with RomRaider or BimmerStein Tuning Suite.
+The ROM Analyzer can also import user-selected RomRaider-format MS41 definition
+files and stores a private registered copy under the user's local
+application-data folder. The application's GPLv3 license does not cover
+separately imported data.
 
 ## Trademarks and independence
 

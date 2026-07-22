@@ -350,7 +350,7 @@ class FlashReplyContract:
     operation: int
     address: int
     count: int
-    status: int = 0x01
+    allowed_statuses: FrozenSet[int] = frozenset((0x01,))
 
     def validate(self, response: DS2Response) -> FlashReply:
         StatusResponseContract(
@@ -376,10 +376,13 @@ class FlashReplyContract:
             raise ContractViolation(
                 f"{self.name}: count {count}, expected {self.count}"
             )
-        if status != self.status:
+        if status not in self.allowed_statuses:
+            expected = ", ".join(
+                f"0x{item:02X}" for item in sorted(self.allowed_statuses)
+            )
             raise ContractViolation(
                 f"{self.name}: flash status 0x{status:02X}, expected "
-                f"0x{self.status:02X}"
+                f"{expected}"
             )
         return FlashReply(operation, address, count, status, response)
 
@@ -387,6 +390,8 @@ class FlashReplyContract:
 def flash_reply_contract(
     mode: FastOperation,
     request: FlashRequest,
+    *,
+    allowed_statuses: FrozenSet[int] = frozenset((0x01,)),
 ) -> FlashReplyContract:
     """Build the mode-specific reply rule observed in the captures."""
 
@@ -419,6 +424,7 @@ def flash_reply_contract(
         operation=response_operation,
         address=expected_address,
         count=expected_count,
+        allowed_statuses=frozenset(int(status) for status in allowed_statuses),
     )
 
 
@@ -431,6 +437,7 @@ def validate_flash_exchange(
     rate: LinkRate = LinkRate.HIGH,
     state: SessionState = SessionState.UNKNOWN,
     label: str = "",
+    allowed_statuses: FrozenSet[int] = frozenset((0x01,)),
 ) -> FlashReply:
     """Validate one exchange and classify an unreadable destructive ACK."""
 
@@ -449,4 +456,8 @@ def validate_flash_exchange(
         if request.destructive and echo_complete:
             raise CommitUnknownError(request, str(error)) from error
         raise
-    return flash_reply_contract(mode, request).validate(response)
+    return flash_reply_contract(
+        mode,
+        request,
+        allowed_statuses=allowed_statuses,
+    ).validate(response)

@@ -2,6 +2,16 @@ from checksum import correct_checksums, checksum_status, verify_checksum
 from tests.conftest import ref
 
 
+def test_ms413_default_correction_updates_program_checksum():
+    source = bytearray(ref("MS41.3"))
+    original = bytes(source[0x6050:0x6052])
+
+    image, _details = correct_checksums(source)
+
+    assert image[0x6050:0x6052] != original
+    assert checksum_status(image)["program"] is True
+
+
 def test_ms413_disabled_program_mismatch_is_informational():
     image, _details = correct_checksums(
         bytearray(ref("MS41.3")), correct_program=False)

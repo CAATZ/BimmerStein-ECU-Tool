@@ -229,9 +229,9 @@ def test_latest_ms412_program_patches_recompute_enabled_program_checksum():
     assert bytes.fromhex("9a180240fa02d607fa02e807") in cave
 
 
-def test_latest_ms413_program_patches_preserve_valid_active_checksums():
+def test_latest_ms413_program_patches_recompute_all_checksums():
     out, _log = patch_ms41.build(
         ref("MS41.3clean"), ["ignition_cut_v7", "launch_control_v4"])
     status = checksum.checksum_status(out)
-    assert status["boot"] and status["cal"] and status["prog_disabled"]
-    assert status["program"] is False
+    assert status["boot"] and status["program"] and status["cal"]
+    assert status["prog_disabled"]

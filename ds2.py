@@ -189,7 +189,7 @@ def _xor(buf) -> int:
 
 def _isn_from_identify(payload: bytes) -> str:
     """The 4-digit ISN is the last 4 ASCII characters of the DS2 identification
-    (cmd 0x00) payload — the same 4 digits the EWS-sync writes to the EWS."""
+    (cmd 0x00) payload — the same 4 digits written to the EWS during alignment."""
     return "".join(chr(b) for b in bytes(payload)[-4:])
 
 

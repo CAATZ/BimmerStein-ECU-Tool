@@ -184,11 +184,13 @@ def test_full_service_uses_slim_session_and_verify_is_optional(monkeypatch, tmp_
         b"target",
         connected_family="amd",
         verify_write=False,
+        variant_conversion=True,
     )
 
     assert result is sentinel
     assert captured["kwargs"]["connected_family"] == "amd"
     assert captured["kwargs"]["verify_write"] is False
+    assert captured["kwargs"]["variant_conversion"] is True
     assert not transport.is_open
 
 

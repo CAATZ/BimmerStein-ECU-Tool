@@ -1,9 +1,7 @@
 # Building BimmerStein ECU Tool
 
-The supported release build is a Windows x64 PyInstaller one-folder package
-distributed as both a portable ZIP and a per-user installer. A separately
-labeled experimental Nuitka standalone package can be built as a second option;
-PyInstaller remains the recommended release backend.
+The supported Windows x64 release is built with both PyInstaller and Nuitka and
+distributed as portable ZIPs and per-user installers.
 All commands below run from the repository root in PowerShell.
 
 ## 1. Create the build environment
@@ -18,8 +16,8 @@ Install Inno Setup 6 when building the installer EXE. The release scripts find
 `ISCC.exe` from `INNO_ISCC`, the standard Program Files locations, or an
 explicit `-IsccPath` argument.
 
-`requirements-build.txt` also pins the experimental Nuitka compiler and its
-build helpers. The Nuitka path uses MSVC because Python 3.14 is not supported by
+`requirements-build.txt` also pins the Nuitka compiler and its build helpers.
+The Nuitka path uses MSVC because Python 3.14 is not supported by
 Nuitka's MinGW mode.
 
 The FTDI D2XX driver is a system dependency used at runtime when available. It
@@ -70,16 +68,15 @@ Output:
 Keep the complete folder together. `BimmerStein ECU Tool.exe` depends on the
 adjacent `_internal` directory.
 
-To compile the separately labeled experimental Nuitka portable package:
+To compile the Nuitka portable package:
 
 ```powershell
-.\build_windows_nuitka.ps1 -Version 0.1.0b4
+.\build_windows_nuitka.ps1 -Version 0.1.0b6
 ```
 
-Its output is `dist\BimmerStein ECU Tool Nuitka Experimental\`. It is a flat
-Nuitka standalone directory and does not use PyInstaller's `_internal` layout.
-The package includes `EXPERIMENTAL-NOTICE.txt`; do not rename or present it as
-the recommended installer without completing a new release qualification.
+Its output is `dist\BimmerStein ECU Tool Nuitka\`. It is a flat Nuitka
+standalone directory and does not use PyInstaller's `_internal` layout. Both
+builds place `BimmerStein MS41 Patch Definitions.xml` beside the executable.
 
 ## 5. Licensing and publication gate
 
@@ -114,29 +111,28 @@ After the release owner has selected a version, create the final ZIP with the
 GPLv3 licensing gate selected for the public beta:
 
 Beta versions use the same compact `bN` suffix as BimmerStein Tuning Suite.
-The current beta is `0.1.0b4`, with Git tag `v0.1.0b4`.
+The current beta is `0.1.0b6`, with Git tag `v0.1.0b6`.
 
 ```powershell
 .\packaging\prepare_release.ps1 `
-    -Version 0.1.0b4 `
+    -Version 0.1.0b6 `
     -PyQtLicenseBasis GPLv3 `
-    -IncludeExperimentalNuitka `
+    -IncludeNuitka `
     -IsccPath "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 ```
 
 The `Commercial` option is reserved for a future distribution whose application
 code and dependencies have been separately cleared for proprietary release. The
 script performs a fresh build, verifies every staged x64 package, records the
-backend, experimental status, project license, and selected PyQt5 basis in
+backend, project license, bundled-definition status, and selected PyQt5 basis in
 `RELEASE-METADATA.json`, and writes the portable ZIPs, per-user installer EXEs,
 individual checksum files, and one complete `SHA256SUMS.txt` under `release\`.
 
-The regular and experimental installers use distinct product identities and
+The PyInstaller and Nuitka installers use distinct product identities and
 installation directories so they can coexist. Both use the BimmerStein icon,
 install under the current user's local application-data folder without
 requiring administrator access, create a Start Menu shortcut, and offer an
-optional desktop shortcut. The Nuitka filenames, installer UI, install folder,
-and package notice all say **Nuitka Experimental**. Use `-SkipInstaller` only
-when intentionally preparing a portable-only build.
+optional desktop shortcut. Nuitka artifacts use the `-Nuitka` suffix. Use
+`-SkipInstaller` only when intentionally preparing a portable-only build.
 
 This script does not commit, push, tag, or publish anything.

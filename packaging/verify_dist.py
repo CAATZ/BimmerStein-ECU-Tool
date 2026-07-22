@@ -10,10 +10,12 @@ import json
 import os
 from pathlib import Path
 import sys
+import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_NAME = "BimmerStein ECU Tool"
+PATCH_DEFINITION_NAME = "BimmerStein MS41 Patch Definitions.xml"
 REQUIRED_PATCH_IDS = {
     "amd_flash",
     "cal_guard",
@@ -218,8 +220,8 @@ def _verify_release_metadata(
         raise RuntimeError("release metadata VC++ runtime hashes do not match the package")
     if metadata.get("build_backend") != backend:
         raise RuntimeError("release metadata has the wrong build backend")
-    if metadata.get("experimental") is not (backend == "nuitka"):
-        raise RuntimeError("release metadata has the wrong experimental-build status")
+    if metadata.get("calibration_definitions_bundled") is not True:
+        raise RuntimeError("release metadata omits the bundled patch definition")
 
 
 def verify_distribution(app_dir: Path, *, expected_backend: str | None = None) -> dict:
@@ -250,6 +252,7 @@ def verify_distribution(app_dir: Path, *, expected_backend: str | None = None) -
         app_dir / "RELEASE_NOTES.md",
         app_dir / "THIRD_PARTY_NOTICES.md",
         app_dir / "BimmerStein-ECU-Tool-User-Manual.pdf",
+        app_dir / PATCH_DEFINITION_NAME,
         content / "assets" / "bimmerstein_ecu_tool.png",
         content / "assets" / "bimmerstein_ecu_tool.ico",
         content / "python314.dll",
@@ -324,15 +327,16 @@ def verify_distribution(app_dir: Path, *, expected_backend: str | None = None) -
     if expected_icon_reference not in release_readme:
         raise RuntimeError("portable README does not reference its packaged application icon")
 
-    experimental_notice = app_dir / "EXPERIMENTAL-NOTICE.txt"
-    if backend == "nuitka":
-        if not experimental_notice.is_file():
-            raise RuntimeError("experimental Nuitka notice is missing from package root")
-        if "EXPERIMENTAL" not in experimental_notice.read_text(
-                encoding="utf-8").upper():
-            raise RuntimeError("Nuitka package notice is not marked experimental")
-    elif experimental_notice.exists():
-        raise RuntimeError("experimental Nuitka notice leaked into PyInstaller package")
+    patch_definition = app_dir / PATCH_DEFINITION_NAME
+    tracked_definition = (
+        ROOT / "engines" / "patcher" / "romraider" / PATCH_DEFINITION_NAME
+    )
+    if patch_definition.read_bytes() != tracked_definition.read_bytes():
+        raise RuntimeError("bundled patch definition does not match tracked source")
+    try:
+        ET.parse(patch_definition)
+    except ET.ParseError as error:
+        raise RuntimeError("bundled patch definition is invalid XML") from error
 
     verified_licenses = _verify_license_inventory(app_dir)
     if content != app_dir and (content / "THIRD_PARTY_LICENSES").exists():
@@ -370,7 +374,7 @@ def verify_distribution(app_dir: Path, *, expected_backend: str | None = None) -
     return {
         "application": str(app_dir),
         "build_backend": backend,
-        "experimental": backend == "nuitka",
+        "patch_definition": PATCH_DEFINITION_NAME,
         "pe_machine": f"0x{machine:04X}",
         "executable_bytes": executable.stat().st_size,
         "patch_count": len(patch_ids),

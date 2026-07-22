@@ -17,6 +17,25 @@ pytestmark = pytest.mark.skipif(not _HAS_QT, reason="PyQt5 not available")
 from tests.conftest import ref
 import patch_service
 import ecu_info
+from ms41 import (
+    CODING_FAMILY_CAL_ADDRS,
+    CODING_FAMILY_FILE_ADDR,
+    CODING_FAMILY_PROGRAM_ADDRS,
+)
+
+
+class _CodingFamilyDS2:
+    def __init__(self, family):
+        self.family = bytes(family)
+        self.reads = []
+
+    def read_mem(self, address, length):
+        self.reads.append((address, length))
+        assert (address, length) == (gui.MS41ECU.CODING_FAMILY_DS2_ADDR, 3)
+        return self.family
+
+    def close(self):
+        pass
 
 
 def _gui():
@@ -112,37 +131,18 @@ def test_full_write_blocks_intel_image_on_connected_amd(monkeypatch):
         w.close()
 
 
-def test_conversion_warning_policy_is_bidirectional_for_ms41_0():
-    supported_pairs = (
-        ("MS41.1", "MS41.2"), ("MS41.2", "MS41.1"),
-        ("MS41.1", "MS41.3"), ("MS41.3", "MS41.2"),
-    )
-    for source, target in supported_pairs:
-        title, risk, ms410 = gui.MS41FlashGUI._conversion_warning_policy(
-            source, target, False)
-        assert title == "Confirm Variant Conversion"
-        assert "supported" in risk
-        assert ms410 is False
-
-    for source, target in (("MS41.0", "MS41.1"), ("MS41.3", "MS41.0")):
-        title, risk, ms410 = gui.MS41FlashGUI._conversion_warning_policy(
-            source, target, False)
-        assert "MS41.0" in title and "Brick Risk" in title
-        assert "existing boot/parameter region" in risk
-        assert ms410 is True
-
-        title, risk, ms410 = gui.MS41FlashGUI._conversion_warning_policy(
-            source, target, True)
-        assert "MS41.0" in title and "Boot Write" in title
-        assert "compatible hardware" in risk
-        assert "not yet been validated" in risk
-        assert ms410 is True
+def test_conversion_warning_policy_supports_all_variants():
+    title, risk = gui.MS41FlashGUI._conversion_warning_policy()
+    assert title == "Confirm Variant Conversion"
+    assert "MS41.0/MS41.1/MS41.2/MS41.3" in risk
+    assert "supported" in risk
 
 
-def test_ms41_0_conversion_is_allowed_after_explicit_untested_warning(monkeypatch):
+def test_ms41_0_conversion_uses_common_confirmation(monkeypatch):
     app, w = _gui()
     try:
         w._ecu_variant = "MS41.0"
+        w._last_full_read = ref("MS41.0")
         warnings = []
         monkeypatch.setattr(
             QMessageBox, "warning",
@@ -154,17 +154,17 @@ def test_ms41_0_conversion_is_allowed_after_explicit_untested_warning(monkeypatc
         w._ds2_write_full(bytearray(ref("MS41.3")), "target.bin")
 
         assert captured.get("ran") is True
-        conversion = next(item for item in warnings if "MS41.0 Conversion" in item[0])
-        assert "not yet been validated" in conversion[1]
-        assert "hardware BSL" in conversion[1]
+        conversion = next(item for item in warnings if item[0] == "Confirm Variant Conversion")
+        assert "MS41.0/MS41.1/MS41.2/MS41.3" in conversion[1]
     finally:
         w.close()
 
 
-def test_conversion_into_ms41_0_is_allowed_after_explicit_untested_warning(monkeypatch):
+def test_conversion_into_ms41_0_uses_common_confirmation(monkeypatch):
     app, w = _gui()
     try:
         w._ecu_variant = "MS41.2"
+        w._last_full_read = ref("MS41.2")
         warnings = []
         monkeypatch.setattr(
             QMessageBox, "warning",
@@ -176,9 +176,8 @@ def test_conversion_into_ms41_0_is_allowed_after_explicit_untested_warning(monke
         w._ds2_write_full(bytearray(ref("MS41.0")), "target-ms410.bin")
 
         assert captured.get("ran") is True
-        conversion = next(item for item in warnings if "MS41.0 Conversion" in item[0])
-        assert "existing boot/parameter region" in conversion[1]
-        assert "may not boot" in conversion[1]
+        conversion = next(item for item in warnings if item[0] == "Confirm Variant Conversion")
+        assert "MS41.0/MS41.1/MS41.2/MS41.3" in conversion[1]
     finally:
         w.close()
 
@@ -188,6 +187,10 @@ def test_conversion_without_a_prior_full_read_is_allowed_when_boot_is_preserved(
     try:
         w._ecu_variant = "MS41.1"
         w._last_full_read = None
+        source = ref("MS41.1")
+        w._ds2 = _CodingFamilyDS2(
+            source[CODING_FAMILY_FILE_ADDR:CODING_FAMILY_FILE_ADDR + 3]
+        )
         _warning_router(monkeypatch, {"Variant Conversion": QMessageBox.Yes})
         critical_calls = []
         monkeypatch.setattr(QMessageBox, "critical",
@@ -200,7 +203,158 @@ def test_conversion_without_a_prior_full_read_is_allowed_when_boot_is_preserved(
 
         assert not critical_calls
         assert captured.get("ran") is True
+        assert w._ds2.reads == [(gui.MS41ECU.CODING_FAMILY_DS2_ADDR, 3)]
     finally:
+        w.close()
+
+
+@pytest.mark.parametrize("route", ("ds2", "native_ds2", "softbsl"))
+def test_boot_preserving_conversion_graft_reaches_every_full_write_route(
+    monkeypatch, route
+):
+    app, w = _gui()
+    try:
+        target = bytearray(b"\xFF" * gui.MS41ECU.FULL_ROM_SIZE)
+        target[CODING_FAMILY_FILE_ADDR:CODING_FAMILY_FILE_ADDR + 3] = b"909"
+        for address in CODING_FAMILY_PROGRAM_ADDRS:
+            target[address:address + 3] = b"909"
+        for address in CODING_FAMILY_CAL_ADDRS:
+            target[address] = ord("9")
+
+        w._ecu_variant = "MS41.1"
+        w._ds2 = _CodingFamilyDS2(b"606")
+        monkeypatch.setattr(w, "_auto_transfer_route", lambda: route)
+        monkeypatch.setattr(
+            gui.MS41ECU, "detect_variant", staticmethod(lambda _data: "MS41.2")
+        )
+        monkeypatch.setattr(
+            gui.MS41ECU, "check_hybrid", staticmethod(lambda _data: None)
+        )
+        monkeypatch.setattr(gui, "verify_checksum", lambda _data: (True, []))
+        monkeypatch.setattr(
+            gui.softbsl_service, "validate_flash_image_family", lambda *a, **k: None
+        )
+        monkeypatch.setattr(gui.patch_service, "boot_write_patches_in", lambda _data: [])
+        monkeypatch.setattr(w, "_softbsl_missing_after_full_write", lambda *a, **k: ())
+        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: QMessageBox.Yes)
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+        monkeypatch.setattr(w, "_finish_flash_success", lambda *a, **k: None)
+        monkeypatch.setattr(w, "_disconnect", lambda: None)
+        captured = {}
+
+        monkeypatch.setattr(
+            w,
+            "_ds2_write",
+            lambda kind, image, *a, **k: captured.update(kind=kind, image=image),
+        )
+        monkeypatch.setattr(
+            w,
+            "_native_fast_write_with_fallback",
+            lambda kind, image, family, *a, **k: captured.update(
+                kind=kind, image=image, native_kwargs=k
+            ),
+        )
+        monkeypatch.setattr(
+            gui.softbsl_service,
+            "run_flash",
+            lambda port, image, *a, **k: captured.update(image=image, soft_kwargs=k),
+        )
+        monkeypatch.setattr(
+            w,
+            "_run_via_softbsl",
+            lambda operation, log_fn, progress_fn, **kwargs:
+                operation("COM1", progress_fn, log_fn),
+        )
+
+        def run_task(task_fn, on_success=None, on_failure=None):
+            result = task_fn(lambda *a, **k: None, lambda *a, **k: None)
+            if on_success:
+                on_success(result)
+
+        monkeypatch.setattr(w, "_run_task", run_task)
+
+        w._ds2_write_full(target, "conversion.bin")
+
+        written = captured["image"]
+        for address in CODING_FAMILY_PROGRAM_ADDRS:
+            assert written[address:address + 3] == b"606"
+        for address in CODING_FAMILY_CAL_ADDRS:
+            assert written[address] == ord("6")
+        assert w._ds2.reads == [(gui.MS41ECU.CODING_FAMILY_DS2_ADDR, 3)]
+        if route == "native_ds2":
+            assert captured["native_kwargs"]["variant_conversion"] is True
+    finally:
+        w._ds2 = None
+        w.close()
+
+
+def test_boot_overwrite_normalizes_mixed_target_to_its_own_boot_family(monkeypatch):
+    app, w = _gui()
+    try:
+        target = bytearray(b"\xFF" * gui.MS41ECU.FULL_ROM_SIZE)
+        target[CODING_FAMILY_FILE_ADDR:CODING_FAMILY_FILE_ADDR + 3] = b"606"
+        for address in CODING_FAMILY_PROGRAM_ADDRS:
+            target[address:address + 3] = b"909"
+        for address in CODING_FAMILY_CAL_ADDRS:
+            target[address] = ord("9")
+
+        w._ecu_variant = "MS41.2"
+        w._ds2 = _CodingFamilyDS2(b"909")
+        w.chk_bootloader_write.setEnabled(True)
+        w.chk_bootloader_write.setChecked(True)
+        w.chk_boot_preserve_identity.setChecked(False)
+        monkeypatch.setattr(w, "_auto_transfer_route", lambda: "softbsl")
+        monkeypatch.setattr(
+            gui.MS41ECU, "detect_variant", staticmethod(lambda _data: "MS41.2")
+        )
+        monkeypatch.setattr(
+            gui.MS41ECU, "check_hybrid", staticmethod(lambda _data: None)
+        )
+        monkeypatch.setattr(gui, "verify_checksum", lambda _data: (True, []))
+        monkeypatch.setattr(
+            gui.softbsl_service, "validate_flash_image_family", lambda *a, **k: None
+        )
+        monkeypatch.setattr(gui.patch_service, "boot_write_patches_in", lambda _data: [])
+        monkeypatch.setattr(w, "_bootloader_write_file_warning", lambda _data: None)
+        monkeypatch.setattr(w, "_softbsl_missing_after_full_write", lambda *a, **k: ())
+        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: QMessageBox.Yes)
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+        monkeypatch.setattr(
+            QInputDialog, "getText", lambda *a, **k: ("WRITE BOOT", True)
+        )
+        monkeypatch.setattr(w, "_finish_flash_success", lambda *a, **k: None)
+        captured = {}
+        monkeypatch.setattr(
+            gui.softbsl_service,
+            "run_flash",
+            lambda port, image, *a, **k: captured.update(image=image, kwargs=k),
+        )
+        monkeypatch.setattr(
+            w,
+            "_run_via_softbsl",
+            lambda operation, log_fn, progress_fn, **kwargs:
+                operation("COM1", progress_fn, log_fn),
+        )
+
+        def run_task(task_fn, on_success=None, on_failure=None):
+            result = task_fn(lambda *a, **k: None, lambda *a, **k: None)
+            if on_success:
+                on_success(result)
+
+        monkeypatch.setattr(w, "_run_task", run_task)
+
+        w._ds2_write_full(target, "mixed-boot.bin")
+
+        written = captured["image"]
+        assert written[CODING_FAMILY_FILE_ADDR:CODING_FAMILY_FILE_ADDR + 3] == b"606"
+        for address in CODING_FAMILY_PROGRAM_ADDRS:
+            assert written[address:address + 3] == b"606"
+        for address in CODING_FAMILY_CAL_ADDRS:
+            assert written[address] == ord("6")
+        assert captured["kwargs"]["write_bootloader"] is True
+        assert w._ds2.reads == []
+    finally:
+        w._ds2 = None
         w.close()
 
 
@@ -231,7 +385,8 @@ def test_boot_write_grafts_live_identity_onto_conversion_target(monkeypatch):
             lambda port, image, *a, **k: captured.update(image=image, kwargs=k))
         monkeypatch.setattr(
             w, "_run_via_softbsl",
-            lambda operation, log_fn, progress_fn: operation("COM1", progress_fn, log_fn))
+            lambda operation, log_fn, progress_fn, **kwargs:
+                operation("COM1", progress_fn, log_fn))
 
         def fake_run_task(task_fn, on_success=None, on_failure=None):
             result = task_fn(lambda *a, **k: None, lambda *a, **k: None)
@@ -304,7 +459,7 @@ def test_required_identity_boot_write_has_no_ds2_fallback(monkeypatch):
         w.close()
 
 
-def test_ms41_0_boot_conversion_warning_explains_untested_but_compatible_path(monkeypatch):
+def test_ms41_0_boot_conversion_uses_common_supported_confirmation(monkeypatch):
     app, w = _gui()
     try:
         w._ecu_variant = "MS41.0"
@@ -316,19 +471,25 @@ def test_ms41_0_boot_conversion_warning_explains_untested_but_compatible_path(mo
 
         def warning(*args, **kwargs):
             warnings.append((args[1], args[2]))
-            return (QMessageBox.No if "MS41.0 Conversion" in args[1]
-                    else QMessageBox.Yes)
+            return QMessageBox.Yes
 
         monkeypatch.setattr(QMessageBox, "warning", warning)
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+        monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: QMessageBox.Ok)
+        monkeypatch.setattr(
+            QInputDialog, "getText",
+            lambda *a, **k: ("WRITE BOOT", True),
+        )
+        monkeypatch.setattr(w, "_run_via_softbsl", lambda *a, **k: None)
         captured = _stub_run_task(monkeypatch, w)
 
         w._ds2_write_full(bytearray(ref("MS41.3")), "target.bin")
 
-        title, message = next(item for item in warnings if "MS41.0 Conversion" in item[0])
-        assert "compatible hardware" in message
-        assert "not yet been validated" in message
-        assert "boot/parameter region will also be overwritten" in message
-        assert "ran" not in captured
+        title, message = next(item for item in warnings if item[0] == "Confirm Variant Conversion")
+        assert "MS41.0/MS41.1/MS41.2/MS41.3" in message
+        assert "supported" in message
+        assert "not yet been validated" not in message
+        assert captured.get("ran") is True
     finally:
         w.close()
 
@@ -356,7 +517,8 @@ def test_boot_write_can_deliberately_use_the_rom_file_identity(monkeypatch):
             lambda port, image, *a, **k: captured.update(image=image, kwargs=k))
         monkeypatch.setattr(
             w, "_run_via_softbsl",
-            lambda operation, log_fn, progress_fn: operation("COM1", progress_fn, log_fn))
+            lambda operation, log_fn, progress_fn, **kwargs:
+                operation("COM1", progress_fn, log_fn))
 
         def fake_run_task(task_fn, on_success=None, on_failure=None):
             result = task_fn(lambda *a, **k: None, lambda *a, **k: None)
@@ -397,7 +559,8 @@ def test_required_identity_write_forces_boot_without_toggling_flash_tab_option(m
             lambda port, image, *a, **k: captured.update(image=image, kwargs=k))
         monkeypatch.setattr(
             w, "_run_via_softbsl",
-            lambda operation, log_fn, progress_fn: operation("COM1", progress_fn, log_fn))
+            lambda operation, log_fn, progress_fn, **kwargs:
+                operation("COM1", progress_fn, log_fn))
 
         def fake_run_task(task_fn, on_success=None, on_failure=None):
             result = task_fn(lambda *a, **k: None, lambda *a, **k: None)
@@ -520,6 +683,7 @@ def test_full_read_caches_identity_source_and_auto_archives(tmp_path, monkeypatc
         out_path = tmp_path / "out.bin"
         monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(out_path), ""))
         monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: QMessageBox.Ok)
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
 
         def fake_run_task(task_fn, on_success=None, on_failure=None):
             result = task_fn(lambda *a, **k: None, lambda *a, **k: None)
