@@ -1,18 +1,30 @@
 <p align="center">
-  <img src="assets/bimmerstein_ecu_tool.png" alt="BimmerStein ECU Tool" width="180">
+  <img src="assets/bimmerstein_ecu_tool.png" alt="BimmerStein ECU Tool" width="160">
 </p>
 
 <h1 align="center">BimmerStein ECU Tool</h1>
+
+<p align="center"><strong>BMW MS41 Programming, Diagnostics, and Recovery</strong></p>
 
 <p align="center">
   Windows desktop software for BMW MS41 programming, diagnostics, calibration work, and recovery.
 </p>
 
 <p align="center">
-  <a href="RELEASE_NOTES.md">Beta Release Notes</a> &bull;
-  <a href="manual/USER_MANUAL.md">User Manual</a> &bull;
+  <strong><a href="RELEASE_NOTES.md">Beta Release Notes</a></strong>
+  &nbsp;&middot;&nbsp;
+  <a href="manual/USER_MANUAL.md">User Manual</a>
+  &nbsp;&middot;&nbsp;
   <a href="BUILDING.md">Build Guide</a>
 </p>
+
+<p align="center">
+  <code>Windows x64</code>&nbsp;&nbsp;
+  <code>BMW MS41 focused</code>&nbsp;&nbsp;
+  <code>GPL-3.0-only</code>
+</p>
+
+---
 
 <p align="center">
   <strong>OFF-ROAD USE ONLY</strong>
