@@ -468,6 +468,7 @@ def build_pdf(output: Path) -> Path:
         author="CAATZ and contributors",
         subject="BMW MS41 programming, diagnostics, and recovery user manual",
         creator="BimmerStein ECU Tool documentation build",
+        invariant=1,
     )
     icon_path = ROOT / "assets" / "bimmerstein_ecu_tool.png"
     cover = [Spacer(1, 26 * mm)]
