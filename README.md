@@ -270,10 +270,14 @@ Public License version 3.
 
 ## Acknowledgements
 
-Special thanks to [NXT-Tronic](https://github.com/NXT-Tronic) and
-[grantUser](https://github.com/grantUser) for collaborative ideation during the development of
-BimmerStein ECU Tool. Special thanks to Alpine and roimaomanik for beta testing, and to Alphamk4
-for testing MS41.0 patches.
+Special thanks to the people who helped shape and validate BimmerStein ECU Tool.
+
+| Contributor | Contribution |
+| --- | --- |
+| [NXT-Tronic](https://github.com/NXT-Tronic) and [grantUser](https://github.com/grantUser) | Collaborative ideation and development feedback |
+| **Alpine** | Beta testing |
+| **roimaomanik** | Beta testing |
+| **Alphamk4** | MS41.0 patch testing |
 
 ## License
 
