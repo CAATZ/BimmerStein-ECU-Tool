@@ -146,7 +146,7 @@ The shared log and progress controls remain visible below it.
 | Bins | Catalog reads, backups, generated images, and notes. |
 | Patches | Compose, detect, migrate, or remove supported firmware patches. |
 | ECU Config | Inspect and modify supported calibration configuration switches. |
-| VIN / EWS | Separate VIN editing and EWS3 alignment workflows. |
+| VIN / EWS | Separate VIN editing and EWS2 alignment workflows. |
 | ROM Analyzer | Inspect a BIN offline without connecting to an ECU. |
 | Soft-BSL | Install and operate the persistent Soft-BSL loader. |
 | BSL-Unbricker | Hardware bootstrap reads, erase, program, and recovery. |
@@ -384,10 +384,10 @@ loader, detected flash family, D2XX connection, and a live identity-sector cache
 connection. The application changes only the packed VIN field and preserves the rest of the owning
 erase sector.
 
-### EWS3 alignment
+### EWS2 alignment
 
 EWS alignment is separate from VIN editing. It reads a fresh live DME ISN, applies the validated
-EWS3 encoding, rechecks the value immediately before transmission, and requires the expected EWS
+EWS2 encoding, rechecks the value immediately before transmission, and requires the expected EWS
 acknowledgement.
 
 > [!WARNING]

@@ -8,6 +8,17 @@ shared by BimmerStein applications.
 
 ## [Unreleased]
 
+## [0.1.0b7] - 2026-07-21
+
+### Fixed
+
+- Corrected the EWS alignment generation label to EWS2 in the application,
+  implementation documentation, and user manual. Protocol behavior is unchanged.
+
+### Changed
+
+- Aligned the README hero and release links with the BimmerStein presentation.
+
 ## [0.1.0b6] - 2026-07-21
 
 ### Added
@@ -124,7 +135,7 @@ configuration, patching, and recovery workflows.
   deprecated-patch detection/removal.
 - Soft-BSL install/read/write workflows and in-circuit hardware-BSL recovery
   for Intel 28F200 and AMD/JEDEC 29F200/29F400 flash chips.
-- ECU identity and ISN reading plus EWS3 alignment helpers.
+- ECU identity and ISN reading plus EWS2 alignment helpers.
 - PyQt5 desktop interface for live ECU operations and offline analysis.
 - Stock native-fast DS2 reads and writes with direct 187,500 baud operation,
   pre-erase stability checks, and safe fallback to normal DS2.

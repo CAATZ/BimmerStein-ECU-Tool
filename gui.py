@@ -4607,7 +4607,7 @@ class MS41FlashGUI(QMainWindow):
 
         # EWS alignment owns its own fresh live ISN state.
         ews_group = QGroupBox(
-            "EWS3 Alignment  (write the DME's 4-digit ISN to the immobilizer, module 0x44)")
+            "EWS2 Alignment  (write the DME's 4-digit ISN to the immobilizer, module 0x44)")
         ews_group.setStyleSheet(_SECTION_GB)
         ews_lay = QVBoxLayout(ews_group)
         ews_read_row = QHBoxLayout()
@@ -4808,7 +4808,7 @@ class MS41FlashGUI(QMainWindow):
             self._identity_isn_key = connection_key or self._identity_connection_key()
             self.id_ews_isn.setText(isn4)
             self.id_ews_frames.setPlainText(
-                "ISN read from DME. Ready to send the validated EWS3 encoding to EWS.")
+                "ISN read from DME. Ready to send the validated EWS2 encoding to EWS.")
             self.btn_ews_send.setEnabled(
                 self._ds2 is not None
                 and self._identity_isn_key == self._identity_connection_key())
@@ -5155,9 +5155,9 @@ class MS41FlashGUI(QMainWindow):
         f = identity.ews_frames(isn)
         ok = QMessageBox.warning(
             self, "Write ISN to EWS?",
-            f"This writes the ISN to the EWS3 immobilizer (module 0x44) — a LIVE immobilizer change.\n\n"
+            f"This writes the ISN to the EWS2 immobilizer (module 0x44) — a LIVE immobilizer change.\n\n"
             f"DME ISN: {isn}\n"
-            f"Validated EWS3 encoded value: 0x{f['hex_value']:03X}\n\n"
+            f"Validated EWS2 encoded value: 0x{f['hex_value']:03X}\n\n"
             "The DME ISN will be reread immediately before the write and must still match. "
             "Success is reported only after a checksum-valid EWS acknowledgement.\n\n"
             "After it succeeds, turn the ignition OFF for 15 seconds.\n\nProceed?",

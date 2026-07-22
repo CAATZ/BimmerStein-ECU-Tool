@@ -2,7 +2,7 @@
 
 The DME's per-unit serial is stored in flash as 9 ASCII digits at file 0x5CE5
 (NUL-terminated at 0x5CEE); its last 4 digits at 0x5CEA are the ISN the external
-EWS3 immobilizer is aligned to. The VIN is 6-bit packed at 0x5D07. The offsets
+EWS2 immobilizer is aligned to. The VIN is 6-bit packed at 0x5D07. The offsets
 are identical across MS41.0/.1/.2/.3 (verified across 8 ECUs). Stdlib only.
 """
 import re
@@ -208,7 +208,7 @@ def ews_frames(isn4: str) -> dict:
     """Build the two DS2 frames for EWS alignment against a 4-digit ISN.
 
     read : ask the DME to report its identity (module 0x12, cmd 0x00).
-    write: store the ISN into the EWS3 (module 0x44, cmd 0x61) as a 12-bit value,
+    write: store the ISN into the EWS2 (module 0x44, cmd 0x61) as a 12-bit value,
            the same number the DME reports in decimal, expressed in hex.
 
     The proven legacy implementation used a 10,000-entry
