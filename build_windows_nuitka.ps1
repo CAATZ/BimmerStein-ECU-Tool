@@ -38,7 +38,12 @@ try {
     if (-not $SkipTests) {
         & $python -m ruff check . --select F,E9
         if ($LASTEXITCODE -ne 0) { throw "Static analysis failed." }
-        & $python -m pytest -q -p no:cacheprovider --basetemp ".pytest-windows-nuitka-build"
+        $testTempRoot = Join-Path $root ".tmp"
+        New-Item -ItemType Directory -Path $testTempRoot -Force | Out-Null
+        $testBaseTemp = Join-Path $testTempRoot (
+            "pytest-windows-nuitka-build-" + [guid]::NewGuid().ToString("N")
+        )
+        & $python -m pytest -q -p no:cacheprovider --basetemp $testBaseTemp
         if ($LASTEXITCODE -ne 0) { throw "Automated tests failed." }
     }
 

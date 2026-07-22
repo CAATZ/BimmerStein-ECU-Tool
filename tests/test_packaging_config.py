@@ -239,6 +239,7 @@ def test_nuitka_build_is_explicit_and_separate():
     assert '"packaging\\verify_dist.py" --backend nuitka' in build
     assert "BimmerStein ECU Tool Nuitka" in build
     assert '"--file-description=BimmerStein ECU Tool"' in build
+    assert "[guid]::NewGuid()" in build
     assert "BimmerStein MS41 Patch Definitions.xml" in build
 
     entry = (ROOT / "packaging" / "nuitka_entry.py").read_text(encoding="utf-8")
