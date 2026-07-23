@@ -13,7 +13,9 @@ PatchError = patch_ms41.PatchError
 # This bootstrap is an internal Soft-BSL installation detail, not a general-purpose
 # firmware patch. Keep its definition available to the installer while omitting it
 # from the Patches-tab catalogue, where baking it into a BIN can cause collisions.
-PATCH_TAB_HIDDEN_IDS = frozenset({"door_0x43"})
+PATCH_TAB_HIDDEN_IDS = frozenset({
+    "door_0x43", "door_0x43_ms410", "door_0x43_ms411",
+})
 
 
 def definitions():

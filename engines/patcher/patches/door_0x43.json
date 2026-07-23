@@ -5,8 +5,7 @@
   "description": "Program-high splice on the clear-adapts 0x43 selector -> a stub that streams+runs a RAM agent from normal mode (no unlock). WIPED by a program reflash (re-deployable). Uses the program-high code cave.",
   "target": "MS41.3",
   "targets": ["MS41.2", "MS41.3"],
-  "recompute": [],
-  "recompute_by_target": {"MS41.2": ["program"]},
+  "recompute": ["program"],
   "requires": [],
   "conflicts": [],
   "cave": {

@@ -40,14 +40,16 @@ EMU_ROOT = _optional_directory("MS41EMU_ROOT")
 TEST_DATA_ROOT = _optional_directory("MS41_TEST_DATA_ROOT")
 REF = _find_reference(TEST_DATA_ROOT, "MS41.2")
 REF_413 = _find_reference(TEST_DATA_ROOT, "MS41.3")
+REF_410 = _find_reference(TEST_DATA_ROOT, "MS41.0")
+REF_411 = _find_reference(TEST_DATA_ROOT, "MS41.1")
 
 
 def test_latest_ms412_patch_set_passes_canonical_emulator_gate():
     if EMU_ROOT is None or not (EMU_ROOT / "ms41emu").is_dir():
         pytest.skip("canonical ms41emu package unavailable; set MS41EMU_ROOT")
-    if REF is None or REF_413 is None:
+    if None in (REF_410, REF_411, REF, REF_413):
         pytest.skip(
-            "MS41.2/MS41.3 references unavailable; set MS41_TEST_DATA_ROOT"
+            "MS41.0-MS41.3 references unavailable; set MS41_TEST_DATA_ROOT"
         )
 
     os.environ["MS41EMU_ROOT"] = str(EMU_ROOT)
@@ -56,6 +58,8 @@ def test_latest_ms412_patch_set_passes_canonical_emulator_gate():
     from engines.patcher import verify_ms412_emulator as gate
 
     assert gate.EMU_ROOT == EMU_ROOT
+    assert gate.STOCK_410_PATH == REF_410
+    assert gate.STOCK_411_PATH == REF_411
     assert gate.STOCK_PATH == REF
     assert gate.STOCK_413_PATH == REF_413
     gate.main()

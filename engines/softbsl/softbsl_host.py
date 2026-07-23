@@ -95,6 +95,12 @@ _DEPRECATED_LOADER_IDS = (
     "softbsl_loader_legacy",
     "softbsl_loader_relocated_v1",
 )
+_DOOR_PATCH_IDS = {
+    "MS41.0": ("door_0x43_ms410", "door_magic_ms410"),
+    "MS41.1": ("door_0x43_ms411", "door_magic_ms411"),
+    "MS41.2": ("door_0x43", "door_magic"),
+    "MS41.3": ("door_0x43", "door_magic"),
+}
 # Exact CPU 0x1C32 CRC helper shipped by the first descriptor-safe relocation.
 # It ACKs the 0x5A trigger and accepts the upload but does not issue the CRC ACK
 # on real C166 hardware.  Keep this synchronized with the deprecated patch
@@ -393,6 +399,13 @@ def crossbank_dry_run(image, log=_emit):
 
 class SoftBSLError(Exception):
     pass
+
+
+def _door_patch_ids(version):
+    try:
+        return _DOOR_PATCH_IDS[version]
+    except KeyError:
+        raise SoftBSLError(f"no Soft-BSL command-door patches for {version!r}") from None
 
 
 class InstallCancelled(SoftBSLError):
@@ -2339,14 +2352,20 @@ def cmd_deploy_splice(args):
 
 def _verify_install(args, target):
     """Read the key install markers back via stock DS2 and compare to the target image."""
+    from engines.patcher.patch_ms41 import load_patches
+    version = _patch_base_version(target)
+    bootstrap_door_id, persistent_door_id = _door_patch_ids(version)
+    patch_defs = load_patches()
+    persistent_off = patch_defs[persistent_door_id]["cave"]["splice_off"]
+    bootstrap_off = patch_defs[bootstrap_door_id]["cave"]["splice_off"]
     spots = [
         ("boot/param1 bank-ID marker @0x5FFC", 0x5FFC, 4),
         ("boot/param1 0x5A hook @0x55A0", 0x55A0, 4),
         ("boot/param1 loader CRC helper @0x5C32", 0x5C32, 4),
         ("boot/param1 loader main @0x5D92", 0x5D92, 4),
         ("boot/param1 loader I/O helper @0x5FC4", 0x5FC4, 4),
-        ("program door        @0x27386", 0x27386, 4),   # door_magic splice (fa0350dc if 0x2A)
-        ("program 0x43 slot   @0x27354", 0x27354, 4),   # da02cc51=stock (0x43 gone) / da036adb=0x43 still there
+        (f"program door        @0x{persistent_off:05X}", persistent_off, 4),
+        (f"program 0x43 slot   @0x{bootstrap_off:05X}", bootstrap_off, 4),
     ]
     d = _open(args)
     ok = True
@@ -2633,7 +2652,7 @@ def _patches_overlap(left, right):
     return False
 
 
-def _temporary_bootstrap_base(base, patch_defs):
+def _temporary_bootstrap_base(base, patch_defs, door_id="door_0x43"):
     """Temporarily remove an exact applied patch that occupies the disposable 0x43 cave.
 
     A persistent feature patch may legitimately use the same program-high cave as the one-shot
@@ -2641,12 +2660,12 @@ def _temporary_bootstrap_base(base, patch_defs):
     the original base so the persistent feature is restored. Unknown/partial states are never
     treated as recoverable here; the caller will still fail closed in the normal compose path.
     """
-    door = patch_defs["door_0x43"]
+    door = patch_defs[door_id]
     result = bytes(base)
     displaced = []
     from engines.patcher.patch_ms41 import is_applied, revert
     for patch_id, patch in patch_defs.items():
-        if patch_id == "door_0x43" or not _patches_overlap(patch, door):
+        if patch_id == door_id or not _patches_overlap(patch, door):
             continue
         if is_applied(result, patch):
             result = bytes(revert(result, patch))
@@ -2654,34 +2673,36 @@ def _temporary_bootstrap_base(base, patch_defs):
     return result, tuple(displaced)
 
 
-def _door_bootstrap_conflicts_are_exact(base, patch_defs):
+def _door_bootstrap_conflicts_are_exact(base, patch_defs, door_id="door_0x43"):
     """Whether a partial 0x43 state is explained by an exact overlapping persistent patch."""
-    door = patch_defs["door_0x43"]
+    door = patch_defs[door_id]
     if _patch_state(base, door) != "partial":
         return False
     from engines.patcher.patch_ms41 import is_applied
     return any(
-        patch_id != "door_0x43"
+        patch_id != door_id
         and _patches_overlap(patch, door)
         and is_applied(base, patch)
         for patch_id, patch in patch_defs.items()
     )
 
 
-def _confirm_reinstall(args, base, patch_defs, patch_ids):
+def _confirm_reinstall(
+        args, base, patch_defs, patch_ids, bootstrap_door_id="door_0x43"):
     """Confirm a complete existing install; reject ambiguous partial patches."""
     states = {patch_id: _patch_state(base, patch_defs[patch_id])
               for patch_id in patch_ids}
     partial = [patch_id for patch_id, state in states.items()
                if state == "partial"
-               and not (patch_id == "door_0x43"
-                        and _door_bootstrap_conflicts_are_exact(base, patch_defs))]
+               and not (patch_id == bootstrap_door_id
+                        and _door_bootstrap_conflicts_are_exact(
+                            base, patch_defs, bootstrap_door_id))]
     if partial:
         raise SoftBSLError(
             "partial/inconsistent patch state detected for "
             + ", ".join(partial)
             + "; refusing to treat this as a safe reinstall")
-    if states.get("door_0x43") == "partial":
+    if states.get(bootstrap_door_id) == "partial":
         _emit("  0x43 bootstrap cave is occupied by an exact persistent patch; "
               "Phase 1 will displace it temporarily and Phase 2 will restore it.")
 
@@ -2712,9 +2733,9 @@ def _patch_base_version(base):
     from ms41 import MS41ECU
     resolved = MS41ECU.resolve_version(bytes(base))
     cal_v, prog_v = resolved.get("cal"), resolved.get("program")
-    if cal_v != prog_v or prog_v not in ("MS41.2", "MS41.3"):
+    if cal_v != prog_v or prog_v not in _DOOR_PATCH_IDS:
         raise SoftBSLError(
-            f"base must be a consistent MS41.2 or MS41.3 image "
+            f"base must be a consistent MS41.0, MS41.1, MS41.2, or MS41.3 image "
             f"(detected cal={cal_v or 'unknown'}, program={prog_v or 'unknown'})")
     return prog_v
 
@@ -2730,10 +2751,9 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
     if len(base) != IMAGE_SIZE:
         raise SoftBSLError(f"base is {len(base)} B, expected {IMAGE_SIZE} (256 KB)")
     version = _patch_base_version(base)
-    if version == "MS41.2" and with_alphan:
+    if version != "MS41.3" and with_alphan:
         raise SoftBSLError(
-            "MS41.2 already contains the native MAF-fault -> AlphaN failover; "
-            "the MS41.3 alphan_failsafe restore patch is not applicable")
+            "the alphan_failsafe restore patch is only applicable to MS41.3")
 
     driver_off = _DRV_SIG_ADDR ^ DESCR
     base_driver = base[driver_off:driver_off + len(_DRV_SIG_INTEL)]
@@ -2756,6 +2776,7 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
 
     from engines.patcher.patch_ms41 import load_patches, is_applied, revert
     patch_defs = load_patches()
+    bootstrap_door_id, persistent_door_id = _door_patch_ids(version)
     clean_base = base
     for old_loader_id in _DEPRECATED_LOADER_IDS:
         old_loader = patch_defs.get(old_loader_id)
@@ -2764,9 +2785,9 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
             # legacy loader and the non-triggering first relocation. Restore each revision's
             # declared pre-patch bytes before composing the current CRC loader.
             clean_base = bytes(revert(clean_base, old_loader))
-    if is_applied(clean_base, patch_defs["door_0x43"]):
-        clean_base = bytes(revert(clean_base, patch_defs["door_0x43"]))
-    patch_ids = (["softbsl_loader", "door_magic"]
+    if is_applied(clean_base, patch_defs[bootstrap_door_id]):
+        clean_base = bytes(revert(clean_base, patch_defs[bootstrap_door_id]))
+    patch_ids = (["softbsl_loader", persistent_door_id]
                  + (["cal_guard"] if with_calguard else [])
                  + (["alphan_failsafe"] if with_alphan else [])
                  + driver_patches)
@@ -2809,7 +2830,7 @@ def _install_resolve_images(args):
     chip = getattr(args, "chip", "auto")
     _emit("\n== compose install images from patches (no shipped .bins) ==")
     if dry and base_src is None and base_inline is None:
-        raise SoftBSLError("  install --dry-run can't read the ECU; pass --base <stock_MS41.2-or-MS41.3.bin> (+ --chip) to dry-run the compose.")
+        raise SoftBSLError("  install --dry-run can't read the ECU; pass --base <supported-stock-MS41.bin> (+ --chip) to dry-run the compose.")
     if dry and chip == "auto":
         raise SoftBSLError("  install --dry-run compose: pass an explicit --chip (auto-detect needs the ECU).")
 
@@ -2910,6 +2931,7 @@ def _install_resolve_images(args):
         raise SoftBSLError(f"  {error}")
     args.target_version = target_version
     _emit(f"  patch target: {target_version}")
+    bootstrap_door_id, _persistent_door_id = _door_patch_ids(target_version)
 
     try:
         target_base, tgt_patches, amd = _persistent_patch_plan(
@@ -2920,7 +2942,7 @@ def _install_resolve_images(args):
         raise SoftBSLError(f"  {error}")
     if not amd and str(chip).startswith("29"):
         _emit("  (base already carries the AMD driver -- amd_flash not needed)")
-    boot_patches = ["softbsl_loader", "door_0x43"] + amd
+    boot_patches = ["softbsl_loader", bootstrap_door_id] + amd
     from engines.patcher.patch_ms41 import load_patches
     patch_defs = load_patches()
     relevant_patches = list(dict.fromkeys(boot_patches + tgt_patches))
@@ -2936,7 +2958,9 @@ def _install_resolve_images(args):
             _emit("  non-triggering relocated loader v1 detected: migrating to the current CRC implementation")
         if "softbsl_loader_legacy" in old_loaders_installed:
             _emit("  legacy loader @0x5D36 detected: migrating to the descriptor-safe relocated layout")
-    _confirm_reinstall(args, base, patch_defs, confirm_patches)
+    _confirm_reinstall(
+        args, base, patch_defs, confirm_patches,
+        bootstrap_door_id=bootstrap_door_id)
     _emit(f"  bootstrap = [{', '.join(boot_patches)}]")
     _emit(f"  target    = [{', '.join(tgt_patches)}]")
     import tempfile
@@ -2955,7 +2979,8 @@ def _install_resolve_images(args):
     # safely reverted. A different persistent feature may occupy the same code cave as the
     # disposable door; displace only that exact patch for Phase 1. Phase 2 is still composed from
     # target_base, so the feature returns in the final image.
-    bootstrap_base, displaced = _temporary_bootstrap_base(target_base, patch_defs)
+    bootstrap_base, displaced = _temporary_bootstrap_base(
+        target_base, patch_defs, bootstrap_door_id)
     if displaced:
         _emit("  bootstrap temporarily displaces: " + ", ".join(displaced)
               + " (restored by the Phase-2 target)")
@@ -2975,7 +3000,7 @@ def _ms41_install_scope(version, preserve_cal=True):
     """Calibration-safe persistent-install scope for a consistent target version."""
     if not preserve_cal:
         return "full"
-    if version in ("MS41.2", "MS41.3"):
+    if version in _DOOR_PATCH_IDS:
         return "softbsl_ms412"
     raise SoftBSLError(f"no calibration-safe Soft-BSL install scope for {version!r}")
 
@@ -3475,7 +3500,7 @@ def main():
     pin.add_argument("target", nargs="?", help="[legacy] a pre-built 256 KB target image. OMIT to COMPOSE "
                                                "it (+ the bootstrap) from patches -- see --base.")
     pin.add_argument("--bootstrap", help="[legacy] a pre-built 0x43-door bootstrap image. Omit with `target` to compose.")
-    pin.add_argument("--base", help="COMPOSE mode: a consistent MS41.2 or MS41.3 base .bin to patch. Omit to read the base "
+    pin.add_argument("--base", help="COMPOSE mode: a consistent MS41.0-MS41.3 base .bin to patch. Omit to read the base "
                                     "off the ECU over stock DS2 (default). Ignored if `target`+`--bootstrap` are given.")
     pin.add_argument("--with-calguard", action="store_true",
                      help="compose mode: add the cal_guard no-brick version gate to the target (recommended).")

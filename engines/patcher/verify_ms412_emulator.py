@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute the current MS41.2/MS41.3 patch set in canonical ms41emu.
+"""Execute the current MS41.0-MS41.3 patch set in canonical ms41emu.
 
 This is a behavioural gate for the port, not a replacement for on-car/HIL tests.
 It composes the real JSON descriptors through ``patch_ms41.build``, keeps every
@@ -58,6 +58,8 @@ from ms41emu import Emulator  # noqa: E402
 from ms41emu.gate import verify_cal_guard  # noqa: E402
 
 
+STOCK_410_PATH = _find_reference(TEST_DATA_ROOT, "MS41.0")
+STOCK_411_PATH = _find_reference(TEST_DATA_ROOT, "MS41.1")
 STOCK_PATH = _find_reference(TEST_DATA_ROOT, "MS41.2")
 STOCK_413_PATH = _find_reference(TEST_DATA_ROOT, "MS41.3")
 PATCHES = patch_ms41.load_patches()
@@ -68,7 +70,11 @@ LATEST = [
 
 
 def _build(ids):
-    stock = STOCK_PATH.read_bytes()
+    return _build_from(STOCK_PATH, ids)
+
+
+def _build_from(stock_path, ids):
+    stock = stock_path.read_bytes()
     image, _log = patch_ms41.build(stock, ids, marker="B")
     status = checksum.checksum_status(image)
     assert status["boot"] and status["program"] and status["cal"], status
@@ -77,6 +83,33 @@ def _build(ids):
 
 FULL_IMAGE = _build(LATEST)
 BOOTSTRAP_IMAGE = _build(["amd_flash", "softbsl_loader", "door_0x43"])
+
+
+def _build_softbsl_pair(stock_path, bootstrap_door, persistent_door):
+    common = ["amd_flash", "softbsl_loader"]
+    return (
+        _build_from(stock_path, [*common, "cal_guard", persistent_door]),
+        _build_from(stock_path, [*common, bootstrap_door]),
+    )
+
+
+SOFTBSL_410_IMAGE, BOOTSTRAP_410_IMAGE = _build_softbsl_pair(
+    STOCK_410_PATH, "door_0x43_ms410", "door_magic_ms410")
+SOFTBSL_411_IMAGE, BOOTSTRAP_411_IMAGE = _build_softbsl_pair(
+    STOCK_411_PATH, "door_0x43_ms411", "door_magic_ms411")
+SOFTBSL_413_IMAGE, BOOTSTRAP_413_IMAGE = _build_softbsl_pair(
+    STOCK_413_PATH, "door_0x43", "door_magic")
+
+SOFTBSL_VARIANTS = {
+    "MS41.0": (SOFTBSL_410_IMAGE, BOOTSTRAP_410_IMAGE,
+               0x2556, 0x2A06, 0x2536, 0x3D96, 0xDBEC),
+    "MS41.1": (SOFTBSL_411_IMAGE, BOOTSTRAP_411_IMAGE,
+               0x32A8, 0x376C, 0x3276, 0x508E, 0xF606),
+    "MS41.2": (FULL_IMAGE, BOOTSTRAP_IMAGE,
+               0x3386, 0x385E, 0x3354, 0x51CC, 0xDBEC),
+    "MS41.3": (SOFTBSL_413_IMAGE, BOOTSTRAP_413_IMAGE,
+               0x3386, 0x385E, 0x3354, 0x51CC, 0xDBEC),
+}
 
 
 def _build_413():
@@ -90,6 +123,64 @@ def _build_413():
 
 
 FULL_413_IMAGE = _build_413()
+
+
+OLDER_FEATURE_LAYOUTS = {
+    "MS41.0": {
+        "stock_path": STOCK_410_PATH,
+        "patch_ids": (
+            "ignition_cut_v7_ms410",
+            "launch_control_v4_ms410",
+            "vanos_minrpm_ms410",
+        ),
+        "ignition_id": "ignition_cut_v7_ms410",
+        "launch_id": "launch_control_v4_ms410",
+        "vanos_id": "vanos_minrpm_ms410",
+        "ignition_hooks": (0x26F8, 0x275C),
+        "ignition_entry": 0x26E8,
+        "ignition_cave_cpu": 0x32820,
+        "ignition_replay_cpu": 0x3288A,
+        "rpm_address": 0xFAE6,
+        "paired_selector": 0xFD4E,
+        "launch_hook": 0x0710,
+        "launch_continuations": (0x0714, 0x0726),
+        "soft_limit_address": 0xED52,
+        "hard_sites": (
+            (0x07C4, (0x07CE, 0x081E)),
+            (0x0864, (0x0880, 0x086E)),
+        ),
+    },
+    "MS41.1": {
+        "stock_path": STOCK_411_PATH,
+        "patch_ids": (
+            "ignition_cut_v7_ms411",
+            "launch_control_v4_ms411",
+            "vanos_minrpm_ms411",
+        ),
+        "ignition_id": "ignition_cut_v7_ms411",
+        "launch_id": "launch_control_v4_ms411",
+        "vanos_id": "vanos_minrpm_ms411",
+        "ignition_hooks": (0xF466, 0xF4CA),
+        "ignition_entry": 0xF456,
+        "ignition_cave_cpu": 0x3F680,
+        "ignition_replay_cpu": 0x3F6EA,
+        "rpm_address": 0xFC3C,
+        "paired_selector": 0xFD5E,
+        "launch_hook": 0x07D6,
+        "launch_continuations": (0x07DA, 0x07EC),
+        "soft_limit_address": 0xF02C,
+        "hard_sites": (
+            (0x088A, (0x0894, 0x08E4)),
+            (0x092A, (0x0946, 0x0934)),
+        ),
+        "vanos_hook": 0xBBC0,
+        "vanos_outcomes": (0xBBC8, 0xBBCE),
+    },
+}
+
+for _layout in OLDER_FEATURE_LAYOUTS.values():
+    _layout["image"] = _build_from(
+        _layout["stock_path"], list(_layout["patch_ids"]))
 
 
 def _case_image(values):
@@ -121,6 +212,19 @@ def _case_image_413(values):
     return bytes(image)
 
 
+def _case_image_older(layout, values):
+    image = bytearray(layout["image"])
+    cal_offsets = {}
+    for patch_id in layout["patch_ids"]:
+        cal_offsets.update(PATCHES[patch_id].get("cave", {}).get("cals", {}))
+    for name, value in values.items():
+        image[cal_offsets[name]] = value & 0xFF
+    image, _details = checksum.correct_checksums(image, correct_program=True)
+    status = checksum.checksum_status(image)
+    assert status["boot"] and status["program"] and status["cal"], status
+    return bytes(image)
+
+
 def _emu(image, dpp0=5):
     emu = Emulator.load(image)
     emu.reg.dpp[0] = dpp0
@@ -137,72 +241,73 @@ def _crc16(data, init=0xFFFF):
 
 
 def verify_loader_and_doors():
-    # Execute the real SA1 dispatcher call slot. File 0x55A0 maps to CPU 0x15A0;
-    # its relocated operand must enter the new main at CPU 0x1D92.
-    emu = _emu(FULL_IMAGE)
-    res = emu.run_from(0x15A0, stop_at=(0x1D92,), max_steps=10)
-    assert res.final_pc == 0x1D92 and res.exit_reason == "stop_at", res
+    for version, case in SOFTBSL_VARIANTS.items():
+        (image, bootstrap, persistent_hook, nak_handler,
+         bootstrap_hook, clear_handler, bootstrap_tx) = case
 
-    # Relocated loader: ordinary traffic must fall through to the stock handler.
-    emu = _emu(FULL_IMAGE)
-    emu.write_byte(0xE653, 0x00)
-    res = emu.run_from(0x1D92, stop_at=(0x0A44,), max_steps=100)
-    assert res.final_pc == 0x0A44 and res.exit_reason == "stop_at", res
+        # The common SA1 dispatcher, loader, and CRC helper execute on every base.
+        emu = _emu(image)
+        res = emu.run_from(0x15A0, stop_at=(0x1D92,), max_steps=10)
+        assert res.final_pc == 0x1D92 and res.exit_reason == "stop_at", (version, res)
 
-    # A valid 0x5A/0x9C9C header reaches the relocated TX helper at CPU 0x1FD8.
-    emu = _emu(FULL_IMAGE)
-    emu.write_byte(0xE653, 0x5A)
-    emu.write_byte(0xE423, 0x9C)
-    emu.write_byte(0xE424, 0x9C)
-    res = emu.run_from(0x1D92, stop_at=(0x1FD8,), max_steps=100)
-    assert res.final_pc == 0x1FD8 and res.exit_reason == "stop_at", res
+        emu = _emu(image)
+        emu.write_byte(0xE653, 0x00)
+        res = emu.run_from(0x1D92, stop_at=(0x0A44,), max_steps=100)
+        assert res.final_pc == 0x0A44 and res.exit_reason == "stop_at", (version, res)
 
-    # Execute the relocated CRC helper against both matching and bad headers.
-    payload = b"MS41.2 relocated loader"
-    expected = _crc16(payload)
-    for supplied, want_ip, want_rl4 in (
-        # Stop on the RETS after the result byte has been written.  The two
-        # result MOVB instructions start at 0x1C6E/0x1C72 respectively.
-        (expected, 0x1C70, 0), (expected ^ 1, 0x1C74, 1),
-    ):
-        emu = _emu(FULL_IMAGE)
-        for index, value in enumerate(payload):
-            emu.write_byte(0xD800 + index, value)
-        emu.reg.r[5] = 0xD800 + len(payload)
-        emu.write_byte(0xE427, supplied >> 8)
-        emu.write_byte(0xE428, supplied & 0xFF)
-        res = emu.run_from(0x1C32, stop_at=(0x1C70, 0x1C74), max_steps=10000)
-        assert res.final_pc == want_ip and (emu.reg.r[4] & 0xFF) == want_rl4, (
-            supplied, res, emu.reg.r[4])
+        emu = _emu(image)
+        emu.write_byte(0xE653, 0x5A)
+        emu.write_byte(0xE423, 0x9C)
+        emu.write_byte(0xE424, 0x9C)
+        res = emu.run_from(0x1D92, stop_at=(0x1FD8,), max_steps=100)
+        assert res.final_pc == 0x1FD8 and res.exit_reason == "stop_at", (version, res)
 
-    # Persistent 0x2A door: passthrough and matched reset/commit paths.
-    emu = _emu(FULL_IMAGE)
-    emu.cpu.csp = 2
-    emu.write_byte(0xE653, 0x00)
-    res = emu.run_from(0x3386, stop_at=(0x385E,), max_steps=100)
-    assert res.final_pc == 0x385E, res
+        payload = f"{version} relocated loader".encode()
+        expected = _crc16(payload)
+        for supplied, want_ip, want_rl4 in (
+            (expected, 0x1C70, 0), (expected ^ 1, 0x1C74, 1),
+        ):
+            emu = _emu(image)
+            for index, value in enumerate(payload):
+                emu.write_byte(0xD800 + index, value)
+            emu.reg.r[5] = 0xD800 + len(payload)
+            emu.write_byte(0xE427, supplied >> 8)
+            emu.write_byte(0xE428, supplied & 0xFF)
+            res = emu.run_from(
+                0x1C32, stop_at=(0x1C70, 0x1C74), max_steps=10000)
+            assert res.final_pc == want_ip and (emu.reg.r[4] & 0xFF) == want_rl4, (
+                version, supplied, res, emu.reg.r[4])
 
-    emu = _emu(FULL_IMAGE)
-    emu.cpu.csp = 2
-    emu.write_byte(0xE653, 0x2A)
-    res = emu.run_from(0x3386, stop_at=(0x1A62,), max_steps=100)
-    assert res.final_pc == 0x1A62 and emu.read(0xE740) == 1, (
-        res, emu.read(0xE740))
+        # Persistent 0x2A door: stock NAK passthrough and matched commit paths.
+        emu = _emu(image)
+        emu.cpu.csp = 2
+        emu.write_byte(0xE653, 0x00)
+        res = emu.run_from(persistent_hook, stop_at=(nak_handler,), max_steps=100)
+        assert res.final_pc == nak_handler, (version, res)
 
-    # Disposable 0x43 bootstrap door: passthrough and valid-header helper jump.
-    emu = _emu(BOOTSTRAP_IMAGE)
-    emu.cpu.csp = 2
-    emu.write_byte(0xE653, 0x00)
-    res = emu.run_from(0x3354, stop_at=(0x51CC,), max_steps=100)
-    assert res.final_pc == 0x51CC, res
+        emu = _emu(image)
+        emu.cpu.csp = 2
+        emu.write_byte(0xE653, 0x2A)
+        res = emu.run_from(persistent_hook, stop_at=(0x1A62,), max_steps=100)
+        assert res.final_pc == 0x1A62 and emu.read(0xE740) == 1, (
+            version, res, emu.read(0xE740))
 
-    emu = _emu(BOOTSTRAP_IMAGE)
-    emu.cpu.csp = 2
-    emu.write_byte(0xE653, 0x43)
-    emu.write_byte(0xE423, 0x9C)
-    emu.write_byte(0xE424, 0x9C)
-    res = emu.run_from(0x3354, stop_at=(0xDBEC,), max_steps=100)
-    assert res.final_pc == 0xDBEC and emu.cpu.csp == 3, res
+        # Disposable 0x43 door: stock clear-adapts passthrough and RAM-agent upload.
+        emu = _emu(bootstrap)
+        emu.cpu.csp = 2
+        emu.write_byte(0xE653, 0x00)
+        res = emu.run_from(
+            bootstrap_hook, stop_at=(clear_handler,), max_steps=100)
+        assert res.final_pc == clear_handler, (version, res)
+
+        emu = _emu(bootstrap)
+        emu.cpu.csp = 2
+        emu.write_byte(0xE653, 0x43)
+        emu.write_byte(0xE423, 0x9C)
+        emu.write_byte(0xE424, 0x9C)
+        res = emu.run_from(
+            bootstrap_hook, stop_at=(bootstrap_tx,), max_steps=100)
+        assert res.final_pc == bootstrap_tx and emu.cpu.csp == 3, (version, res)
 
 
 IGNITION_HOOKS = (0xD92A, 0xD98E)       # IP values while CSP=3
@@ -512,11 +617,236 @@ def verify_composed_launch_and_ignition(case_image=_case_image):
             name, request, cut, stock, want, hygiene)
 
 
+def _run_older_ignition(
+        layout, image, *, rpm, pins=0, request=False, hook=None, mask=0xFE):
+    hook = layout["ignition_hooks"][0] if hook is None else hook
+    emu = _emu(image, dpp0=4)
+    emu.write_byte(layout["rpm_address"], rpm)
+    emu.write_byte(0xFD60, pins & 0xFF)
+    emu.write_byte(0xFD61, (pins >> 8) & 0xFF)
+    emu.write(0xFD5A, 0x0080 if request else 0)
+    emu.write_byte(0xFF04, 0xFF)
+    emu.reg.r[1] = 0x1200 | mask
+    emu.reg.r[4] = 0xA55A
+    visited = []
+    emu.cpu.set_trace(lambda pc, _opcode: visited.append(pc))
+    emu.cpu.csp = 3
+    sp0 = emu.state()["regs"]["sp"]
+    res = emu.run_from(hook, stop_at=(hook + 4,), max_steps=300)
+    replayed = layout["ignition_replay_cpu"] in visited
+    hygiene = (
+        res.final_pc == hook + 4 and res.exit_reason == "stop_at"
+        and layout["ignition_cave_cpu"] in visited
+        and res.regs["dpp"][0] == 4
+        and emu.reg.r[4] == 0xA55A
+        and emu.reg.r[1] == (0x1200 | mask)
+        and res.regs["sp"] == sp0
+    )
+    return (
+        not replayed and emu.read_byte(0xFF04) == 0xFF,
+        replayed and emu.read_byte(0xFF04) == mask,
+        hygiene,
+    )
+
+
+def _verify_older_ignition(layout):
+    cases = [
+        ("always above", 0x00, 0x7D, 0xC8, 0, False, True),
+        ("always equal", 0x00, 0x7D, 0x7D, 0, False, True),
+        ("always below", 0x00, 0x7D, 0x64, 0, False, False),
+        ("off", 0xFF, 0x7D, 0xC8, 0, False, False),
+        ("pin80", 0x01, 0x7D, 0xC8, SIR_PIN_WORDS[0x01], False, True),
+        ("pin81", 0x02, 0x7D, 0xC8, SIR_PIN_WORDS[0x02], False, True),
+        ("pin82", 0x04, 0x7D, 0xC8, SIR_PIN_WORDS[0x04], False, True),
+        ("launch request", 0xFF, 0xD7, 0x64, 0, True, True),
+    ]
+    for name, switch, limit, rpm, pins, request, wants_cut in cases:
+        image = _case_image_older(
+            layout, {"CUTSW": switch, "CUTRPM": limit})
+        cut, stock, hygiene = _run_older_ignition(
+            layout, image, rpm=rpm, pins=pins, request=request)
+        assert cut == wants_cut and stock == (not wants_cut) and hygiene, (
+            name, cut, stock, hygiene)
+
+    # Both recurring sites and all six native single-cylinder masks execute the
+    # real descriptor CALLS and return with the stock/cut P1L result.
+    cut_image = _case_image_older(layout, {"CUTSW": 0x00, "CUTRPM": 0x7D})
+    stock_image = _case_image_older(layout, {"CUTSW": 0xFF, "CUTRPM": 0x7D})
+    for hook in layout["ignition_hooks"]:
+        for image, wants_cut in ((cut_image, True), (stock_image, False)):
+            cut, stock, hygiene = _run_older_ignition(
+                layout, image, rpm=0xC8, hook=hook)
+            assert cut == wants_cut and stock == (not wants_cut) and hygiene
+    for index, mask in enumerate(IGNITION_SINGLE_MASKS):
+        for image, wants_cut in ((cut_image, True), (stock_image, False)):
+            emu = _emu(image, dpp0=4)
+            emu.write_byte(layout["rpm_address"], 0xC8)
+            emu.write_byte(0xFA5F, index)
+            emu.write(layout["paired_selector"], 0)
+            emu.write(0xFD5A, 0)
+            emu.write_byte(0xFF04, 0xFF)
+            emu.cpu.csp = 3
+            res = emu.run_from(
+                layout["ignition_entry"],
+                stop_at=(layout["ignition_hooks"][0] + 4,),
+                max_steps=300,
+            )
+            assert res.exit_reason == "stop_at"
+            assert emu.read_byte(0xFF04) == (0xFF if wants_cut else mask), (
+                index, hex(mask), wants_cut, res)
+
+
+def _run_older_launch(
+        layout, image, *, speed, tps, fd60=0, fd61=0, soft=0xCB,
+        fd30_4=False, latch=False):
+    emu = _emu(image)
+    emu.write_byte(0xF19A, speed)
+    emu.write_byte(0xE8D0, tps)
+    emu.write_byte(layout["rpm_address"], 0xC8)
+    emu.write_byte(0xFD60, fd60)
+    emu.write_byte(0xFD61, fd61)
+    emu.write(0xFD5A, 0x0040 if latch else 0)
+    emu.write(0xFD30, 0x0010 if fd30_4 else 0)
+    emu.write_byte(layout["soft_limit_address"], soft)
+    emu.cpu.csp = 2
+    sp0 = emu.state()["regs"]["sp"]
+    res = emu.run_from(
+        layout["launch_hook"],
+        stop_at=layout["launch_continuations"],
+        max_steps=600,
+    )
+    return emu, res, sp0
+
+
+def _verify_older_launch(layout):
+    state_cases = [
+        ("off", 0xFF, 0, 0, 0xC0, 0, 0, 1, False),
+        ("always", 0x00, 0, 0, 0xC0, 0, 0, 0, True),
+        ("pin80 arm", 0x01, 0, 0, 0xC0, *SIR_PIN_BYTES[0x01], 0, True),
+        ("pin80 hold zero", 0x01, 0, 0, 0xC0, 0, 0, 0, False),
+        ("pin80 hold one", 0x01, 0, 0, 0xC0, 0, 0, 1, True),
+        ("pin81", 0x02, 0, 0, 0xC0, *SIR_PIN_BYTES[0x02], 0, True),
+        ("pin82", 0x04, 0, 0, 0xC0, *SIR_PIN_BYTES[0x04], 0, True),
+        ("release speed", 0x01, 0, 0x28, 0xC0, *SIR_PIN_BYTES[0x01], 1, False),
+        ("release TPS", 0x01, 0, 0, 0x40, *SIR_PIN_BYTES[0x01], 1, False),
+        ("mid-shift no arm", 0x01, 0, 0x14, 0xC0, *SIR_PIN_BYTES[0x01], 0, False),
+        ("rollout hold", 0x01, 0, 0x14, 0xC0, 0, 0, 1, True),
+        ("active-low", 0x01, 1, 0, 0xC0, 0, 0, 0, True),
+    ]
+    for (
+        name, switch, polarity, speed, tps, fd60, fd61, initial_latch,
+        wants_latch,
+    ) in state_cases:
+        image = _case_image_older(layout, {
+            "LC_SW": switch, "LC_CUTTYPE": 1,
+            "LC_CLUTCHPOL": polarity, **A_THRESHOLDS,
+            "LC_MAXRPM": 0x7D,
+        })
+        emu, res, sp0 = _run_older_launch(
+            layout, image, speed=speed, tps=tps, fd60=fd60, fd61=fd61,
+            latch=initial_latch)
+        assert (
+            bool(emu.read(0xFD5A) & 0x40) == wants_latch
+            and res.exit_reason == "stop_at"
+            and res.regs["sp"] == sp0 and res.regs["dpp"][0] == 5
+        ), (name, res, hex(emu.read(0xFD5A)))
+
+    soft_cases = [
+        ("off", 0xFF, 0, 0x7D, 0xCB, 0xCB),
+        ("fuel clamp", 0x00, 0, 0x7D, 0xCB, 0x7D),
+        ("fuel keep", 0x00, 0, 0xD0, 0xCB, 0xCB),
+        ("ignition mode", 0x00, 1, 0x7D, 0xCB, 0xCB),
+    ]
+    for name, switch, cut_type, limit, stock_limit, wanted in soft_cases:
+        image = _case_image_older(layout, {
+            "LC_SW": switch, "LC_CUTTYPE": cut_type,
+            "LC_CLUTCHPOL": 0, "LC_MAXRPM": limit, **A_THRESHOLDS,
+        })
+        emu, res, sp0 = _run_older_launch(
+            layout, image, speed=0, tps=0xC0, soft=stock_limit)
+        assert (
+            emu.read_byte(layout["soft_limit_address"]) == wanted
+            and res.exit_reason == "stop_at"
+            and res.regs["sp"] == sp0 and res.regs["dpp"][0] == 5
+        ), (name, res, emu.read_byte(layout["soft_limit_address"]))
+
+    hard_cases = [
+        ("below", 1, 0, 0x7D, 0x90, 0x8F, 0),
+        ("at", 1, 0, 0x7D, 0x90, 0x90, 1),
+        ("below-soft clamp", 1, 0, 0x7D, 0x70, 0x7C, 0),
+        ("at-soft clamp", 1, 0, 0x7D, 0x70, 0x7D, 1),
+        ("FF fallback below", 1, 0, 0x7D, 0xFF, 0x7F, 0),
+        ("FF fallback at", 1, 0, 0x7D, 0xFF, 0x80, 1),
+        ("stock below", 0, 0, 0x7D, 0x90, 0xCD, 0),
+        ("stock at", 0, 0, 0x7D, 0x90, 0xCE, 1),
+        ("ignition uses stock", 1, 1, 0x7D, 0x90, 0xCD, 0),
+    ]
+    for name, latch, cut_type, soft, hard, rpm, result_index in hard_cases:
+        image = _case_image_older(layout, {
+            "LC_CUTTYPE": cut_type, "LC_MAXRPM": soft, "LC_HARDRPM": hard,
+        })
+        for entry, outcomes in layout["hard_sites"]:
+            emu = _emu(image)
+            emu.write(0xFD5A, 0x0040 if latch else 0)
+            emu.write_byte(layout["rpm_address"], rpm)
+            emu.cpu.csp = 2
+            sp0 = emu.state()["regs"]["sp"]
+            res = emu.run_from(entry, stop_at=outcomes, max_steps=300)
+            assert (
+                res.final_pc == outcomes[result_index]
+                and res.exit_reason == "stop_at"
+                and res.regs["sp"] == sp0 and res.regs["dpp"][0] == 5
+            ), (name, entry, outcomes, res)
+
+    # Ignition-mode launch request composes with this firmware's V7 hook.
+    image = _case_image_older(layout, {
+        "CUTSW": 0xFF, "CUTRPM": 0xD7,
+        "LC_SW": 0x00, "LC_CUTTYPE": 1, "LC_CLUTCHPOL": 0,
+        "LC_MAXRPM": 0x7D, **A_THRESHOLDS,
+    })
+    emu, res, _sp0 = _run_older_launch(
+        layout, image, speed=0, tps=0xC0)
+    request = bool(emu.read(0xFD5A) & 0x80)
+    cut, stock, hygiene = _run_older_ignition(
+        layout, image, rpm=0xC8, request=request)
+    assert request and cut and not stock and hygiene, (res, request, cut)
+
+
+def _verify_ms411_vanos(layout):
+    cases = [
+        ("fd14.4 below", 0x10, 0x7D, 0x64, 0),
+        ("fd14.4 equal", 0x10, 0x7D, 0x7D, 1),
+        ("fd14.5 below", 0x20, 0x7D, 0x64, 0),
+        ("fd14.5 above", 0x20, 0x7D, 0xC8, 1),
+        ("neither preserves engage", 0x00, 0xFF, 0x00, 1),
+    ]
+    for name, fd14, threshold, rpm, outcome_index in cases:
+        image = _case_image_older(layout, {"VANOSRPM": threshold})
+        emu = _emu(image, dpp0=4)
+        emu.write(0xFD14, fd14)
+        emu.write_byte(0xE9E2, rpm)
+        emu.cpu.csp = 3
+        res = emu.run_from(
+            layout["vanos_hook"],
+            stop_at=layout["vanos_outcomes"],
+            max_steps=100,
+        )
+        assert (
+            res.final_pc == layout["vanos_outcomes"][outcome_index]
+            and res.exit_reason == "stop_at"
+            and res.regs["dpp"][0] == 4
+        ), (name, res)
+
+
 def main():
     if not EMU_ROOT.is_dir():
         raise SystemExit(f"ms41emu package not found: {EMU_ROOT}")
     if not STOCK_PATH.is_file():
         raise SystemExit(f"MS41.2 reference image not found: {STOCK_PATH}")
+    if not STOCK_410_PATH.is_file():
+        raise SystemExit(f"MS41.0 reference image not found: {STOCK_410_PATH}")
+    if not STOCK_411_PATH.is_file():
+        raise SystemExit(f"MS41.1 reference image not found: {STOCK_411_PATH}")
     if not STOCK_413_PATH.is_file():
         raise SystemExit(f"MS41.3 reference image not found: {STOCK_413_PATH}")
 
@@ -554,6 +884,16 @@ def main():
         check()
         print(f"[PASS] MS41.3 {label}")
     print(f"\nMS41.3 EMULATOR GATE PASS ({len(checks_413)} groups)")
+
+    for version, layout in OLDER_FEATURE_LAYOUTS.items():
+        _verify_older_ignition(layout)
+        print(f"[PASS] {version} ignition cut V7 final-stage hooks")
+        _verify_older_launch(layout)
+        print(f"[PASS] {version} launch V4 native staged limiter + V7 composition")
+        if version == "MS41.1":
+            _verify_ms411_vanos(layout)
+            print("[PASS] MS41.1 VANOS minimum-RPM retrofit")
+        print(f"\n{version} FEATURE PORT EMULATOR GATE PASS")
 
 
 if __name__ == "__main__":

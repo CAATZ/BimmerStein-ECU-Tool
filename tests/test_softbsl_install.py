@@ -547,11 +547,10 @@ def test_ms413_cal_preservation_includes_the_program_checksum_block():
     assert softbsl_install._sb._ms413_install_scope(False) == "full"
 
 
-def test_ms412_cal_preservation_selects_the_checksum_aware_scope():
-    assert softbsl_install._sb._ms41_install_scope("MS41.2", True) == "softbsl_ms412"
-    assert softbsl_install._sb._ms41_install_scope("MS41.2", False) == "full"
-    assert softbsl_install._sb._ms41_install_scope("MS41.3", True) == "softbsl_ms412"
-    assert softbsl_install._sb._ms41_install_scope("MS41.3", False) == "full"
+@pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
+def test_cal_preservation_selects_the_checksum_aware_scope(version):
+    assert softbsl_install._sb._ms41_install_scope(version, True) == "softbsl_ms412"
+    assert softbsl_install._sb._ms41_install_scope(version, False) == "full"
 
 
 def test_persistent_composer_builds_ms412_and_migrates_deprecated_loaders():
@@ -578,6 +577,26 @@ def test_persistent_composer_builds_ms412_and_migrates_deprecated_loaders():
         assert migrated[0x5D36:0x5D92] == ref("MS41.3")[0x5D36:0x5D92]
 
 
+@pytest.mark.parametrize(
+    "version,door_id",
+    [("MS41.0", "door_magic_ms410"), ("MS41.1", "door_magic_ms411")],
+)
+def test_persistent_composer_builds_older_softbsl_ports(version, door_id):
+    import checksum
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+
+    image, patch_ids, _log = softbsl_install.compose_persistent_target(
+        ref(version), with_calguard=True, marker="B", chip="29f400")
+
+    assert patch_ids == ["softbsl_loader", door_id, "cal_guard", "amd_flash"]
+    assert patch_ms41.is_applied(image, patch_ms41.load_patches()[door_id])
+    assert checksum.checksum_status(image) == {
+        "boot": True, "program": True, "cal": True,
+        "prog_disabled": False, "cal_disabled": False,
+    }
+
+
 def test_fixed_relocated_loader_restores_the_hardware_proven_crc_bytes():
     from engines.patcher import patch_ms41
     from tests.conftest import ref
@@ -596,7 +615,7 @@ def test_fixed_relocated_loader_restores_the_hardware_proven_crc_bytes():
     assert broken[0x5C32:0x5C32 + len(proven)] != proven
 
 
-@pytest.mark.parametrize("version", ["MS41.2", "MS41.3"])
+@pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
 @pytest.mark.parametrize("chip, wants_amd", [("28f200", False), ("29f400", True)])
 def test_installer_composes_relocated_loader_for_both_flash_families(
         version, chip, wants_amd):
@@ -611,6 +630,8 @@ def test_installer_composes_relocated_loader_for_both_flash_families(
         bootstrap = Path(args.bootstrap).read_bytes()
         target = Path(args.target).read_bytes()
         patches = patch_ms41.load_patches()
+        bootstrap_door_id, persistent_door_id = softbsl_install._sb._door_patch_ids(
+            version)
 
         for image in (bootstrap, target):
             assert patch_ms41.is_applied(image, patches["softbsl_loader"])
@@ -619,6 +640,11 @@ def test_installer_composes_relocated_loader_for_both_flash_families(
             assert image[0x5C32:0x5C36] == bytes.fromhex("f075e6f5")
             assert image[0x5D92:0x5D96] == bytes.fromhex("f3f853e6")
             assert image[0x5FC4:0x5FC8] == bytes.fromhex("4fd87eb7")
+
+        assert patch_ms41.is_applied(bootstrap, patches[bootstrap_door_id])
+        assert patch_ms41.is_applied(target, patches[persistent_door_id])
+        assert patch_ms41.checksum.checksum_status(bootstrap)["program"] is True
+        assert patch_ms41.checksum.checksum_status(target)["program"] is True
 
         assert ("amd_flash" in patches and
                 patch_ms41.is_applied(target, patches["amd_flash"])) is wants_amd
@@ -668,11 +694,14 @@ def test_reinstall_displaces_shared_alpha_n_cave_only_in_bootstrap():
             shutil.rmtree(Path(args.target).parent, ignore_errors=True)
 
 
-def test_final_install_verifier_reads_every_relocated_loader_component(monkeypatch):
+@pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
+def test_final_install_verifier_reads_every_relocated_loader_component(
+        monkeypatch, version):
+    from engines.patcher import patch_ms41
     from tests.conftest import ref
 
     target, _ids, _log = softbsl_install.compose_persistent_target(
-        ref("MS41.2"), with_calguard=True, marker="B", chip="29f400")
+        ref(version), with_calguard=True, marker="B", chip="29f400")
     reads = []
 
     class FakeDS2:
@@ -691,6 +720,14 @@ def test_final_install_verifier_reads_every_relocated_loader_component(monkeypat
             for address, length in reads} >= {
         (0x55A0, 4), (0x5C32, 4), (0x5D92, 4), (0x5FC4, 4),
     }
+    bootstrap_door_id, persistent_door_id = softbsl_install._sb._door_patch_ids(
+        version)
+    patches = patch_ms41.load_patches()
+    assert {
+        (patches[bootstrap_door_id]["cave"]["splice_off"], 4),
+        (patches[persistent_door_id]["cave"]["splice_off"], 4),
+    } <= {(address ^ softbsl_install._sb.DESCR, length)
+          for address, length in reads}
 
 
 def test_live_variant_gate_uses_program_signature_and_either_cal_marker(monkeypatch):
@@ -722,6 +759,15 @@ def test_live_variant_gate_uses_program_signature_and_either_cal_marker(monkeypa
     assert softbsl_install._sb._detect_ecu_variant(FakeDS2(hybrid)) == (
         "MS41.3", "MS41.2", False)
 
+    for cal_id, ecu_id, version in (
+        (b"41000000", b"1429861", "MS41.0"),
+        (b"60000000", b"1437806", "MS41.1"),
+        (b"12000000", b"1406464", "MS41.2"),
+    ):
+        memory = {0x1000E: cal_id, 0x2025: ecu_id}
+        assert softbsl_install._sb._detect_ecu_variant(FakeDS2(memory)) == (
+            version, version, True)
+
 
 def test_final_install_patches_really_span_both_29f_program_sectors_and_boot():
     from engines.patcher.patch_ms41 import load_patches
@@ -736,12 +782,14 @@ def test_final_install_patches_really_span_both_29f_program_sectors_and_boot():
     assert all(cpu < 0x2000 for cpu in loader_cpus)
 
 
-def test_bootstrap_targeted_verify_only_includes_deployed_0x43_edits():
+@pytest.mark.parametrize(
+    "door_id", ["door_0x43_ms410", "door_0x43_ms411", "door_0x43"])
+def test_bootstrap_targeted_verify_only_includes_deployed_0x43_edits(door_id):
     ranges = softbsl_install._sb._bootstrap_verify_ranges(
-        ["softbsl_loader", "door_0x43"])
+        ["softbsl_loader", door_id])
 
     assert len(ranges) == 2
-    assert {label for _addr, _size, label in ranges} == {"door_0x43"}
+    assert {label for _addr, _size, label in ranges} == {door_id}
     assert all(0x20000 <= addr < 0x40000 for addr, _size, _label in ranges)
 
 

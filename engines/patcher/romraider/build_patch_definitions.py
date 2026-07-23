@@ -61,22 +61,43 @@ DTD = """<!DOCTYPE roms [
 <!ATTLIST state name CDATA #REQUIRED data CDATA #REQUIRED >
 ]>"""
 
-VANOS_TABLE = """<table type="2D" name="VANOS Retrofit - Minimum RPM (Closed Throttle)" category="VANOS Retrofit" storagetype="uint8" sizey="1" storageaddress="0x3000">
+VANOS_TABLE_MS410 = """<table type="2D" name="VANOS Retrofit - Minimum RPM (Closed Throttle)" category="VANOS Retrofit" storagetype="uint8" sizey="1" storageaddress="0x3000">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Engage Above" sizey="1"><data>RPM</data></table>
   <description>Minimum RPM for closed-throttle VANOS engagement added by the tested MS41.0 VANOSRT1 retrofit. Raw 0xFF preserves stock behavior; use only after that patch is installed.</description>
 </table>"""
 
+VANOS_TABLE_MS411 = """<table type="2D" name="VANOS Retrofit - Minimum RPM (Closed Throttle)" category="VANOS Retrofit" storagetype="uint8" sizey="1" storageaddress="0x3720">
+  <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Engage Above" sizey="1"><data>RPM</data></table>
+  <description>Minimum RPM for closed-throttle VANOS engagement added by the MS41.1 VANOSRT2 retrofit. Raw 0xFF preserves stock behavior; use only after that patch is installed.</description>
+</table>"""
+
+MS410_ADDRESS_MAP = {
+    0x2A65: 0x3010, 0x2A66: 0x3011,
+    **{0x352C + index: 0x3020 + index for index in range(8)},
+}
+MS411_ADDRESS_MAP = {
+    0x2A65: 0x3700, 0x2A66: 0x3701,
+    **{0x352C + index: 0x3710 + index for index in range(8)},
+}
+
 IGNITION_LAUNCH_VARIANTS = (
-    ("BIMMERSTEIN_MS413_SS1V2_24K", "33BB", "SS1v2", "SHINDE1", "MS41.3 SS1v2 + BimmerStein patches (24KB)", "24kb", False),
-    ("BIMMERSTEIN_MS413_SS1V2_256K", "173BB", "SS1v2", "SHINDE1", "MS41.3 SS1v2 + BimmerStein patches (256KB)", "256kb", True),
-    ("BIMMERSTEIN_MS412_ID12_24K", "E", "12", "1406464", "MS41.2 ID12 + BimmerStein patches (24KB)", "24kb", False),
-    ("BIMMERSTEIN_MS412_ID12_256K", "1400E", "12", "1406464", "MS41.2 ID12 + BimmerStein patches (256KB)", "256kb", True),
+    ("BIMMERSTEIN_MS413_SS1V2_24K", "33BB", "SS1v2", "SHINDE1", "MS41.3 SS1v2 + BimmerStein patches (24KB)", "24kb", False, None),
+    ("BIMMERSTEIN_MS413_SS1V2_256K", "173BB", "SS1v2", "SHINDE1", "MS41.3 SS1v2 + BimmerStein patches (256KB)", "256kb", True, None),
+    ("BIMMERSTEIN_MS412_ID12_24K", "E", "12", "1406464", "MS41.2 ID12 + BimmerStein patches (24KB)", "24kb", False, None),
+    ("BIMMERSTEIN_MS412_ID12_256K", "1400E", "12", "1406464", "MS41.2 ID12 + BimmerStein patches (256KB)", "256kb", True, None),
+    ("BIMMERSTEIN_MS410_ID41_24K", "E", "41", "1429861", "MS41.0 1429861 + BimmerStein patches (24KB)", "24kb", False, MS410_ADDRESS_MAP),
+    ("BIMMERSTEIN_MS410_ID41_256K", "1400E", "41", "1429861", "MS41.0 1429861 + BimmerStein patches (256KB)", "256kb", True, MS410_ADDRESS_MAP),
+    ("BIMMERSTEIN_MS411_ID60_24K", "E", "60", "1437806", "MS41.1 1437806 + BimmerStein patches (24KB)", "24kb", False, MS411_ADDRESS_MAP),
+    ("BIMMERSTEIN_MS411_ID60_256K", "1400E", "60", "1437806", "MS41.1 1437806 + BimmerStein patches (256KB)", "256kb", True, MS411_ADDRESS_MAP),
 )
 
 VANOS_VARIANTS = (
-    ("BIMMERSTEIN_MS410_VANOSRT1_24K", "3008", "VANOSRT1", "24kb", False),
-    ("BIMMERSTEIN_MS410_VANOSRT1_256K", "17008", "VANOSRT1", "256kb", True),
+    ("BIMMERSTEIN_MS410_VANOSRT1_24K", "3008", "VANOSRT1", "1429861", "MS41.0 1429861 + VANOSRT1 (24KB)", "24kb", False, MS410_ADDRESS_MAP, VANOS_TABLE_MS410),
+    ("BIMMERSTEIN_MS410_VANOSRT1_256K", "17008", "VANOSRT1", "1429861", "MS41.0 1429861 + VANOSRT1 (256KB)", "256kb", True, MS410_ADDRESS_MAP, VANOS_TABLE_MS410),
+    ("BIMMERSTEIN_MS411_VANOSRT2_24K", "3728", "VANOSRT2", "1437806", "MS41.1 1437806 + VANOSRT2 (24KB)", "24kb", False, MS411_ADDRESS_MAP, VANOS_TABLE_MS411),
+    ("BIMMERSTEIN_MS411_VANOSRT2_256K", "17728", "VANOSRT2", "1437806", "MS41.1 1437806 + VANOSRT2 (256KB)", "256kb", True, MS411_ADDRESS_MAP, VANOS_TABLE_MS411),
 )
 
 
@@ -103,6 +124,18 @@ def _tables_only(fragment: str) -> str:
 def _for_full_read(fragment: str) -> str:
     def replace(match: re.Match[str]) -> str:
         mapped = full_read_address(int(match.group(2), 16))
+        return f'{match.group(1)}0x{mapped:X}{match.group(3)}'
+
+    return ADDRESS_RE.sub(replace, fragment)
+
+
+def _remap_addresses(fragment: str, address_map: dict[int, int] | None) -> str:
+    if not address_map:
+        return fragment
+
+    def replace(match: re.Match[str]) -> str:
+        address = int(match.group(2), 16)
+        mapped = address_map.get(address, address)
         return f'{match.group(1)}0x{mapped:X}{match.group(3)}'
 
     return ADDRESS_RE.sub(replace, fragment)
@@ -153,18 +186,29 @@ def build_standalone_definition(fragment: str) -> str:
     """Return a complete definition containing only patch-added calibrations."""
     patch_tables = _tables_only(fragment).strip()
     roms = []
-    for xmlid, id_address, id_string, ecuid, submodel, filesize, full_read in IGNITION_LAUNCH_VARIANTS:
-        tables = _for_full_read(patch_tables) if full_read else patch_tables
+    # Marker-specific blocks come first so a VANOS-patched partial/full image
+    # wins over the generic CAL-ID entry and exposes all applicable controls.
+    for (
+        xmlid, id_address, id_string, ecuid, submodel, filesize, full_read,
+        address_map, vanos_table,
+    ) in VANOS_VARIANTS:
+        tables = f"{_remap_addresses(patch_tables, address_map)}\n\n{vanos_table}"
+        if full_read:
+            tables = _for_full_read(tables)
         roms.append(_rom(
             xmlid=xmlid, id_address=id_address, id_string=id_string,
             ecuid=ecuid, submodel=submodel, filesize=filesize, tables=tables,
         ))
-    for xmlid, id_address, id_string, filesize, full_read in VANOS_VARIANTS:
-        tables = _for_full_read(VANOS_TABLE) if full_read else VANOS_TABLE
+    for (
+        xmlid, id_address, id_string, ecuid, submodel, filesize, full_read,
+        address_map,
+    ) in IGNITION_LAUNCH_VARIANTS:
+        tables = _remap_addresses(patch_tables, address_map)
+        if full_read:
+            tables = _for_full_read(tables)
         roms.append(_rom(
             xmlid=xmlid, id_address=id_address, id_string=id_string,
-            ecuid="1429861", submodel=f"MS41.0 1429861 + VANOSRT1 ({filesize.upper()})",
-            filesize=filesize, tables=tables,
+            ecuid=ecuid, submodel=submodel, filesize=filesize, tables=tables,
         ))
     result = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'

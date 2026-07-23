@@ -44,6 +44,9 @@ FINGERPRINTS = {
     # MS41.0 = factory part 1429861. The part-number digit-runs live at 0x6025 (6 aligned copies);
     # MS41.3/.2 carry "1406464" at that same offset, so this cleanly discriminates the version.
     "MS41.0": [(0x6025, b"1429861")],
+    # Factory MS41.1 reference (ECU-ID 1437806 / CAL-ID 60). Both markers are required so
+    # alternate or hybrid .1 images remain fail-closed until their hook bytes are verified.
+    "MS41.1": [(0x6025, b"1437806"), (0x1400E, b"60")],
     # Factory S52 firmware.  check_base additionally rejects the SS1v2 program/cal markers so
     # the common 1406464 part number cannot make an MS41.3 or hybrid image look like MS41.2.
     "MS41.2": [(0x6025, b"1406464"), (0x1400E, b"12")],

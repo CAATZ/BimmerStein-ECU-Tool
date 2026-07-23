@@ -4,15 +4,19 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from engines.patcher import patch_ms41
 from tests.conftest import ref
 import checksum
+import pytest
 
 EXPECTED_IDS = {
     "alphan_failsafe", "amd_flash", "cal_guard", "door_0x43",
-    "door_magic", "ignition_cut", "ignition_cut_v2", "ignition_cut_v3", "ignition_cut_v4",
+    "door_0x43_ms410", "door_0x43_ms411", "door_magic", "door_magic_ms410",
+    "door_magic_ms411", "ignition_cut", "ignition_cut_v2", "ignition_cut_v3", "ignition_cut_v4",
     "ignition_cut_v5", "ignition_cut_v6", "ignition_cut_v7", "launch_control", "launch_control_v2",
+    "ignition_cut_v7_ms410", "ignition_cut_v7_ms411",
     "launch_control_v2_ms412", "launch_control_v3", "launch_control_v3_ms412",
-    "launch_control_v4", "launch_control_v4_ms412",
+    "launch_control_v4", "launch_control_v4_ms410", "launch_control_v4_ms411",
+    "launch_control_v4_ms412",
     "softbsl_loader", "softbsl_loader_legacy", "softbsl_loader_relocated_v1",
-    "vanos_minrpm_ms410",
+    "vanos_minrpm_ms410", "vanos_minrpm_ms411",
 }
 
 
@@ -43,6 +47,13 @@ def test_ms412_base_gate_is_distinct_from_ms413_and_unknown_targets_fail_closed(
     assert patch_ms41.check_base(ref("MS41.3"), "MS41.2") is not None
     assert patch_ms41.check_base(ref("MS41.2"), "MS41.3") is not None
     assert "unsupported" in patch_ms41.check_base(ref("MS41.2"), "MS41.9")
+
+
+def test_older_softbsl_base_gates_are_exact_and_distinct():
+    for variant in ("MS41.0", "MS41.1"):
+        assert patch_ms41.check_base(ref(variant), variant) is None
+    assert patch_ms41.check_base(ref("MS41.0"), "MS41.1") is not None
+    assert patch_ms41.check_base(ref("MS41.1"), "MS41.0") is not None
 
 
 def test_ms413_base_gate_uses_program_signature_and_either_cal_marker():
@@ -235,3 +246,35 @@ def test_latest_ms413_program_patches_recompute_all_checksums():
     status = checksum.checksum_status(out)
     assert status["boot"] and status["program"] and status["cal"]
     assert status["prog_disabled"]
+
+
+@pytest.mark.parametrize(
+    "variant,patch_ids",
+    [
+        (
+            "MS41.0",
+            [
+                "ignition_cut_v7_ms410",
+                "launch_control_v4_ms410",
+                "vanos_minrpm_ms410",
+            ],
+        ),
+        (
+            "MS41.1",
+            [
+                "ignition_cut_v7_ms411",
+                "launch_control_v4_ms411",
+                "vanos_minrpm_ms411",
+            ],
+        ),
+    ],
+)
+def test_latest_older_firmware_feature_ports_compose_and_recompute_program(
+        variant, patch_ids):
+    out, _log = patch_ms41.build(ref(variant), patch_ids)
+    status = checksum.checksum_status(out)
+    baseline = checksum.checksum_status(ref(variant))
+    assert status["boot"] and status["program"] and status["cal"]
+    assert status["prog_disabled"] == baseline["prog_disabled"]
+    for patch_id in patch_ids:
+        assert patch_ms41.is_applied(out, patch_ms41.load_patches()[patch_id])

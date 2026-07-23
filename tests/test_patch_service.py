@@ -68,17 +68,27 @@ def test_available_patches_exposes_only_latest_ms412_ports():
 
 
 def test_softbsl_bootstrap_definition_is_kept_but_hidden_from_patch_catalogue():
-    assert "door_0x43" in patch_service.definitions()
-    for variant in ("MS41.2", "MS41.3"):
-        assert "door_0x43" not in {
+    bootstrap_ids = {
+        "MS41.0": "door_0x43_ms410",
+        "MS41.1": "door_0x43_ms411",
+        "MS41.2": "door_0x43",
+        "MS41.3": "door_0x43",
+    }
+    assert set(bootstrap_ids.values()) <= patch_service.definitions().keys()
+    for variant, bootstrap_id in bootstrap_ids.items():
+        assert bootstrap_id not in {
             patch["id"] for patch in patch_service.available_patches(ref(variant))
         }
 
 
 def test_ms410_vanos_patch_is_selectable_and_hardware_tested():
     avail = patch_service.available_patches(ref("MS41.0"))
-    assert [patch["id"] for patch in avail] == ["vanos_minrpm_ms410"]
-    patch = avail[0]
+    assert [patch["id"] for patch in avail] == [
+        "amd_flash", "cal_guard", "door_magic_ms410",
+        "ignition_cut_v7_ms410", "launch_control_v4_ms410",
+        "softbsl_loader", "vanos_minrpm_ms410",
+    ]
+    patch = next(item for item in avail if item["id"] == "vanos_minrpm_ms410")
     definition = patch_service.definitions()["vanos_minrpm_ms410"]
     assert patch["status"] == "TESTED"
     assert patch["tested"] is True
@@ -87,7 +97,37 @@ def test_ms410_vanos_patch_is_selectable_and_hardware_tested():
     assert "UNTESTED" not in patch["title"]
 
 
-@pytest.mark.parametrize("variant", ["MS41.2", "MS41.3"])
+def test_ms411_exposes_current_feature_ports_and_softbsl():
+    assert [patch["id"] for patch in patch_service.available_patches(ref("MS41.1"))] == [
+        "amd_flash", "cal_guard", "door_magic_ms411",
+        "ignition_cut_v7_ms411", "launch_control_v4_ms411",
+        "softbsl_loader", "vanos_minrpm_ms411",
+    ]
+
+
+@pytest.mark.parametrize(
+    "variant,ignition_id,launch_id",
+    [
+        ("MS41.0", "ignition_cut_v7_ms410", "launch_control_v4_ms410"),
+        ("MS41.1", "ignition_cut_v7_ms411", "launch_control_v4_ms411"),
+    ],
+)
+def test_older_launch_ports_require_and_compose_with_matching_ignition_port(
+        variant, ignition_id, launch_id):
+    with pytest.raises(patch_ms41.PatchError, match="requires"):
+        patch_service.build_image(ref(variant), [launch_id])
+
+    image, _log = patch_service.build_image(
+        ref(variant), [ignition_id, launch_id])
+    available = {
+        patch["id"]: patch
+        for patch in patch_service.available_patches(image)
+    }
+    assert available[ignition_id]["installed"] is True
+    assert available[launch_id]["installed"] is True
+
+
+@pytest.mark.parametrize("variant", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
 def test_amd_patch_can_be_built_and_saved_but_not_sent_to_intel(
         variant, tmp_path):
     image, _log = patch_service.build_image(ref(variant), ["amd_flash"])
@@ -102,7 +142,7 @@ def test_amd_patch_can_be_built_and_saved_but_not_sent_to_intel(
             image, "intel", write_bootloader=False)
 
 
-@pytest.mark.parametrize("variant", ["MS41.2", "MS41.3"])
+@pytest.mark.parametrize("variant", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
 def test_stock_intel_image_is_not_sent_to_amd_geometry(variant):
     image = ref(variant)
     assert ecu_info.image_chip_family(image) == "intel"
@@ -167,26 +207,32 @@ def test_launch_control_requires_and_composes_with_ignition_cut_v7():
 
 
 @pytest.mark.parametrize(
-    "variant,launch_id",
-    [("MS41.2", "launch_control_v4_ms412"), ("MS41.3", "launch_control_v4")],
+    "variant,ignition_id,launch_id",
+    [
+        ("MS41.0", "ignition_cut_v7_ms410", "launch_control_v4_ms410"),
+        ("MS41.1", "ignition_cut_v7_ms411", "launch_control_v4_ms411"),
+        ("MS41.2", "ignition_cut_v7", "launch_control_v4_ms412"),
+        ("MS41.3", "ignition_cut_v7", "launch_control_v4"),
+    ],
 )
-def test_installed_launch_blocks_removing_its_ignition_dependency(variant, launch_id):
+def test_installed_launch_blocks_removing_its_ignition_dependency(
+        variant, ignition_id, launch_id):
     combined, _ = patch_service.build_image(
-        ref(variant), ["ignition_cut_v7", launch_id]
+        ref(variant), [ignition_id, launch_id]
     )
     available = {patch["id"]: patch for patch in patch_service.available_patches(combined)}
 
-    assert patch_service.installed_dependents(combined, "ignition_cut_v7") == [launch_id]
-    assert available["ignition_cut_v7"]["required_by"] == [launch_id]
-    assert available["ignition_cut_v7"]["removable"] is False
+    assert patch_service.installed_dependents(combined, ignition_id) == [launch_id]
+    assert available[ignition_id]["required_by"] == [launch_id]
+    assert available[ignition_id]["removable"] is False
     with pytest.raises(patch_ms41.PatchError, match="remove the dependent patch"):
-        patch_service.revert_patch(combined, "ignition_cut_v7")
+        patch_service.revert_patch(combined, ignition_id)
 
     without_launch = patch_service.revert_patch(combined, launch_id)
-    without_ignition = patch_service.revert_patch(without_launch, "ignition_cut_v7")
+    without_ignition = patch_service.revert_patch(without_launch, ignition_id)
     definitions = patch_service.definitions()
     assert not patch_service.is_applied(without_ignition, definitions[launch_id])
-    assert not patch_service.is_applied(without_ignition, definitions["ignition_cut_v7"])
+    assert not patch_service.is_applied(without_ignition, definitions[ignition_id])
 
 
 @pytest.mark.parametrize(

@@ -68,6 +68,7 @@ VERIFY_OFF_MESSAGE = (
 MAIN_WINDOW_WIDTH = 980
 MAIN_WINDOW_PREFERRED_HEIGHT = 960
 MAIN_CANVAS_MIN_HEIGHT = 700
+_SOFTBSL_PATCH_VERSIONS = ("MS41.0", "MS41.1", "MS41.2", "MS41.3")
 
 
 def configure_high_dpi():
@@ -554,7 +555,7 @@ class MS41FlashGUI(QMainWindow):
         self._ecu_variant         = None
         self._ecu_program_variant = None   # confirmed from full ROM read; resolves MS41.2/MS41.3 ambiguity
         self._softbsl_last_is_ms41_3 = False   # backward-compatible sticky used by older UI tests
-        self._softbsl_last_version = None      # consistent MS41.2/.3 target retained across port handoff
+        self._softbsl_last_version = None      # consistent MS41 target retained across port handoff
         self._ecu_id              = None
         self._ecu_cal_id          = None
         self._ecu_vin             = None
@@ -1194,8 +1195,11 @@ class MS41FlashGUI(QMainWindow):
             softbsl_hook_check_failed = False
             if ecu_info.decode_bank_marker(softbsl_marker_raw):
                 try:
-                    softbsl_hook_present = self._live_patch_present(
-                        self._ds2, "door_magic")
+                    softbsl_hook_present = any(
+                        self._live_patch_present(self._ds2, patch_id)
+                        for patch_id in (
+                            "door_magic_ms410", "door_magic_ms411", "door_magic")
+                    )
                 except Exception as error:
                     softbsl_hook_check_failed = True
                     log_fn(
@@ -1636,8 +1640,11 @@ class MS41FlashGUI(QMainWindow):
             loader = patches.get("softbsl_loader")
             if loader is None or not patch_service.is_applied(data, loader):
                 missing.append("softbsl_loader")
-        hook = patches.get("door_magic")
-        if hook is None or not patch_service.is_applied(data, hook):
+        door_ids = ("door_magic_ms410", "door_magic_ms411", "door_magic")
+        if not any(
+                patch_id in patches
+                and patch_service.is_applied(data, patches[patch_id])
+                for patch_id in door_ids):
             missing.append("door_magic")
         return tuple(missing)
 
@@ -5230,7 +5237,7 @@ class MS41FlashGUI(QMainWindow):
             "You cycle the ignition once when prompted.\n"
             "• Use base .bin skips the slow full-ROM read; VIN/ISN can still be preserved from the "
             "identity data captured at connection.\n"
-            "• Calibration is preserved when the connected ECU and patch base are the same consistent MS41.2 or MS41.3 version.\n"
+            "• Calibration is preserved when the connected ECU and patch base are the same consistent MS41 version.\n"
             "• Cross-version conversion replaces the calibration and requires explicit full-write confirmation.")
         inst_help.setWordWrap(True); inst_help.setStyleSheet("color:#888;")
         ig.addWidget(inst_help)
@@ -5240,7 +5247,7 @@ class MS41FlashGUI(QMainWindow):
         r3.addWidget(self.chk_install_calguard)
         self.chk_install_force_base = QCheckBox("Use base .bin (skip ECU read)")
         self.chk_install_force_base.setToolTip(
-            "Choose a full, consistent MS41.2 or MS41.3 ROM and use it directly as the patch base instead of "
+            "Choose a full, consistent MS41.0-MS41.3 ROM and use it directly as the patch base instead of "
             "reading 256 KB from the connected ECU. Intended for fresh/rebuild workflows.")
         r3.addWidget(self.chk_install_force_base)
         r3.addStretch()
@@ -5252,11 +5259,11 @@ class MS41FlashGUI(QMainWindow):
             "When a base .bin is used, read only the connected ECU's serial/ISN and packed VIN "
             "and graft them into the base before composing the install images.")
         r4.addWidget(self.chk_install_preserve_identity)
-        self.chk_install_preserve_cal = QCheckBox("Preserve calibration (matching MS41.2/MS41.3)")
+        self.chk_install_preserve_cal = QCheckBox("Preserve calibration (matching MS41 version)")
         self.chk_install_preserve_cal.setChecked(True)
         self.chk_install_preserve_cal.setEnabled(False)
         self.chk_install_preserve_cal.setToolTip(
-            "Available for an already-consistent MS41.2 or MS41.3 ECU. Unchecking performs a full "
+            "Available for an already-consistent MS41.0-MS41.3 ECU. Unchecking performs a full "
             "brick-class write and replaces the calibration from the selected/composed base.")
         r4.addWidget(self.chk_install_preserve_cal)
         self.btn_softbsl_install = self._op_btn("Install Soft-BSL…", "#7a2d2d", self._on_softbsl_install)
@@ -5272,7 +5279,7 @@ class MS41FlashGUI(QMainWindow):
         note2 = QLabel("Builds the golden TOP with the same persistent Soft-BSL components as regular "
                        "installation, then writes the complete coarse-sector TOP half of a dual-bank "
                        "29F400. Load a consistent "
-                       "MS41.2 or MS41.3 base, or read the existing TOP through the RAM agent while connected. The live "
+                       "MS41.0-MS41.3 base, or read the existing TOP through the RAM agent while connected. The live "
                        "write remains brick-class and recoverable only from the intact BOTTOM.")
         note2.setWordWrap(True); note2.setStyleSheet("color:#888;")
         fg_lay.addWidget(note2)
@@ -5294,7 +5301,7 @@ class MS41FlashGUI(QMainWindow):
 
         top = QHBoxLayout()
         self.btn_softbsl_xbank_load = self._op_btn(
-            "Load MS41.2 / .3 Base…", "#3d3d3d", self._on_softbsl_load)
+            "Load MS41 Base…", "#3d3d3d", self._on_softbsl_load)
         self.btn_softbsl_xbank_load.setMaximumWidth(210)
         top.addWidget(self.btn_softbsl_xbank_load)
         self.btn_softbsl_xbank_read = self._op_btn(
@@ -5397,14 +5404,14 @@ class MS41FlashGUI(QMainWindow):
             return False
         raw_base = bytes(self._softbsl_xbank_base)
         resolved = MS41ECU.resolve_version(raw_base)
-        supported = ("MS41.2", "MS41.3")
+        supported = _SOFTBSL_PATCH_VERSIONS
         if (resolved["hybrid"] or resolved["program"] not in supported
                 or resolved["cal"] != resolved["program"]):
             self._clear_softbsl_crossbank_target(
-                "Base rejected: a consistent MS41.2 or MS41.3 image is required.")
+                "Base rejected: a consistent MS41.0-MS41.3 image is required.")
             QMessageBox.warning(
                 self, "Golden TOP Base Rejected",
-                "The base must be a complete, internally-consistent MS41.2 or MS41.3 image.\n\n"
+                "The base must be a complete, internally-consistent MS41.0-MS41.3 image.\n\n"
                 f"Program: {resolved['program'] or 'unknown'}\n"
                 f"Calibration: {resolved['cal'] or 'unknown'}\n"
                 f"Hybrid: {resolved['hybrid'] or 'no'}")
@@ -5461,7 +5468,7 @@ class MS41FlashGUI(QMainWindow):
 
     def _on_softbsl_load(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Load full MS41.2 or MS41.3 base for golden TOP", "", "Binary (*.bin);;All Files (*)")
+            self, "Load full MS41.0-MS41.3 base for golden TOP", "", "Binary (*.bin);;All Files (*)")
         if not path:
             return
         try:
@@ -5513,7 +5520,7 @@ class MS41FlashGUI(QMainWindow):
             if self._set_softbsl_crossbank_base(data, "ECU TOP read (Soft-BSL)", "top"):
                 self._log("Golden TOP base read and patch composition complete.", "ok")
             else:
-                self._log("TOP read completed, but the image was rejected by the MS41.2/.3 patch gates.", "error")
+                self._log("TOP read completed, but the image was rejected by the MS41 patch gates.", "error")
 
         self._run_task(task, on_success=on_done)
 
@@ -6238,7 +6245,7 @@ class MS41FlashGUI(QMainWindow):
         if not self._softbsl_image:
             QMessageBox.information(
                 self, "Prepare Golden TOP First",
-                "Load a consistent MS41.2 or MS41.3 base, or connect to the Soft-BSL BOTTOM bank and use "
+                "Load a consistent MS41.0-MS41.3 base, or connect to the Soft-BSL BOTTOM bank and use "
                 "Read TOP Base + Compose. The patch engine must produce the T-marked target "
                 "before the brick-class write can be armed.")
             return
@@ -6305,9 +6312,9 @@ class MS41FlashGUI(QMainWindow):
         """Best-effort consistent patch target for the connected ECU."""
         program = getattr(self, "_ecu_program_variant", None)
         calibration = getattr(self, "_ecu_variant", None)
-        if program in ("MS41.2", "MS41.3") and calibration in (None, program):
+        if program in _SOFTBSL_PATCH_VERSIONS and calibration in (None, program):
             return program
-        if program is None and calibration in ("MS41.2", "MS41.3"):
+        if program is None and calibration in _SOFTBSL_PATCH_VERSIONS:
             return calibration
         return None
 
@@ -6315,11 +6322,11 @@ class MS41FlashGUI(QMainWindow):
         return self._ecu_patch_version() or getattr(self, "_softbsl_last_version", None)
 
     def _update_softbsl_install_options(self):
-        """Expose cal preservation for a live, consistent MS41.2 or MS41.3 ECU."""
+        """Expose cal preservation for a live, consistent supported MS41 ECU."""
         if self._ds2 is None:
             self.chk_install_preserve_cal.setChecked(True)
             self.chk_install_preserve_cal.setEnabled(False)
-        elif self._ecu_patch_version() in ("MS41.2", "MS41.3"):
+        elif self._ecu_patch_version() in _SOFTBSL_PATCH_VERSIONS:
             self.chk_install_preserve_cal.setEnabled(True)
         else:
             self.chk_install_preserve_cal.setChecked(False)
@@ -6345,9 +6352,9 @@ class MS41FlashGUI(QMainWindow):
         return out_path, info
 
     def _select_softbsl_base_file(self):
-        """Pick and validate a complete, internally-consistent MS41.2 or MS41.3 base."""
+        """Pick and validate a complete, internally-consistent supported MS41 base."""
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select a full MS41.2 or MS41.3 base .bin", "",
+            self, "Select a full MS41.0-MS41.3 base .bin", "",
             "Binary (*.bin);;All files (*)")
         if not path:
             return None
@@ -6360,16 +6367,16 @@ class MS41FlashGUI(QMainWindow):
         if len(data) != identity.FULL_ROM_SIZE:
             QMessageBox.warning(
                 self, "Invalid Base Image",
-                "The base must be a 256 KB full MS41.2 or MS41.3 image "
+                "The base must be a 256 KB full MS41.0-MS41.3 image "
                 f"({identity.FULL_ROM_SIZE:,} bytes); received {len(data):,} bytes.")
             return None
         program_variant = MS41ECU.detect_program_variant(data)
         cal_variant = MS41ECU.detect_variant(data)
-        if (program_variant not in ("MS41.2", "MS41.3")
+        if (program_variant not in _SOFTBSL_PATCH_VERSIONS
                 or cal_variant != program_variant):
             QMessageBox.warning(
                 self, "Invalid Base Image",
-                f"The selected base is not a consistent MS41.2 or MS41.3 image "
+                f"The selected base is not a consistent MS41.0-MS41.3 image "
                 f"(program={program_variant or 'unknown'}, cal={cal_variant or 'unknown'}).")
             return None
         return path
@@ -6416,7 +6423,7 @@ class MS41FlashGUI(QMainWindow):
                     return
         preserve_cal = (self.chk_install_preserve_cal.isChecked()
                         and live_version == target_version
-                        and target_version in ("MS41.2", "MS41.3"))
+                        and target_version in _SOFTBSL_PATCH_VERSIONS)
         reinstall_preconfirmed = False
         installed_marker = getattr(self, "_ecu_softbsl_marker", None)
         if installed_marker:
@@ -6431,7 +6438,7 @@ class MS41FlashGUI(QMainWindow):
                 return
             reinstall_preconfirmed = True
 
-        if (target_version in ("MS41.2", "MS41.3")
+        if (target_version in _SOFTBSL_PATCH_VERSIONS
                 and live_version == target_version):
             # Reuse this session's full read when available. It is already tied
             # to the connected ECU and avoids another ~5 minute stock-DS2 read.
@@ -6465,7 +6472,7 @@ class MS41FlashGUI(QMainWindow):
             # conversion is a FULL write that replaces the calibration.
             variant = (self._ecu_program_variant or self._ecu_variant
                        or "an unsupported/unknown MS41 variant")
-            target_label = target_version or "the selected MS41.2/MS41.3 target"
+            target_label = target_version or "the selected MS41 target"
             conversion_title, conversion_risk = self._conversion_warning_policy()
             if QMessageBox.warning(
                     self, conversion_title,
@@ -6473,7 +6480,7 @@ class MS41FlashGUI(QMainWindow):
                     f"Conversion erases and replaces the current calibration "
                     "and writes the target boot/parameter region.\n\n"
                     f"{conversion_risk}\n\n"
-                    f"{'Continue with the selected base image?' if force_base else 'Continue and pick a consistent MS41.2 or MS41.3 base image?'}",
+                    f"{'Continue with the selected base image?' if force_base else 'Continue and pick a consistent MS41.0-MS41.3 base image?'}",
                     QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel) != QMessageBox.Yes:
                 self._release_softbsl_port(port)
                 return

@@ -1919,16 +1919,12 @@ def test_softbsl_cal_preservation_control_is_gated_by_live_variant():
     app, w = _gui()
     try:
         w._ds2 = object()
-        w._ecu_program_variant = "MS41.3"
-        w._update_softbsl_install_options()
-        assert w.chk_install_preserve_cal.isEnabled() is True
-        assert w.chk_install_preserve_cal.isChecked() is True
-
-        w._ecu_program_variant = None
-        w._ecu_variant = "MS41.2"
-        w._update_softbsl_install_options()
-        assert w.chk_install_preserve_cal.isEnabled() is True
-        assert w.chk_install_preserve_cal.isChecked() is True
+        for version in ("MS41.0", "MS41.1", "MS41.2", "MS41.3"):
+            w._ecu_program_variant = version
+            w._ecu_variant = version
+            w._update_softbsl_install_options()
+            assert w.chk_install_preserve_cal.isEnabled() is True
+            assert w.chk_install_preserve_cal.isChecked() is True
     finally:
         w._ds2 = None
         w.close()
@@ -1949,7 +1945,7 @@ def test_ecu_is_ms41_3_detects_from_variant_fields():
         w.close()
 
 
-@pytest.mark.parametrize("version", ["MS41.2", "MS41.3"])
+@pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
 def test_softbsl_install_native_target_reads_ecu_no_base_no_convert(monkeypatch, version):
     app, w = _gui()
     try:
@@ -1980,7 +1976,7 @@ def test_softbsl_install_native_target_reads_ecu_no_base_no_convert(monkeypatch,
         w.close()
 
 
-@pytest.mark.parametrize("version", ["MS41.2", "MS41.3"])
+@pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
 def test_softbsl_install_matching_force_base_skips_ecu_image(monkeypatch, tmp_path, version):
     app, w = _gui()
     try:
@@ -2075,7 +2071,7 @@ def test_softbsl_install_factory_prompts_convert_picks_grafted_base(monkeypatch,
     try:
         import softbsl_install
         w._ecu_program_variant = None
-        w._ecu_variant = "MS41.1"                  # unsupported native target -> convert path
+        w._ecu_variant = "unknown"                 # force the explicit conversion path
         w.cb_port.clear(); w.cb_port.addItem("COM1"); w.cb_port.setCurrentText("COM1")
         base = _write_ms413_base(tmp_path / "ms413.bin")
 
@@ -2108,7 +2104,7 @@ def test_softbsl_install_factory_prompts_convert_picks_grafted_base(monkeypatch,
         w.close()
 
 
-def test_softbsl_install_ms41_0_uses_common_conversion_confirmation(monkeypatch):
+def test_softbsl_install_ms41_0_uses_native_install_confirmation(monkeypatch):
     app, w = _gui()
     try:
         w._ecu_program_variant = None
@@ -2125,10 +2121,9 @@ def test_softbsl_install_ms41_0_uses_common_conversion_confirmation(monkeypatch)
         w._on_softbsl_install()
 
         title, message = shown[0]
-        assert title == "Confirm Variant Conversion"
-        assert "MS41.0/MS41.1/MS41.2/MS41.3" in message
-        assert "supported" in message
-        assert "not yet been validated" not in message
+        assert title == "Confirm Soft-BSL Installation"
+        assert "preserved from this MS41.0 ECU" in message
+        assert "Variant Conversion" not in message
         assert w._port_owner.is_free()
     finally:
         w.close()
@@ -2138,7 +2133,7 @@ def test_softbsl_install_releases_port_if_graft_raises(monkeypatch, tmp_path):
     app, w = _gui()
     try:
         import softbsl_install
-        w._ecu_variant = "MS41.1"                   # unsupported native target -> convert path
+        w._ecu_variant = "unknown"                  # force the explicit conversion path
         w.cb_port.clear(); w.cb_port.addItem("COM1"); w.cb_port.setCurrentText("COM1")
         base = _write_ms413_base(tmp_path / "ms413.bin")
         monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: QMessageBox.Yes))
@@ -2165,6 +2160,7 @@ def test_softbsl_install_rejects_wrong_sized_base(monkeypatch, tmp_path):
     try:
         import softbsl_install
         w._ecu_variant = "MS41.1"
+        w.chk_install_force_base.setChecked(True)
         w.cb_port.clear(); w.cb_port.addItem("COM1"); w.cb_port.setCurrentText("COM1")
         bad = tmp_path / "tune.bin"; bad.write_bytes(b"\xFF" * 24576)   # 24 KB, not a 256 KB full image
         warned = {}
@@ -2197,15 +2193,19 @@ def test_softbsl_tab_consolidated_to_crossbank():
         w.close()
 
 
-@pytest.mark.parametrize("version", ["MS41.2", "MS41.3"])
+@pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
 def test_softbsl_crossbank_top_base_is_composed_with_persistent_patches(version):
     app, w = _gui()
     try:
         data = ref(version)
         assert w._set_softbsl_crossbank_base(data, "live TOP", "top") is True
         assert gui.softbsl_service.marker(w._softbsl_image) == "T"
+        door_id = {
+            "MS41.0": "door_magic_ms410",
+            "MS41.1": "door_magic_ms411",
+        }.get(version, "door_magic")
         assert w._softbsl_xbank_patch_ids == [
-            "softbsl_loader", "door_magic", "cal_guard", "amd_flash"]
+            "softbsl_loader", door_id, "cal_guard", "amd_flash"]
         preview = w._softbsl_preview.toPlainText()
         assert "PREPARED IMAGE" in preview
         assert "CROSS-BANK top-half write PLAN" in preview
@@ -2815,10 +2815,13 @@ def test_transfer_mode_uses_native_ds2_when_loader_exists_without_hook():
         w.close()
 
 
-def test_live_softbsl_hook_check_reads_exact_descriptor_edits_at_ds2_addresses():
+@pytest.mark.parametrize(
+    "patch_id", ["door_magic_ms410", "door_magic_ms411", "door_magic"])
+def test_live_softbsl_hook_check_reads_exact_descriptor_edits_at_ds2_addresses(
+        patch_id):
     import patch_service
 
-    patch = patch_service.definitions()["door_magic"]
+    patch = patch_service.definitions()[patch_id]
     expected_reads = {
         int(edit["off"]) ^ 0x4000: bytes.fromhex(edit["data"])
         for edit in patch["edits"]
@@ -2830,7 +2833,7 @@ def test_live_softbsl_hook_check_reads_exact_descriptor_edits_at_ds2_addresses()
             calls.append((address, length))
             return expected_reads[address]
 
-    assert gui.MS41FlashGUI._live_patch_present(HookedDS2(), "door_magic") is True
+    assert gui.MS41FlashGUI._live_patch_present(HookedDS2(), patch_id) is True
     assert calls == [
         (int(edit["off"]) ^ 0x4000, len(bytes.fromhex(edit["data"])))
         for edit in patch["edits"]
@@ -2842,7 +2845,7 @@ def test_live_softbsl_hook_check_reads_exact_descriptor_edits_at_ds2_addresses()
             return bytes([data[0] ^ 0xFF]) + data[1:]
 
     assert gui.MS41FlashGUI._live_patch_present(
-        MissingHookDS2(), "door_magic") is False
+        MissingHookDS2(), patch_id) is False
 
 
 def test_transfer_mode_ds2_without_d2xx_even_with_marker():
@@ -3281,7 +3284,9 @@ def test_bootloader_write_file_warning_flags_missing_patches():
         w.close()
 
 
-def test_softbsl_survival_check_uses_effective_full_write_regions():
+@pytest.mark.parametrize(
+    "door_id", ["door_magic_ms410", "door_magic_ms411", "door_magic"])
+def test_softbsl_survival_check_uses_effective_full_write_regions(door_id):
     import patch_service
 
     patches = patch_service.definitions()
@@ -3296,8 +3301,8 @@ def test_softbsl_survival_check_uses_effective_full_write_regions():
         return bytes(image)
 
     stock = image_with()
-    hook_only = image_with("door_magic")
-    complete = image_with("softbsl_loader", "door_magic")
+    hook_only = image_with(door_id)
+    complete = image_with("softbsl_loader", door_id)
 
     # A simple full write preserves the already-working loader in SA1, but
     # always replaces the program-region entry hook.

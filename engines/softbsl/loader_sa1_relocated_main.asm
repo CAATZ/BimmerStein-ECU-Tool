@@ -1,7 +1,7 @@
 ; Persistent Soft-BSL 0x5A loader: main dispatcher/streaming path.
 ;
 ; File placement is 0x5D92..0x5DFF (CPU = file XOR 0x4000 -> 0x1D92).
-; This deliberately starts after the MS41.2/.3 per-unit descriptor, which may
+; This deliberately starts after the MS41 per-unit descriptor, which may
 ; occupy file 0x5D36..0x5D90.  The helper routines live in two other proven-FF
 ; SA1 gaps so the existing calibration guard can remain at 0x5E10..0x5FC3.
 ;

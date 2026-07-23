@@ -4,7 +4,7 @@
   "user_description": "Keeps the ECU in recoverable flash-listen mode when the program and calibration versions do not match, instead of allowing engine operation with incompatible data. This patch writes the boot/parameter region.",
   "description": "Boot->app handoff splice @0x493A -> SA1 cave @0x5E10 (436-B universal gate). Reloads E740; a real flash session (E740==1) boots to stock flash-comms, and otherwise the ECU runs the engine ONLY if the flashed PROGRAM and CALIBRATION are the same MS41 version (.0/.1/.2/.3): cal version from the strict SS1v2 marker (@phys 0x133BB) else the CAL-ID prefix (@0x1400E); program version from the SS1v2 code signature (@phys 0x3DA9A) else the ECU-ID (@phys 0x2027). Any mismatch, cross-version, foreign, or blank cal is routed to DS2 flash-listen recovery instead of running misconfigured (no brick, no EEPROM wear, self-clearing on a correct re-flash). SA1 (re-apply on SA1 write).",
   "target": "MS41.3",
-  "targets": ["MS41.2", "MS41.3"],
+  "targets": ["MS41.0", "MS41.1", "MS41.2", "MS41.3"],
   "recompute": [
     "boot_crc"
   ],

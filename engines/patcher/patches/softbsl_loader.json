@@ -2,9 +2,9 @@
   "id": "softbsl_loader",
   "title": "Soft-BSL SA1 loader (0x5A door)",
   "user_description": "Installs the persistent Soft-BSL entry loader in the boot/parameter region while preserving supported ECU coding records.",
-  "description": "Install the persistent SA1 bootloader: dispatcher hook @0x55A0 -> 0x5A loader main @CPU 0x1D92. The proven loader is split across three descriptor-safe SA1 gaps (file 0x5C32/0x5D92/0x5FC4) so it preserves the optional MS41.2/.3 coding records at 0x5D36-0x5D90 and composes with AMD flash + cal_guard. The AMD driver ends at 0x5C31 immediately before the CRC helper; cal_guard ends at 0x5FC3 immediately before the I/O helper. Includes the 'B' bank marker.",
+  "description": "Install the persistent SA1 bootloader: dispatcher hook @0x55A0 -> 0x5A loader main @CPU 0x1D92. The proven loader is split across three descriptor-safe SA1 gaps (file 0x5C32/0x5D92/0x5FC4) so it preserves the optional MS41 coding records at 0x5D36-0x5D90 and composes with AMD flash + cal_guard. The AMD driver ends at 0x5C31 immediately before the CRC helper; cal_guard ends at 0x5FC3 immediately before the I/O helper. Includes the 'B' bank marker.",
   "target": "MS41.3",
-  "targets": ["MS41.2", "MS41.3"],
+  "targets": ["MS41.0", "MS41.1", "MS41.2", "MS41.3"],
   "recompute": [
     "boot_crc"
   ],

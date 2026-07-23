@@ -119,30 +119,59 @@ def test_standalone_artifact_is_reproducible_and_patch_only():
 
     root = ET.fromstring(expected)
     roms = root.findall("rom")
-    assert len(roms) == 6
+    assert len(roms) == 12
     patch_tables = set(TABLE_TO_CAL)
     for rom in roms:
         tables = {table.attrib["name"] for table in rom.findall("table")}
         xmlid = rom.findtext("romid/xmlid")
-        if "VANOSRT1" in xmlid:
-            assert tables == {"VANOS Retrofit - Minimum RPM (Closed Throttle)"}
+        if "VANOSRT" in xmlid:
+            assert tables == patch_tables | {
+                "VANOS Retrofit - Minimum RPM (Closed Throttle)"
+            }
         else:
             assert tables == patch_tables
 
 
 def test_standalone_addresses_match_patch_descriptors_for_each_framing():
     root = ET.parse(STANDALONE).getroot()
-    ignition = _patch("ignition_cut_v7")["cave"]["cals"]
-    launch = _patch("launch_control_v4")["cave"]["cals"]
-    expected_full = {**ignition, **launch}
-    vanos_full = _patch("vanos_minrpm_ms410")["cave"]["cals"]["VANOSRPM"]
-
     for rom in root.findall("rom"):
         rid = rom.find("romid")
         full_read = rid.findtext("filesize") == "256kb"
         xmlid = rid.findtext("xmlid")
         tables = {table.attrib["name"]: table for table in rom.findall("table")}
-        if "VANOSRT1" in xmlid:
+        if "MS410" in xmlid:
+            ignition_id = "ignition_cut_v7_ms410"
+            launch_id = "launch_control_v4_ms410"
+        elif "MS411" in xmlid:
+            ignition_id = "ignition_cut_v7_ms411"
+            launch_id = "launch_control_v4_ms411"
+        else:
+            ignition_id = "ignition_cut_v7"
+            launch_id = (
+                "launch_control_v4_ms412"
+                if "MS412" in xmlid
+                else "launch_control_v4"
+            )
+        expected_full = {
+            **_patch(ignition_id)["cave"]["cals"],
+            **_patch(launch_id)["cave"]["cals"],
+        }
+        for table_name, cal_name in TABLE_TO_CAL.items():
+            full_address = expected_full[cal_name]
+            expected_address = (
+                full_address if full_read else _storage_address(full_address)
+            )
+            assert int(
+                tables[table_name].attrib["storageaddress"], 16
+            ) == expected_address
+
+        if "VANOSRT" in xmlid:
+            vanos_id = (
+                "vanos_minrpm_ms410"
+                if "VANOSRT1" in xmlid
+                else "vanos_minrpm_ms411"
+            )
+            vanos_full = _patch(vanos_id)["cave"]["cals"]["VANOSRPM"]
             address = int(
                 tables["VANOS Retrofit - Minimum RPM (Closed Throttle)"].attrib[
                     "storageaddress"
@@ -150,11 +179,6 @@ def test_standalone_addresses_match_patch_descriptors_for_each_framing():
                 16,
             )
             assert address == (vanos_full if full_read else _storage_address(vanos_full))
-            continue
-        for table_name, cal_name in TABLE_TO_CAL.items():
-            full_address = expected_full[cal_name]
-            expected_address = full_address if full_read else _storage_address(full_address)
-            assert int(tables[table_name].attrib["storageaddress"], 16) == expected_address
 
 
 def test_standalone_matches_every_declared_rom_variant():
@@ -182,8 +206,32 @@ def test_standalone_matches_real_images_after_each_tunable_patch_set():
             "BIMMERSTEIN_MS412_ID12_24K", "BIMMERSTEIN_MS412_ID12_256K",
         ),
         (
-            "MS41.0", ["vanos_minrpm_ms410"],
+            "MS41.0",
+            ["ignition_cut_v7_ms410", "launch_control_v4_ms410"],
+            "BIMMERSTEIN_MS410_ID41_24K", "BIMMERSTEIN_MS410_ID41_256K",
+        ),
+        (
+            "MS41.0",
+            [
+                "ignition_cut_v7_ms410",
+                "launch_control_v4_ms410",
+                "vanos_minrpm_ms410",
+            ],
             "BIMMERSTEIN_MS410_VANOSRT1_24K", "BIMMERSTEIN_MS410_VANOSRT1_256K",
+        ),
+        (
+            "MS41.1",
+            ["ignition_cut_v7_ms411", "launch_control_v4_ms411"],
+            "BIMMERSTEIN_MS411_ID60_24K", "BIMMERSTEIN_MS411_ID60_256K",
+        ),
+        (
+            "MS41.1",
+            [
+                "ignition_cut_v7_ms411",
+                "launch_control_v4_ms411",
+                "vanos_minrpm_ms411",
+            ],
+            "BIMMERSTEIN_MS411_VANOSRT2_24K", "BIMMERSTEIN_MS411_VANOSRT2_256K",
         ),
     )
     for version, patch_ids, partial_xmlid, full_xmlid in cases:
@@ -193,15 +241,14 @@ def test_standalone_matches_real_images_after_each_tunable_patch_set():
             matched = definitions.match(image)
             assert matched.xmlid == xmlid
             tables = definitions.resolve(matched)
-            if version == "MS41.0":
+            if any(patch_id.startswith("vanos_minrpm") for patch_id in patch_ids):
                 value, units, _format = romraider_defs.read_scalar(
                     image, tables["VANOS Retrofit - Minimum RPM (Closed Throttle)"]
                 )
                 assert (value, units) == (8160, "RPM")
-            else:
-                assert romraider_defs.switch_state(
-                    image, tables["Ignition Cut - Switch Input"]
-                ) == "Off"
-                assert romraider_defs.switch_state(
-                    image, tables["LC - Switch / Mode"]
-                ) == "Off"
+            assert romraider_defs.switch_state(
+                image, tables["Ignition Cut - Switch Input"]
+            ) == "Off"
+            assert romraider_defs.switch_state(
+                image, tables["LC - Switch / Mode"]
+            ) == "Off"

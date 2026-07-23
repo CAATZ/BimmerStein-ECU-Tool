@@ -1,0 +1,57 @@
+{
+  "id": "launch_control_v4_ms411",
+  "family_id": "launch_control_v4",
+  "status": "EMULATOR VERIFIED - ON-CAR TEST REQUIRED",
+  "tested": false,
+  "verification": "Canonical ms41emu verifies the MS41.1 latch state machine, active-high/low pin selection, speed/TPS release, F02C soft clamp, both native cal-0x2DB hard-limit sites, configured/fallback/clamped thresholds, stock fallback, and Ignition Cut V7 composition. On-car testing is still required.",
+  "title": "Launch Control v4 / 2-step (MS41.1)",
+  "user_description": "Adds MS41.1 clutch- or switch-armed launch control with independently configurable soft and hard limits and a choice of native staged fuel cut or Ignition Cut V7.",
+  "description": "MS41.1 Launch Control V4. The state machine runs at the native limiter's fd30.4 selection point, using vehicle speed 0xF19A, TPS 0xE8D0, and a dedicated SA 0x3710-0x3717 calibration block. Fuel mode transiently clamps the selected F02C soft threshold and substitutes LC_HARDRPM at both stock cal-0x2DB hard comparisons while preserving F02B cylinder staging, F02D delay, F02E reload, and all stock branches. Ignition mode raises fd5a.7 at LC_MAXRPM and requires the MS41.1 Ignition Cut V7 port.",
+  "target": "MS41.1",
+  "recompute": ["program"],
+  "requires": ["ignition_cut_v7_ms411"],
+  "conflicts": [],
+  "supersedes": [],
+  "cave": {
+    "region": "proghigh-gap",
+    "base": 243456,
+    "splice_off": 149462,
+    "splice_op": "jmps",
+    "relocatable": false,
+    "splices": [
+      {"off": 149462, "base": 243456, "op": "jmps"},
+      {"off": 149646, "base": 243712, "op": "calls"},
+      {"off": 149806, "base": 243712, "op": "calls"}
+    ],
+    "cals": {
+      "LC_SW": 96016,
+      "LC_CUTTYPE": 96017,
+      "LC_CLUTCHPOL": 96018,
+      "LC_MAXRPM": 96019,
+      "LC_ARMSPEED": 96020,
+      "LC_MAXSPEED": 96021,
+      "LC_MINTPS": 96022,
+      "LC_HARDRPM": 96023
+    }
+  },
+  "edits": [
+    {"off": 149462, "expect": "9a180940", "data": "fa0300f7"},
+    {"off": 149646, "expect": "43f8db02", "data": "da0300f8"},
+    {"off": 149806, "expect": "43f8db02", "data": "da0300f8"},
+    {
+      "off": 243456,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4ecf5e6000400f3f8103747f8ff002d3a47f800002d35f3f89af143f815379d32f3f8d0e843f816378d2df3f89af143f814379d2af3f8103747f801003d05f3f861fd67f802000d0f47f802003d05f3f861fd67f801000d0747f804003d13f3f860fd67f88000f3fa123747fa00002d0447f800002d050d0847f800003d010d046f2d0d026e2d0d007e2df3f85afd67f840002d0bf3f8113747f801003d06f3f83cfc43f813378d017f2dfcf5fcf4fc00fa03c0f7cc00cc00"
+    },
+    {
+      "off": 243648,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4e6000400f3f85afd67f840002d0bf3f8113749803d07f3f8133743f82cf09d02f7f82cf0fcf4fc009a180240fa02da07fa02ec07"
+    },
+    {
+      "off": 243712,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf5e6000400f3fa5afd67fa40002d1af3fa113749a03d16f3fa173747faff003d0af3fa133747fafd008d03e7faff000d0709a30d0543fa13379d02f3fa1337418a0d0243f8db02fcf5fc00db00"
+    }
+  ]
+}

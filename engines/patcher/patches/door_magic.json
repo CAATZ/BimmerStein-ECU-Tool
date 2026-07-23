@@ -5,8 +5,7 @@
   "description": "Adds DS2 command 0x2A to the stock dispatcher's unknown-command path -> enter flash mode (E740=1 + commit + reset) -> reboot to the SA1 0x5A loader. Native-looking; leaves 0x43 clear-adapts fully intact. Program-high (re-apply after a program reflash).",
   "target": "MS41.3",
   "targets": ["MS41.2", "MS41.3"],
-  "recompute": [],
-  "recompute_by_target": {"MS41.2": ["program"]},
+  "recompute": ["program"],
   "requires": [],
   "conflicts": [],
   "cave": {

@@ -1,0 +1,29 @@
+{
+  "id": "door_magic_ms411",
+  "title": "MS41.1 magic-command normal-mode entry (DS2 0x2A)",
+  "user_description": "Adds DS2 command 0x2A as a normal-mode entry into the persistent Soft-BSL loader on MS41.1 while leaving the standard 0x43 adaptation-clear command intact.",
+  "description": "MS41.1 unknown-command splice -> enter flash mode (E740=1 + commit + reset) -> reboot to the SA1 0x5A loader. Leaves 0x43 clear-adapts intact.",
+  "target": "MS41.1",
+  "recompute": ["program"],
+  "requires": [],
+  "conflicts": [],
+  "cave": {
+    "region": "proghigh",
+    "base": 243296,
+    "splice_off": 160424,
+    "splice_op": "jmps",
+    "relocatable": true
+  },
+  "edits": [
+    {
+      "off": 160424,
+      "expect": "da026c37",
+      "data": "fa0360f6"
+    },
+    {
+      "off": 243296,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "f3f853e647f82a003d06e118f7f840e7da00621a0dffda026c37fa022834"
+    }
+  ]
+}

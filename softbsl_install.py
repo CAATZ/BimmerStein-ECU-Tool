@@ -190,7 +190,7 @@ def install_compose(port, base, with_calguard, allow_convert, prompt, log, baud=
     """Prepare and install Soft-BSL without pre-built firmware images.
 
     With ``base=None``, the connected ECU's full image is the source and therefore preserves its
-    identity. A supplied base must be a consistent MS41.2 or MS41.3 full image. ``allow_convert``
+    identity. A supplied base must be a consistent MS41.0-MS41.3 full image. ``allow_convert``
     authorizes a cross-version replacement; ``preserve_cal`` is honored when the connected ECU
     and composed target are the same consistent version. Returns zero on success.
     """

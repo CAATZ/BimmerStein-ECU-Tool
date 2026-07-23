@@ -4,7 +4,7 @@
   "user_description": "Adds in-circuit calibration and program writing support for ECUs converted to AMD 29F200 or 29F400 flash memory.",
   "description": "Replace the stock Intel-28F flash driver with our AMD-29F driver (the fw's own flasher then drives the AMD re-chip; enables cal/program writes on the 29F). Driver code lives in SA1/param1.",
   "target": "MS41.3",
-  "targets": ["MS41.2", "MS41.3"],
+  "targets": ["MS41.0", "MS41.1", "MS41.2", "MS41.3"],
   "recompute": [
     "boot_crc",
     "cal"
