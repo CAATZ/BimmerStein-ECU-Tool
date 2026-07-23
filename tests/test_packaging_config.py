@@ -187,8 +187,8 @@ def test_release_packaging_requires_explicit_license_gates():
     assert "b[1-9]\\d*" in build_text
 
     building = (ROOT / "BUILDING.md").read_text(encoding="utf-8")
-    assert "-Version 0.1.0b8" in building
-    assert "v0.1.0b8" in building
+    assert "-Version 0.1.0b9" in building
+    assert "v0.1.0b9" in building
     assert "BimmerStein ECU Tool Nuitka" in building
 
 
