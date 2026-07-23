@@ -52,7 +52,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control V4 may independently request spark cut through fd5a.7.</description>
+  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x3011">
@@ -67,7 +67,7 @@
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Launch Control V4. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x3021">
@@ -140,7 +140,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control V4 may independently request spark cut through fd5a.7.</description>
+  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x17011">
@@ -155,7 +155,7 @@
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Launch Control V4. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x17021">
@@ -228,7 +228,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control V4 may independently request spark cut through fd5a.7.</description>
+  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x3701">
@@ -243,7 +243,7 @@
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Launch Control V4. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x3711">
@@ -316,7 +316,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control V4 may independently request spark cut through fd5a.7.</description>
+  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x17701">
@@ -331,7 +331,7 @@
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Launch Control V4. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x17711">
@@ -404,7 +404,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control V4 may independently request spark cut through fd5a.7.</description>
+  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x2A66">
@@ -413,52 +413,52 @@
   <description>Spark-cut threshold stored as RPM/32. Example: 6880 RPM = raw 0xD7.</description>
 </table>
 
-<table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x352C">
+<table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x47E0">
   <state name="Off" data="FF" />
   <state name="Always On (flat limiter)" data="00" />
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Launch Control V4. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
 </table>
 
-<table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x352D">
+<table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x47E1">
   <state name="Fuel cut (stock injector limiter)" data="00" />
   <state name="Ignition cut (Ignition Cut V7)" data="01" />
   <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode raises fd5a.7 at the soft threshold and requires Ignition Cut V7.</description>
 </table>
 
-<table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x352E">
+<table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x47E2">
   <state name="Active-high (depressed = 5V)" data="00" />
   <state name="Active-low (depressed = 0V)" data="01" />
   <description>Electrical sense of the clutch or toggle input.</description>
 </table>
 
-<table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x352F">
+<table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x47E3">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Begin Staged Fuel Cut" sizey="1"><data>RPM</data></table>
   <description>Lower launch threshold stored as RPM/32. Fuel mode begins the stock staged injector cut here; ignition mode requests spark cut here. Example: 4000 RPM = raw 0x7D.</description>
 </table>
 
-<table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3533">
+<table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x47E7">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Full Fuel Cut Above" sizey="1"><data>RPM</data></table>
   <description>Upper fuel-mode threshold stored as RPM/32. It must be at or above Soft Cut RPM; firmware clamps a lower value to the soft threshold. Raw 0xFF is the unconfigured sentinel and safely uses Soft Cut RPM + 96 RPM, saturating instead of wrapping.</description>
 </table>
 
-<table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3530">
+<table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x47E4">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
   <table type="Static Y Axis" name="Arm Below" sizey="1"><data>km/h</data></table>
   <description>Near-standstill arming guard. A clutch press at or above this speed does not arm a cleared latch.</description>
 </table>
 
-<table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3531">
+<table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x47E5">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
   <table type="Static Y Axis" name="Release Above" sizey="1"><data>km/h</data></table>
   <description>Releases the launch latch once vehicle speed reaches this value. Must be greater than Arm Speed.</description>
 </table>
 
-<table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3532">
+<table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x47E6">
   <scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0" fineincrement="1" coarseincrement="10" />
   <table type="Static Y Axis" name="Throttle Above" sizey="1"><data>TPS%</data></table>
   <description>Continuous throttle gate. Dropping below this value immediately clears the launch latch.</description>
@@ -486,7 +486,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control V4 may independently request spark cut through fd5a.7.</description>
+  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x16A66">
@@ -495,52 +495,52 @@
   <description>Spark-cut threshold stored as RPM/32. Example: 6880 RPM = raw 0xD7.</description>
 </table>
 
-<table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x1752C">
+<table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x107E0">
   <state name="Off" data="FF" />
   <state name="Always On (flat limiter)" data="00" />
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Launch Control V4. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
 </table>
 
-<table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x1752D">
+<table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x107E1">
   <state name="Fuel cut (stock injector limiter)" data="00" />
   <state name="Ignition cut (Ignition Cut V7)" data="01" />
   <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode raises fd5a.7 at the soft threshold and requires Ignition Cut V7.</description>
 </table>
 
-<table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x1752E">
+<table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x107E2">
   <state name="Active-high (depressed = 5V)" data="00" />
   <state name="Active-low (depressed = 0V)" data="01" />
   <description>Electrical sense of the clutch or toggle input.</description>
 </table>
 
-<table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x1752F">
+<table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x107E3">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Begin Staged Fuel Cut" sizey="1"><data>RPM</data></table>
   <description>Lower launch threshold stored as RPM/32. Fuel mode begins the stock staged injector cut here; ignition mode requests spark cut here. Example: 4000 RPM = raw 0x7D.</description>
 </table>
 
-<table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17533">
+<table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x107E7">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Full Fuel Cut Above" sizey="1"><data>RPM</data></table>
   <description>Upper fuel-mode threshold stored as RPM/32. It must be at or above Soft Cut RPM; firmware clamps a lower value to the soft threshold. Raw 0xFF is the unconfigured sentinel and safely uses Soft Cut RPM + 96 RPM, saturating instead of wrapping.</description>
 </table>
 
-<table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17530">
+<table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x107E4">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
   <table type="Static Y Axis" name="Arm Below" sizey="1"><data>km/h</data></table>
   <description>Near-standstill arming guard. A clutch press at or above this speed does not arm a cleared latch.</description>
 </table>
 
-<table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17531">
+<table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x107E5">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
   <table type="Static Y Axis" name="Release Above" sizey="1"><data>km/h</data></table>
   <description>Releases the launch latch once vehicle speed reaches this value. Must be greater than Arm Speed.</description>
 </table>
 
-<table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17532">
+<table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x107E6">
   <scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0" fineincrement="1" coarseincrement="10" />
   <table type="Static Y Axis" name="Throttle Above" sizey="1"><data>TPS%</data></table>
   <description>Continuous throttle gate. Dropping below this value immediately clears the launch latch.</description>
@@ -568,7 +568,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control V4 may independently request spark cut through fd5a.7.</description>
+  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x2A66">
@@ -583,7 +583,7 @@
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Launch Control V4. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x352D">
@@ -650,7 +650,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control V4 may independently request spark cut through fd5a.7.</description>
+  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x16A66">
@@ -665,7 +665,7 @@
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Launch Control V4. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x1752D">
@@ -732,7 +732,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control V4 may independently request spark cut through fd5a.7.</description>
+  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x3011">
@@ -747,7 +747,7 @@
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Launch Control V4. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x3021">
@@ -814,7 +814,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control V4 may independently request spark cut through fd5a.7.</description>
+  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x17011">
@@ -829,7 +829,7 @@
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Launch Control V4. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x17021">
@@ -896,7 +896,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control V4 may independently request spark cut through fd5a.7.</description>
+  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x3701">
@@ -911,7 +911,7 @@
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Launch Control V4. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x3711">
@@ -978,7 +978,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control V4 may independently request spark cut through fd5a.7.</description>
+  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x17701">
@@ -993,7 +993,7 @@
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Launch Control V4. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x17711">

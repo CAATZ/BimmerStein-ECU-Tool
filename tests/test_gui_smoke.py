@@ -1168,12 +1168,12 @@ def test_patch_dependency_is_labeled_and_selected_automatically():
     app, w = _gui()
     try:
         w._set_patch_base(ref("MS41.3"), "test")
-        launch = w._patch_checkboxes["launch_control_v4"]
+        launch = w._patch_checkboxes["launch_control_v5"]
         ignition = w._patch_checkboxes["ignition_cut_v7"]
 
         labels = {
             label.text()
-            for label in w._patch_rows["launch_control_v4"].findChildren(gui.QLabel)
+            for label in w._patch_rows["launch_control_v5"].findChildren(gui.QLabel)
         }
         assert "REQUIRES IGNITION CUT V7" in labels
         assert "Required patch: Ignition Cut v7" in launch.toolTip()
@@ -1197,10 +1197,10 @@ def test_patch_dependency_never_removes_a_conflicting_selection(monkeypatch):
             gui.patch_service,
             "collisions",
             lambda selected: {"ignition_cut_v7"}
-            if "launch_control_v4" in selected else set(),
+            if "launch_control_v5" in selected else set(),
         )
 
-        launch = w._patch_checkboxes["launch_control_v4"]
+        launch = w._patch_checkboxes["launch_control_v5"]
         launch.setChecked(True)
 
         assert launch.isChecked()
@@ -1217,7 +1217,7 @@ def test_installed_dependency_remove_button_is_blocked_by_launch_control():
     app, w = _gui()
     try:
         combined, _ = patch_service.build_image(
-            ref("MS41.3"), ["ignition_cut_v7", "launch_control_v4"]
+            ref("MS41.3"), ["ignition_cut_v7", "launch_control_v5"]
         )
         w._set_patch_base(combined, "dependency-removal-test")
 
@@ -1228,8 +1228,8 @@ def test_installed_dependency_remove_button_is_blocked_by_launch_control():
             for label in w._patch_rows["ignition_cut_v7"].findChildren(gui.QLabel)
         }
         assert remove.isEnabled() is False
-        assert "Launch Control v4" in remove.toolTip()
-        assert "REQUIRED BY LAUNCH CONTROL V4" in labels
+        assert "Launch Control v5" in remove.toolTip()
+        assert "REQUIRED BY LAUNCH CONTROL V5" in labels
     finally:
         w.close()
 

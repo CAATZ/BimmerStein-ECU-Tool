@@ -33,7 +33,8 @@ def test_available_patches_filters_by_version():
     assert "ignition_cut_v6" not in ids              # field-failed V6 is remove-only
     assert "ignition_cut_v7" in ids                  # final-stage P1L revision
     assert "launch_control_v3" not in ids            # V3 is retained only for removal
-    assert "launch_control_v4" in ids                # independent soft + hard limiter
+    assert "launch_control_v4" not in ids            # overlapping V4 is remove-only
+    assert "launch_control_v5" in ids                # relocated independent soft + hard limiter
     assert "door_0x43" not in ids                    # installer-only Soft-BSL bootstrap
     assert len(avail) == 7                            # the 7 user-facing MS41.3 patches
     cg = next(p for p in avail if p["id"] == "cal_guard")
@@ -189,21 +190,21 @@ def test_field_failed_v6_is_remove_only_and_v7_replaces_it(variant):
 
 
 def test_launch_control_requires_and_composes_with_ignition_cut_v7():
-    # launch_control_v4's ignition mode feeds V7's final-stage hook (fd5a.7), so it REQUIRES V7 and
+    # launch_control_v5's ignition mode feeds V7's final-stage hook (fd5a.7), so it REQUIRES V7 and
     # COMPOSES with it (no byte collision) instead of conflicting.
-    # 1) building launch_control_v4 alone (no V7) fails the requires check:
+    # 1) building launch_control_v5 alone (no V7) fails the requires check:
     with pytest.raises(patch_ms41.PatchError):
-        patch_service.build_image(ref("MS41.3"), ["launch_control_v4"])
-    # 2) V7 + launch_control_v4 build together cleanly (no overlapping bytes):
-    out, _ = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v7", "launch_control_v4"])
+        patch_service.build_image(ref("MS41.3"), ["launch_control_v5"])
+    # 2) V7 + launch_control_v5 build together cleanly (no overlapping bytes):
+    out, _ = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v7", "launch_control_v5"])
     assert len(out) == patch_ms41.FULL
-    # 3) onto a base that ALREADY has V7 installed, launch_control_v4 alone builds:
+    # 3) onto a base that ALREADY has V7 installed, launch_control_v5 alone builds:
     v7_base, _ = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v7"])
-    out2, _ = patch_service.build_image(v7_base, ["launch_control_v4"])
+    out2, _ = patch_service.build_image(v7_base, ["launch_control_v5"])
     assert len(out2) == patch_ms41.FULL
     # 4) they do NOT byte-collide (composition, not mutual exclusion):
-    assert "launch_control_v4" not in patch_service.collisions(["ignition_cut_v7"])
-    assert "ignition_cut_v7" not in patch_service.collisions(["launch_control_v4"])
+    assert "launch_control_v5" not in patch_service.collisions(["ignition_cut_v7"])
+    assert "ignition_cut_v7" not in patch_service.collisions(["launch_control_v5"])
 
 
 @pytest.mark.parametrize(
@@ -212,7 +213,7 @@ def test_launch_control_requires_and_composes_with_ignition_cut_v7():
         ("MS41.0", "ignition_cut_v7_ms410", "launch_control_v4_ms410"),
         ("MS41.1", "ignition_cut_v7_ms411", "launch_control_v4_ms411"),
         ("MS41.2", "ignition_cut_v7", "launch_control_v4_ms412"),
-        ("MS41.3", "ignition_cut_v7", "launch_control_v4"),
+        ("MS41.3", "ignition_cut_v7", "launch_control_v5"),
     ],
 )
 def test_installed_launch_blocks_removing_its_ignition_dependency(
@@ -238,7 +239,7 @@ def test_installed_launch_blocks_removing_its_ignition_dependency(
 @pytest.mark.parametrize(
     "variant,old_id,new_id",
     [
-        ("MS41.3", "launch_control_v3", "launch_control_v4"),
+        ("MS41.3", "launch_control_v3", "launch_control_v5"),
         ("MS41.2", "launch_control_v3_ms412", "launch_control_v4_ms412"),
     ],
 )
@@ -256,6 +257,46 @@ def test_launch_v3_is_remove_only_and_v4_replaces_it(variant, old_id, new_id):
     cleaned = patch_service.revert_patch(cleaned, "ignition_cut_v6")
     upgraded, _ = patch_service.build_image(cleaned, ["ignition_cut_v7", new_id])
     assert patch_service.is_applied(upgraded, patch_service.definitions()[new_id])
+
+
+def test_overlapping_ms413_launch_v4_is_detected_removed_and_replaced():
+    definitions = patch_service.definitions()
+    stock = ref("MS41.3")
+    old_image, _ = patch_service.build_image(
+        stock, ["ignition_cut_v7", "launch_control_v4"])
+
+    # A configured legacy image has real Launch values in the boost table.
+    # Migration must preserve them for an explicit boost-table review rather
+    # than copying them to, or silently erasing them from, the new controls.
+    old_values = bytes((0x01, 0x00, 0x00, 0x7D, 0x05, 0x28, 0x80, 0x80))
+    old_image = bytearray(old_image)
+    old_image[0x1752C:0x17534] = old_values
+    old_image, _details = patch_ms41.checksum.correct_checksums(old_image)
+
+    available = {
+        patch["id"]: patch
+        for patch in patch_service.available_patches(old_image)
+    }
+    legacy = available["launch_control_v4"]
+    assert legacy["installed"] is True
+    assert legacy["deprecated"] is True
+    assert legacy["removable"] is True
+    assert available["launch_control_v5"]["legacy"] == [
+        {"id": "launch_control_v4", "label": "V4"}
+    ]
+
+    cleaned = patch_service.revert_patch(
+        old_image, "launch_control_v4")
+    cleaned_status = patch_ms41.checksum.checksum_status(cleaned)
+    assert cleaned_status["boot"]
+    assert cleaned_status["program"]
+    assert cleaned_status["cal"]
+    upgraded, _log = patch_service.build_image(cleaned, ["launch_control_v5"])
+    assert not patch_service.is_applied(
+        upgraded, definitions["launch_control_v4"])
+    assert patch_service.is_applied(upgraded, definitions["launch_control_v5"])
+    assert upgraded[0x1752C:0x17534] == old_values
+    assert upgraded[0x107E0:0x107E8] == b"\xFF" * 8
 
 
 @pytest.mark.parametrize(

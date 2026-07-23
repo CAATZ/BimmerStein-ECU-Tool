@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <strong><a href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b9">Download Beta 9</a></strong>
+  <strong><a href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b10">Download Beta 10</a></strong>
   &nbsp;&middot;&nbsp;
   <a href="manual/USER_MANUAL.md">User Manual</a>
   &nbsp;&middot;&nbsp;
@@ -157,7 +157,7 @@ The Patches tab detects installed and deprecated revisions, validates dependenci
 collisions, corrects checksums, and archives the composed image in Bins.
 
 > [!WARNING]
-> **HIGHLY EXPERIMENTAL — UNTESTED.** Ignition Cut V7, Launch Control V4, and AlphaN
+> **HIGHLY EXPERIMENTAL — UNTESTED.** Ignition Cut V7, current Launch Control, and AlphaN
 > MAF-failsafe are currently untested
 > and may work incorrectly or may not work at all. Unexpected engine behavior, stalling, failure to
 > limit RPM, or other unintended results are possible. Test only in controlled off-road or bench
@@ -200,7 +200,7 @@ Full ROMs and logs can contain VIN and ECU identity information. Treat them as p
 The illustrated manual covers normal flashing, recovery behavior, Soft-BSL, hardware BSL,
 diagnostics, offline tools, patches, and final checklists:
 
-- [Download BimmerStein ECU Tool 0.1.0 Beta 9](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b9)
+- [Download BimmerStein ECU Tool 0.1.0 Beta 10](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b10)
 - [Illustrated PDF manual](output/pdf/BimmerStein-ECU-Tool-User-Manual.pdf)
 - [User manual (web-readable Markdown)](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/manual/USER_MANUAL.md)
 - [Build and release instructions](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/BUILDING.md)

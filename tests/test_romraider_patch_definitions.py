@@ -48,13 +48,13 @@ def _tables():
     return {table.attrib["name"]: table for table in root.findall("table")}
 
 
-def test_current_fragment_matches_patch_calibration_addresses():
+def test_source_fragment_matches_ms412_patch_calibration_addresses():
     ignition = _patch("ignition_cut_v7")["cave"]["cals"]
-    launch_413 = _patch("launch_control_v4")["cave"]["cals"]
+    launch_413 = _patch("launch_control_v5")["cave"]["cals"]
     launch_412 = _patch("launch_control_v4_ms412")["cave"]["cals"]
-    assert launch_412 == launch_413
+    assert launch_412 != launch_413
 
-    expected = {**ignition, **launch_413}
+    expected = {**ignition, **launch_412}
     tables = _tables()
     assert set(tables) == set(TABLE_TO_CAL)
     for table_name, cal_name in TABLE_TO_CAL.items():
@@ -112,6 +112,35 @@ def test_builder_upgrades_previous_marker_blocks():
         assert rebuilt.count('name="LC - Hard Cut RPM"') == 3
 
 
+def test_combined_builder_remaps_only_ms413_launch_controls():
+    rebuilt = build_patch_definitions.inject_definition(
+        _synthetic_definition(),
+        FRAGMENT.read_text(encoding="utf-8"),
+    )
+    root = ET.fromstring(rebuilt)
+    addresses = {}
+    for rom in root.findall("rom"):
+        key = (
+            rom.findtext("romid/xmlid"),
+            rom.findtext("romid/filesize"),
+        )
+        launch = next(
+            table for table in rom.findall("table")
+            if table.attrib.get("name") == "LC - Switch / Mode"
+        )
+        addresses[key] = int(launch.attrib["storageaddress"], 16)
+
+    assert addresses[("SS1v2", "24kb")] == 0x47E0
+    assert addresses[("12", "24kb")] == 0x352C
+    assert addresses[("12", "256kb")] == 0x1752C
+
+
+def test_ms413_v5_documentation_has_no_current_boost_conflict_warning():
+    text = (FRAGMENT.parent / "README.md").read_text(encoding="utf-8")
+    assert "current Launch and boost control may be configured together" in text
+    assert "This restriction does not apply to V5" in text
+
+
 def test_standalone_artifact_is_reproducible_and_patch_only():
     fragment = FRAGMENT.read_text(encoding="utf-8")
     expected = build_patch_definitions.build_standalone_definition(fragment)
@@ -150,7 +179,7 @@ def test_standalone_addresses_match_patch_descriptors_for_each_framing():
             launch_id = (
                 "launch_control_v4_ms412"
                 if "MS412" in xmlid
-                else "launch_control_v4"
+                else "launch_control_v5"
             )
         expected_full = {
             **_patch(ignition_id)["cave"]["cals"],
@@ -198,7 +227,7 @@ def test_standalone_matches_real_images_after_each_tunable_patch_set():
     definitions = romraider_defs.load_definitions(STANDALONE)
     cases = (
         (
-            "MS41.3", ["ignition_cut_v7", "launch_control_v4"],
+            "MS41.3", ["ignition_cut_v7", "launch_control_v5"],
             "BIMMERSTEIN_MS413_SS1V2_24K", "BIMMERSTEIN_MS413_SS1V2_256K",
         ),
         (

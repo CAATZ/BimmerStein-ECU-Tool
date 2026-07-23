@@ -122,11 +122,16 @@ try {
         'href="BUILDING.md">Build Guide</a>',
         'href="LICENSE.txt">License</a>'
     )
-    $releaseReadme = [regex]::Replace(
-        $releaseReadme,
-        '(?m)^- \[User manual source\]\(manual/USER_MANUAL\.md\)\r?\n?',
-        ''
-    )
+    foreach ($sourceOnlyLink in @(
+        "User manual (web-readable Markdown)",
+        "Build and release instructions"
+    )) {
+        $releaseReadme = [regex]::Replace(
+            $releaseReadme,
+            "(?m)^- \[$([regex]::Escape($sourceOnlyLink))\]\([^)]+\)\r?\n?",
+            ''
+        )
+    }
     $releaseReadme = $releaseReadme.Replace(
         '(output/pdf/BimmerStein-ECU-Tool-User-Manual.pdf)',
         '(BimmerStein-ECU-Tool-User-Manual.pdf)'

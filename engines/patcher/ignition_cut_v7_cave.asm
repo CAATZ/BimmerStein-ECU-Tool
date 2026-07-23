@@ -24,7 +24,7 @@ base 0x3DC70
         push r4
         mov  DPP0,#4
 
-        ; Launch Control V4 already applied its own RPM threshold before it
+        ; Launch Control already applied its own RPM threshold before it
         ; raises fd5a.7. This request deliberately bypasses CUTSW/CUTRPM.
         movb RL4,0xFD5A
         andb RL4,#0x80

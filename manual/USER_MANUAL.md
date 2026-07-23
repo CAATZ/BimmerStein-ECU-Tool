@@ -326,11 +326,12 @@ checksums, and archives the composed image into Bins.
 - **Untested** means emulator validation exists but physical vehicle testing has not been completed.
 - Boot-region patches require a transfer path that can actually deliver their bytes.
 
-Ignition Cut V7, Launch Control V4 ignition mode, and AlphaN MAF-failsafe intentionally remain
+Ignition Cut V7, Launch Control ignition mode, and AlphaN MAF-failsafe intentionally remain
 marked **Untested**.
-Launch Control V4 fuel mode has held its configured 4000 RPM setpoint
-during vehicle testing. Field-failed Ignition Cut V6 remains visible only when installed so it can
-be removed before V7 is applied.
+Launch Control V4 fuel mode held its configured 4000 RPM setpoint during
+vehicle testing before the MS41.3 V5 calibration relocation; V5 requires an
+on-car retest. Field-failed Ignition Cut V6 remains visible only when installed
+so it can be removed before V7 is applied.
 Applying one requires an explicit confirmation. Do not treat emulator verification as proof of
 safe behavior on an engine.
 
@@ -342,6 +343,9 @@ The release includes `BimmerStein MS41 Patch Definitions.xml` beside the executa
 RomRaider or BimmerStein Tuning Suite to configure calibration items added by the matching patches.
 Install the firmware patch first and verify the ECU variant, calibration ID, and patch revision. A
 mismatched definition can expose incorrect tables or write to the wrong calibration addresses.
+MS41.3 Launch Control V5 uses its dedicated `0x47E0-0x47E7` block and can be
+configured with boost control. Only deprecated MS41.3 V4 overlapped boost
+knock-compensation cells; remove V4 before installing and configuring V5.
 
 ### Safe composition
 

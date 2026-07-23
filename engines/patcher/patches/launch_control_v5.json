@@ -1,0 +1,74 @@
+{
+  "id": "launch_control_v5",
+  "status": "EMULATOR VERIFIED - ON-CAR RETEST REQUIRED",
+  "tested": false,
+  "verification": "V5 relocates the MS41.3 controls to the erased calibration tail at 0x47E0-0x47E7, leaving the live 0x352C-0x356B boost knock-compensation table untouched. LC_HARDRPM at 0x47E7 independently controls both native DB87 compare sites. Canonical ms41emu gates configured thresholds, below-soft clamping, 0xFF fallback and saturation, stock fallback, both real hard-limit call sites, soft entry, recovery, and Ignition Cut V7 composition. Fuel mode held the configured 4000 RPM setpoint on-car in V4 before this calibration relocation; V5 and V7 ignition mode require on-car retesting.",
+  "title": "Launch Control v5 / 2-step (independent soft + hard fuel limit or ignition cut)",
+  "user_description": "Adds clutch- or switch-armed launch control with independently configurable soft and hard limits and a choice of fuel-cut or ignition-cut operation. Its dedicated MS41.3 calibration block does not overlap boost control. Fuel mode was exercised on-car before the V5 relocation; V5 and ignition mode require vehicle retesting.",
+  "description": "MS41.3 Launch Control V5 using the dedicated calibration block at 0x47E0-0x47E7. Cave A retains the proven arm/hold/release state machine and fd5a.6 latch. Fuel mode lowers regenerated F014 to LC_MAXRPM (soft cut) and substitutes LC_HARDRPM at both native DB87 comparisons (hard cut), while preserving stock F013 cylinder staging, F015/F016 resume delay, and hysteresis. LC_HARDRPM below LC_MAXRPM clamps to the soft threshold; 0xFF safely falls back to LC_MAXRPM + 96 RPM with saturation. Ignition mode raises fd5a.7 at LC_MAXRPM and requires Ignition Cut V7's six-channel P1L final-stage gate. Supersedes the released V4 that overlapped the boost knock-compensation table, Launch Control V3, field-failed V2, and deprecated V1.",
+  "target": "MS41.3",
+  "recompute": ["program"],
+  "requires": ["ignition_cut_v7"],
+  "conflicts": [
+    "ignition_cut",
+    "ignition_cut_v2",
+    "ignition_cut_v3",
+    "ignition_cut_v4",
+    "ignition_cut_v5",
+    "ignition_cut_v6",
+    "launch_control",
+    "launch_control_v2",
+    "launch_control_v3",
+    "launch_control_v4"
+  ],
+  "supersedes": [
+    "launch_control",
+    "launch_control_v2",
+    "launch_control_v3",
+    "launch_control_v4"
+  ],
+  "cave": {
+    "region": "proghigh",
+    "base": 236800,
+    "splice_off": 252200,
+    "splice_op": "jmps",
+    "relocatable": false,
+    "splices": [
+      {"off": 252200, "base": 236800, "op": "jmps"},
+      {"off": 149458, "base": 236988, "op": "jmps"},
+      {"off": 149642, "base": 237088, "op": "calls"},
+      {"off": 149802, "base": 237088, "op": "calls"}
+    ],
+    "cals": {
+      "LC_SW": 67552,
+      "LC_CUTTYPE": 67553,
+      "LC_CLUTCHPOL": 67554,
+      "LC_MAXRPM": 67555,
+      "LC_ARMSPEED": 67556,
+      "LC_MAXSPEED": 67557,
+      "LC_MINTPS": 67558,
+      "LC_HARDRPM": 67559
+    }
+  },
+  "edits": [
+    {"off": 252200, "expect": "f3f89af1", "data": "fa0300dd"},
+    {"off": 149458, "expect": "fe2dfe11", "data": "fa03bcdd"},
+    {"off": 149642, "expect": "43f887db", "data": "da0320de"},
+    {"off": 149802, "expect": "43f887db", "data": "da0320de"},
+    {
+      "off": 236800,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4ecf5e6000400f3f8e04747f8ff002d3a47f800002d35f3f89af143f8e5479d32f3f8d0e843f8e6478d2df3f89af143f8e4479d2af3f8e04747f801003d05f3f861fd67f802000d0f47f802003d05f3f861fd67f801000d0747f804003d13f3f860fd67f88000f3fae24747fa00002d0447f800002d050d0847f800003d010d046f2d0d026e2d0d007e2df3f85afd67f840002d0bf3f8e14747f801003d06f3f83cfc43f8e3478d017f2dfcf5fcf4fc00f3f89af1fa032c99"
+    },
+    {
+      "off": 236988,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4e6000400f3f85afd67f840002d0cf3f8e14747f800003d07f3f8e34743f814f09d02f7f814f0fcf4fc00fe2dfe11fa02d607"
+    },
+    {
+      "off": 237088,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf5e6000400f3fa5afd67fa40002d1af3fae14749a03d16f3fae74747faff003d0af3fae34747fafd008d03e7faff000d0709a30d0543fae3479d02f3fae347418a0d0243f887dbfcf5fc00db00"
+    }
+  ]
+}

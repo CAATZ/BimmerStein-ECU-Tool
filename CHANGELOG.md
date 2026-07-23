@@ -8,6 +8,15 @@ shared by BimmerStein applications.
 
 ## [Unreleased]
 
+## [0.1.0b10] - 2026-07-23
+
+### Fixed
+
+- Revved MS41.3 Launch Control to V5 and relocated its controls to the dedicated
+  `0x47E0-0x47E7` calibration block, allowing Launch and boost control together.
+  Released V4 remains detectable and remove-only for migration, and the bundled
+  RomRaider definitions now expose the V5 addresses.
+
 ## [0.1.0b9] - 2026-07-23
 
 ### Added

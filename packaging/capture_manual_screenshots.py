@@ -84,8 +84,8 @@ def _synthetic_patch_records() -> list[dict]:
             "removable": False,
         },
         {
-            "id": "launch_control_v4",
-            "title": "Launch Control V4",
+            "id": "launch_control_v5",
+            "title": "Launch Control V5",
             "description": "Current staged launch-control limiter implementation.",
             "user_description": "Adds configurable staged launch control.",
             "target": "MS41.3",
@@ -218,7 +218,7 @@ def main() -> int:
         )
         window._refresh_patch_list()
         window._patch_checkboxes["ignition_cut_v7"].setChecked(True)
-        window._patch_checkboxes["launch_control_v4"].setChecked(True)
+        window._patch_checkboxes["launch_control_v5"].setChecked(True)
     finally:
         patch_service.available_patches = original_available
     _select_tab(window, "Patches")

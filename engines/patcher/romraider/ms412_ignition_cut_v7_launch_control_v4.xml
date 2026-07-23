@@ -1,9 +1,8 @@
-<!-- RomRaider table fragment for Ignition Cut V7 plus Launch Control V4.
-     The calibration-relative addresses are shared by MS41.2 ID12 and MS41.3 SS1v2:
-       - MS41.2 uses launch_control_v4_ms412
-       - MS41.3 uses launch_control_v4
-     Paste these tables inside the matching 24KB ID12 or SS1v2 <rom> element. This
-     is a fragment, not a standalone definition file. Defaults are 0xFF (OFF).
+<!-- RomRaider table fragment for MS41.2 Ignition Cut V7 plus Launch Control V4.
+     The source addresses match MS41.2 ID12 and launch_control_v4_ms412.
+     build_patch_definitions.py remaps the Launch controls for MS41.0, MS41.1,
+     and MS41.3; do not paste this unprocessed fragment into those variants.
+     This is a fragment, not a standalone definition file. Defaults are 0xFF (OFF).
      For a 256KB MS41.2 definition, convert every address with fo(SA); e.g.
      0x2A65 -> 0x16A65, 0x352C -> 0x1752C, and 0x3533 -> 0x17533. -->
 
@@ -13,7 +12,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control V4 may independently request spark cut through fd5a.7.</description>
+  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x2A66">
@@ -28,7 +27,7 @@
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Launch Control V4. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x352D">

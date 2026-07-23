@@ -81,10 +81,13 @@ MS411_ADDRESS_MAP = {
     0x2A65: 0x3700, 0x2A66: 0x3701,
     **{0x352C + index: 0x3710 + index for index in range(8)},
 }
+MS413_ADDRESS_MAP = {
+    0x352C + index: 0x47E0 + index for index in range(8)
+}
 
 IGNITION_LAUNCH_VARIANTS = (
-    ("BIMMERSTEIN_MS413_SS1V2_24K", "33BB", "SS1v2", "SHINDE1", "MS41.3 SS1v2 + BimmerStein patches (24KB)", "24kb", False, None),
-    ("BIMMERSTEIN_MS413_SS1V2_256K", "173BB", "SS1v2", "SHINDE1", "MS41.3 SS1v2 + BimmerStein patches (256KB)", "256kb", True, None),
+    ("BIMMERSTEIN_MS413_SS1V2_24K", "33BB", "SS1v2", "SHINDE1", "MS41.3 SS1v2 + BimmerStein patches (24KB)", "24kb", False, MS413_ADDRESS_MAP),
+    ("BIMMERSTEIN_MS413_SS1V2_256K", "173BB", "SS1v2", "SHINDE1", "MS41.3 SS1v2 + BimmerStein patches (256KB)", "256kb", True, MS413_ADDRESS_MAP),
     ("BIMMERSTEIN_MS412_ID12_24K", "E", "12", "1406464", "MS41.2 ID12 + BimmerStein patches (24KB)", "24kb", False, None),
     ("BIMMERSTEIN_MS412_ID12_256K", "1400E", "12", "1406464", "MS41.2 ID12 + BimmerStein patches (256KB)", "256kb", True, None),
     ("BIMMERSTEIN_MS410_ID41_24K", "E", "41", "1429861", "MS41.0 1429861 + BimmerStein patches (24KB)", "24kb", False, MS410_ADDRESS_MAP),
@@ -141,8 +144,14 @@ def _remap_addresses(fragment: str, address_map: dict[int, int] | None) -> str:
     return ADDRESS_RE.sub(replace, fragment)
 
 
-def _payload(fragment: str, *, full_read: bool) -> str:
+def _payload(
+    fragment: str,
+    *,
+    full_read: bool,
+    address_map: dict[int, int] | None = None,
+) -> str:
     tables = _tables_only(fragment).strip()
+    tables = _remap_addresses(tables, address_map)
     if full_read:
         tables = _for_full_read(tables)
     address_note = (
@@ -152,7 +161,7 @@ def _payload(fragment: str, *, full_read: bool) -> str:
     )
     return (
         f"{BEGIN}\n"
-        "<!-- Ignition Cut V7 + Launch Control V4 controls. "
+        "<!-- Ignition Cut V7 + current Launch Control controls. "
         f"{address_note} -->\n"
         f"{tables}\n"
         f"{END}"
@@ -224,7 +233,11 @@ def build_standalone_definition(fragment: str) -> str:
 
 def inject_definition(source: str, fragment: str) -> str:
     """Return *source* with one current patch block in each supported ROM."""
-    wanted = {("SS1v2", "24kb"), ("12", "24kb"), ("12", "256kb")}
+    wanted = {
+        ("SS1v2", "24kb"): MS413_ADDRESS_MAP,
+        ("12", "24kb"): None,
+        ("12", "256kb"): None,
+    }
     found: set[tuple[str, str]] = set()
 
     def inject(block_match: re.Match[str]) -> str:
@@ -233,7 +246,11 @@ def inject_definition(source: str, fragment: str) -> str:
         if key not in wanted:
             return block
         found.add(key)
-        replacement = _payload(fragment, full_read=(key[1] == "256kb"))
+        replacement = _payload(
+            fragment,
+            full_read=(key[1] == "256kb"),
+            address_map=wanted[key],
+        )
         for begin, end in [(BEGIN, END), *LEGACY_MARKERS]:
             marked = re.compile(
                 re.escape(begin) + r".*?" + re.escape(end),
@@ -249,7 +266,7 @@ def inject_definition(source: str, fragment: str) -> str:
         return re.sub(r"\s*</rom>\s*$", f"\n\n{replacement}\n\n</rom>", block)
 
     result = ROM_RE.sub(inject, source)
-    missing = sorted(wanted - found)
+    missing = sorted(set(wanted) - found)
     if missing:
         raise ValueError(f"definition is missing target ROM blocks: {missing}")
 

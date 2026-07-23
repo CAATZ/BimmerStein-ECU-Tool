@@ -14,7 +14,7 @@ EXPECTED_IDS = {
     "ignition_cut_v7_ms410", "ignition_cut_v7_ms411",
     "launch_control_v2_ms412", "launch_control_v3", "launch_control_v3_ms412",
     "launch_control_v4", "launch_control_v4_ms410", "launch_control_v4_ms411",
-    "launch_control_v4_ms412",
+    "launch_control_v4_ms412", "launch_control_v5",
     "softbsl_loader", "softbsl_loader_legacy", "softbsl_loader_relocated_v1",
     "vanos_minrpm_ms410", "vanos_minrpm_ms411",
 }
@@ -85,7 +85,7 @@ def test_needs_boot_write_flags_only_the_sa1_patches():
     }
     # Program/cal patches are DS2-writable.
     assert patch_ms41.needs_boot_write(patches["ignition_cut_v7"]) is False
-    assert patch_ms41.needs_boot_write(patches["launch_control_v4"]) is False
+    assert patch_ms41.needs_boot_write(patches["launch_control_v5"]) is False
 
 
 def test_relocated_loader_preserves_optional_descriptor_and_composes_with_guard_and_amd():
@@ -133,11 +133,17 @@ def test_relocated_loader_and_latest_patch_descriptors_use_built_hex_artifacts()
         root / "engines" / "patcher" / "launch_control_v4_hard_compare.hex"
     ).read_text().strip().lower()
 
-    launch_413 = patches["launch_control_v4"]
+    launch_413 = patches["launch_control_v5"]
     cave_b_413 = next(
         edit["data"] for edit in launch_413["edits"] if edit["off"] == 0x39DBC)
     assert cave_b_413 == (
-        root / "engines" / "patcher" / "launch_control_v4_ms413_cave_b.hex"
+        root / "engines" / "patcher" / "launch_control_v5_ms413_cave_b.hex"
+    ).read_text().strip().lower()
+    comparator_413 = next(
+        edit["data"] for edit in launch_413["edits"] if edit["off"] == 0x39E20)
+    assert comparator_413 == (
+        root / "engines" / "patcher"
+        / "launch_control_v5_ms413_hard_compare.hex"
     ).read_text().strip().lower()
 
 
@@ -149,9 +155,9 @@ def test_latest_switch_caves_follow_the_stock_sir_selector_order():
             for edit in patches["ignition_cut_v7"]["edits"]
             if edit["off"] == 0x39C70
         )),
-        "launch_control_v4": bytes.fromhex(next(
+        "launch_control_v5": bytes.fromhex(next(
             edit["data"]
-            for edit in patches["launch_control_v4"]["edits"]
+            for edit in patches["launch_control_v5"]["edits"]
             if edit["off"] == 0x39D00
         )),
         "launch_control_v4_ms412": bytes.fromhex(next(
@@ -172,7 +178,62 @@ def test_latest_switch_caves_follow_the_stock_sir_selector_order():
         assert all(offset >= 0 for offset in offsets), (patch_id, offsets)
         assert all(cave.count(read) == 1 for read in sir_reads), patch_id
 
-    assert active_caves["launch_control_v4"] == active_caves["launch_control_v4_ms412"]
+    ms413 = active_caves["launch_control_v5"]
+    ms412 = active_caves["launch_control_v4_ms412"]
+    assert len(ms413) == len(ms412)
+    assert ms413 != ms412
+
+
+def test_ms413_launch_uses_erased_tail_and_preserves_live_boost_table():
+    patches = patch_ms41.load_patches()
+    launch = patches["launch_control_v5"]
+    expected_cals = {
+        "LC_SW": 0x107E0,
+        "LC_CUTTYPE": 0x107E1,
+        "LC_CLUTCHPOL": 0x107E2,
+        "LC_MAXRPM": 0x107E3,
+        "LC_ARMSPEED": 0x107E4,
+        "LC_MAXSPEED": 0x107E5,
+        "LC_MINTPS": 0x107E6,
+        "LC_HARDRPM": 0x107E7,
+    }
+    assert launch["cave"]["cals"] == expected_cals
+
+    stock = ref("MS41.3")
+    assert stock[0x107E0:0x107E8] == b"\xFF" * 8
+    boost_table = stock[0x1752C:0x1756C]
+    patched, _log = patch_ms41.build(
+        stock, ["ignition_cut_v7", "launch_control_v5"])
+    assert patched[0x107E0:0x107E8] == b"\xFF" * 8
+    assert patched[0x1752C:0x1756C] == boost_table
+
+
+def test_ms413_launch_relocation_changes_only_address_bearing_instructions():
+    patches = patch_ms41.load_patches()
+    current = bytes.fromhex(next(
+        edit["data"]
+        for edit in patches["launch_control_v5"]["edits"]
+        if edit["off"] == 0x39D00
+    ))
+    legacy = bytes.fromhex(next(
+        edit["data"]
+        for edit in patches["launch_control_v4"]["edits"]
+        if edit["off"] == 0x39D00
+    ))
+    expected = legacy
+    for old, new in {
+        "f3f82c35": "f3f8e047",
+        "f3f82d35": "f3f8e147",
+        "f3fa2e35": "f3fae247",
+        "43f82f35": "43f8e347",
+        "43f83035": "43f8e447",
+        "43f83135": "43f8e547",
+        "43f83235": "43f8e647",
+    }.items():
+        expected = expected.replace(bytes.fromhex(old), bytes.fromhex(new))
+
+    assert current == expected
+    assert bytes.fromhex("2d35") in current  # original JMPR opcode/displacement
 
 
 def test_ignition_v7_is_anchored_only_at_the_six_channel_p1l_final_stage():
@@ -242,7 +303,7 @@ def test_latest_ms412_program_patches_recompute_enabled_program_checksum():
 
 def test_latest_ms413_program_patches_recompute_all_checksums():
     out, _log = patch_ms41.build(
-        ref("MS41.3clean"), ["ignition_cut_v7", "launch_control_v4"])
+        ref("MS41.3clean"), ["ignition_cut_v7", "launch_control_v5"])
     status = checksum.checksum_status(out)
     assert status["boot"] and status["program"] and status["cal"]
     assert status["prog_disabled"]

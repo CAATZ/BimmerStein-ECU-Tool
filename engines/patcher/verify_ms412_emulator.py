@@ -115,7 +115,7 @@ SOFTBSL_VARIANTS = {
 def _build_413():
     stock = STOCK_413_PATH.read_bytes()
     image, _log = patch_ms41.build(
-        stock, ["ignition_cut_v7", "launch_control_v4"], marker="B")
+        stock, ["ignition_cut_v7", "launch_control_v5"], marker="B")
     status = checksum.checksum_status(image)
     assert status["boot"] and status["program"] and status["cal"], status
     assert status["prog_disabled"], status
@@ -201,7 +201,7 @@ def _case_image_413(values):
     """Set the MS41.3 patch controls and restore its active checksums."""
     image = bytearray(FULL_413_IMAGE)
     cal_offsets = {}
-    for patch_id in ("ignition_cut_v7", "launch_control_v4"):
+    for patch_id in ("ignition_cut_v7", "launch_control_v5"):
         cal_offsets.update(PATCHES[patch_id]["cave"]["cals"])
     for name, value in values.items():
         image[cal_offsets[name]] = value & 0xFF
@@ -228,6 +228,9 @@ def _case_image_older(layout, values):
 def _emu(image, dpp0=5):
     emu = Emulator.load(image)
     emu.reg.dpp[0] = dpp0
+    # Function-level calls skip stock startup, which normally establishes the
+    # calibration flash pages as DPP0=4 and DPP1=5.
+    emu.reg.dpp[1] = 5
     return emu
 
 
@@ -459,8 +462,13 @@ def _run_launch_a(image, *, speed, tps, fd60, fd61, latch):
     res = emu.run_from(0x9928, stop_at=(0x992C,), max_steps=500)
     latch_out = bool(emu.read(0xFD5A) & 0x40)
     spark = bool(emu.read(0xFD5A) & 0x80)
-    hygiene = (res.final_pc == 0x992C and res.exit_reason == "stop_at"
-               and res.regs["sp"] == sp0 and res.regs["dpp"][0] == 5)
+    hygiene = (
+        res.final_pc == 0x992C
+        and res.exit_reason == "stop_at"
+        and res.regs["sp"] == sp0
+        and res.regs["dpp"][0] == 5
+        and res.regs["dpp"][1] == 5
+    )
     return latch_out, spark, hygiene
 
 
@@ -530,8 +538,13 @@ def verify_launch_fuel_soft_cave_ms413():
         emu.write_byte(0xF014, stock_limit)
         emu.cpu.csp = 2
         res = emu.run_from(0x07D2, stop_at=(0x07D6,), max_steps=300)
-        hygiene = (res.final_pc == 0x07D6 and res.exit_reason == "stop_at"
-                   and res.regs["sp"] == sp0 and res.regs["dpp"][0] == 5)
+        hygiene = (
+            res.final_pc == 0x07D6
+            and res.exit_reason == "stop_at"
+            and res.regs["sp"] == sp0
+            and res.regs["dpp"][0] == 5
+            and res.regs["dpp"][1] == 5
+        )
         assert emu.read_byte(0xF014) == want and hygiene, (
             name, emu.read_byte(0xF014), want, res, hygiene)
 
@@ -539,7 +552,7 @@ def verify_launch_fuel_soft_cave_ms413():
 def verify_launch_fuel_hard_comparator(case_image=_case_image):
     """Exercise both real DB87 CALL sites and their untouched stock branches.
 
-    V4 uses LC_HARDRPM rather than a DB86/DB87-derived gap. It also clamps a
+    Current Launch uses LC_HARDRPM rather than a DB86/DB87-derived gap. It also clamps a
     configured hard threshold below soft, and treats 0xFF as an unconfigured
     soft+3 fallback with saturation. Persistent DB86/DB87 must remain unchanged.
     """
@@ -583,6 +596,7 @@ def verify_launch_fuel_hard_comparator(case_image=_case_image):
                     and res.exit_reason == "stop_at"
                     and res.regs["sp"] == sp0
                     and res.regs["dpp"][0] == 5
+                    and res.regs["dpp"][1] == 5
                     and emu.read_byte(0xDB86) == 0x10
                     and emu.read_byte(0xDB87) == 0xCE), (
                         name, entry, outcomes, res,
@@ -872,12 +886,12 @@ def main():
     checks_413 = [
         ("ignition cut V7 native CC6 final-stage reachability",
          lambda: verify_ignition_cut_v7(_case_image_413)),
-        ("launch V4 state machine", lambda: verify_launch_brain(_case_image_413)),
-        ("launch V4 MS41.3 soft limiter / continuation",
+        ("launch V5 state machine", lambda: verify_launch_brain(_case_image_413)),
+        ("launch V5 MS41.3 soft limiter / continuation",
          verify_launch_fuel_soft_cave_ms413),
-        ("launch V4 independent hard limiter comparator",
+        ("launch V5 independent hard limiter comparator",
          lambda: verify_launch_fuel_hard_comparator(_case_image_413)),
-        ("launch V4 + ignition V7 composition",
+        ("launch V5 + ignition V7 composition",
          lambda: verify_composed_launch_and_ignition(_case_image_413)),
     ]
     for label, check in checks_413:

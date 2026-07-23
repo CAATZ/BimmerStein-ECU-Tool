@@ -23,6 +23,7 @@ REQUIRED_PATCH_IDS = {
     "softbsl_loader",
     "ignition_cut_v7",
     "launch_control_v4",
+    "launch_control_v5",
     "launch_control_v4_ms412",
 }
 PE_MACHINE_AMD64 = 0x8664

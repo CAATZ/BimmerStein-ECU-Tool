@@ -1,13 +1,15 @@
 {
   "id": "launch_control_v4",
-  "status": "EMULATOR VERIFIED - ON-CAR RETEST REQUIRED",
+  "label": "V4",
+  "deprecated": true,
+  "superseded_by": "launch_control_v5",
+  "status": "DEPRECATED - REMOVE BEFORE V5",
   "tested": false,
-  "verification": "V4 keeps the V3 stock-limiter integration but removes its stock-redline-derived hard threshold. LC_HARDRPM at calibration address 0x3533 independently controls both native DB87 compare sites. Canonical ms41emu gates configured thresholds, below-soft clamping, 0xFF fallback and saturation, stock fallback, both real hard-limit call sites, soft entry, recovery, and Ignition Cut V7 composition. Fuel mode has held the configured 4000 RPM setpoint on-car; the new V7 ignition mode remains an on-car retest item.",
-  "title": "Launch Control v4 / 2-step (independent soft + hard fuel limit or ignition cut)",
-  "user_description": "Adds clutch- or switch-armed launch control with independently configurable soft and hard limits and a choice of fuel-cut or ignition-cut operation. Fuel mode has been exercised on-car; ignition mode requires Ignition Cut V7 and still needs vehicle testing.",
-  "description": "Clutch/switch-armed 2-step. Cave A retains the proven arm/hold/release state machine and fd5a.6 latch. Fuel mode lowers regenerated F014 to LC_MAXRPM (soft cut) and substitutes LC_HARDRPM at both native DB87 comparisons (hard cut), while preserving stock F013 cylinder staging, F015/F016 resume delay, and hysteresis. LC_HARDRPM below LC_MAXRPM clamps to the soft threshold; 0xFF safely falls back to LC_MAXRPM + 96 RPM with saturation. Ignition mode raises fd5a.7 at LC_MAXRPM and requires Ignition Cut V7's six-channel P1L final-stage gate. Supersedes Launch Control V3, field-failed V2, and deprecated V1.",
+  "verification": "Released MS41.3 Launch Control V4 implementation retained byte-for-byte for installed-state detection and removal. Its 0x352C-0x3533 controls overlap the live 0x352C-0x356B boost knock-compensation table. Replace it with Launch Control V5 at 0x47E0-0x47E7.",
+  "title": "Launch Control v4 at boost-table addresses [DEPRECATED - REMOVE ONLY]",
+  "description": "DEPRECATED and remove-only. This released MS41.3 V4 reads its controls from 0x352C-0x3533, which is part of the live boost knock-compensation table. It is retained exactly so installed images can be detected and safely reverted before V5 is installed. Removing the code does not rewrite those calibration bytes.",
   "target": "MS41.3",
-  "recompute": [],
+  "recompute": ["program"],
   "requires": ["ignition_cut_v7"],
   "conflicts": [
     "ignition_cut",
@@ -18,7 +20,8 @@
     "ignition_cut_v6",
     "launch_control",
     "launch_control_v2",
-    "launch_control_v3"
+    "launch_control_v3",
+    "launch_control_v5"
   ],
   "supersedes": ["launch_control", "launch_control_v2", "launch_control_v3"],
   "cave": {
