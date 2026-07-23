@@ -11,11 +11,11 @@
 </p>
 
 <p align="center">
-  <strong><a href="RELEASE_NOTES.md">Beta Release Notes</a></strong>
+  <strong><a href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b9">Download Beta 9</a></strong>
   &nbsp;&middot;&nbsp;
   <a href="manual/USER_MANUAL.md">User Manual</a>
   &nbsp;&middot;&nbsp;
-  <a href="BUILDING.md">Build Guide</a>
+  <a href="https://github.com/CAATZ/BimmerStein-ECU-Tool/issues">Issues &amp; Feedback</a>
 </p>
 
 <p align="center">
@@ -195,13 +195,27 @@ User-generated data is stored beside the executable in either installation mode:
 
 Full ROMs and logs can contain VIN and ECU identity information. Treat them as private.
 
-## User manual
+## Documentation and support
 
 The illustrated manual covers normal flashing, recovery behavior, Soft-BSL, hardware BSL,
 diagnostics, offline tools, patches, and final checklists:
 
-- [User manual source](manual/USER_MANUAL.md)
+- [Download BimmerStein ECU Tool 0.1.0 Beta 9](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b9)
 - [Illustrated PDF manual](output/pdf/BimmerStein-ECU-Tool-User-Manual.pdf)
+- [User manual (web-readable Markdown)](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/manual/USER_MANUAL.md)
+- [Build and release instructions](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/BUILDING.md)
+- [Beta release notes](RELEASE_NOTES.md)
+- [Patch definitions and usage](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/engines/patcher/romraider/README.md)
+- [Hardware-BSL recovery companion](https://github.com/CAATZ/MS41-BSL-Unbricker)
+- [BimmerStein Tuning Suite](https://github.com/CAATZ/bimmerstein-tuning-suite)
+- [Third-party notices](THIRD_PARTY_NOTICES.md)
+- [GNU GPL license](LICENSE)
+- [Report a bug or request a feature](https://github.com/CAATZ/BimmerStein-ECU-Tool/issues)
+
+Useful bug reports include the ECU software version, flash family, Windows version, interface and
+driver, selected transfer mode, exact operation, last completed step, application log, reproduction
+steps, and screenshots when applicable. Full ROMs and logs can contain VIN or ECU identity data;
+redact personal information before sharing them.
 
 ## Run from source
 
@@ -279,7 +293,7 @@ Special thanks to the people who helped shape and validate BimmerStein ECU Tool.
 | **roimaomanik** | Beta testing |
 | **Alphamk4** | MS41.0 patch testing |
 
-## License
+## License and provenance
 
 Copyright (C) 2026 CAATZ.
 

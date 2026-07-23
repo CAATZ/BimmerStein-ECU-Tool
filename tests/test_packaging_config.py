@@ -271,12 +271,15 @@ def test_public_project_license_and_docs_are_gplv3():
         assert "OFF-ROAD" in text, path
 
 
-def test_readme_uses_canonical_product_logo_and_beta_links():
+def test_readme_uses_canonical_product_logo_and_resource_links():
     text = (ROOT / "README.md").read_text(encoding="utf-8")
     assert '<img src="assets/bimmerstein_ecu_tool.png"' in text
     assert 'alt="BimmerStein ECU Tool"' in text
-    assert 'href="RELEASE_NOTES.md">Beta Release Notes</a>' in text
+    assert 'href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b9"' in text
     assert 'href="manual/USER_MANUAL.md">User Manual</a>' in text
+    assert 'href="https://github.com/CAATZ/BimmerStein-ECU-Tool/issues"' in text
+    assert "## Documentation and support" in text
+    assert "[Patch definitions and usage]" in text
 
 
 def test_public_docs_include_product_specific_disclaimer():
