@@ -441,6 +441,26 @@ def test_golden_top_composer_shares_persistent_install_patch_set():
     assert rebuilt == image
 
 
+def test_ms411_calguard_v1_directly_upgrades_during_softbsl_compose():
+    from engines.patcher.patch_ms41 import build, is_applied, load_patches
+    from tests.conftest import ref
+
+    patches = load_patches()
+    v1_image, _ = build(ref("MS41.1"), ["cal_guard_v1"])
+
+    composed, log = softbsl_install._sb._compose_image(
+        v1_image,
+        ["softbsl_loader", "door_magic_ms411", "cal_guard"],
+        return_log=True,
+    )
+
+    assert is_applied(composed, patches["softbsl_loader"])
+    assert is_applied(composed, patches["door_magic_ms411"])
+    assert is_applied(composed, patches["cal_guard"])
+    assert not is_applied(composed, patches["cal_guard_v1"])
+    assert any("exact prior revision" in line for line in log)
+
+
 def test_complete_existing_loader_asks_and_allows_reinstall():
     patch = {"id": "softbsl_loader", "edits": [
         {"off": 0, "expect": "00", "data": "5a"}

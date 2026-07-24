@@ -364,9 +364,16 @@ def test_calguard_v1_is_detected_removed_and_replaced_by_v2():
         "label": "V1 broad-version guard",
     }]
 
+    directly_upgraded, direct_log = patch_service.build_image(
+        v1_image, ["cal_guard"])
+    definitions = patch_service.definitions()
+    assert patch_service.is_applied(directly_upgraded, definitions["cal_guard"])
+    assert not patch_service.is_applied(
+        directly_upgraded, definitions["cal_guard_v1"])
+    assert any("exact prior revision" in line for line in direct_log)
+
     cleaned = patch_service.revert_patch(v1_image, "cal_guard_v1")
     upgraded, _ = patch_service.build_image(cleaned, ["cal_guard"])
-    definitions = patch_service.definitions()
     assert not patch_service.is_applied(upgraded, definitions["cal_guard_v1"])
     assert patch_service.is_applied(upgraded, definitions["cal_guard"])
 

@@ -24,6 +24,7 @@
     {
       "off": 18746,
       "expect": "f3fa40e749a12d04",
+      "upgrade_expect": "ea00101ecc00cc00",
       "data": "ea00101ecc00cc00"
     },
     {
