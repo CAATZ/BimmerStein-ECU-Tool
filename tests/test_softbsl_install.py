@@ -769,6 +769,41 @@ def test_live_variant_gate_uses_program_signature_and_either_cal_marker(monkeypa
             version, version, True)
 
 
+def test_live_compatibility_gate_reads_the_same_program_and_calibration_ids():
+    class FakeDS2:
+        def read_mem(self, address, length):
+            values = {
+                0x1000C: b"0660",
+                0x2007: b"0660",
+                0x1CF4: b"606",
+            }
+            return values.get(address, b"\xFF" * length)[:length]
+
+    assert softbsl_install._sb._detect_firmware_compatibility(FakeDS2()) == (
+        "0660", "0660", b"606", True)
+
+
+def test_install_normalization_preserves_the_calibration_family_suffix():
+    from ms41 import (
+        CODING_FAMILY_CAL_ADDRS, CODING_FAMILY_PROGRAM_ADDRS,
+        FIRMWARE_COMPAT_CAL_ADDRS, FIRMWARE_COMPAT_PROGRAM_ADDRS, MS41ECU,
+    )
+
+    image = bytearray(b"\xFF" * MS41ECU.FULL_ROM_SIZE)
+    for address in CODING_FAMILY_PROGRAM_ADDRS:
+        image[address:address + 3] = b"909"
+    for address in CODING_FAMILY_CAL_ADDRS:
+        image[address] = ord("9")
+    for address in FIRMWARE_COMPAT_PROGRAM_ADDRS:
+        image[address:address + 4] = b"0960"
+    for address in FIRMWARE_COMPAT_CAL_ADDRS:
+        image[address:address + 4] = b"0960"
+
+    normalized = softbsl_install._sb._normalize_install_image(image, b"606")
+    assert MS41ECU.read_program_compatibility_id(normalized) == "0660"
+    assert MS41ECU.read_calibration_compatibility_id(normalized) == "0660"
+
+
 def test_final_install_patches_really_span_both_29f_program_sectors_and_boot():
     from engines.patcher.patch_ms41 import load_patches
     patches = load_patches()
@@ -1156,6 +1191,11 @@ def test_bootstrap_reuses_install_preflight_without_reopening_ds2(
         "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
         "cal_variant": "MS41.3",
         "program_variant": "MS41.3",
+        "cal_compatibility_id": "0912",
+        "program_compatibility_id": "0912",
+        "coding_family": b"909",
+        "broad_consistent": True,
+        "exact_consistent": True,
         "consistent": True,
     }
 
@@ -1209,6 +1249,11 @@ def test_install_reuses_cached_variant_and_family_for_phase1(monkeypatch, tmp_pa
         "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
         "cal_variant": "MS41.3",
         "program_variant": "MS41.3",
+        "cal_compatibility_id": "0912",
+        "program_compatibility_id": "0912",
+        "coding_family": b"909",
+        "broad_consistent": True,
+        "exact_consistent": True,
         "consistent": True,
     }
     args = SimpleNamespace(
@@ -1332,7 +1377,12 @@ def test_install_phase1_marker_recovery_reuses_prepared_images_and_live_family(
     monkeypatch.setattr(
         softbsl_install._sb,
         "_detect_ecu_variant",
-        lambda _probe: ("MS41.3", "MS41.3", True),
+        lambda _probe, **_kwargs: ("MS41.3", "MS41.3", True),
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_detect_firmware_compatibility",
+        lambda _probe: ("0912", "0912", b"909", True),
     )
     monkeypatch.setattr(
         softbsl_install._sb.ecu_info,
@@ -1399,6 +1449,11 @@ def test_repeated_phase1_marker_timeout_requires_each_decision_and_cancel_is_typ
         "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
         "cal_variant": "MS41.3",
         "program_variant": "MS41.3",
+        "cal_compatibility_id": "0912",
+        "program_compatibility_id": "0912",
+        "coding_family": b"909",
+        "broad_consistent": True,
+        "exact_consistent": True,
         "consistent": True,
     }
     decisions = iter((True, False))
@@ -1468,6 +1523,11 @@ def test_phase1_native_retry_never_downshifts_to_legacy_writer(monkeypatch, tmp_
         "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
         "cal_variant": "MS41.3",
         "program_variant": "MS41.3",
+        "cal_compatibility_id": "0912",
+        "program_compatibility_id": "0912",
+        "coding_family": b"909",
+        "broad_consistent": True,
+        "exact_consistent": True,
         "consistent": True,
     }
     native_calls = []
@@ -1561,6 +1621,11 @@ def test_phase1_non_marker_preerase_failures_do_not_prompt(
         "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
         "cal_variant": "MS41.3",
         "program_variant": "MS41.3",
+        "cal_compatibility_id": "0912",
+        "program_compatibility_id": "0912",
+        "coding_family": b"909",
+        "broad_consistent": True,
+        "exact_consistent": True,
         "consistent": True,
     }
     args = SimpleNamespace(
@@ -1603,6 +1668,11 @@ def test_phase1_posterase_failure_retains_session_without_marker_prompt(
         "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
         "cal_variant": "MS41.3",
         "program_variant": "MS41.3",
+        "cal_compatibility_id": "0912",
+        "program_compatibility_id": "0912",
+        "coding_family": b"909",
+        "broad_consistent": True,
+        "exact_consistent": True,
         "consistent": True,
     }
     retained = SimpleNamespace(

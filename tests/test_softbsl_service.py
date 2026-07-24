@@ -3,6 +3,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import softbsl_service
 import ds2 as app_ds2
 import ecu_info
+import pytest
 from engines.softbsl import softbsl_host
 
 BLANK = b"\xFF" * 262144
@@ -68,6 +69,25 @@ def test_intel_image_is_blocked_on_amd_before_agent_entry(monkeypatch):
     except softbsl_service.FlashFamilyMismatchError as error:
         assert "Intel 28F" in str(error)
         assert "AMD/JEDEC 29F" in str(error)
+
+
+def test_hybrid_image_is_blocked_before_agent_entry(monkeypatch):
+    image = bytearray(BLANK)
+    for address in (0x6007, 0x6013, 0x601F):
+        image[address:address + 4] = b"0641"
+    for address in (0x1400C, 0x14016, 0x14026, 0x14036):
+        image[address:address + 4] = b"0659"
+    monkeypatch.setattr(
+        softbsl_service, "_open_session",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("hybrid gate entered the RAM agent")))
+
+    with pytest.raises(
+            softbsl_service.FlashImageCompatibilityError,
+            match="blocked before agent entry"):
+        softbsl_service.run_flash(
+            "COM1", image, "full", prompt=lambda _message: "",
+            log=lambda *_args: None)
 
 
 def test_amd_image_is_allowed_for_amd_when_boot_is_preserved():

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from engines.softbsl import softbsl_host as _sb
 import ds2 as _sbds2
 import ecu_info
+from ms41 import MS41ECU
 from engines.softbsl.softbsl_host import SoftBSLError  # stable ref (tests monkeypatch _sb)
 
 
@@ -75,6 +76,10 @@ class SoftBSLFallbackExhausted(SoftBSLError):
 
 class FlashFamilyMismatchError(RuntimeError):
     """An image's installed flash-driver family is unsafe for the live ECU."""
+
+
+class FlashImageCompatibilityError(RuntimeError):
+    """A full image's program and calibration compatibility data disagree."""
 
 
 def validate_flash_image_family(image, connected_family, *, write_bootloader=False):
@@ -353,6 +358,10 @@ def run_flash(port, image, scope, prompt, log, baud="low", progress_cb=None,
     :class:`SoftBSLWriteRecoveryRequired`. Successful writes finalize E740=0; ``do_verify``
     controls only the requested read-back verification.
     """
+    hybrid_error = MS41ECU.check_hybrid(bytes(image))
+    if hybrid_error:
+        raise FlashImageCompatibilityError(
+            f"Flash blocked before agent entry: {hybrid_error}")
     validate_flash_image_family(
         image, chip_family, write_bootloader=write_bootloader)
     target = bytes(image)

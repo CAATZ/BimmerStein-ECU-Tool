@@ -503,8 +503,8 @@ def _populate_ecu_info(ident: bytes, labels: dict) -> tuple:
         "1438068": ("MS41.1", "60"),
         "1429861": ("MS41.0", "41"),
         "1432401": ("MS41.0", "41"),
-        "1429373": ("MS41.0", "41"),
-        "1438137": ("MS41.0", "41"),
+        "1429373": ("MS41.0", "59"),
+        "1438137": ("MS41.0", "85"),
         "1406464": ("MS41.2", "12"),
         "SHINDE1": ("MS41.3", "SS"),
     }
@@ -527,6 +527,15 @@ def _populate_ecu_info(ident: bytes, labels: dict) -> tuple:
     except Exception:
         pass
     return ecu_id, variant
+
+
+def _is_firmware_conversion(file_variant, ecu_variant, file_calid, ecu_calid):
+    """True when either the broad variant or exact CAL family changes."""
+    return bool(
+        file_variant and ecu_variant and file_variant != ecu_variant
+    ) or bool(
+        file_calid and ecu_calid and file_calid[:2] != ecu_calid[:2]
+    )
 
 
 class _BootGateBlock:
@@ -2111,11 +2120,12 @@ class MS41FlashGUI(QMainWindow):
                         f"Connected ECU: {ecu_variant}  —  Tune file: {file_variant}.\n\n"
                         f"Writing a {file_variant} calibration to a {ecu_variant} ECU "
                         f"will brick it.")
-        elif file_calid and ecu_calid and file_calid[:2] != ecu_calid[:2]:
+        if (not confirmed_mismatch and file_calid and ecu_calid
+                and file_calid[:2] != ecu_calid[:2]):
             confirmed_mismatch = (
                 f"CAL ID family mismatch — ECU CAL ID '{ecu_calid}' vs tune '{file_calid}'.\n\n"
                 "Writing a calibration from the wrong ID family will brick the ECU.")
-        elif not ecu_variant:
+        if not confirmed_mismatch and not ecu_variant:
             uncertain_warn = ("Connected ECU variant could not be determined — "
                               "cannot confirm this tune belongs to the connected ECU.")
 
@@ -2328,8 +2338,16 @@ class MS41FlashGUI(QMainWindow):
         file_variant = MS41ECU.detect_variant(image)
         ecu_variant = (getattr(self, "_ecu_program_variant", None)
                        or getattr(self, "_ecu_variant", None))
-        is_variant_conversion = bool(
-            file_variant and ecu_variant and file_variant != ecu_variant
+        file_calid = MS41ECU.read_calid(image)
+        ecu_calid = getattr(self, "_ecu_cal_id", None)
+        if not ecu_calid and archived_prewrite_image is not None:
+            ecu_calid = MS41ECU.read_calid(archived_prewrite_image)
+        if not ecu_calid and getattr(self, "_last_full_read", None) is not None:
+            ecu_calid = MS41ECU.read_calid(self._last_full_read)
+        file_family = file_calid[:2] if file_calid else None
+        ecu_family = ecu_calid[:2] if ecu_calid else None
+        is_variant_conversion = _is_firmware_conversion(
+            file_variant, ecu_variant, file_calid, ecu_calid
         )
         if file_variant is None:
             ans = QMessageBox.warning(self, "Unrecognised ROM",
@@ -2358,8 +2376,10 @@ class MS41FlashGUI(QMainWindow):
 
             title, risk_note = self._conversion_warning_policy()
             ans = QMessageBox.warning(self, title,
-                f"Connected ECU : {ecu_variant}\n"
-                f"ROM file      : {file_variant}\n\n"
+                f"Connected ECU : {ecu_variant}"
+                f"{f' (ID{ecu_family})' if ecu_family else ''}\n"
+                f"ROM file      : {file_variant}"
+                f"{f' (ID{file_family})' if file_family else ''}\n\n"
                 f"This will convert the ECU from {ecu_variant} to {file_variant}. "
                 "A full ROM flash rewrites both the program code and the calibration, "
                 "so the ECU will boot as a different variant after the write.\n\n"
@@ -4671,18 +4691,24 @@ class MS41FlashGUI(QMainWindow):
                 f"Partial must be 24 KB ({MS41ECU.TUNE_SIZE:,} bytes), got {len(partial):,}.")
             return
 
-        # CAL ID consistency check (the partial's CAL ID is at its offset 0x0E)
-        full_cal = MS41ECU.read_calid(full)
-        part_cal = MS41ECU.read_calid(partial)
-        if full_cal and part_cal and full_cal != part_cal:
-            ans = QMessageBox.warning(self, "CAL ID Mismatch",
-                f"Donor full CAL ID : {full_cal}\nPartial CAL ID    : {part_cal}\n\n"
-                f"These calibrations differ. Merging mismatched calibrations can "
-                f"produce an unbootable ROM.\n\nMerge anyway?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if ans != QMessageBox.Yes:
-                self._log("Merge cancelled — CAL ID mismatch.", "warn")
-                return
+        donor_error = MS41ECU.check_hybrid(full)
+        if donor_error:
+            QMessageBox.critical(
+                self, "Hybrid Donor — Merge Blocked",
+                f"The donor full ROM is internally inconsistent:\n\n{donor_error}")
+            return
+
+        full_compat = MS41ECU.read_calibration_compatibility_id(full)
+        part_compat = MS41ECU.read_calibration_compatibility_id(partial)
+        if (full_compat and part_compat
+                and full_compat[-2:] != part_compat[-2:]):
+            QMessageBox.critical(
+                self, "Firmware Compatibility Mismatch — Merge Blocked",
+                f"Donor compatibility family : ID{full_compat[-2:]}\n"
+                f"Partial compatibility family: ID{part_compat[-2:]}\n\n"
+                "These program/calibration families cannot be merged safely.")
+            self._log("Merge blocked — Firmware Compatibility ID mismatch.", "error")
+            return
 
         # Inverse descramble, then keep the donor boot/program/cal family coherent.
         merged = MS41ECU.tune_into_full(full, partial)
@@ -4693,6 +4719,14 @@ class MS41FlashGUI(QMainWindow):
             )
         except ValueError as error:
             QMessageBox.critical(self, "Invalid Donor Coding Family", str(error))
+            return
+
+        hybrid_error = MS41ECU.check_hybrid(merged)
+        if hybrid_error:
+            QMessageBox.critical(
+                self, "Hybrid Result — Merge Blocked",
+                f"The prepared full ROM is internally inconsistent:\n\n{hybrid_error}")
+            self._log(f"Merge blocked — {hybrid_error}", "error")
             return
 
         if self.chk_merge_fix.isChecked():

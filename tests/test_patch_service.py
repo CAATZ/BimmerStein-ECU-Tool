@@ -16,8 +16,28 @@ DEPRECATED_PATCH_CASES = tuple(
 )
 
 
+def _synthetic_patch_base(ecu_id, cal_family, compatibility_id):
+    image = bytearray(b"\xFF" * 262144)
+    image[0x6025:0x602C] = ecu_id.encode("ascii")
+    image[0x1400E:0x14016] = (cal_family + "000000").encode("ascii")
+    for address in (0x6007, 0x6013, 0x601F):
+        image[address:address + 4] = compatibility_id.encode("ascii")
+    for address in (0x1400C, 0x14016, 0x14026, 0x14036):
+        image[address:address + 4] = compatibility_id.encode("ascii")
+    return bytes(image)
+
+
 def test_base_version_of_ms41_3():
     assert patch_service.base_version(ref("MS41.3")) == "MS41.3"
+
+
+def test_patch_catalogue_does_not_inherit_unverified_variant_hooks():
+    assert patch_service.base_version(
+        _synthetic_patch_base("1429861", "41", "0641")) == "MS41.0"
+    assert patch_service.base_version(
+        _synthetic_patch_base("1429373", "59", "0659")) is None
+    assert patch_service.base_version(
+        _synthetic_patch_base("1438068", "60", "0960")) is None
 
 
 def test_available_patches_filters_by_version():

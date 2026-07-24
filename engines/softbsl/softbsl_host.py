@@ -1105,16 +1105,20 @@ class SoftBSL:
                 return False
             if not _live_patch_applied(self.ds2, "cal_guard"):
                 return False
-            cal_v, prog_v, consistent = _detect_ecu_variant(
+            cal_v, prog_v, broad_consistent = _detect_ecu_variant(
                 self.ds2, accept_credit=False)
+            cal_id, program_id, _family, exact_consistent = (
+                _detect_firmware_compatibility(self.ds2)
+            )
         except Exception as error:
             self.log(f"CalGuard direct-entry preflight unavailable ({error}); using normal entry.")
             return False
-        if consistent:
+        if broad_consistent and exact_consistent:
             return False
         self.log(
             "CalGuard mismatch listener detected "
-            f"(cal={cal_v or 'unknown'}, program={prog_v or 'unknown'}, E740!=1); "
+            f"(cal={cal_v or 'unknown'}/{cal_id or 'unknown'}, "
+            f"program={prog_v or 'unknown'}/{program_id or 'unknown'}, E740!=1); "
             "entering Soft-BSL directly without 0x2A.")
         return True
 
@@ -2438,6 +2442,9 @@ _DRV_SIG_INTEL = bytes.fromhex("e6f45000b84c6fe0")         # stock Intel driver 
 # you need that part's specific region map.) Intel hit = 28F200.
 _DRV_FAMILY_LABEL = {"amd":   "29F200 / 29F400 bottom-half (AMD driver)",
                      "intel": "28F200 (Intel driver)"}
+_COMPAT_CAL_ADDR = 0x1000C
+_COMPAT_PROGRAM_ADDR = 0x2007
+_CODING_FAMILY_ADDR = 0x1CF4
 
 
 def _detect_ecu_variant(d, *, accept_credit=True):
@@ -2462,6 +2469,31 @@ def _detect_ecu_variant(d, *, accept_credit=True):
     prog_v = "MS41.3" if sig == _PROG_SIG_3 else _ECUID_PROG_VARIANT.get(ecuid[2:5].decode("latin1", "ignore"))
     consistent = cal_v is not None and cal_v == prog_v
     return cal_v, prog_v, consistent
+
+
+def _detect_firmware_compatibility(d):
+    """Return the live canonical program/cal IDs, coding family, and exact match state."""
+    def read(address, length):
+        for _ in range(4):
+            try:
+                return d.read_mem(address, length)
+            except Exception:
+                time.sleep(0.3)
+        return b""
+
+    cal_raw = read(_COMPAT_CAL_ADDR, 4)
+    program_raw = read(_COMPAT_PROGRAM_ADDR, 4)
+    family = read(_CODING_FAMILY_ADDR, 3)
+    cal_id = cal_raw.decode("ascii") if len(cal_raw) == 4 and cal_raw.isdigit() else None
+    program_id = (
+        program_raw.decode("ascii")
+        if len(program_raw) == 4 and program_raw.isdigit() else None
+    )
+    if len(family) != 3 or not family.isdigit():
+        family = None
+    return cal_id, program_id, family, bool(
+        cal_id and program_id and cal_id == program_id
+    )
 
 
 def _live_patch_applied(d, patch_id):
@@ -2504,7 +2536,11 @@ def _store_live_preflight(args, d, flash_family, flash_signature):
     that read and reuse it for the version gate and Phase-1 bootstrap.
     """
 
-    cal_v, prog_v, consistent = _detect_ecu_variant(d)
+    cal_v, prog_v, broad_consistent = _detect_ecu_variant(
+        d, accept_credit=False)
+    cal_id, program_id, coding_family, exact_consistent = (
+        _detect_firmware_compatibility(d)
+    )
     evidence = {
         "port": str(getattr(args, "port", "")),
         "uses_d2xx": bool(getattr(d, "uses_d2xx", False)),
@@ -2512,7 +2548,12 @@ def _store_live_preflight(args, d, flash_family, flash_signature):
         "flash_signature": bytes(flash_signature),
         "cal_variant": cal_v,
         "program_variant": prog_v,
-        "consistent": bool(consistent),
+        "cal_compatibility_id": cal_id,
+        "program_compatibility_id": program_id,
+        "coding_family": coding_family,
+        "broad_consistent": bool(broad_consistent),
+        "exact_consistent": bool(exact_consistent),
+        "consistent": bool(broad_consistent and exact_consistent),
     }
     args._live_preflight = evidence
     return evidence
@@ -2530,6 +2571,11 @@ def _live_preflight(args):
         "flash_signature",
         "cal_variant",
         "program_variant",
+        "cal_compatibility_id",
+        "program_compatibility_id",
+        "coding_family",
+        "broad_consistent",
+        "exact_consistent",
         "consistent",
     }
     return evidence if required <= evidence.keys() else None
@@ -2765,13 +2811,27 @@ def _confirm_reinstall(
 def _patch_base_version(base):
     """Return the one supported, internally-consistent patch target for a full image."""
     from ms41 import MS41ECU
-    resolved = MS41ECU.resolve_version(bytes(base))
-    cal_v, prog_v = resolved.get("cal"), resolved.get("program")
-    if cal_v != prog_v or prog_v not in _DOOR_PATCH_IDS:
+    from engines.patcher import patch_ms41
+
+    base = bytes(base)
+    hybrid = MS41ECU.check_hybrid(base)
+    program_compat = MS41ECU.read_program_compatibility_id(base)
+    calibration_compat = MS41ECU.read_calibration_compatibility_id(base)
+    matches = [
+        version for version in patch_ms41.FINGERPRINTS
+        if patch_ms41.check_base(base, version) is None
+    ]
+    if (hybrid or program_compat is None or calibration_compat is None
+            or program_compat != calibration_compat
+            or len(matches) != 1 or matches[0] not in _DOOR_PATCH_IDS):
+        resolved = MS41ECU.resolve_version(base)
         raise SoftBSLError(
-            f"base must be a consistent MS41.0, MS41.1, MS41.2, or MS41.3 image "
-            f"(detected cal={cal_v or 'unknown'}, program={prog_v or 'unknown'})")
-    return prog_v
+            "base must exactly match a supported, internally consistent patch "
+            f"fingerprint (cal={resolved.get('cal') or 'unknown'}, "
+            f"program={resolved.get('program') or 'unknown'}, "
+            f"compat={program_compat or 'unknown'}/{calibration_compat or 'unknown'}"
+            f"{'; ' + hybrid if hybrid else ''})")
+    return matches[0]
 
 
 def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False):
@@ -3044,6 +3104,32 @@ def _ms413_install_scope(preserve_cal=True):
     return _ms41_install_scope("MS41.3", preserve_cal)
 
 
+def _normalize_install_image(image, coding_family):
+    """Normalize a boot-preserving install image and re-establish its checksums."""
+    from ms41 import MS41ECU
+
+    normalized = MS41ECU.graft_coding_family(bytes(image), coding_family)
+    normalized, _details = checksum.correct_checksums(normalized)
+    hybrid = MS41ECU.check_hybrid(normalized)
+    if hybrid:
+        raise SoftBSLError(
+            f"coding-family normalization produced an incompatible image: {hybrid}")
+    return bytes(normalized)
+
+
+def _store_normalized_install_images(args, target, bootstrap):
+    import tempfile
+
+    directory = tempfile.mkdtemp(prefix="softbsl_compat_")
+    args.target = os.path.join(directory, "target.bin")
+    args.bootstrap = os.path.join(directory, "bootstrap_0x43.bin")
+    with open(args.target, "wb") as stream:
+        stream.write(target)
+    with open(args.bootstrap, "wb") as stream:
+        stream.write(bootstrap)
+    return target, bootstrap
+
+
 def _install_copy(args, **overrides):
     ns = copy.copy(args)
     for key, value in overrides.items():
@@ -3290,6 +3376,11 @@ def cmd_install(args):
             det_sig = preflight["flash_signature"]
         cal_v = preflight["cal_variant"]
         prog_v = preflight["program_variant"]
+        cal_compat = preflight["cal_compatibility_id"]
+        program_compat = preflight["program_compatibility_id"]
+        coding_family = preflight["coding_family"]
+        broad_consistent = preflight["broad_consistent"]
+        exact_consistent = preflight["exact_consistent"]
         consistent = preflight["consistent"]
         # ── flash-IC reconcile (checked FIRST: the WRONG flash command set = an instant brick) ──
         raw_chip = getattr(args, "chip", "auto")
@@ -3312,23 +3403,69 @@ def cmd_install(args):
                          f"is BRICK-CLASS. Aborting (pass the matching --chip, or --force to override).")
             xcheck = f"MATCH ({det_label})" if det_fam else f"skipped (sig {det_sig.hex() or 'unreadable'})"
             _emit(f"\n  flash-IC: --chip {raw_chip}; boot/param1 driver cross-check = {xcheck}")
-        _emit(f"\n  version gate: ECU cal={cal_v}  program={prog_v}  consistent={consistent}; "
-              f"target={target_version}")
-        if not consistent:
+        _emit(
+            f"\n  version gate: ECU cal={cal_v}/{cal_compat or 'unknown'}  "
+            f"program={prog_v}/{program_compat or 'unknown'}  "
+            f"consistent={consistent}; target={target_version}")
+        if not broad_consistent:
             raise SoftBSLError(f"  X ECU is a program<->cal HYBRID (cal={cal_v} / program={prog_v}) -- REFUSING to flash. "
                      f"Recover to a consistent image (BSL-Unbricker) before installing soft-BSL.")
-        if cal_v == target_version and prog_v == target_version:
+        if not exact_consistent or coding_family is None:
+            raise SoftBSLError(
+                "  X ECU Firmware Compatibility ID is missing or mismatched "
+                f"(cal={cal_compat or 'unknown'} / "
+                f"program={program_compat or 'unknown'}). "
+                "Recover to a consistent image before installing Soft-BSL.")
+
+        from ms41 import MS41ECU
+        target_program_compat = MS41ECU.read_program_compatibility_id(target)
+        target_cal_compat = MS41ECU.read_calibration_compatibility_id(target)
+        target_compat_available = bool(
+            target_program_compat and target_cal_compat
+        )
+        exact_target_match = (
+            target_program_compat == program_compat
+            and target_cal_compat == cal_compat
+            if target_compat_available else True
+        )
+        normalized_target = normalized_bootstrap = None
+        if (target_compat_available and preserve_cal and cal_v == target_version
+                and prog_v == target_version):
+            normalized_target = _normalize_install_image(target, coding_family)
+            normalized_bootstrap = _normalize_install_image(
+                bootstrap, coding_family)
+            target_program_compat = (
+                MS41ECU.read_program_compatibility_id(normalized_target))
+            target_cal_compat = (
+                MS41ECU.read_calibration_compatibility_id(normalized_target))
+            exact_target_match = (
+                target_program_compat == program_compat
+                and target_cal_compat == cal_compat
+            )
+
+        if (cal_v == target_version and prog_v == target_version
+                and exact_target_match):
             if preserve_cal:
+                if normalized_target is not None:
+                    target, bootstrap = _store_normalized_install_images(
+                        args, normalized_target, normalized_bootstrap)
                 scope_text = ("28F boot/param1 + param2/checksum + main-E"
                               if args.chip == "28f200"
                               else "29F SA1 + SA2/checksum + SA5/SA6")
-                _emit(f"  -> {target_version} confirmed: CAL-SKIP install ({scope_text}; calibration untouched).")
+                _emit(
+                    f"  -> {target_version}/{cal_compat} confirmed: "
+                    f"CAL-SKIP install ({scope_text}; calibration untouched).")
             else:
                 install_scope = "full"
                 _emit(f"  !! {target_version} confirmed, but calibration preservation was explicitly disabled.")
                 _emit("  -> FULL write INCLUDING the CAL from the composed base (BRICK-CLASS).")
         else:
-            _emit(f"\n  !! The ECU is running {prog_v}; the composed target is {target_version}.")
+            _emit(
+                f"\n  !! The ECU is running {prog_v}/{program_compat}; "
+                f"the composed target is {target_version}"
+                + (
+                    f"/{target_program_compat or 'unknown'}."
+                ))
             _emit(f"     Converting to {target_version} requires a FULL WRITE that erases and replaces the "
                   f"current {cal_v} calibration/tune.")
             _confirm_convert = getattr(args, "confirm_convert", None)

@@ -1084,6 +1084,17 @@ def test_populate_ecu_info_sets_detected_variant_with_trimmed_label_set():
         w.close()
 
 
+def test_populate_ecu_info_preserves_distinct_ms410_ids():
+    app, w = _gui()
+    try:
+        gui._populate_ecu_info(b"1429373", w._info_labels)
+        assert "ID59" in w._info_labels["Detected Variant"].text()
+        gui._populate_ecu_info(b"1438137", w._info_labels)
+        assert "ID85" in w._info_labels["Detected Variant"].text()
+    finally:
+        w.close()
+
+
 def test_gui_has_free_port_owner_that_works():
     app, w = _gui()
     try:

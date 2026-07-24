@@ -28,8 +28,15 @@ def is_applied(image, patch):
 
 
 def base_version(data):
-    """The program-side version string a base should be patched as (e.g. 'MS41.3'), or None."""
-    return MS41ECU.resolve_version(bytes(data))["program"]
+    """The exactly fingerprinted patch base version, or None."""
+    data = bytes(data)
+    if MS41ECU.check_hybrid(data):
+        return None
+    matches = [
+        version for version in patch_ms41.FINGERPRINTS
+        if patch_ms41.check_base(data, version) is None
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _installed_patch_state(data, all_patches=None):

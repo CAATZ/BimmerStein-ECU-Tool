@@ -50,6 +50,13 @@ def _gui():
     return app, w
 
 
+def test_same_broad_variant_with_different_cal_family_is_a_conversion():
+    assert gui._is_firmware_conversion(
+        "MS41.0", "MS41.0", "59000000", "41000000")
+    assert not gui._is_firmware_conversion(
+        "MS41.0", "MS41.0", "59000000", "59010000")
+
+
 def _warning_router(monkeypatch, rules, default=None):
     """Route QMessageBox.warning by a substring of its title (args[1]) to a canned
     reply, so a test can answer the 'checksum not valid' and 'variant conversion'
