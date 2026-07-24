@@ -76,6 +76,10 @@ def test_every_supported_variant_conversion_grafts_and_rechecksums(
     _assert_family(corrected, family)
     assert MS41ECU.detect_program_variant(corrected) == target_variant
     assert MS41ECU.detect_variant(corrected) == target_variant
+    assert (
+        MS41ECU.read_program_compatibility_id(corrected)
+        == MS41ECU.read_calibration_compatibility_id(corrected)
+    )
     assert MS41ECU.check_hybrid(corrected) is None
     assert verify_checksum(corrected)[0]
 

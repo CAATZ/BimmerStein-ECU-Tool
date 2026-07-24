@@ -94,12 +94,6 @@ _PROG_ECU_ID_MAP = {
     "1429373": "MS41.0", "1438137": "MS41.0",
 }
 
-# Calibration-family label per variant (MS41.2 and MS41.3 share "ID12").
-_VARIANT_FAMILY = {
-    "MS41.0": "ID41", "MS41.1": "ID60",
-    "MS41.2": "ID12", "MS41.3": "ID12",
-}
-
 # The protected boot/parameter region exposes the live three-byte coding-family
 # value at DS2 0x1CF4 (= file 0x5CF4).  When that region is preserved during a
 # cross-variant full write, the same value must be copied into the target
@@ -109,6 +103,13 @@ CODING_FAMILY_FILE_ADDR = 0x5CF4
 CODING_FAMILY_PROGRAM_ADDRS = (0x6006, 0x6012, 0x601E)
 CODING_FAMILY_CAL_ADDRS = (0x1400D, 0x14017, 0x14027, 0x14037)
 CODING_FAMILY_PARTIAL_ADDRS = (0x000D, 0x0017, 0x0027, 0x0037)
+
+# Native four-digit program/calibration compatibility identifiers.  The first
+# digit is supplied by the protected coding-family value; the final two digits
+# retain the specific calibration family (41/42/59/85/60/12).
+FIRMWARE_COMPAT_PROGRAM_ADDRS = (0x6007, 0x6013, 0x601F)
+FIRMWARE_COMPAT_CAL_ADDRS = (0x1400C, 0x14016, 0x14026, 0x14036)
+FIRMWARE_COMPAT_PARTIAL_ADDRS = (0x000C, 0x0016, 0x0026, 0x0036)
 
 
 class MS41ECU:
@@ -120,6 +121,41 @@ class MS41ECU:
     TUNE_DS2_BASE = 0x010000     # the ECU tune partition is CPU/DS2-order @ 0x10000-0x15FFF
     CODING_FAMILY_DS2_ADDR = CODING_FAMILY_DS2_ADDR
     CODING_FAMILY_FILE_ADDR = CODING_FAMILY_FILE_ADDR
+
+    @staticmethod
+    def _read_repeated_compatibility_id(data: bytes, addresses):
+        values = []
+        for address in addresses:
+            if address + 4 > len(data):
+                continue
+            raw = bytes(data[address:address + 4])
+            values.append(raw.decode("ascii") if raw.isdigit() else None)
+        valid = [value for value in values if value is not None]
+        if not valid:
+            return None, None
+        if len(valid) != len(addresses) or len(set(valid)) != 1:
+            shown = ", ".join(value or "invalid" for value in values)
+            return None, f"inconsistent repeated identifiers ({shown})"
+        return valid[0], None
+
+    @staticmethod
+    def read_program_compatibility_id(data: bytes):
+        """Return the consistent four-digit program compatibility ID, or None."""
+        value, _error = MS41ECU._read_repeated_compatibility_id(
+            data, FIRMWARE_COMPAT_PROGRAM_ADDRS
+        )
+        return value
+
+    @staticmethod
+    def read_calibration_compatibility_id(data: bytes):
+        """Return the consistent four-digit calibration compatibility ID, or None."""
+        addresses = (
+            FIRMWARE_COMPAT_CAL_ADDRS
+            if len(data) >= MS41ECU.FULL_ROM_SIZE
+            else FIRMWARE_COMPAT_PARTIAL_ADDRS
+        )
+        value, _error = MS41ECU._read_repeated_compatibility_id(data, addresses)
+        return value
 
     @staticmethod
     def graft_coding_family(target: bytes, source_family: bytes) -> bytearray:
@@ -298,17 +334,33 @@ class MS41ECU:
         """
         if len(data) < MS41ECU.FULL_ROM_SIZE:
             return None
+        program_id, program_error = MS41ECU._read_repeated_compatibility_id(
+            data, FIRMWARE_COMPAT_PROGRAM_ADDRS
+        )
+        calibration_id, calibration_error = MS41ECU._read_repeated_compatibility_id(
+            data, FIRMWARE_COMPAT_CAL_ADDRS
+        )
+        if program_error:
+            return f"Program Firmware Compatibility ID: {program_error}"
+        if calibration_error:
+            return f"Calibration Firmware Compatibility ID: {calibration_error}"
+        if program_id and calibration_id and program_id != calibration_id:
+            return (
+                f"Program Firmware Compatibility ID: {program_id}  —  "
+                f"Calibration Firmware Compatibility ID: {calibration_id}  "
+                "[program-cal mismatch]"
+            )
+
         prog_v = MS41ECU.detect_program_variant(data)   # genuine program-region read
         cal_v  = MS41ECU.detect_variant(data)           # cal (SS1 marker / CAL ID)
         if prog_v is None or cal_v is None:
             return None
         if prog_v == cal_v:
             return None
-        pf = _VARIANT_FAMILY.get(prog_v, "?")
-        cf = _VARIANT_FAMILY.get(cal_v,  "?")
-        kind = "cross-family (brick risk)" if pf != cf else "MS41.2/.3 program-cal mismatch"
-        return (f"Program region: {prog_v} ({pf})  —  "
-                f"Calibration region: {cal_v} ({cf})  [{kind}]")
+        return (
+            f"Program region: {prog_v}  —  Calibration region: {cal_v}  "
+            "[program-cal mismatch]"
+        )
 
     @staticmethod
     def looks_cpu_order(data: bytes) -> bool:
@@ -341,6 +393,9 @@ class MS41ECU:
             "program": MS41ECU.detect_program_variant(data),
             "cal":     MS41ECU.detect_variant(data),
             "hybrid":  MS41ECU.check_hybrid(data),
+            "program_compatibility_id": MS41ECU.read_program_compatibility_id(data),
+            "calibration_compatibility_id":
+                MS41ECU.read_calibration_compatibility_id(data),
             "ecu_id":  MS41ECU.read_ecu_id(data),
             "cal_id":  MS41ECU.read_calid(data),
             "vin":     MS41ECU.vin_from_image(data),

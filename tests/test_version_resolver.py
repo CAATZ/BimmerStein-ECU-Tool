@@ -5,6 +5,17 @@ import pytest
 from tests.conftest import SYNTHETIC_IDENTITIES, ref
 
 
+def _synthetic_ms410():
+    data = bytearray(b"\xFF" * ms41.MS41ECU.FULL_ROM_SIZE)
+    data[ms41.ECU_ID_ADDR:ms41.ECU_ID_ADDR + 7] = b"1429861"
+    data[ms41.CALID_ADDR_256K:ms41.CALID_ADDR_256K + 8] = b"41000000"
+    for address in ms41.FIRMWARE_COMPAT_PROGRAM_ADDRS:
+        data[address:address + 4] = b"0641"
+    for address in ms41.FIRMWARE_COMPAT_CAL_ADDRS:
+        data[address:address + 4] = b"0641"
+    return data
+
+
 @pytest.mark.parametrize("variant", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
 def test_canonical_full_rom_resolver_identifies_all_supported_variants(variant):
     resolved = ms41.MS41ECU.resolve_version(ref(variant))
@@ -59,4 +70,29 @@ def test_resolve_reports_all_fields():
     r = ms41.MS41ECU.resolve_version(data)
     assert r["ecu_id"] == "1437806"
     assert r["vin"] == SYNTHETIC_IDENTITIES["MS41.1"][1]
-    assert set(r) == {"program", "cal", "hybrid", "ecu_id", "cal_id", "vin"}
+    assert r["program_compatibility_id"] == "0960"
+    assert r["calibration_compatibility_id"] == "0960"
+    assert set(r) == {
+        "program", "cal", "hybrid", "program_compatibility_id",
+        "calibration_compatibility_id", "ecu_id", "cal_id", "vin",
+    }
+
+
+def test_same_variant_different_compatibility_ids_are_rejected():
+    data = _synthetic_ms410()
+    for address in ms41.FIRMWARE_COMPAT_CAL_ADDRS:
+        data[address:address + 4] = b"0659"
+
+    assert ms41.MS41ECU.detect_program_variant(data) == "MS41.0"
+    assert ms41.MS41ECU.detect_variant(data) == "MS41.0"
+    assert "0641" in ms41.MS41ECU.check_hybrid(data)
+    assert "0659" in ms41.MS41ECU.check_hybrid(data)
+
+
+def test_conflicting_repeated_compatibility_ids_are_rejected():
+    data = _synthetic_ms410()
+    address = ms41.FIRMWARE_COMPAT_PROGRAM_ADDRS[-1]
+    data[address:address + 4] = b"0659"
+
+    assert ms41.MS41ECU.read_program_compatibility_id(data) is None
+    assert "inconsistent repeated identifiers" in ms41.MS41ECU.check_hybrid(data)
