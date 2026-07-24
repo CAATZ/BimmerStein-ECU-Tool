@@ -374,16 +374,22 @@ def build(base_data, patch_ids, patches=None, marker=None):
         for w in scan_cave_intraseg(p):
             log.append("warn: " + w)
 
-    # verify every expect, then apply
+    # Verify every expect, then apply.  A descriptor may carry a precise
+    # ``upgrade_expect`` for a superseded revision of one edit.  This is not a
+    # broad bypass: only that exact prior payload may be replaced in place.
     recompute = {"program"} if target == "MS41.3" else set()
     for p in chosen:
         for e in p["edits"]:
             off = e["off"]; exp = bytes.fromhex(e["expect"])
             cur = bytes(data[off:off + len(exp)])
             if cur != exp:
-                raise PatchError(
-                    f"{p['id']} @0x{off:05X}: expect {exp.hex()} but base has {cur.hex()} "
-                    f"(wrong base, or already patched)")
+                upgrade = bytes.fromhex(e.get("upgrade_expect", ""))
+                if not upgrade or cur != upgrade:
+                    raise PatchError(
+                        f"{p['id']} @0x{off:05X}: expect {exp.hex()} but base has {cur.hex()} "
+                        f"(wrong base, or already patched)")
+                log.append(
+                    f"{p['id']} @0x{off:05X}: exact prior revision detected; upgrading")
         for e in p["edits"]:
             off = e["off"]; dat = bytes.fromhex(e["data"])
             data[off:off + len(dat)] = dat

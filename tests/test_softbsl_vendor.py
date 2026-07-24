@@ -198,6 +198,9 @@ def test_calguard_mismatch_selects_direct_entry_without_marker_one(monkeypatch):
     monkeypatch.setattr(
         sh, "_detect_ecu_variant",
         lambda _ds2, **_kwargs: ("MS41.2", "MS41.1", False))
+    monkeypatch.setattr(
+        sh, "_detect_firmware_compatibility",
+        lambda _ds2: ("0960", "0960", b"909", True))
 
     assert sb.calguard_direct_entry_ready() is True
     assert any("without 0x2A" in line for line in logs)
@@ -238,8 +241,44 @@ def test_consistent_calguard_image_keeps_normal_entry(monkeypatch):
     monkeypatch.setattr(
         sh, "_detect_ecu_variant",
         lambda _ds2, **_kwargs: ("MS41.1", "MS41.1", True))
+    monkeypatch.setattr(
+        sh, "_detect_firmware_compatibility",
+        lambda _ds2: ("0960", "0960", b"909", True))
 
     assert sb.calguard_direct_entry_ready() is False
+
+
+def test_calguard_exact_id_mismatch_selects_direct_entry(monkeypatch):
+    from engines.softbsl import softbsl_host as sh
+
+    class FakeDS2:
+        def read_mem(self, address, length):
+            assert (address, length) == (0xE740, 1)
+            return b"\x03"
+
+    sb = sh.SoftBSL(FakeDS2(), log=lambda _line: None)
+    monkeypatch.setattr(sh, "_live_patch_applied", lambda _ds2, _patch_id: True)
+    monkeypatch.setattr(
+        sh, "_detect_ecu_variant",
+        lambda _ds2, **_kwargs: ("MS41.0", "MS41.0", True))
+    monkeypatch.setattr(
+        sh, "_detect_firmware_compatibility",
+        lambda _ds2: ("0641", "0659", b"909", False))
+
+    assert sb.calguard_direct_entry_ready() is True
+
+
+def test_calguard_prior_cave_is_a_safe_upgrade_state():
+    from engines.patcher.patch_ms41 import load_patches
+    from engines.softbsl import softbsl_host as sh
+
+    guard = load_patches()["cal_guard"]
+    image = bytearray(b"\xFF" * 0x40000)
+    for edit in guard["edits"]:
+        payload = bytes.fromhex(edit.get("upgrade_expect", edit["data"]))
+        image[edit["off"]:edit["off"] + len(payload)] = payload
+
+    assert sh._patch_state(image, guard) == "legacy"
 
 
 def test_enter_retry_forwards_the_bounded_ack_timeout(monkeypatch):

@@ -1,0 +1,144 @@
+"""Emit the CalGuard cave that validates exact Firmware Compatibility IDs."""
+
+CAVE_CPU = 0x1E10
+CAVE_SIZE = 0x5FC4 - 0x5E10
+BOOT_EXIT = 0x0942
+RECOVER_EXIT = 0x094A
+
+CC_UC, CC_EQ, CC_NE = 0, 2, 3
+
+
+class _Assembler:
+    """Tiny two-pass emitter for the C166 forms used by this cave."""
+
+    def __init__(self):
+        self.code = bytearray()
+        self.labels = {}
+        self.fixups = []
+
+    @property
+    def pc(self):
+        return CAVE_CPU + len(self.code)
+
+    def emit(self, *values):
+        self.code.extend(value & 0xFF for value in values)
+
+    def label(self, name):
+        self.labels[name] = self.pc
+
+    def mov_mem(self, reg, address):
+        self.emit(0xF2, 0xF0 + reg, address, address >> 8)
+
+    def movb_mem(self, byte_reg, address):
+        self.emit(0xF3, 0xF0 + byte_reg, address, address >> 8)
+
+    def mov_dpp(self, dpp, value):
+        self.emit(0xE6, dpp, value, value >> 8)
+
+    def cmp(self, reg, value):
+        self.emit(0x46, 0xF0 + reg, value, value >> 8)
+
+    def cmp_rr(self, left, right):
+        self.emit(0x40, (left << 4) | right)
+
+    def cmpb(self, byte_reg, value):
+        self.emit(0x47, 0xF0 + byte_reg, value, 0)
+
+    def push(self, reg):
+        self.emit(0xEC, 0xF0 + reg)
+
+    def pop(self, reg):
+        self.emit(0xFC, 0xF0 + reg)
+
+    def jmpr(self, cc, label):
+        self.emit((cc << 4) | 0x0D, 0)
+        self.fixups.append((len(self.code) - 1, label))
+
+    def jmpa(self, cc, address):
+        self.emit(0xEA, cc << 4, address, address >> 8)
+
+    def finish(self):
+        for position, label in self.fixups:
+            target = self.labels[label]
+            instruction = CAVE_CPU + position - 1
+            delta = target - (instruction + 2)
+            if delta & 1 or not -256 <= delta <= 254:
+                raise ValueError(f"relative branch out of range: {label}")
+            self.code[position] = (delta // 2) & 0xFF
+        if len(self.code) > CAVE_SIZE:
+            raise ValueError(f"CalGuard is {len(self.code)} B, cave holds {CAVE_SIZE} B")
+        return bytes(self.code).ljust(CAVE_SIZE, b"\xFF")
+
+
+def assemble():
+    """Return the 436-byte production cave, including deliberate FF padding."""
+    a = _Assembler()
+    rl5 = 10
+
+    # Preserve stock E740=1 flash-listener behavior before any identification.
+    a.movb_mem(rl5, 0xE740)
+    a.cmpb(rl5, 1)
+    a.jmpa(CC_EQ, RECOVER_EXIT)
+    a.mov_dpp(0, 4)
+
+    # A genuine SS1v2 calibration must pair with the genuine SS1v2 program.
+    for address, value in ((0x33BB, 0x53), (0x33BC, 0x53), (0x33BD, 0x31),
+                           (0x33BE, 0x76), (0x33BF, 0x32)):
+        a.movb_mem(rl5, address)
+        a.cmpb(rl5, value)
+        a.jmpr(CC_NE, "not_ss1v2_cal")
+    a.mov_dpp(2, 15)
+    a.mov_mem(4, 0x9A9A)
+    a.mov_mem(5, 0x9A9C)
+    a.mov_dpp(2, 0)
+    a.cmp(4, 0x119A)
+    a.jmpa(CC_NE, RECOVER_EXIT)
+    a.cmp(5, 0x9063)
+    a.jmpa(CC_NE, RECOVER_EXIT)
+    a.jmpr(CC_UC, "compare_compatibility")
+
+    # Without the strict calibration marker the program must not be SS1v2, and
+    # the compatibility suffix must be one of the supported .0/.1/.2 families.
+    a.label("not_ss1v2_cal")
+    a.mov_dpp(2, 15)
+    a.mov_mem(4, 0x9A9A)
+    a.mov_mem(5, 0x9A9C)
+    a.mov_dpp(2, 0)
+    a.cmp(4, 0x119A)
+    a.jmpr(CC_NE, "check_legacy_suffix")
+    a.cmp(5, 0x9063)
+    a.jmpa(CC_EQ, RECOVER_EXIT)
+
+    a.label("check_legacy_suffix")
+    a.mov_mem(4, 0x000E)
+    for suffix in (0x3231, 0x3036, 0x3134, 0x3234, 0x3935, 0x3538):
+        a.cmp(4, suffix)
+        a.jmpr(CC_EQ, "compare_compatibility")
+    a.jmpa(CC_UC, RECOVER_EXIT)
+
+    # DPP0=4 exposes cal 0x1400C at 0x000C; DPP2=0 exposes program
+    # 0x06007 at 0xA007. Compare both native words exactly.
+    a.label("compare_compatibility")
+    a.push(2)
+    a.push(3)
+    a.mov_mem(2, 0x000C)
+    a.mov_mem(3, 0x000E)
+    a.mov_mem(4, 0xA007)
+    a.mov_mem(5, 0xA009)
+    a.cmp_rr(2, 4)
+    a.jmpr(CC_NE, "compatibility_fail")
+    a.cmp_rr(3, 5)
+    a.jmpr(CC_NE, "compatibility_fail")
+    a.pop(3)
+    a.pop(2)
+    a.jmpa(CC_UC, BOOT_EXIT)
+
+    a.label("compatibility_fail")
+    a.pop(3)
+    a.pop(2)
+    a.jmpa(CC_UC, RECOVER_EXIT)
+    return a.finish()
+
+
+if __name__ == "__main__":
+    print(assemble().hex())

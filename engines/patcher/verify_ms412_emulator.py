@@ -54,6 +54,7 @@ sys.path.insert(0, str(EMU_ROOT))
 
 import checksum  # noqa: E402
 from engines.patcher import patch_ms41  # noqa: E402
+from engines.patcher.cal_guard_exact import assemble as assemble_cal_guard  # noqa: E402
 from ms41emu import Emulator  # noqa: E402
 from ms41emu.gate import verify_cal_guard  # noqa: E402
 
@@ -123,6 +124,42 @@ def _build_413():
 
 
 FULL_413_IMAGE = _build_413()
+
+
+def verify_calguard_compatibility():
+    """Execute the registered gate on every canonical stock family and failures."""
+    guard = PATCHES["cal_guard"]
+    guard_bytes = bytes.fromhex(next(
+        edit["data"] for edit in guard["edits"]
+        if edit["off"] == guard["cave"]["base"]
+    ))
+    assert guard_bytes == assemble_cal_guard()
+
+    references = {
+        "MS41.0": STOCK_410_PATH,
+        "MS41.1": STOCK_411_PATH,
+        "MS41.2": STOCK_PATH,
+        "MS41.3": STOCK_413_PATH,
+    }
+    for version, path in references.items():
+        assert verify_cal_guard(path.read_bytes(), cave=guard_bytes) == "BOOT", version
+
+    # Same broad generation is insufficient: ID41 calibration with ID59
+    # program (or vice versa) must remain in the stock flash listener.
+    id41_to_id59 = bytearray(STOCK_410_PATH.read_bytes())
+    assert id41_to_id59[0x6007:0x600B] == b"0641"
+    id41_to_id59[0x1400C:0x14010] = b"0659"
+    assert verify_cal_guard(id41_to_id59, cave=guard_bytes) == "RECOVER"
+
+    # The strict SS1v2 identity still takes precedence over legacy suffixes.
+    strict_mismatch = bytearray(STOCK_413_PATH.read_bytes())
+    assert strict_mismatch[0x173BB:0x173C0] == b"SS1v2"
+    assert strict_mismatch[0x6007:0x600B] != b"0641"
+    strict_mismatch[0x6007:0x600B] = b"0641"
+    assert verify_cal_guard(strict_mismatch, cave=guard_bytes) == "RECOVER"
+
+    # E740=1 is intentionally the existing stock flash-listener branch.
+    assert verify_cal_guard(STOCK_PATH.read_bytes(), e740=1, cave=guard_bytes) == "RECOVER"
 
 
 OLDER_FEATURE_LAYOUTS = {
@@ -864,10 +901,7 @@ def main():
     if not STOCK_413_PATH.is_file():
         raise SystemExit(f"MS41.3 reference image not found: {STOCK_413_PATH}")
 
-    guard = PATCHES["cal_guard"]
-    guard_bytes = bytes.fromhex(next(
-        edit["data"] for edit in guard["edits"] if edit["off"] == guard["cave"]["base"]))
-    assert verify_cal_guard(FULL_IMAGE, cave=guard_bytes) == "BOOT"
+    verify_calguard_compatibility()
 
     checks = [
         ("relocated loader + command doors", verify_loader_and_doors),
@@ -877,7 +911,7 @@ def main():
         ("launch V4 independent hard limiter comparator", verify_launch_fuel_hard_comparator),
         ("launch V4 + ignition V7 composition", verify_composed_launch_and_ignition),
     ]
-    print("[PASS] cal_guard: consistent MS41.2 -> BOOT")
+    print("[PASS] cal_guard: exact IDs, strict SS1v2, mismatch and E740 recovery")
     for label, check in checks:
         check()
         print(f"[PASS] {label}")

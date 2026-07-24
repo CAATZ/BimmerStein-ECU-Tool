@@ -2702,18 +2702,22 @@ def _bootstrap_verify_ranges(patch_ids):
 
 
 def _patch_state(image, patch):
-    """Return absent/applied/partial for one patch's exact edit bytes."""
+    """Return absent/applied/legacy/partial for one patch's exact edit bytes."""
     states = []
     for edit in patch["edits"]:
         offset = int(edit["off"])
         expected = bytes.fromhex(edit["expect"])
         applied = bytes.fromhex(edit["data"])
         current = bytes(image[offset:offset + len(applied)])
+        legacy = bytes.fromhex(edit.get("upgrade_expect", ""))
         states.append("applied" if current == applied
+                      else "legacy" if legacy and current == legacy
                       else "absent" if current == expected
                       else "partial")
     if states and all(state == "applied" for state in states):
         return "applied"
+    if states and all(state in ("applied", "legacy") for state in states):
+        return "legacy"
     if states and all(state == "absent" for state in states):
         return "absent"
     return "partial"

@@ -35,6 +35,42 @@ def test_every_edit_restores_the_full_written_range():
             assert len(bytes.fromhex(edit["expect"])) == len(
                 bytes.fromhex(edit["data"])
             ), (patch["id"], hex(edit["off"]))
+            if "upgrade_expect" in edit:
+                assert len(bytes.fromhex(edit["upgrade_expect"])) == len(
+                    bytes.fromhex(edit["data"])
+                ), (patch["id"], hex(edit["off"]), "upgrade_expect")
+
+
+def test_exact_calguard_artifact_is_registered_and_prior_revision_is_upgradable():
+    from engines.patcher.cal_guard_exact import assemble
+
+    guard = patch_ms41.load_patches()["cal_guard"]
+    cave = next(edit for edit in guard["edits"] if edit["off"] == guard["cave"]["base"])
+    root = Path(__file__).resolve().parents[1]
+
+    assert bytes.fromhex(cave["data"]) == assemble()
+    assert cave["data"] == (
+        root / "engines" / "patcher" / "cal_guard_exact.hex"
+    ).read_text().strip()
+
+    base = bytearray(b"\xFF" * patch_ms41.FULL)
+    base[0x6025:0x602C] = b"1429861"
+    base[0x0120:0x0124] = bytes.fromhex("aabbccdd")
+    upgrade = {
+        "id": "revision_upgrade",
+        "target": "MS41.0",
+        "edits": [{
+            "off": 0x0120,
+            "expect": "ffffffff",
+            "upgrade_expect": "aabbccdd",
+            "data": "01020304",
+        }],
+    }
+
+    image, log = patch_ms41.build(bytes(base), ["revision_upgrade"],
+                                  patches={"revision_upgrade": upgrade})
+    assert image[0x0120:0x0124] == bytes.fromhex("01020304")
+    assert any("exact prior revision" in line for line in log)
 
 
 def test_check_base_accepts_ms41_3_and_rejects_blank():
