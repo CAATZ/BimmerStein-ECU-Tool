@@ -348,6 +348,29 @@ def test_installed_deprecated_patch_is_surfaced_for_removal():
     assert "ignition_cut_v4" not in {p["id"] for p in patch_service.available_patches(ref("MS41.3"))}
 
 
+def test_calguard_v1_is_detected_removed_and_replaced_by_v2():
+    stock = ref("MS41.2")
+    v1_image, _ = patch_service.build_image(stock, ["cal_guard_v1"])
+    available = {
+        patch["id"]: patch for patch in patch_service.available_patches(v1_image)
+    }
+
+    assert available["cal_guard_v1"]["installed"] is True
+    assert available["cal_guard_v1"]["removable"] is True
+    assert available["cal_guard"]["installed"] is False
+    assert available["cal_guard"]["status"] == "V2"
+    assert available["cal_guard"]["legacy"] == [{
+        "id": "cal_guard_v1",
+        "label": "V1 broad-version guard",
+    }]
+
+    cleaned = patch_service.revert_patch(v1_image, "cal_guard_v1")
+    upgraded, _ = patch_service.build_image(cleaned, ["cal_guard"])
+    definitions = patch_service.definitions()
+    assert not patch_service.is_applied(upgraded, definitions["cal_guard_v1"])
+    assert patch_service.is_applied(upgraded, definitions["cal_guard"])
+
+
 @pytest.mark.parametrize(
     "variant,patch_id",
     DEPRECATED_PATCH_CASES,

@@ -1,0 +1,42 @@
+{
+  "id": "cal_guard_v1",
+  "label": "V1 broad-version guard",
+  "deprecated": true,
+  "status": "DEPRECATED - V1",
+  "title": "CalGuard V1 - Broad program/calibration version guard [DEPRECATED]",
+  "user_description": "Previous CalGuard revision retained only so installed V1 images can be identified and removed before installing CalGuard V2. This patch writes the boot/parameter region.",
+  "description": "Deprecated CalGuard V1 boot-to-application gate. It checked broad MS41.0/.1/.2/.3 program-versus-calibration identity using strict SS1v2 and CAL-ID/ECU-ID markers, but did not compare the canonical four-byte Firmware Compatibility IDs. Retained only for exact installed-state detection and safe removal.",
+  "target": "MS41.3",
+  "targets": [
+    "MS41.0",
+    "MS41.1",
+    "MS41.2",
+    "MS41.3"
+  ],
+  "recompute": [
+    "boot_crc"
+  ],
+  "requires": [],
+  "conflicts": [
+    "cal_guard"
+  ],
+  "cave": {
+    "region": "sa1",
+    "base": 24080,
+    "splice_off": 18746,
+    "splice_op": "jmpa",
+    "relocatable": false
+  },
+  "edits": [
+    {
+      "off": 18746,
+      "expect": "f3fa40e749a12d04",
+      "data": "ea00101ecc00cc00"
+    },
+    {
+      "off": 24080,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "f3fa40e749a1ea204a09e6000400e6f4bb33a9a447fa53003d260841a9a447fa53003d210841a9a447fa31003d1c0841a9a447fa76003d170841a9a447fa32003d12e6020f00f2f59a9af2f49c9ae602000046f59a11ea304a0946f46390ea304a09ea004209e0e4a9a447fa31003d240841a9a447fa32003d1fe6020f00f2f59a9ae602000046f59a11ea204a09e6f427a0a9a447fa3000ea304a090841a9a447fa3600ea304a090841a9a447fa3400ea304a09ea004209e0e4a9a447fa36003d250841a9a447fa30003d20e6f427a0a9a447fa3300ea304a090841a9a447fa37002d0c47fa3800ea304a090841a9a447fa3000ea204209ea004a090841a9a447fa3800ea204209ea004a09e0e4a9a40841a9b447fa34003d0847fb31002d1547fb32002d12ea004a0947fa35003d0547fb39002d0aea004a0947fa3800ea304a0947fb3500ea304a09e6f427a0a9a447fa32002d1d47fa3300ea304a090841a9a447fa32002d0c47fa3800ea304a090841a9a447fa3100ea204209ea004a090841a9a447fa3400ea204209ea004a090841a9a447fa3900ea304a090841a9a447fa3800ea20420947fa3300ea204209ea004a09"
+    }
+  ]
+}

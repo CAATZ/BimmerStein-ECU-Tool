@@ -7,7 +7,7 @@ import checksum
 import pytest
 
 EXPECTED_IDS = {
-    "alphan_failsafe", "amd_flash", "cal_guard", "door_0x43",
+    "alphan_failsafe", "amd_flash", "cal_guard", "cal_guard_v1", "door_0x43",
     "door_0x43_ms410", "door_0x43_ms411", "door_magic", "door_magic_ms410",
     "door_magic_ms411", "ignition_cut", "ignition_cut_v2", "ignition_cut_v3", "ignition_cut_v4",
     "ignition_cut_v5", "ignition_cut_v6", "ignition_cut_v7", "launch_control", "launch_control_v2",
@@ -44,10 +44,17 @@ def test_every_edit_restores_the_full_written_range():
 def test_exact_calguard_artifact_is_registered_and_prior_revision_is_upgradable():
     from engines.patcher.cal_guard_exact import assemble
 
-    guard = patch_ms41.load_patches()["cal_guard"]
+    patches = patch_ms41.load_patches()
+    guard = patches["cal_guard"]
     cave = next(edit for edit in guard["edits"] if edit["off"] == guard["cave"]["base"])
+    legacy = patches["cal_guard_v1"]
+    legacy_cave = next(
+        edit for edit in legacy["edits"] if edit["off"] == legacy["cave"]["base"]
+    )
     root = Path(__file__).resolve().parents[1]
 
+    assert guard["supersedes"] == "cal_guard_v1"
+    assert legacy_cave["data"] == cave["upgrade_expect"]
     assert bytes.fromhex(cave["data"]) == assemble()
     assert cave["data"] == (
         root / "engines" / "patcher" / "cal_guard_exact.hex"
@@ -116,7 +123,7 @@ def test_needs_boot_write_flags_only_the_sa1_patches():
     boot = {pid for pid, p in patches.items() if patch_ms41.needs_boot_write(p)}
     # These edit file 0x4000-0x5FFF (SA1/boot); DS2 and un-armed soft-BSL can't write there.
     assert boot == {
-        "cal_guard", "softbsl_loader", "softbsl_loader_legacy",
+        "cal_guard", "cal_guard_v1", "softbsl_loader", "softbsl_loader_legacy",
         "softbsl_loader_relocated_v1", "amd_flash",
     }
     # Program/cal patches are DS2-writable.
