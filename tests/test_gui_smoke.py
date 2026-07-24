@@ -2787,6 +2787,28 @@ def test_force_slow_ds2_overrides_softbsl_and_disables_boot_write():
         w.close()
 
 
+def test_recovery_override_group_can_force_direct_softbsl_without_detection():
+    app, w = _gui()
+    try:
+        assert w.grp_recovery_override.title() == "Recovery Override"
+        assert w.rb_recovery_auto.isChecked() is True
+
+        w._d2xx_ok = True
+        w._ecu_softbsl_marker = None
+        w._ecu_softbsl_hook_present = False
+        w.chk_force_softbsl.setChecked(True)
+
+        assert w.rb_recovery_auto.isChecked() is False
+        assert w.chk_force_slow_ds2.isChecked() is False
+        assert w._auto_transfer_route() == "softbsl"
+        assert w._softbsl_entry_mode() == "direct"
+        assert "Direct Soft-BSL 0x5A" in w.lbl_transfer_mode.text()
+        assert w.chk_bootloader_write.isChecked() is False
+        assert w.chk_bootloader_write.isEnabled() is False
+    finally:
+        w.close()
+
+
 def test_transfer_mode_uses_native_ds2_without_softbsl_marker():
     app, w = _gui()
     try:
@@ -3595,8 +3617,9 @@ def test_patches_read_routes_through_softbsl_when_available(monkeypatch):
             captured["routed"] = True
             return op_fn("COM1", progress_fn, log_fn)   # drive the op_fn just like the real helper
 
-        def fake_read_image(port, scope, baud, pf, lf, chip_family=None):
-            captured["args"] = (port, scope, baud)
+        def fake_read_image(
+                port, scope, baud, pf, lf, chip_family=None, entry_mode="auto"):
+            captured["args"] = (port, scope, baud, entry_mode)
             return payload
 
         def _no_ds2(*a, **k):
@@ -3608,7 +3631,7 @@ def test_patches_read_routes_through_softbsl_when_available(monkeypatch):
 
         data, source = w._read_base_from_ecu(lambda *a, **k: None, lambda *a, **k: None)
         assert captured["routed"] is True
-        assert captured["args"] == ("COM1", "full", "high")
+        assert captured["args"] == ("COM1", "full", "high", "auto")
         assert data == payload
         assert source == "ECU read (Soft-BSL fast)"
     finally:

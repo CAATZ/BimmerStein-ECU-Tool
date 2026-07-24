@@ -163,6 +163,85 @@ def test_polled_flash_mode_entry_uses_quiet_guard_then_waits_for_e740(monkeypatc
     ]
 
 
+def test_runtime_calguard_detector_does_not_use_the_abhishek_credit():
+    from engines.softbsl import softbsl_host as sh
+
+    memory = {
+        0x133BB: b"\xFF" * 5,
+        0x15F60: b"ABHISHEK",
+        0x1000E: b"12000000",
+        0x3DA9A: sh._PROG_SIG_3,
+        0x2025: b"1406464",
+    }
+
+    class FakeDS2:
+        def read_mem(self, address, length):
+            return memory.get(address, b"\xFF" * length)[:length]
+
+    assert sh._detect_ecu_variant(FakeDS2()) == (
+        "MS41.3", "MS41.3", True)
+    assert sh._detect_ecu_variant(FakeDS2(), accept_credit=False) == (
+        "MS41.2", "MS41.3", False)
+
+
+def test_calguard_mismatch_selects_direct_entry_without_marker_one(monkeypatch):
+    from engines.softbsl import softbsl_host as sh
+
+    class FakeDS2:
+        def read_mem(self, address, length):
+            assert (address, length) == (0xE740, 1)
+            return b"\x03"
+
+    logs = []
+    sb = sh.SoftBSL(FakeDS2(), log=logs.append)
+    monkeypatch.setattr(sh, "_live_patch_applied", lambda _ds2, patch_id: patch_id == "cal_guard")
+    monkeypatch.setattr(
+        sh, "_detect_ecu_variant",
+        lambda _ds2, **_kwargs: ("MS41.2", "MS41.1", False))
+
+    assert sb.calguard_direct_entry_ready() is True
+    assert any("without 0x2A" in line for line in logs)
+
+
+def test_live_calguard_check_reads_every_exact_descriptor_byte():
+    from engines.patcher.patch_ms41 import load_patches
+    from engines.softbsl import softbsl_host as sh
+
+    patch = load_patches()["cal_guard"]
+    expected = {
+        int(edit["off"]) ^ sh.DESCR: bytes.fromhex(edit["data"])
+        for edit in patch["edits"]
+    }
+    reads = []
+
+    class FakeDS2:
+        def read_memory_range(self, address, length):
+            reads.append((address, length))
+            return expected[address]
+
+    assert sh._live_patch_applied(FakeDS2(), "cal_guard") is True
+    assert reads == [
+        (address, len(data)) for address, data in expected.items()
+    ]
+
+
+def test_consistent_calguard_image_keeps_normal_entry(monkeypatch):
+    from engines.softbsl import softbsl_host as sh
+
+    class FakeDS2:
+        def read_mem(self, address, length):
+            assert (address, length) == (0xE740, 1)
+            return b"\x03"
+
+    sb = sh.SoftBSL(FakeDS2(), log=lambda _line: None)
+    monkeypatch.setattr(sh, "_live_patch_applied", lambda _ds2, _patch_id: True)
+    monkeypatch.setattr(
+        sh, "_detect_ecu_variant",
+        lambda _ds2, **_kwargs: ("MS41.1", "MS41.1", True))
+
+    assert sb.calguard_direct_entry_ready() is False
+
+
 def test_enter_retry_forwards_the_bounded_ack_timeout(monkeypatch):
     from engines.softbsl import softbsl_host as sh
 

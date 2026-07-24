@@ -23,7 +23,7 @@ from PyQt5.QtWidgets import (
     QProgressBar, QFileDialog, QGroupBox, QGridLayout,
     QMessageBox, QTabWidget, QTableWidget,
     QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QCheckBox, QSpinBox,
+    QCheckBox, QRadioButton, QSpinBox,
     QLineEdit, QInputDialog, QDialog, QScrollArea
 )
 from PyQt5.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer, QUrl, QCoreApplication
@@ -858,15 +858,31 @@ class MS41FlashGUI(QMainWindow):
         opt_row.addWidget(self.chk_correct_cksum)
 
         opt_row.addStretch()
-        self.chk_force_slow_ds2 = QCheckBox("Force Slow DS2 (ECU Recovery)")
-        self.chk_force_slow_ds2.setStyleSheet("color:#e8c46a; padding:4px;")
+        lay.addLayout(opt_row)
+
+        self.grp_recovery_override = QGroupBox("Recovery Override")
+        recovery_row = QHBoxLayout(self.grp_recovery_override)
+        self.rb_recovery_auto = QRadioButton("Automatic")
+        self.rb_recovery_auto.setChecked(True)
+        self.chk_force_slow_ds2 = QRadioButton("Force Slow DS2")
+        self.chk_force_softbsl = QRadioButton("Force Direct Soft-BSL (0x5A)")
+        self.rb_recovery_auto.setStyleSheet("color:#aaa; padding:4px;")
+        for button in (self.chk_force_slow_ds2, self.chk_force_softbsl):
+            button.setStyleSheet("color:#e8c46a; padding:4px;")
+        for button in (
+                self.rb_recovery_auto, self.chk_force_slow_ds2, self.chk_force_softbsl):
+            button.toggled.connect(self._update_transfer_mode)
+            recovery_row.addWidget(button)
+        recovery_row.addStretch()
         self.chk_force_slow_ds2.setToolTip(
             "Bypass Soft-BSL and native-fast DS2 for automatic tune/full reads and "
             "boot-preserving writes. Uses conventional DS2 at 9600 baud. Plain DS2 "
             "cannot write the boot/parameter region, identity sector, or TOP bank.")
-        self.chk_force_slow_ds2.toggled.connect(self._update_transfer_mode)
-        opt_row.addWidget(self.chk_force_slow_ds2)
-        lay.addLayout(opt_row)
+        self.chk_force_softbsl.setToolTip(
+            "Bypass automatic CalGuard/door detection and attempt the installed Soft-BSL "
+            "loader directly with staged command 0x5A. Never sends 0x2A or falls back to DS2. "
+            "Requires a known flash-driver family; a rejected trigger stops before erase.")
+        lay.addWidget(self.grp_recovery_override)
 
         # ── Boot-region write row (requires Soft-BSL) ──────────────────────
         boot_row = QHBoxLayout()
@@ -1460,11 +1476,22 @@ class MS41FlashGUI(QMainWindow):
         if (getattr(self, "chk_force_slow_ds2", None) is not None
                 and self.chk_force_slow_ds2.isChecked()):
             return "legacy_ds2"
+        if self._force_softbsl_recovery():
+            return "softbsl"
         if self._fast_read_available():
             return "softbsl"
         if self._native_fast_ds2_available():
             return "native_ds2"
         return "legacy_ds2"
+
+    def _force_softbsl_recovery(self):
+        return bool(
+            getattr(self, "chk_force_softbsl", None)
+            and self.chk_force_softbsl.isChecked()
+        )
+
+    def _softbsl_entry_mode(self):
+        return "direct" if self._force_softbsl_recovery() else "auto"
 
     def _update_transfer_mode(self):
         """Describe the automatic Soft-BSL/native-fast/legacy transfer route."""
@@ -1480,6 +1507,13 @@ class MS41FlashGUI(QMainWindow):
             self.lbl_transfer_mode.setToolTip(
                 "Force Slow DS2 is selected. Automatic tune/full reads and "
                 "boot-preserving writes bypass Soft-BSL and native-fast DS2.")
+        elif self._force_softbsl_recovery():
+            self.lbl_transfer_mode.setText(
+                "Transfer: Direct Soft-BSL 0x5A (forced recovery)")
+            self.lbl_transfer_mode.setStyleSheet("color:#e8c46a; padding:4px;")
+            self.lbl_transfer_mode.setToolTip(
+                "Forced recovery bypasses CalGuard/door detection and sends staged 0x5A "
+                "directly. It never sends 0x2A or falls back to DS2.")
         elif self._fast_read_available():
             self.lbl_transfer_mode.setText("Transfer: Soft-BSL RAM agent, high baud (fast, auto)")
             self.lbl_transfer_mode.setStyleSheet("color:#9ece6a; padding:4px;")
@@ -1536,7 +1570,8 @@ class MS41FlashGUI(QMainWindow):
             getattr(self, "chk_force_slow_ds2", None)
             and self.chk_force_slow_ds2.isChecked()
         )
-        if self._fast_read_available() and not force_slow:
+        force_direct = self._force_softbsl_recovery()
+        if self._fast_read_available() and not force_slow and not force_direct:
             self.chk_bootloader_write.setEnabled(True)
             if getattr(self, "_ecu_softbsl_marker", None) == "T":
                 tip = ("Writes the complete fused TOP SA7 sector (file 0x0000-0xFFFF) through "
@@ -1550,7 +1585,7 @@ class MS41FlashGUI(QMainWindow):
             self.chk_bootloader_write.setChecked(False)
             self.chk_bootloader_write.setToolTip(
                 "Requires Soft-BSL (loader + normal-mode 0x2A hook + D2XX); "
-                "Force Slow DS2 cannot write this region.")
+                "recovery overrides cannot write this region.")
         self._update_boot_identity_checkbox_state()
 
     def _update_boot_identity_checkbox_state(self):
@@ -1808,6 +1843,7 @@ class MS41FlashGUI(QMainWindow):
 
         transfer_route = self._auto_transfer_route()
         chip_family = self._fast_chip_family() if transfer_route == "softbsl" else None
+        entry_mode = self._softbsl_entry_mode()
 
         def task(log_fn, progress_fn):
             if is_full:
@@ -1815,7 +1851,8 @@ class MS41FlashGUI(QMainWindow):
                     log_fn("Using the Soft-BSL RAM agent with automatic baud fallback.", "ok")
                     data = self._run_via_softbsl(
                         lambda port, pf, lf: softbsl_service.read_image(port, "full", "high", pf, lf,
-                                                                        chip_family=chip_family),
+                                                                        chip_family=chip_family,
+                                                                        entry_mode=entry_mode),
                         log_fn, progress_fn)
                 elif transfer_route == "native_ds2":
                     log_fn(
@@ -1831,7 +1868,8 @@ class MS41FlashGUI(QMainWindow):
                     log_fn("Using the Soft-BSL RAM agent with automatic baud fallback.", "ok")
                     data = self._run_via_softbsl(
                         lambda port, pf, lf: softbsl_service.read_image(port, "tune", "high", pf, lf,
-                                                                        chip_family=chip_family),
+                                                                        chip_family=chip_family,
+                                                                        entry_mode=entry_mode),
                         log_fn, progress_fn)
                 elif transfer_route == "native_ds2":
                     log_fn(
@@ -2118,10 +2156,15 @@ class MS41FlashGUI(QMainWindow):
         transfer_route = self._auto_transfer_route()
         fast_route = transfer_route == "softbsl"
         native_route = transfer_route == "native_ds2"
+        entry_mode = self._softbsl_entry_mode()
         verify_write = self.chk_verify.isChecked()
         backup_before_write = self.chk_backup_before_write.isChecked()
         if fast_route:
-            transport = "Soft-BSL RAM agent (fast baud with automatic fallback)"
+            transport = (
+                "Direct Soft-BSL 0x5A (forced recovery; no 0x2A/DS2 fallback)"
+                if entry_mode == "direct" else
+                "Soft-BSL RAM agent (fast baud with automatic fallback)"
+            )
         elif native_route:
             transport = "Native DS2 at 187,500 baud (direct; pre-erase 9600 fallback)"
         else:
@@ -2161,6 +2204,7 @@ class MS41FlashGUI(QMainWindow):
                 progress_fn,
                 verify_write=verify_write,
                 route=transfer_route,
+                entry_mode=entry_mode,
             )
             if verify_write:
                 return "Calibration write completed and read-back verification passed."
@@ -2237,6 +2281,8 @@ class MS41FlashGUI(QMainWindow):
         transfer_route = self._auto_transfer_route()
         fast_route = transfer_route == "softbsl"
         native_route = transfer_route == "native_ds2"
+        entry_mode = self._softbsl_entry_mode()
+        force_direct = entry_mode == "direct"
         verify_write = self.chk_verify.isChecked()
         backup_before_write = self.chk_backup_before_write.isChecked()
         if archived_prewrite_image is not None:
@@ -2248,17 +2294,21 @@ class MS41FlashGUI(QMainWindow):
         boot_checkbox_requested = bool(
             getattr(self, "chk_bootloader_write", None) is not None
             and self.chk_bootloader_write.isChecked())
-        if require_boot_write and not fast_route:
+        if require_boot_write and (not fast_route or force_direct):
             QMessageBox.critical(
                 self, "Soft-BSL Boot Write Required",
                 "This operation changes bytes inside the ECU's boot/parameter region "
                 "(file 0x4000-0x5FFF). DS2 cannot write that region.\n\n"
-                "Install Soft-BSL and reconnect with an FTDI D2XX-capable adapter, then retry. "
+                "Use Automatic mode with a detected Soft-BSL installation and an FTDI "
+                "D2XX-capable adapter, then retry. "
                 "Hardware BSL remains the recovery alternative.")
             self._log("Full write blocked — the requested operation requires an armed "
                       "Soft-BSL boot-region write.", "error")
             return
-        will_write_boot = fast_route and (require_boot_write or boot_checkbox_requested)
+        will_write_boot = (
+            fast_route and not force_direct
+            and (require_boot_write or boot_checkbox_requested)
+        )
         target_half = softbsl_service.marker(image) or "B"
         connected_chip_family = self._fast_chip_family()
         try:
@@ -2487,7 +2537,11 @@ class MS41FlashGUI(QMainWindow):
 
         chip_family = connected_chip_family if fast_route else None
         if fast_route:
-            transport = "Soft-BSL RAM agent (fast baud with automatic fallback)"
+            transport = (
+                "Direct Soft-BSL 0x5A (forced recovery; no 0x2A/DS2 fallback)"
+                if force_direct else
+                "Soft-BSL RAM agent (fast baud with automatic fallback)"
+            )
         elif native_route:
             transport = "Native DS2 at 187,500 baud (direct; pre-erase 9600 fallback)"
         else:
@@ -2566,7 +2620,8 @@ class MS41FlashGUI(QMainWindow):
                     lambda port, pf, lf: softbsl_service.run_flash(
                         port, image_bytes, "full", self._softbsl_prompt, lf, baud="high",
                         progress_cb=pf, do_verify=verify_write,
-                        write_bootloader=will_write_boot, chip_family=chip_family),
+                        write_bootloader=will_write_boot, chip_family=chip_family,
+                        entry_mode=entry_mode),
                     log_fn, progress_fn,
                     restore_after_success=not softbsl_missing_after_write)
             elif native_route:
@@ -8208,11 +8263,18 @@ class MS41FlashGUI(QMainWindow):
         """Use Soft-BSL, otherwise native fast DS2, otherwise normal DS2."""
         route = self._auto_transfer_route()
         if route == "softbsl":
-            log_fn("Fast (Soft-BSL) read — RAM agent, high baud (auto).", "ok")
+            entry_mode = self._softbsl_entry_mode()
+            label = (
+                "Direct Soft-BSL 0x5A recovery read"
+                if entry_mode == "direct" else
+                "Fast (Soft-BSL) read — RAM agent, high baud (auto)"
+            )
+            log_fn(label + ".", "ok")
             fam = self._fast_chip_family()
             return self._run_via_softbsl(
                 lambda port, pf, lf: softbsl_service.read_image(port, which, "high", pf, lf,
-                                                                chip_family=fam),
+                                                                chip_family=fam,
+                                                                entry_mode=entry_mode),
                 log_fn, progress_fn)
         if route == "native_ds2":
             log_fn(
@@ -8231,6 +8293,7 @@ class MS41FlashGUI(QMainWindow):
         *,
         verify_write,
         route=None,
+        entry_mode=None,
     ):
         """Write a tune through the same automatic route as the Flash tab."""
         family = self._live_coding_family()
@@ -8249,12 +8312,19 @@ class MS41FlashGUI(QMainWindow):
         image_bytes = bytes(prepared)
         route = route or self._auto_transfer_route()
         if route == "softbsl":
-            log_fn("Fast (Soft-BSL) write — RAM agent, high baud (auto).", "ok")
+            entry_mode = entry_mode or self._softbsl_entry_mode()
+            label = (
+                "Direct Soft-BSL 0x5A recovery write"
+                if entry_mode == "direct" else
+                "Fast (Soft-BSL) write — RAM agent, high baud (auto)"
+            )
+            log_fn(label + ".", "ok")
             fam = self._fast_chip_family()
             self._run_via_softbsl(
                 lambda port, pf, lf: softbsl_service.write_tune(
                     port, bytes(image_bytes), lf, baud="high",
-                    progress_cb=pf, do_verify=verify_write, chip_family=fam),
+                    progress_cb=pf, do_verify=verify_write, chip_family=fam,
+                    entry_mode=entry_mode),
                 log_fn, progress_fn)
             if not verify_write:
                 log_fn(VERIFY_OFF_MESSAGE, "warn")
@@ -8422,7 +8492,9 @@ class MS41FlashGUI(QMainWindow):
         self._update_softbsl_crossbank_button()
 
     def _set_all_buttons_enabled(self, enabled: bool):
-        self.chk_force_slow_ds2.setEnabled(enabled)
+        for button in (
+                self.rb_recovery_auto, self.chk_force_slow_ds2, self.chk_force_softbsl):
+            button.setEnabled(enabled)
         if enabled and self._ds2 is not None:
             self._set_ds2_buttons_enabled()          # DS2 connected: enable ECU ops
         else:

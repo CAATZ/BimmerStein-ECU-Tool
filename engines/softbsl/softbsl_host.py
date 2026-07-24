@@ -1098,6 +1098,26 @@ class SoftBSL:
         self._ser().reset_input_buffer()
         return True
 
+    def calguard_direct_entry_ready(self):
+        """True when the installed CalGuard gate is holding a mismatch in flash-listen."""
+        try:
+            if self.ds2.read_mem(0xE740, 1) == b"\x01":
+                return False
+            if not _live_patch_applied(self.ds2, "cal_guard"):
+                return False
+            cal_v, prog_v, consistent = _detect_ecu_variant(
+                self.ds2, accept_credit=False)
+        except Exception as error:
+            self.log(f"CalGuard direct-entry preflight unavailable ({error}); using normal entry.")
+            return False
+        if consistent:
+            return False
+        self.log(
+            "CalGuard mismatch listener detected "
+            f"(cal={cal_v or 'unknown'}, program={prog_v or 'unknown'}, E740!=1); "
+            "entering Soft-BSL directly without 0x2A.")
+        return True
+
     def enter_retry(self, agent, trigger="5a", tries=14, gap=0.12, ack_timeout=2.0):
         """enter(), but hammer the trigger to CATCH the brief post-reboot clean-locked window (a single
         enter can hit the ECU mid-reboot or a stale window). Used by flash/dump for hands-off entry."""
@@ -2420,11 +2440,11 @@ _DRV_FAMILY_LABEL = {"amd":   "29F200 / 29F400 bottom-half (AMD driver)",
                      "intel": "28F200 (Intel driver)"}
 
 
-def _detect_ecu_variant(d):
+def _detect_ecu_variant(d, *, accept_credit=True):
     """Read the cal_guard markers over stock DS2 (READ-ONLY, brick-safe) and return
-    (cal_variant, prog_variant, consistent) exactly as cal_guard_gate.asm / ms41_variant.check_hybrid
-    decide it. DS2 addr = file ^ 0x4000. CAL side: SS1v2 @file 0x173BB or ABHISHEK @0x11F60,
-    else CAL-ID prefix @0x1400E.
+    (cal_variant, prog_variant, consistent). ``accept_credit`` preserves the broader
+    offline/install detector; False mirrors CalGuard runtime exactly: strict SS1v2,
+    otherwise CAL-ID, with no ABHISHEK shortcut. DS2 addr = file ^ 0x4000.
     PROGRAM side: the exact 9a116390 signature @file 0x39A9A else ECU-ID[2:5] @0x6025."""
     def rd(a, n):
         for _ in range(4):
@@ -2433,13 +2453,27 @@ def _detect_ecu_variant(d):
             except Exception:
                 time.sleep(0.3)
         return b""
-    ss1 = rd(0x133BB, 5); credit = rd(0x15F60, 8); calid = rd(0x1000E, 8)
-    cal_v = ("MS41.3" if (ss1 == _SS1V2 or credit == _ABHISHEK)
+    ss1 = rd(0x133BB, 5)
+    credit = rd(0x15F60, 8) if accept_credit else b""
+    calid = rd(0x1000E, 8)
+    cal_v = ("MS41.3" if (ss1 == _SS1V2 or (accept_credit and credit == _ABHISHEK))
              else _CALID_VARIANT.get(calid[:2].decode("latin1", "ignore")))
     sig = rd(0x3DA9A, 4); ecuid = rd(0x2025, 7)          # program markers (file 0x39A9A / 0x6025)
     prog_v = "MS41.3" if sig == _PROG_SIG_3 else _ECUID_PROG_VARIANT.get(ecuid[2:5].decode("latin1", "ignore"))
     consistent = cal_v is not None and cal_v == prog_v
     return cal_v, prog_v, consistent
+
+
+def _live_patch_applied(d, patch_id):
+    """Read every post-patch descriptor byte from the live ECU."""
+    from engines.patcher.patch_ms41 import load_patches
+    patch = load_patches()[patch_id]
+    for edit in patch["edits"]:
+        expected = bytes.fromhex(edit["data"])
+        actual = d.read_memory_range(int(edit["off"]) ^ DESCR, len(expected))
+        if actual != expected:
+            return False
+    return True
 
 
 def _detect_flash_chip(d):

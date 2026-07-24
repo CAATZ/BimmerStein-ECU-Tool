@@ -259,14 +259,13 @@ def crossbank_plan(image):
     return _capture(_sb.crossbank_dry_run, bytes(image))
 
 
-def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=None):
-    """Open the port and enter the RAM agent via the STEADY-STATE door (0x2A door_magic ->
-    5a loader window), not the disposable 0x43 install-only door — 0x43 only exists during
-    the one-time install bootstrap and is erased afterward, so entering via it here would
-    always fail on an already-installed ECU. ensure_flash_mode() sends 0x2A, keeps K-Line
-    quiet through the installed door's watchdog interval, then polls E740 with bounded DS2
-    reads. Production service calls use the staged 0x5A entry at the selected exact tier;
-    legacy callers retain enter_retry(trigger='5a') compatibility.
+def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=None,
+                  entry_mode="auto"):
+    """Open the port and enter the RAM agent through the persistent 0x5A loader.
+
+    Automatic normal entry uses 0x2A door_magic first. An exact CalGuard mismatch, or
+    ``entry_mode='direct'` recovery override, skips 0x2A and sends staged 0x5A directly.
+    The disposable 0x43 install door is never used here.
 
     `chip_family` ('amd'/'intel'/None) selects the flash agent: an Intel 28F200 needs
     agent_28f.hex (Intel command set + 12 V VPP); AMD/None default to agent.hex. Reads are
@@ -276,6 +275,13 @@ def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=Non
     E740=1 (flash-listen, non-drivable, persistent across key-cycles). Walk it back to marker 0 +
     drivable via the running agent's self-finalize before closing +
     re-raising — otherwise a missed 5a window strands a previously-drivable ECU in flash mode."""
+    if entry_mode not in ("auto", "direct"):
+        raise ValueError(f"unknown Soft-BSL entry mode {entry_mode!r}")
+    if entry_mode == "direct" and chip_family not in ("amd", "intel"):
+        raise SoftBSLError(
+            "Direct Soft-BSL recovery requires a known Intel/AMD flash-driver family; "
+            "no port was opened and nothing was erased.")
+
     d = _sbds2.DS2Interface(port, baud=9600, verbose=False, echo=True)
     d.open()
     if require_d2xx and not d.uses_d2xx:
@@ -286,8 +292,18 @@ def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=Non
     sb = _sb.SoftBSL(d, log=_agent_log(log))
     staged = baud_tier is not None and hasattr(sb, "enter_staged")
     try:
+        direct = entry_mode == "direct" or bool(
+            getattr(sb, "calguard_direct_entry_ready", lambda: False)())
+        if direct and chip_family not in ("amd", "intel"):
+            raise SoftBSLError(
+                "Direct Soft-BSL recovery requires a known Intel/AMD flash-driver family; "
+                "no agent was loaded and nothing was erased.")
         agent = _sb.load_agent(_sb.agent_path_for_family(chip_family))
-        sb.ensure_flash_mode(poll_ready=True)
+        if direct:
+            if entry_mode == "direct":
+                log("Forced direct Soft-BSL recovery: sending staged 0x5A without 0x2A.")
+        else:
+            sb.ensure_flash_mode(poll_ready=True)
         if staged:
             sb.enter_staged(agent, baud_tier, trigger="5a")
         else:
@@ -328,7 +344,8 @@ def _set_agent_baud_if_needed(sb, tier):
 
 
 def run_flash(port, image, scope, prompt, log, baud="low", progress_cb=None,
-             do_verify=True, write_bootloader=False, chip_family=None):
+             do_verify=True, write_bootloader=False, chip_family=None,
+             entry_mode="auto"):
     """Live full-image-scope write with a brief pre-erase link gate.
 
     High/mid failures may fall back only while flash is untouched. Once the host emits the
@@ -342,7 +359,8 @@ def run_flash(port, image, scope, prompt, log, baud="low", progress_cb=None,
 
     def _attempt(tier):
         d, sb = _open_session(
-            port, log, chip_family, require_d2xx=tier != "low", baud_tier=tier)
+            port, log, chip_family, require_d2xx=tier != "low", baud_tier=tier,
+            entry_mode=entry_mode)
         tracker = _WriteProgressTracker(progress_cb)
         finalized_by_flash = False
         write_complete = False
@@ -430,7 +448,7 @@ def write_identity_sector(port, sector, prompt, log, baud="high", progress_cb=No
 
 
 def write_tune(port, partial, log, baud="low", progress_cb=None, do_verify=True,
-               chip_family=None):
+               chip_family=None, entry_mode="auto"):
     """Live Fast TUNE write: enter the RAM agent and write the 24 KB calibration/tune PARTITION to
     the running bank via SoftBSL.write_tune_partial — the agent counterpart of ds2.write_partial.
     Unlike run_flash, this takes a 24 KB partial (NOT a 256 KB full image) and needs NO bank marker:
@@ -442,7 +460,8 @@ def write_tune(port, partial, log, baud="low", progress_cb=None, do_verify=True,
 
     def _attempt(tier):
         d, sb = _open_session(
-            port, log, chip_family, require_d2xx=tier != "low", baud_tier=tier)
+            port, log, chip_family, require_d2xx=tier != "low", baud_tier=tier,
+            entry_mode=entry_mode)
         tracker = _WriteProgressTracker(progress_cb)
         write_complete = False
         retain_for_recovery = False
@@ -544,14 +563,16 @@ def resume_write_recovery(recovery, *, progress_cb=None, log=lambda *_args: None
     return True
 
 
-def read_image(port, scope, baud, progress_cb, log, chip_family=None):
+def read_image(port, scope, baud, progress_cb, log, chip_family=None,
+               entry_mode="auto"):
     """Live Fast Read: enter the RAM agent and read `scope` ('full'/'tune') back as bytes,
     with real progress_cb(done, total) movement. `chip_family`
     ('amd'/'intel'/None) picks the flash agent — reads are chip-agnostic, but using the right
     agent keeps a read + follow-up write on the same command set."""
     def _attempt(tier):
         d, sb = _open_session(
-            port, log, chip_family, require_d2xx=tier != "low", baud_tier=tier)
+            port, log, chip_family, require_d2xx=tier != "low", baud_tier=tier,
+            entry_mode=entry_mode)
         try:
             _set_agent_baud_if_needed(sb, tier)
             if scope == "tune":

@@ -589,6 +589,68 @@ def test_open_session_uses_steady_state_door_not_the_disposable_43_door(monkeypa
     assert "reset" in sb.calls
 
 
+def test_open_session_uses_direct_5a_for_calguard_mismatch(monkeypatch):
+    class CalGuardSB(_RecordingSB):
+        def calguard_direct_entry_ready(self):
+            self.calls.append("calguard_direct_entry_ready")
+            return True
+        def enter_staged(self, _agent, tier, trigger):
+            self.calls.append(("enter_staged", tier, trigger))
+
+    sb = CalGuardSB()
+    _install_fakes(monkeypatch, sb)
+
+    d, _session = softbsl_service._open_session(
+        "COM1", lambda *_args: None, chip_family="intel",
+        baud_tier="low", entry_mode="auto")
+    d.close()
+
+    assert "calguard_direct_entry_ready" in sb.calls
+    assert not any(call[0] == "ensure_flash_mode" for call in sb.calls if isinstance(call, tuple))
+    assert ("enter_staged", "low", "5a") in sb.calls
+
+
+def test_forced_direct_5a_bypasses_detection_and_0x2a(monkeypatch):
+    class ForcedSB(_RecordingSB):
+        def calguard_direct_entry_ready(self):
+            raise AssertionError("forced mode must bypass CalGuard detection")
+        def enter_staged(self, _agent, tier, trigger):
+            self.calls.append(("enter_staged", tier, trigger))
+
+    sb = ForcedSB()
+    _install_fakes(monkeypatch, sb)
+
+    d, _session = softbsl_service._open_session(
+        "COM1", lambda *_args: None, chip_family="amd",
+        baud_tier="high", entry_mode="direct")
+    d.close()
+
+    assert not any(call[0] == "ensure_flash_mode" for call in sb.calls if isinstance(call, tuple))
+    assert ("enter_staged", "high", "5a") in sb.calls
+
+
+def test_forced_direct_requires_a_known_flash_family(monkeypatch):
+    class ForcedSB(_RecordingSB):
+        def enter_staged(self, _agent, tier, trigger):
+            self.calls.append(("enter_staged", tier, trigger))
+
+    sb = ForcedSB()
+    closed = []
+    _install_fakes(monkeypatch, sb, close_rec=closed)
+
+    try:
+        softbsl_service._open_session(
+            "COM1", lambda *_args: None, chip_family=None,
+            baud_tier="low", entry_mode="direct")
+        assert False, "forced direct entry guessed a flash agent"
+    except softbsl_service.SoftBSLError as error:
+        assert "known Intel/AMD" in str(error)
+
+    assert closed == []
+    assert not any(call[0] == "ensure_flash_mode" for call in sb.calls if isinstance(call, tuple))
+    assert not any(call[0] == "enter_staged" for call in sb.calls if isinstance(call, tuple))
+
+
 def test_open_session_recovers_and_closes_when_entry_fails_after_the_door(monkeypatch):
     # ensure_flash_mode fires the 0x2A door (commits E740=1) BEFORE enter_retry; if enter_retry then
     # misses the 5a window, the ECU is stranded in flash-listen. _open_session must walk it back to
