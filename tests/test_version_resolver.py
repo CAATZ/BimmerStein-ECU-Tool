@@ -13,6 +13,8 @@ def _synthetic_ms410():
         data[address:address + 4] = b"0641"
     for address in ms41.FIRMWARE_COMPAT_CAL_ADDRS:
         data[address:address + 4] = b"0641"
+    for address in (0x14016, 0x14026, 0x14036):
+        data[address:address + 4] = b"0600"
     return data
 
 
@@ -87,6 +89,13 @@ def test_same_variant_different_compatibility_ids_are_rejected():
     assert ms41.MS41ECU.detect_variant(data) == "MS41.0"
     assert "0641" in ms41.MS41ECU.check_hybrid(data)
     assert "0659" in ms41.MS41ECU.check_hybrid(data)
+
+
+def test_calibration_family_headers_are_not_treated_as_repeated_full_ids():
+    data = _synthetic_ms410()
+
+    assert ms41.MS41ECU.read_calibration_compatibility_id(data) == "0641"
+    assert ms41.MS41ECU.check_hybrid(data) is None
 
 
 def test_conflicting_repeated_compatibility_ids_are_rejected():

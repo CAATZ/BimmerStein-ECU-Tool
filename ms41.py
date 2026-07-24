@@ -104,12 +104,12 @@ CODING_FAMILY_PROGRAM_ADDRS = (0x6006, 0x6012, 0x601E)
 CODING_FAMILY_CAL_ADDRS = (0x1400D, 0x14017, 0x14027, 0x14037)
 CODING_FAMILY_PARTIAL_ADDRS = (0x000D, 0x0017, 0x0027, 0x0037)
 
-# Native four-digit program/calibration compatibility identifiers.  The first
-# digit is supplied by the protected coding-family value; the final two digits
-# retain the specific calibration family (41/42/59/85/60/12).
+# Native four-digit program/calibration compatibility identifiers. The program
+# ID is repeated three times, but calibration has one complete ID; its later
+# records are coding-family headers such as 0900/0600, not duplicate IDs.
 FIRMWARE_COMPAT_PROGRAM_ADDRS = (0x6007, 0x6013, 0x601F)
-FIRMWARE_COMPAT_CAL_ADDRS = (0x1400C, 0x14016, 0x14026, 0x14036)
-FIRMWARE_COMPAT_PARTIAL_ADDRS = (0x000C, 0x0016, 0x0026, 0x0036)
+FIRMWARE_COMPAT_CAL_ADDRS = (0x1400C,)
+FIRMWARE_COMPAT_PARTIAL_ADDRS = (0x000C,)
 
 
 class MS41ECU:
