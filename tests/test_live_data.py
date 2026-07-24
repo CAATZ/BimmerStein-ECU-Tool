@@ -1,6 +1,7 @@
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import csv as _csv
+import pytest
 import live_data
 
 
@@ -256,3 +257,54 @@ def test_direct_read_profile_matches_wideband_batch_selection():
     assert by_name["AFR Target"].address == 0xE811
     assert "EVAP Purge Duty" not in by_name
     assert "Front O2 B1 Voltage" not in by_name
+
+
+def test_read_adaptations_decodes_fuel_axes_and_six_knock_tables():
+    def fuel_block(additive, ltft):
+        return (additive.to_bytes(2, "little") + bytes(6)
+                + ltft.to_bytes(2, "little"))
+
+    responses = {
+        (0xF040, 10): fuel_block(0x800A, 0x9000),
+        (0xF0FC, 10): fuel_block(0x7FF6, 0x7000),
+        (0xE8DE, 2): (1000).to_bytes(2, "little", signed=True),
+        (0x12606, 4): bytes.fromhex("29 3C 4E 5C"),
+        (0x125D9, 16): bytes.fromhex(
+            "0F 19 1F 26 2F 36 3E 4E 5E 6D 7D 8A 9C AC BC C3"),
+    }
+    for index in range(6):
+        responses[(0xD840 + index * 0x40, 0x40)] = bytes([0x80 - index]) * 0x40
+
+    class FakeDS2:
+        def __init__(self):
+            self.reads = []
+
+        def read_mem(self, address, length):
+            self.reads.append((address, length))
+            return responses[(address, length)]
+
+    ds2 = FakeDS2()
+    result = live_data.read_adaptations(ds2, "1437806")
+
+    assert result["additive"] == pytest.approx([0.0534, -0.0534])
+    assert result["ltft"] == pytest.approx([6.250095, -6.250095])
+    assert result["throttle"] == pytest.approx(1.526)
+    assert result["load"] == pytest.approx([223.3294, 326.8235, 424.8706, 501.1294])
+    assert result["rpm"] == [
+        480, 800, 992, 1216, 1504, 1728, 1984, 2496,
+        3008, 3488, 4000, 4416, 4992, 5504, 6016, 6240,
+    ]
+    assert len(result["knock"]) == 6
+    assert all(len(table) == 16 and all(len(row) == 4 for row in table)
+               for table in result["knock"])
+    assert result["knock"][0][0][0] == 0.0
+    assert result["knock"][5][15][3] == -1.875
+    assert ds2.reads[-6:] == [
+        (0xD840, 0x40), (0xD880, 0x40), (0xD8C0, 0x40),
+        (0xD900, 0x40), (0xD940, 0x40), (0xD980, 0x40),
+    ]
+
+
+def test_read_adaptations_rejects_unmapped_axis_variant():
+    with pytest.raises(ValueError, match="not mapped"):
+        live_data.read_adaptations(object(), "1429373")

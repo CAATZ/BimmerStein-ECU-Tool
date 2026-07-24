@@ -22,7 +22,7 @@ pytestmark = pytest.mark.skipif(not _HAS_QT, reason="PyQt5 not available")
 
 from tests.conftest import ref
 
-EXISTING_TABS = {"Flash", "DTC Codes", "ECU Info", "Live Data",
+EXISTING_TABS = {"Flash", "DTC Codes", "ECU Info", "Live Data", "Adaptations",
                  "ROM Analyzer", "ECU Config", "Partial / Full", "Bins", "Patches"}
 TEST_SERIAL = "900000001"
 TEST_ISN = "0001"
@@ -474,6 +474,46 @@ def test_gui_constructs_headless_with_existing_tabs():
         ) < connection_row.indexOf(w.lbl_status)
         titles = {w.tabs.tabText(i).strip() for i in range(w.tabs.count())}
         assert EXISTING_TABS <= titles, f"missing tabs: {EXISTING_TABS - titles}"
+    finally:
+        w.close()
+
+
+def test_adaptations_tab_reads_and_renders_without_definition_file(monkeypatch):
+    app, w = _gui()
+    try:
+        result = {
+            "ecu_id": "1437806",
+            "additive": [0.05, -0.05],
+            "ltft": [6.25, -6.25],
+            "throttle": 1.53,
+            "load": [223, 327, 425, 501],
+            "rpm": [
+                480, 800, 992, 1216, 1504, 1728, 1984, 2496,
+                3008, 3488, 4000, 4416, 4992, 5504, 6016, 6240,
+            ],
+            "knock": [[[0.0] * 4 for _row in range(16)] for _table in range(6)],
+        }
+        monkeypatch.setattr(gui, "read_adaptations", lambda ds2, ecu_id: result)
+
+        def run_now(task_fn, on_success=None, on_failure=None):
+            del on_failure
+            on_success(task_fn(
+                log_fn=lambda *_args: None,
+                progress_fn=lambda *_args: None))
+
+        w._run_task = run_now
+        w._ds2 = object()
+        w._ecu_id = "1437806"
+        w._on_read_adaptations()
+
+        assert w.adapt_fuel_table.item(0, 1).text() == "0.05"
+        assert w.adapt_fuel_table.item(1, 2).text() == "-6.25"
+        assert w.adapt_fuel_table.item(2, 2).text() == "—"
+        assert w.adapt_knock_tabs.count() == 6
+        assert w._adapt_knock_tables[0].horizontalHeaderItem(0).text() == "223"
+        assert w._adapt_knock_tables[0].verticalHeaderItem(0).text() == "480"
+        assert w._adapt_knock_tables[5].item(15, 3).text() == "0.00"
+        assert w.lbl_adapt_status.text() == "Read from ECU 1437806"
     finally:
         w.close()
 
@@ -3678,9 +3718,11 @@ def test_tab_order_is_workflow_grouped():
     app, w = _gui()
     try:
         order = [w.tabs.tabText(i).strip() for i in range(w.tabs.count())]
-        assert order == ["Flash", "ECU Info", "DTC Codes", "Live Data", "Partial / Full", "Bins",
-                         "Patches", "ECU Config", "VIN / EWS", "ROM Analyzer",
-                         "Soft-BSL", "BSL-Unbricker"]
+        assert order == [
+            "Flash", "ECU Info", "DTC Codes", "Live Data", "Adaptations",
+            "Partial / Full", "Bins", "Patches", "ECU Config", "VIN / EWS",
+            "ROM Analyzer", "Soft-BSL", "BSL-Unbricker",
+        ]
     finally:
         w.close()
 
@@ -4471,6 +4513,11 @@ def test_reset_adaptations_handler_is_live(monkeypatch):
     app, w = _gui()
     try:
         assert hasattr(w, "btn_reset_adapt")
+        titles = [w.tabs.tabText(i).strip() for i in range(w.tabs.count())]
+        adaptations_tab = w.tabs.widget(titles.index("Adaptations"))
+        flash_tab = w.tabs.widget(titles.index("Flash"))
+        assert adaptations_tab.isAncestorOf(w.btn_reset_adapt)
+        assert not flash_tab.isAncestorOf(w.btn_reset_adapt)
         w._ds2 = None
         shown = {}
         monkeypatch.setattr(QMessageBox, "information",

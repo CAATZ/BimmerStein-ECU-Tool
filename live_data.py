@@ -236,12 +236,15 @@ _SHARED_ADDR = {
 _FAMILY_ADDR = {
     "1437806": {"Throttle Position": 0xE8D7, "Engine Load": 0xFC52, "Injector PW": 0xEF96,
                 "Fuel Trim ST": 0xF036, "Fuel Trim ST B2": 0xF0F2,
+                "Fuel Trim Additive": 0xF040, "Fuel Trim Additive B2": 0xF0FC,
                 "Fuel Trim LT": 0xF048, "Fuel Trim LT B2": 0xF104},
     "1429861": {"Throttle Position": 0xE8D7, "Engine Load": 0xFAFC, "Injector PW": 0xECBC,
                 "Fuel Trim ST": 0xED5C, "Fuel Trim ST B2": 0xED96,
+                "Fuel Trim Additive": 0xED66, "Fuel Trim Additive B2": 0xEDA0,
                 "Fuel Trim LT": 0xED6E, "Fuel Trim LT B2": 0xEDA8},
     "1406464": {"Throttle Position": 0xE8D0, "Engine Load": 0xFC52, "Injector PW": 0xEF7E,
                 "Fuel Trim ST": 0xF01E, "Fuel Trim ST B2": 0xF0CA,
+                "Fuel Trim Additive": 0xF028, "Fuel Trim Additive B2": 0xF0D4,
                 "Fuel Trim LT": 0xF030, "Fuel Trim LT B2": 0xF0DC},
 }
 
@@ -258,6 +261,18 @@ _ECU_FAMILY = {
 }
 # ECU IDs with only the shared parameter set mapped (use default TPS, no fuel addrs).
 _DEFAULT_TPS = 0xE8D7
+
+# Definition-derived axis locations converted to live DS2 CPU addresses.
+# Only variants with proven Knock Tables X/Y definitions are listed.
+_ADAPTATION_AXES = {
+    "1437806": (0x12606, 0x125D9),
+    "1438068": (0x12606, 0x125D9),
+    "1429861": (0x1239A, 0x1236D),
+    "1432401": (0x1239A, 0x1236D),
+    "1406464": (0x12388, 0x1235B),
+    "SHINDE1": (0x12388, 0x1235B),
+}
+_KNOCK_ADAPTATION_ADDR = 0xD840
 
 
 def _profile_telegram_params(profile: str, wideband_input_addr: int):
@@ -320,6 +335,56 @@ def telegram_params_for(ecu_id, profile: str = PROFILE_STANDARD,
         params.append(TelegramParameter(name, unit, addr, length, signed, convert, fmt))
     params.extend(_profile_telegram_params(profile, wideband_input_addr))
     return params
+
+
+def read_adaptations(ds2, ecu_id):
+    """Read stored fuel, throttle, and six 16x4 knock-adaptation tables."""
+    ecu_id = str(ecu_id or "")
+    family = _ECU_FAMILY.get(ecu_id)
+    axes = _ADAPTATION_AXES.get(ecu_id)
+    if family is None or axes is None:
+        raise ValueError(
+            f"adaptation-table addresses are not mapped for ECU ID {ecu_id or 'unknown'}")
+
+    def read_exact(address, length):
+        data = bytes(ds2.read_mem(address, length))
+        if len(data) != length:
+            raise ValueError(
+                f"short adaptation read at 0x{address:05X}: {len(data)}/{length} bytes")
+        return data
+
+    addresses = _FAMILY_ADDR[family]
+    additive, ltft = [], []
+    for suffix in ("", " B2"):
+        add_address = addresses[f"Fuel Trim Additive{suffix}"]
+        lt_address = addresses[f"Fuel Trim LT{suffix}"]
+        block = read_exact(add_address, lt_address - add_address + 2)
+        add_raw = int.from_bytes(block[:2], "little")
+        lt_raw = int.from_bytes(block[lt_address - add_address:lt_address - add_address + 2],
+                                "little")
+        additive.append((add_raw - 32768) * 0.00534)
+        ltft.append((lt_raw - 32768) * 100 / 65535)
+
+    throttle_raw = int.from_bytes(read_exact(0xE8DE, 2), "little", signed=True)
+    load_address, rpm_address = axes
+    load = [value * 1389 / 255 for value in read_exact(load_address, 4)]
+    rpm = [value * 32 for value in read_exact(rpm_address, 16)]
+
+    tables = []
+    for index in range(6):
+        raw = read_exact(_KNOCK_ADAPTATION_ADDR + index * 0x40, 0x40)
+        values = [(value - 128) * 0.375 for value in raw]
+        tables.append([values[row:row + 4] for row in range(0, 64, 4)])
+
+    return {
+        "ecu_id": ecu_id,
+        "additive": additive,
+        "ltft": ltft,
+        "throttle": throttle_raw * 0.001526,
+        "load": load,
+        "rpm": rpm,
+        "knock": tables,
+    }
 
 
 # Default param set (ECU ID 1437806 / MS41.1) for display layout, names, and tests.

@@ -34,11 +34,11 @@ from PyQt5.QtGui import (
 
 from ms41 import MS41ECU, SS1V2_PROG_SIG, SS1V2_PROG_SIG_ADDR
 from ds2 import DS2Interface, DS2Error
-from checksum import verify_checksum, correct_checksums, disable_checksum
+from checksum import verify_checksum, correct_checksums
 from dtc import format_dtc_table, parse_ds2_dtc_response, DS2DTCRecord
 import ecu_info
 from live_data import (LiveDataPoller, PROFILE_DISPLAY_NAMES,
-                       TELEGRAM_PARAM_NAMES, display_rows)
+                       TELEGRAM_PARAM_NAMES, display_rows, read_adaptations)
 from rom_analyzer import analyze as analyze_rom
 from backup_manager import BackupManager, BACKUP_DIR
 from port_owner import PortOwner, PortBusyError
@@ -750,6 +750,7 @@ class MS41FlashGUI(QMainWindow):
         self._build_info_tab()         # ECU Info
         self._build_dtc_tab()          # DTC Codes
         self._build_live_data_tab()    # Live Data
+        self._build_adaptations_tab()  # Adaptations
         self._build_partial_tab()      # Partial / Full
         self._build_backups_tab()      # Bins
         self._build_patches_tab()      # Patches
@@ -828,22 +829,12 @@ class MS41FlashGUI(QMainWindow):
             "Correct the boot, program, and calibration checksums for every MS41 variant. "
             "Only checksum bytes change."
         )
-        self.btn_disable_cksum = self._op_btn(
-            "🚫  Disable Program Checksum Verification  (offline)", "#3d3d3d",
-            self._on_disable_cksum_file
-        )
-        self.btn_disable_cksum.setToolTip(
-            "Set the full-ROM program-checksum switch at 0x605C to 0xFF. This disables "
-            "program-checksum verification only; boot and calibration checks remain unchanged. "
-            "Only this one byte changes."
-        )
         grid.addWidget(self.btn_read_full,     0, 0)
         grid.addWidget(self.btn_read_tune,     0, 1)
         grid.addWidget(self.btn_write_full,    1, 0)
         grid.addWidget(self.btn_write_tune,    1, 1)
         grid.addWidget(self.btn_check_file,    0, 2)
         grid.addWidget(self.btn_fix_file,      1, 2)
-        grid.addWidget(self.btn_disable_cksum, 2, 2)
         lay.addLayout(grid)
 
         # ── Checksum + verify row ─────────────────────────────────────────
@@ -918,15 +909,6 @@ class MS41FlashGUI(QMainWindow):
         self.chk_verify.setStyleSheet("color:#aaa; padding:4px;")
         extra_row.addWidget(self.chk_verify, alignment=Qt.AlignTop)
         extra_row.addStretch()
-        self.btn_reset_adapt = self._op_btn(
-            "Reset Adaptations", "#4a3a00", self._on_reset_adaptations
-        )
-        self.btn_reset_adapt.setToolTip(
-            "Clear learned fuel trim and idle speed adaptations from EEPROM.\n"
-            "Recommended after any fueling change."
-        )
-        self.btn_reset_adapt.setMaximumWidth(200)
-        extra_row.addWidget(self.btn_reset_adapt)
         self.btn_native_recovery = self._op_btn(
             "Retry Flash Recovery", "#9b1c1c", self._start_native_flash_recovery
         )
@@ -1446,6 +1428,7 @@ class MS41FlashGUI(QMainWindow):
         self._set_backup_buttons_enabled(True)
         # Enable live data via DS2 RAM reads or the registered-address batch command.
         self._set_live_buttons_enabled(True)
+        self.btn_read_adaptations.setEnabled(True)
         self._update_telegram_checkbox_state()
         self._update_identity_write_state()
         if hasattr(self, "btn_ews_send"):
@@ -2920,6 +2903,155 @@ class MS41FlashGUI(QMainWindow):
     def _set_live_buttons_enabled(self, enabled: bool):
         self.btn_live_start.setEnabled(enabled)
         self.btn_live_stop.setEnabled(False)
+
+    # ── Adaptations tab ──────────────────────────────────────────────────
+
+    def _build_adaptations_tab(self):
+        tab = QWidget()
+        lay = QVBoxLayout(tab)
+
+        controls = QHBoxLayout()
+        self.btn_read_adaptations = self._op_btn(
+            "Read Adaptations", "#1e5080", self._on_read_adaptations)
+        self.btn_read_adaptations.setMaximumWidth(180)
+        self.btn_read_adaptations.setEnabled(False)
+        controls.addWidget(self.btn_read_adaptations)
+        self.btn_reset_adapt = self._op_btn(
+            "Reset Adaptations", "#4a3a00", self._on_reset_adaptations
+        )
+        self.btn_reset_adapt.setToolTip(
+            "Clear ECU learned adaptations over DS2 (command 0x43).\n"
+            "Choose which adaptation to clear in the next dialog.\n"
+            "The ECU will re-learn on the next drive cycle."
+        )
+        self.btn_reset_adapt.setMaximumWidth(200)
+        self.btn_reset_adapt.setEnabled(False)
+        controls.addWidget(self.btn_reset_adapt)
+        controls.addStretch()
+        self.lbl_adapt_status = QLabel("Not read")
+        self.lbl_adapt_status.setStyleSheet("color:#888; font-style:italic;")
+        controls.addWidget(self.lbl_adapt_status)
+        lay.addLayout(controls)
+
+        note = QLabel(
+            "Reads stored fuel, throttle, and knock adaptations directly from the connected "
+            "ECU. No external definition file is required.")
+        note.setWordWrap(True)
+        note.setStyleSheet("color:#999; padding:2px 4px;")
+        lay.addWidget(note)
+
+        fuel_group = QGroupBox("Fuel and Throttle Adaptations")
+        fuel_group.setStyleSheet(_SECTION_GB)
+        fuel_layout = QVBoxLayout(fuel_group)
+        self.adapt_fuel_table = QTableWidget(3, 4)
+        self.adapt_fuel_table.setHorizontalHeaderLabels(
+            ["Adaptation", "Bank 1", "Bank 2", "Unit"])
+        self.adapt_fuel_table.verticalHeader().setVisible(False)
+        self.adapt_fuel_table.verticalHeader().setDefaultSectionSize(26)
+        self.adapt_fuel_table.setFixedHeight(112)
+        self.adapt_fuel_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.Stretch)
+        for column in (1, 2, 3):
+            self.adapt_fuel_table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeToContents)
+        self.adapt_fuel_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.adapt_fuel_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.adapt_fuel_table.setAlternatingRowColors(True)
+        self.adapt_fuel_table.setStyleSheet(_ANALYZER_TABLE_STYLE)
+        self.adapt_fuel_table.setFont(QFont("Courier New", 10))
+        for row, (name, unit) in enumerate((
+                ("Additive Fuel Adaptation (.IdleFT)", "ms"),
+                ("Multiplicative Fuel Adaptation (LTFT)", "%"),
+                ("Throttle Position Adaptation", "%"))):
+            self.adapt_fuel_table.setItem(row, 0, QTableWidgetItem(name))
+            self.adapt_fuel_table.setItem(row, 1, QTableWidgetItem("—"))
+            self.adapt_fuel_table.setItem(row, 2, QTableWidgetItem("—"))
+            self.adapt_fuel_table.setItem(row, 3, QTableWidgetItem(unit))
+        fuel_layout.addWidget(self.adapt_fuel_table)
+        lay.addWidget(fuel_group)
+
+        knock_group = QGroupBox("Knock Adaptation (° correction)")
+        knock_group.setStyleSheet(_SECTION_GB)
+        knock_layout = QVBoxLayout(knock_group)
+        self.adapt_knock_tabs = QTabWidget()
+        self.adapt_knock_tabs.setUsesScrollButtons(False)
+        self.adapt_knock_tabs.tabBar().setExpanding(True)
+        self.adapt_knock_tabs.setStyleSheet(
+            "QTabBar::tab { min-width:70px; padding:6px 12px; }")
+        self._adapt_knock_tables = []
+        for index in range(6):
+            table = QTableWidget(16, 4)
+            table.setHorizontalHeaderLabels(["—"] * 4)
+            table.setVerticalHeaderLabels(["—"] * 16)
+            table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            table.setSelectionMode(QAbstractItemView.NoSelection)
+            table.setAlternatingRowColors(True)
+            table.setStyleSheet(_ANALYZER_TABLE_STYLE)
+            table.setFont(QFont("Courier New", 9))
+            for row in range(16):
+                for column in range(4):
+                    item = QTableWidgetItem("—")
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    table.setItem(row, column, item)
+            self._adapt_knock_tables.append(table)
+            self.adapt_knock_tabs.addTab(table, f"Table {index + 1}")
+        knock_layout.addWidget(self.adapt_knock_tabs)
+        lay.addWidget(knock_group, 1)
+
+        self.tabs.addTab(tab, "  Adaptations  ")
+
+    def _on_read_adaptations(self):
+        if not self._ds2:
+            return
+        ecu_id = self._ecu_id
+        if not ecu_id:
+            QMessageBox.warning(
+                self, "ECU ID Required",
+                "Reconnect to identify the ECU before reading adaptations.")
+            return
+
+        self.lbl_adapt_status.setText("Reading…")
+
+        def task(log_fn, progress_fn):
+            log_fn(f"Reading adaptations for ECU ID {ecu_id}…", "info")
+            progress_fn(0, 1, "Reading adaptations")
+            result = read_adaptations(self._ds2, ecu_id)
+            progress_fn(1, 1, "Adaptations read")
+            return result
+
+        def done(result):
+            self._show_adaptations(result)
+            self.lbl_adapt_status.setText(f"Read from ECU {result['ecu_id']}")
+            self._log("Adaptations read successfully.", "ok")
+
+        def failed(error):
+            self.lbl_adapt_status.setText("Read failed")
+            QMessageBox.critical(self, "Adaptation Read Failed", str(error))
+
+        self._run_task(task, on_success=done, on_failure=failed)
+
+    def _show_adaptations(self, result):
+        fuel_values = (
+            result["additive"],
+            result["ltft"],
+            (result["throttle"], None),
+        )
+        for row, values in enumerate(fuel_values):
+            for column, value in enumerate(values, 1):
+                text = "—" if value is None else f"{value:.2f}"
+                item = self.adapt_fuel_table.item(row, column)
+                item.setText(text)
+                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        load_headers = [f"{value:.0f}" for value in result["load"]]
+        rpm_headers = [f"{value:.0f}" for value in result["rpm"]]
+        for table, values in zip(self._adapt_knock_tables, result["knock"]):
+            table.setHorizontalHeaderLabels(load_headers)
+            table.setVerticalHeaderLabels(rpm_headers)
+            for row in range(16):
+                for column in range(4):
+                    table.item(row, column).setText(f"{values[row][column]:.2f}")
 
     # ── ROM Analyzer tab ─────────────────────────────────────────────────
 
@@ -8010,41 +8142,6 @@ class MS41FlashGUI(QMainWindow):
         for d in details: self._log(d)
         self._log(f"Saved: {out}", "ok")
 
-    def _on_disable_cksum_file(self):
-        """Disable the full-ROM program-checksum gate (0x605C → 0xFF)."""
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select full 256 KB ROM to disable program checksum verification", "",
-            "Binary Files (*.bin);;All Files (*)"
-        )
-        if not path: return
-        with open(path, "rb") as f:
-            data = bytearray(f.read())
-        if len(data) != MS41ECU.FULL_ROM_SIZE:
-            QMessageBox.warning(self, "Full ROM Required",
-                "Disabling program-checksum verification needs a full 256 KB ROM — "
-                "the switch at 0x605C is not present in a 24 KB partial.")
-            return
-        out_data, details = disable_checksum(data)
-        self._log(f"--- Disable program checksum verification: {os.path.basename(path)} ---")
-        for d in details: self._log(d)
-        if out_data == data:
-            QMessageBox.information(self, "Already Disabled",
-                "Program-checksum verification is already disabled in this image "
-                "(0x605C = 0xFF). Nothing to change.")
-            return
-        out, _ = QFileDialog.getSaveFileName(
-            self, "Save ROM with program checksum verification disabled",
-            path.replace(".bin", "_nocksum.bin"),
-            "Binary Files (*.bin);;All Files (*)"
-        )
-        if not out: return
-        with open(out, "wb") as f:
-            f.write(out_data)
-        self._log(f"Saved (program checksum verification disabled): {out}", "ok")
-        QMessageBox.information(self, "Program Checksum Verification Disabled",
-            f"Saved with program-checksum verification disabled:\n{os.path.basename(out)}\n\n"
-            "Boot and calibration checksum verification remain unchanged.")
-
     # -------------------------------------------------------------------
     # DTC
     # -------------------------------------------------------------------
@@ -8474,6 +8571,7 @@ class MS41FlashGUI(QMainWindow):
             self.btn_write_full, self.btn_write_tune,
             self.btn_read_dtc, self.btn_clear_dtc, self.btn_export_dtc,
             self.btn_info, self.btn_reset_adapt,
+            self.btn_read_adaptations,
             self.btn_id_read_flash_ecu, self.btn_id_read_ecu,
             self.btn_softbsl_install,
         ]
@@ -8499,8 +8597,7 @@ class MS41FlashGUI(QMainWindow):
             self._set_ds2_buttons_enabled()          # DS2 connected: enable ECU ops
         else:
             self._set_ecu_buttons_enabled(False)     # disconnected: disable ECU ops
-        for w in [self.btn_check_file, self.btn_fix_file, self.btn_disable_cksum,
-                  self.btn_connect]:
+        for w in [self.btn_check_file, self.btn_fix_file, self.btn_connect]:
             w.setEnabled(enabled)
         # Direct Tap controls transport construction (echo suppression) and cannot be changed
         # on an already-open DS2 session. Keep the selected value, but lock it with the port.
