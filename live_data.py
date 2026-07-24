@@ -223,7 +223,8 @@ _TELEGRAM_ORDER = [
     "Battery Voltage",
 ]
 
-# Addresses shared by ALL ECU IDs (RomRaider MS41 logger defs).
+# Addresses shared by the ECU IDs explicitly listed in the RomRaider logger
+# definitions.  Do not infer RAM layout from a broad MS41 generation label.
 _SHARED_ADDR = {
     "Engine RPM": 0xDA2A, "Mass Air Flow": 0xDA34, "Idle Valve Pos": 0xDA36,
     "Intake Air Temp": 0xDA50, "Coolant Temp": 0xDA5A, "Vehicle Speed": 0xDA63,
@@ -248,19 +249,22 @@ _FAMILY_ADDR = {
                 "Fuel Trim LT": 0xF030, "Fuel Trim LT B2": 0xF0DC},
 }
 
-# Map a connected ECU ID -> address family (for the varying params).
+# Exact ECU IDs with a complete, verified fuel/load/TPS address set.
 _ECU_FAMILY = {
     "1437806": "1437806",   # MS41.1 E36/E39/Z3 M52
-    "1438068": "1437806",   # MS41.1 (alternate part number, same addresses)
     "1429861": "1429861",   # MS41.0
-    "1432401": "1429861",   # MS41.0 (alternate part number)
-    "1429373": "1429861",   # MS41.0 (alternate part number)
-    "1438137": "1429861",   # MS41.0 (alternate part number)
     "1406464": "1406464",   # MS41.2 E36 M3 S52
     "SHINDE1": "1406464",   # MS41.3 bench build (shares MS41.2 RAM layout)
 }
-# ECU IDs with only the shared parameter set mapped (use default TPS, no fuel addrs).
-_DEFAULT_TPS = 0xE8D7
+_LIVE_SHARED_IDS = frozenset({
+    "1405854", "1406464", "SHINDE1", "1429373", "1429861", "1432401",
+    "1437806", "1440176",
+})
+_TPS_BY_ECU_ID = {
+    "1405854": 0xE8D7, "1429373": 0xE8D7, "1429861": 0xE8D7,
+    "1432401": 0xE8D7, "1437806": 0xE8D7, "1440176": 0xE8D7,
+    "1406464": 0xE8D0, "SHINDE1": 0xE8D0,
+}
 
 # Definition-derived axis locations converted to live DS2 CPU addresses.
 # Only variants with proven Knock Tables X/Y definitions are listed.
@@ -269,9 +273,12 @@ _ADAPTATION_AXES = {
     "1438068": (0x12606, 0x125D9),
     "1429861": (0x1239A, 0x1236D),
     "1432401": (0x1239A, 0x1236D),
+    "1429373": (0x12144, 0x12117),
     "1406464": (0x12388, 0x1235B),
     "SHINDE1": (0x12388, 0x1235B),
 }
+# Fuel-adaptation RAM addresses are not defined for CAL 59 / ECU 1429373.
+_ADAPTATION_FUEL_IDS = {"1437806", "1429861", "1406464", "SHINDE1"}
 _KNOCK_ADAPTATION_ADDR = 0xD840
 
 
@@ -315,11 +322,15 @@ def telegram_params_for(ecu_id, profile: str = PROFILE_STANDARD,
                         wideband_input_addr: int = _DEFAULT_WBO2_INPUT_ADDR
                         ) -> List["TelegramParameter"]:
     """
-    Build the telegram parameter list for a given ECU ID.  Shared params apply to
-    all IDs; fuel/TPS params use the ID's address family.  Parameters whose
+    Build the telegram parameter list for a given ECU ID. Shared parameters and
+    TPS require an explicit logger-definition match; fuel/load require a complete
+    exact-ID address map. Parameters whose
     address is unknown for the ID are omitted (never shown with a wrong address).
     """
-    fam = _ECU_FAMILY.get(str(ecu_id) if ecu_id is not None else None)
+    ecu_id = str(ecu_id) if ecu_id is not None else None
+    if ecu_id not in _LIVE_SHARED_IDS:
+        return []
+    fam = _ECU_FAMILY.get(ecu_id)
     fam_map = _FAMILY_ADDR.get(fam, {})
     params = []
     for name in _TELEGRAM_ORDER:
@@ -327,7 +338,7 @@ def telegram_params_for(ecu_id, profile: str = PROFILE_STANDARD,
         if name in _SHARED_ADDR:
             addr = _SHARED_ADDR[name]
         elif name == "Throttle Position":
-            addr = fam_map.get(name, _DEFAULT_TPS)   # TPS known for all (default 0xE8D7)
+            addr = _TPS_BY_ECU_ID[ecu_id]
         elif name in fam_map:
             addr = fam_map[name]
         else:
@@ -340,9 +351,8 @@ def telegram_params_for(ecu_id, profile: str = PROFILE_STANDARD,
 def read_adaptations(ds2, ecu_id):
     """Read stored fuel, throttle, and six 16x4 knock-adaptation tables."""
     ecu_id = str(ecu_id or "")
-    family = _ECU_FAMILY.get(ecu_id)
     axes = _ADAPTATION_AXES.get(ecu_id)
-    if family is None or axes is None:
+    if axes is None:
         raise ValueError(
             f"adaptation-table addresses are not mapped for ECU ID {ecu_id or 'unknown'}")
 
@@ -353,17 +363,20 @@ def read_adaptations(ds2, ecu_id):
                 f"short adaptation read at 0x{address:05X}: {len(data)}/{length} bytes")
         return data
 
-    addresses = _FAMILY_ADDR[family]
-    additive, ltft = [], []
-    for suffix in ("", " B2"):
-        add_address = addresses[f"Fuel Trim Additive{suffix}"]
-        lt_address = addresses[f"Fuel Trim LT{suffix}"]
-        block = read_exact(add_address, lt_address - add_address + 2)
-        add_raw = int.from_bytes(block[:2], "little")
-        lt_raw = int.from_bytes(block[lt_address - add_address:lt_address - add_address + 2],
-                                "little")
-        additive.append((add_raw - 32768) * 0.00534)
-        ltft.append((lt_raw - 32768) * 100 / 65535)
+    additive, ltft = [None, None], [None, None]
+    if ecu_id in _ADAPTATION_FUEL_IDS:
+        family = _ECU_FAMILY[ecu_id]
+        addresses = _FAMILY_ADDR[family]
+        for index, suffix in enumerate(("", " B2")):
+            add_address = addresses[f"Fuel Trim Additive{suffix}"]
+            lt_address = addresses[f"Fuel Trim LT{suffix}"]
+            block = read_exact(add_address, lt_address - add_address + 2)
+            add_raw = int.from_bytes(block[:2], "little")
+            lt_raw = int.from_bytes(
+                block[lt_address - add_address:lt_address - add_address + 2],
+                "little")
+            additive[index] = (add_raw - 32768) * 0.00534
+            ltft[index] = (lt_raw - 32768) * 100 / 65535
 
     throttle_raw = int.from_bytes(read_exact(0xE8DE, 2), "little", signed=True)
     load_address, rpm_address = axes
@@ -431,7 +444,7 @@ def display_rows() -> List[Tuple[str, str]]:
 _FT_BATCH = lambda x: (x - 32768) * 100 / 65535   # same as _FT above
 
 # Addresses shown here are for ECU 1437806 (MS41.1) — the default.
-# batch_layout_for() substitutes ECU-family and profile-specific addresses before
+# batch_layout_for() substitutes exact-ID and profile-specific addresses before
 # the same positional plan is passed to both the transport and response parser.
 #
 # ST entries (1b) read the high byte of the standard-mode LE 16b value
@@ -485,7 +498,9 @@ _BATCH_STATE_VALUES = {
 def batch_layout_for(ecu_id, profile: str = PROFILE_STANDARD,
                      wideband_input_addr: int = _DEFAULT_WBO2_INPUT_ADDR):
     """Build the positional decoder for the ECU family and selected profile."""
-    fam = _ECU_FAMILY.get(str(ecu_id) if ecu_id is not None else None, "1437806")
+    fam = _ECU_FAMILY.get(str(ecu_id) if ecu_id is not None else None)
+    if fam is None:
+        return None
     addrs = _FAMILY_ADDR[fam]
     layout = list(DS2_BATCH_LAYOUT)
     layout[1] = (layout[1][0], addrs["Injector PW"], *layout[1][2:])
@@ -615,10 +630,10 @@ class LiveDataPoller:
         self._profile      = PROFILE_STANDARD
         self._profile_ready = False
         self._wideband_input_addr = _DEFAULT_WBO2_INPUT_ADDR
-        # Resolve telegram params/blocks for this ECU ID (default 1437806).
-        self._tel_params   = telegram_params_for(ecu_id if ecu_id else "1437806")
+        # Resolve only parameters explicitly mapped for this ECU ID.
+        self._tel_params   = telegram_params_for(ecu_id)
         self._tel_blocks   = _build_telegram_blocks(self._tel_params)
-        self._batch_layout = batch_layout_for(ecu_id if ecu_id else "1437806")
+        self._batch_layout = batch_layout_for(ecu_id)
         self._active_profile_names = set()
         self._stop         = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -731,7 +746,7 @@ class LiveDataPoller:
                             f"Wideband input selection unavailable ({error}); "
                             "showing the Front O2 Bank 1 input")
 
-        key = self._ecu_id if self._ecu_id else "1437806"
+        key = self._ecu_id
         self._profile = profile
         self._wideband_input_addr = input_addr
         self._tel_params = telegram_params_for(key, profile, input_addr)
@@ -811,6 +826,12 @@ class LiveDataPoller:
         poll errors are reported and retried without writing incomplete CSV rows.
         """
         self._prepare_live_profile()
+        if self._batch_layout is None:
+            with self._lock:
+                self._errors.append(
+                    "DS2 batch logging is not mapped for this ECU ID — using available cmd 0x06 parameters")
+            self._poll_loop_ds2_reads()
+            return
         # Try to run the setup frame; if it fails, fall back to individual reads.
         try:
             self._ds2.setup_telegram_batch(

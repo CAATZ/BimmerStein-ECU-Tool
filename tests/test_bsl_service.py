@@ -269,6 +269,22 @@ def test_flash_plan_rejects_intel_image_for_amd_geometry(tmp_path):
             assert "AMD/JEDEC 29F" in str(error)
 
 
+def test_flash_plan_rejects_internally_incompatible_full_reference(tmp_path):
+    image = bytearray(b"\xFF" * engine.MS41ECU.FULL_ROM_SIZE)
+    for address in (0x6007, 0x6013, 0x601F):
+        image[address:address + 4] = b"0641"
+    for address in (0x1400C, 0x14016, 0x14026, 0x14036):
+        image[address:address + 4] = b"0659"
+    ref = tmp_path / "hybrid.bin"
+    ref.write_bytes(image)
+
+    try:
+        bsl_service.create_flash_plan("COM3", "all", str(ref), "28f200", "upper")
+        raise AssertionError("incompatible reference was accepted")
+    except ValueError as error:
+        assert "internally incompatible" in str(error)
+
+
 def test_flash_plan_allows_amd_image_for_amd_geometry(tmp_path):
     image = bytearray(b"\xFF" * engine.MS41ECU.FULL_ROM_SIZE)
     image[ecu_info.DRV_SIG_FILE_OFFSET:

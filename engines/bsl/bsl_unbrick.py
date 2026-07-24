@@ -1234,12 +1234,28 @@ def _live_program_variant(bsl):
     return MS41ECU.detect_program_variant(bytes(probe)), blank
 
 
+def _live_compatibility_ids(bsl):
+    """Read the live canonical compatibility IDs without a full BSL dump."""
+    program = bytes(bsl.mon_read(BSL_ALIAS + 0x2007, 4))
+    calibration = bytes(bsl.mon_read(0x1000C, 4))
+    if len(program) != 4 or len(calibration) != 4:
+        raise BSLError(
+            "short live Firmware Compatibility ID read "
+            f"(program {len(program)}/4, calibration {len(calibration)}/4)")
+    program_id = program.decode("ascii") if program.isdigit() else None
+    calibration_id = calibration.decode("ascii") if calibration.isdigit() else None
+    return program_id, calibration_id
+
+
 def _variant_guard(bsl, args, ref, regions):
     """Fail-closed program/cal compatibility gate for partial and whole-chip writes."""
     ref_cal = MS41ECU.detect_variant(ref)
     ref_program = (MS41ECU.detect_program_variant(ref)
                    if len(ref) == MS41ECU.FULL_ROM_SIZE else None)
     ref_id = MS41ECU.read_calid(ref)
+    ref_program_compat = (MS41ECU.read_program_compatibility_id(ref)
+                          if len(ref) == MS41ECU.FULL_ROM_SIZE else None)
+    ref_cal_compat = MS41ECU.read_calibration_compatibility_id(ref)
     if len(ref) == MS41ECU.FULL_ROM_SIZE:
         hybrid = MS41ECU.check_hybrid(ref)
         if hybrid:
@@ -1255,6 +1271,7 @@ def _variant_guard(bsl, args, ref, regions):
                 f"short live calibration read: {len(live_cal_bytes)}/{MS41ECU.TUNE_SIZE} bytes")
         live_cal = MS41ECU.detect_variant(live_cal_bytes)
         live_program, live_program_blank = _live_program_variant(bsl)
+        live_program_compat, live_cal_compat = _live_compatibility_ids(bsl)
     except Exception as error:
         _emit(f"RESULT: variant preflight could not read exact live evidence ({error}) — refusing.")
         return 0 if args.force else 1
@@ -1262,8 +1279,10 @@ def _variant_guard(bsl, args, ref, regions):
     live_cal_blank = all(byte == 0xFF for byte in live_cal_bytes)
     live_blank = live_cal_blank and live_program_blank
     _emit(f"  variant guard : ref program={ref_program or '?'} / cal={ref_cal or '?'} "
-          f"(CAL ID {ref_id or '?'})  |  live program={live_program or '?'} / "
-          f"cal={('BLANK' if live_cal_blank else live_cal or '?')}")
+          f"(CAL ID {ref_id or '?'}, compat {ref_program_compat or '?'}/"
+          f"{ref_cal_compat or '?'})  |  live program={live_program or '?'} / "
+          f"cal={('BLANK' if live_cal_blank else live_cal or '?')} "
+          f"(compat {live_program_compat or '?'}/{live_cal_compat or '?'})")
 
     all_write = set(regions) in (set(FLASH_REGIONS), set(FLASH_REGIONS_AMD),
                                  set(FLASH_REGIONS_AMD_LOWER))
@@ -1290,6 +1309,17 @@ def _variant_guard(bsl, args, ref, regions):
         return 0 if args.force else 1
     if target_program != target_cal:
         _emit(f"RESULT: operation would leave a hybrid ({target_program} program / {target_cal} cal) — refusing.")
+        return 0 if args.force else 1
+    target_program_compat = (
+        ref_program_compat if writes_program else live_program_compat)
+    target_cal_compat = ref_cal_compat if writes_cal else live_cal_compat
+    if not target_program_compat or not target_cal_compat:
+        _emit("RESULT: target Firmware Compatibility ID could not be proven — refusing.")
+        return 0 if args.force else 1
+    if target_program_compat != target_cal_compat:
+        _emit(
+            "RESULT: operation would leave mismatched Firmware Compatibility IDs "
+            f"({target_program_compat} program / {target_cal_compat} calibration) — refusing.")
         return 0 if args.force else 1
     _emit(f"  variant result: target remains internally consistent {target_program}.")
     return 0

@@ -143,3 +143,28 @@ def test_variant_guard_refuses_incomplete_live_evidence():
 
     args = SimpleNamespace(force=False)
     assert bu._variant_guard(Fake(), args, b"\xFF" * 24576, ["tune"]) == 1
+
+
+def test_variant_guard_refuses_same_broad_variant_with_different_compatibility_id():
+    live_cal = bytearray(b"\xFF" * 24576)
+    live_cal[0x0C:0x10] = b"0641"
+    live_cal[0x0E:0x16] = b"41000000"
+    ref = bytearray(live_cal)
+    for address in (0x0C, 0x16, 0x26, 0x36):
+        ref[address:address + 4] = b"0659"
+    ref[0x0E:0x16] = b"59000000"
+
+    class Fake:
+        def mon_read(self, address, size, progress=None):
+            values = {
+                0x10000: bytes(live_cal),
+                0x3DA9A: b"\xFF" * 4,
+                bu.BSL_ALIAS + 0x2025: b"1429861",
+                bu.BSL_ALIAS + 0x2007: b"0641",
+                0x1000C: b"0641",
+            }
+            return values[address][:size]
+
+    assert bu._variant_guard(
+        Fake(), SimpleNamespace(force=False), bytes(ref), ["tune"]
+    ) == 1

@@ -87,6 +87,10 @@ def create_flash_plan(port, region, ref_path, chip, half, fix_checksums=False, f
             f"Reference is {len(ref_bytes):,} bytes; expected a 24,576-byte tune or "
             f"{engine.MS41ECU.FULL_ROM_SIZE:,}-byte full image.")
     if len(ref_bytes) == engine.MS41ECU.FULL_ROM_SIZE:
+        hybrid = engine.MS41ECU.check_hybrid(ref_bytes)
+        if hybrid and not force:
+            raise ValueError(
+                f"Flash blocked: the reference image is internally incompatible ({hybrid}).")
         image_family = ecu_info.image_chip_family(ref_bytes)
         selected_family = {
             "28f200": "intel", "29f200": "amd", "29f400": "amd",

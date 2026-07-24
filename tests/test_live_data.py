@@ -173,6 +173,46 @@ def test_wideband_batch_preserves_the_proven_38_byte_response_shape():
     assert latest["MAF Sensor Voltage"] == ("5.000", "V")
 
 
+def test_live_parameters_do_not_inherit_unverified_ram_addresses():
+    cal59 = {param.name: param for param in live_data.telegram_params_for("1429373")}
+    assert cal59["Throttle Position"].address == 0xE8D7
+    assert "Injector PW" not in cal59
+    assert "Fuel Trim LT" not in cal59
+    assert "Engine Load" not in cal59
+    assert "Engine RPM" in cal59
+
+    assert live_data.telegram_params_for("1438068") == []
+    assert live_data.telegram_params_for("1438137") == []
+    assert live_data.batch_layout_for("1429373") is None
+    assert live_data.batch_layout_for("1438068") is None
+
+
+def test_unmapped_batch_uses_available_direct_parameters_instead():
+    class FakeDS2:
+        def __init__(self, poller):
+            self.poller = poller
+            self.setup_called = False
+            self.reads = 0
+
+        def setup_telegram_batch(self, **_kwargs):
+            self.setup_called = True
+            raise AssertionError("unmapped ECU must not configure a fixed batch")
+
+        def read_mem(self, _address, length):
+            self.reads += 1
+            self.poller._stop.set()
+            return bytes(length)
+
+    p = live_data.LiveDataPoller(interval=0, use_telegram=True, ecu_id="1429373")
+    fake = FakeDS2(p)
+    p._ds2 = fake
+    p._poll_loop_ds2_batch()
+
+    assert not fake.setup_called
+    assert fake.reads
+    assert any("not mapped" in error for error in p.pop_errors())
+
+
 def test_ms413_profile_detection_uses_runtime_flag_and_selected_input():
     class FakeWidebandDS2:
         def __init__(self, poller):
@@ -305,6 +345,36 @@ def test_read_adaptations_decodes_fuel_axes_and_six_knock_tables():
     ]
 
 
+def test_read_adaptations_uses_cal59_axes_without_unproven_fuel_addresses():
+    responses = {
+        (0xE8DE, 2): (500).to_bytes(2, "little", signed=True),
+        (0x12144, 4): bytes.fromhex("29 3C 4E 5C"),
+        (0x12117, 16): bytes.fromhex(
+            "0F 19 1F 26 2F 36 3E 4E 5E 6D 7D 8A 9C AC BC C3"),
+    }
+    for index in range(6):
+        responses[(0xD840 + index * 0x40, 0x40)] = bytes([0x80]) * 0x40
+
+    class FakeDS2:
+        def __init__(self):
+            self.reads = []
+
+        def read_mem(self, address, length):
+            self.reads.append((address, length))
+            return responses[(address, length)]
+
+    ds2 = FakeDS2()
+    result = live_data.read_adaptations(ds2, "1429373")
+
+    assert result["additive"] == [None, None]
+    assert result["ltft"] == [None, None]
+    assert result["throttle"] == pytest.approx(0.763)
+    assert result["load"] == pytest.approx([223.3294, 326.8235, 424.8706, 501.1294])
+    assert result["rpm"][0] == 480
+    assert (0x12144, 4) in ds2.reads
+    assert (0x12117, 16) in ds2.reads
+
+
 def test_read_adaptations_rejects_unmapped_axis_variant():
     with pytest.raises(ValueError, match="not mapped"):
-        live_data.read_adaptations(object(), "1429373")
+        live_data.read_adaptations(object(), "1438137")
