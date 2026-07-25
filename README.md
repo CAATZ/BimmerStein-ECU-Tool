@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <strong><a href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b10">Download Beta 10</a></strong>
+  <strong><a href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b11">Download Beta 11</a></strong>
   &nbsp;&middot;&nbsp;
   <a href="manual/USER_MANUAL.md">User Manual</a>
   &nbsp;&middot;&nbsp;
@@ -164,6 +164,10 @@ collisions, corrects checksums, and archives the composed image in Bins.
 > conditions, begin conservatively, monitor the engine closely, and keep a verified stock image and
 > recovery path available. Do not rely on either patch for engine protection or any safety-critical
 > function.
+>
+> **IGNITION CUT HAZARD.** Ignition Cut V7 is in a very early stage. It will cause fuel-related,
+> misfire, and coil-related DTCs and fuel-trim issues, and the cut is extremely aggressive. Never
+> use it on a car with catalytic converters; unburned fuel can destroy them.
 
 The Patches tab labels these revisions **UNTESTED**. Deprecated field revisions, including
 non-working Ignition Cut V6, remain detectable and remove-only so an older installation can still be
@@ -200,7 +204,7 @@ Full ROMs and logs can contain VIN and ECU identity information. Treat them as p
 The illustrated manual covers normal flashing, recovery behavior, Soft-BSL, hardware BSL,
 diagnostics, offline tools, patches, and final checklists:
 
-- [Download BimmerStein ECU Tool 0.1.0 Beta 10](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b10)
+- [Download BimmerStein ECU Tool 0.1.0 Beta 11](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b11)
 - [Illustrated PDF manual](output/pdf/BimmerStein-ECU-Tool-User-Manual.pdf)
 - [User manual (web-readable Markdown)](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/manual/USER_MANUAL.md)
 - [Build and release instructions](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/BUILDING.md)

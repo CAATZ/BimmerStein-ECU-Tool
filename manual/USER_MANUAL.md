@@ -335,6 +335,11 @@ so it can be removed before V7 is applied.
 Applying one requires an explicit confirmation. Do not treat emulator verification as proof of
 safe behavior on an engine.
 
+> [!DANGER]
+> **IGNITION CUT HAZARD.** Ignition Cut V7 is in a very early stage. It will cause fuel-related,
+> misfire, and coil-related DTCs and fuel-trim issues, and the cut is extremely aggressive. Never
+> use it on a car with catalytic converters; unburned fuel can destroy them.
+
 <!-- pagebreak -->
 
 ### Bundled patch definition

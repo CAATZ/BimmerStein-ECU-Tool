@@ -1392,8 +1392,9 @@ def test_install_reuses_cached_variant_and_family_for_phase1(monkeypatch, tmp_pa
     assert calls == [("phase1", preflight), ("continue",)]
 
 
-def test_install_phase1_marker_recovery_reuses_prepared_images_and_live_family(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize("failure_kind", ["reentry", "authorization"])
+def test_install_phase1_cycle_recovery_reuses_prepared_images_and_live_family(
+    failure_kind, monkeypatch, tmp_path
 ):
     import ds2_native_fast_service
 
@@ -1425,6 +1426,14 @@ def test_install_phase1_marker_recovery_reuses_prepared_images_and_live_family(
     def write_program(port, image, **kwargs):
         native_calls.append((port, bytes(image), dict(kwargs)))
         if len(native_calls) == 1:
+            if failure_kind == "authorization":
+                raise ds2_native_fast_service.NativeFastPreEraseFailure(
+                    RuntimeError(
+                        "write key acknowledgement: status 0xA2, expected 0xA0"
+                    ),
+                    safe_legacy_fallback=False,
+                    power_cycle_required=True,
+                )
             raise ds2_native_fast_service.NativeFastPreEraseFailure(
                 ds2_native_fast_service.NativeFastWriteReentryNotReady(
                     "E659 did not reach 0xCC; no challenge, selector, or flash command was sent"
@@ -1521,13 +1530,24 @@ def test_install_phase1_marker_recovery_reuses_prepared_images_and_live_family(
     assert len(prompt_calls) == 1
     assert "nothing was erased" in prompt_calls[0][1]
     assert "The serial port has been disconnected and released" in prompt_calls[0][1]
+    if failure_kind == "authorization":
+        assert "will not retry the key or fall back to slow DS2" in prompt_calls[0][1]
+    else:
+        assert "No challenge, selector, erase, or flash command" in prompt_calls[0][1]
     assert [step[0] for step in continued] == ["keycycle", "phase2", "finish"]
     assert continued[1][2] == target_bytes
     assert continued[2][2] == target_bytes
 
 
-def test_repeated_phase1_marker_timeout_requires_each_decision_and_cancel_is_typed(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize(
+    ("failure_kind", "cancel_phase"),
+    [
+        ("reentry", "pre_phase1"),
+        ("authorization", "pre_phase1_authorization"),
+    ],
+)
+def test_repeated_phase1_cycle_failure_requires_each_decision_and_cancel_is_typed(
+    failure_kind, cancel_phase, monkeypatch, tmp_path
 ):
     import ds2_native_fast_service
 
@@ -1552,12 +1572,19 @@ def test_repeated_phase1_marker_timeout_requires_each_decision_and_cancel_is_typ
     decisions = iter((True, False))
     prompt_calls = []
     attempts = []
-    marker_error = ds2_native_fast_service.NativeFastPreEraseFailure(
-        ds2_native_fast_service.NativeFastWriteReentryNotReady(
-            "E659 did not reach 0xCC; no challenge, selector, or flash command was sent"
-        ),
-        safe_legacy_fallback=False,
-    )
+    if failure_kind == "authorization":
+        cycle_error = ds2_native_fast_service.NativeFastPreEraseFailure(
+            RuntimeError("write key acknowledgement: status 0xA2, expected 0xA0"),
+            safe_legacy_fallback=False,
+            power_cycle_required=True,
+        )
+    else:
+        cycle_error = ds2_native_fast_service.NativeFastPreEraseFailure(
+            ds2_native_fast_service.NativeFastWriteReentryNotReady(
+                "E659 did not reach 0xCC; no challenge, selector, or flash command was sent"
+            ),
+            safe_legacy_fallback=False,
+        )
     args = SimpleNamespace(
         bootstrap=str(bootstrap),
         target=str(target),
@@ -1582,13 +1609,15 @@ def test_repeated_phase1_marker_timeout_requires_each_decision_and_cancel_is_typ
         softbsl_install._sb, "_patch_base_version", lambda _image: "MS41.3"
     )
 
-    def fail_marker(phase_args):
+    def fail_before_erase(phase_args):
         attempts.append(
             (phase_args.image, phase_args.native_fast_retry_only)
         )
-        raise marker_error
+        raise cycle_error
 
-    monkeypatch.setattr(softbsl_install._sb, "cmd_deploy_splice", fail_marker)
+    monkeypatch.setattr(
+        softbsl_install._sb, "cmd_deploy_splice", fail_before_erase
+    )
     monkeypatch.setattr(
         softbsl_install._sb,
         "_continue_install_after_bootstrap",
@@ -1598,7 +1627,7 @@ def test_repeated_phase1_marker_timeout_requires_each_decision_and_cancel_is_typ
     with pytest.raises(softbsl_install._sb.InstallCancelled) as caught:
         softbsl_install._sb.cmd_install(args)
 
-    assert caught.value.phase == "pre_phase1"
+    assert caught.value.phase == cancel_phase
     assert attempts == [(str(bootstrap), False), (str(bootstrap), True)]
     assert len(prompt_calls) == 2
 
@@ -1700,7 +1729,7 @@ def test_phase1_native_retry_never_downshifts_to_legacy_writer(monkeypatch, tmp_
         ),
     ],
 )
-def test_phase1_non_marker_preerase_failures_do_not_prompt(
+def test_phase1_non_cycle_preerase_failures_do_not_prompt(
     phase1_error, monkeypatch, tmp_path
 ):
     bootstrap = tmp_path / "bootstrap-exclusion.bin"
@@ -1726,7 +1755,7 @@ def test_phase1_non_marker_preerase_failures_do_not_prompt(
         yes=True, preserve_cal=True, chip="28f200", baud="high", force=False,
         progress_cb=None, bootstrap_verify_ranges=(), _live_preflight=preflight,
         phase1_reentry_prompt=lambda *_args: pytest.fail(
-            "only the structured marker timeout may prompt"
+            "only a structured cycle-required failure may prompt"
         ),
     )
     monkeypatch.setattr(

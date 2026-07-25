@@ -367,7 +367,19 @@ def test_phase1_reentry_retry_fails_safe_when_port_owner_cannot_be_reacquired(
         window.close()
 
 
-def test_pre_phase1_cancel_restores_busy_progress_and_controls(monkeypatch):
+@pytest.mark.parametrize(
+    ("cancel_phase", "expected_detail"),
+    [
+        ("pre_phase1", "No challenge, selector, erase, or flash command"),
+        (
+            "pre_phase1_authorization",
+            "did not confirm the stock DS2 authorization key",
+        ),
+    ],
+)
+def test_pre_phase1_cancel_restores_busy_progress_and_controls(
+    cancel_phase, expected_detail, monkeypatch
+):
     _app, window = _gui()
     shown = []
 
@@ -413,7 +425,7 @@ def test_pre_phase1_cancel_restores_busy_progress_and_controls(monkeypatch):
         def task(_log_fn, progress_fn):
             progress_fn(1, 2, "Phase 1")
             raise gui.softbsl_install.SoftBSLInstallCancelled(
-                "operator cancelled", phase="pre_phase1"
+                "operator cancelled", phase=cancel_phase
             )
 
         window._run_task(
@@ -431,6 +443,7 @@ def test_pre_phase1_cancel_restores_busy_progress_and_controls(monkeypatch):
         assert window._softbsl_install_recovery is None
         assert shown[0][1] == "Soft-BSL Installation Cancelled"
         assert "before the temporary Phase 1 write" in shown[0][2]
+        assert expected_detail in shown[0][2]
     finally:
         window._port_owner.release("softbsl")
         window.close()
@@ -1212,6 +1225,11 @@ def test_patches_tab_warns_for_every_explicitly_untested_patch(monkeypatch):
         assert shown["title"] == "Untested Patch"
         assert "marked untested" in shown["message"]
         assert "Ignition Cut" in shown["message"]
+        assert "very early stage" in shown["message"]
+        assert "misfire" in shown["message"]
+        assert "fuel-trim issues" in shown["message"]
+        assert "extremely aggressive" in shown["message"]
+        assert "Never use it on a car with catalytic converters" in shown["message"]
     finally:
         w.close()
 

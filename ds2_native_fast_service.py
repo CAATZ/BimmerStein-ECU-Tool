@@ -6,7 +6,7 @@ import datetime as _datetime
 from dataclasses import dataclass
 from pathlib import Path
 
-from ds2_fast_contracts import FastOperation, LinkRate
+from ds2_fast_contracts import FastOperation, LinkRate, SessionState
 from ds2_fast_full_write import (
     NativeFastFullWriteTransport,
 )
@@ -38,9 +38,16 @@ class NativeFastServiceError(RuntimeError):
 class NativeFastPreEraseFailure(NativeFastServiceError):
     """A fast attempt failed before erase; fallback is allowed only when flagged."""
 
-    def __init__(self, cause: Exception, *, safe_legacy_fallback: bool):
+    def __init__(
+        self,
+        cause: Exception,
+        *,
+        safe_legacy_fallback: bool,
+        power_cycle_required: bool = False,
+    ):
         self.cause = cause
         self.safe_legacy_fallback = bool(safe_legacy_fallback)
+        self.power_cycle_required = bool(power_cycle_required)
         self.seed_unavailable = isinstance(cause, InitialWriteSeedUnavailable)
         self.reentry_not_ready = isinstance(cause, NativeFastWriteReentryNotReady)
         super().__init__(str(cause))
@@ -199,7 +206,12 @@ def write_partial_d2xx(
             mark_reentry_required(port)
         transport.close()
         raise NativeFastPreEraseFailure(
-            error, safe_legacy_fallback=session.safe_legacy_fallback
+            error,
+            safe_legacy_fallback=session.safe_legacy_fallback,
+            power_cycle_required=(
+                getattr(session, "state", None)
+                is SessionState.POWER_CYCLE_REQUIRED
+            ),
         ) from error
     else:
         if (
@@ -270,7 +282,12 @@ def write_full_d2xx(
             mark_reentry_required(port)
         transport.close()
         raise NativeFastPreEraseFailure(
-            error, safe_legacy_fallback=session.safe_legacy_fallback
+            error,
+            safe_legacy_fallback=session.safe_legacy_fallback,
+            power_cycle_required=(
+                getattr(session, "state", None)
+                is SessionState.POWER_CYCLE_REQUIRED
+            ),
         ) from error
     else:
         # A successful full write intentionally leaves the ECU at 187500, but
@@ -342,7 +359,12 @@ def write_program_d2xx(
             mark_reentry_required(port)
         transport.close()
         raise NativeFastPreEraseFailure(
-            error, safe_legacy_fallback=session.safe_legacy_fallback
+            error,
+            safe_legacy_fallback=session.safe_legacy_fallback,
+            power_cycle_required=(
+                getattr(session, "state", None)
+                is SessionState.POWER_CYCLE_REQUIRED
+            ),
         ) from error
     else:
         transport.close()

@@ -187,8 +187,8 @@ def test_release_packaging_requires_explicit_license_gates():
     assert "b[1-9]\\d*" in build_text
 
     building = (ROOT / "BUILDING.md").read_text(encoding="utf-8")
-    assert "-Version 0.1.0b10" in building
-    assert "v0.1.0b10" in building
+    assert "-Version 0.1.0b11" in building
+    assert "v0.1.0b11" in building
     assert "BimmerStein ECU Tool Nuitka" in building
 
 
@@ -275,7 +275,7 @@ def test_readme_uses_canonical_product_logo_and_resource_links():
     text = (ROOT / "README.md").read_text(encoding="utf-8")
     assert '<img src="assets/bimmerstein_ecu_tool.png"' in text
     assert 'alt="BimmerStein ECU Tool"' in text
-    assert 'href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b10"' in text
+    assert 'href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b11"' in text
     assert 'href="manual/USER_MANUAL.md">User Manual</a>' in text
     assert 'href="https://github.com/CAATZ/BimmerStein-ECU-Tool/issues"' in text
     assert "## Documentation and support" in text
@@ -302,6 +302,10 @@ def test_public_docs_state_patch_tuning_definition_is_bundled():
         normalized = " ".join(text.split())
         lowered = normalized.lower()
         assert "ignition cut" in lowered and "launch control" in lowered, path
+        assert "very early stage" in lowered, path
+        assert "misfire" in lowered and "fuel-trim issues" in lowered, path
+        assert "extremely aggressive" in lowered, path
+        assert "catalytic converters" in lowered, path
         assert "BimmerStein MS41 Patch Definitions.xml" in normalized, path
         assert "beside the executable" in lowered, path
 

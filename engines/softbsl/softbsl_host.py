@@ -2198,13 +2198,20 @@ def cmd_deploy_splice(args):
             # erase-time failure. Do not reopen, downshift, or cycle it.
             raise
         except ds2_native_fast_service.NativeFastPreEraseFailure as error:
-            if error.reentry_not_ready:
+            if error.reentry_not_ready or error.power_cycle_required:
                 if bool(getattr(args, "phase1_reentry_recovery", False)):
                     # Preserve the structured service failure for the install-only
                     # operator recovery loop. The native service has already closed
                     # its D2XX handle; this function's finally also closes any probe
                     # before the installer invokes the GUI callback.
                     raise
+                if error.power_cycle_required:
+                    raise SoftBSLError(
+                        f"native fast bootstrap was not started: {error}. Nothing "
+                        "was erased, but the write-authorization state is ambiguous. "
+                        "Turn ignition OFF, wait at least 10 seconds, turn ignition "
+                        "ON, then retry"
+                    ) from error
                 raise SoftBSLError(
                     f"native fast bootstrap was not started: {error}. Nothing "
                     "was erased. Turn ignition OFF, wait at least 10 seconds, "
@@ -3538,7 +3545,7 @@ def cmd_install(args):
                 ) from error
             if (
                 isinstance(error, ds2_native_fast_service.NativeFastPreEraseFailure)
-                and error.reentry_not_ready
+                and (error.reentry_not_ready or error.power_cycle_required)
             ):
                 recovery_prompt = getattr(args, "phase1_reentry_prompt", None)
                 if recovery_prompt is None:
@@ -3547,10 +3554,29 @@ def cmd_install(args):
                         "was erased. Turn ignition OFF, wait at least 10 seconds, "
                         "turn ignition ON, then retry"
                     ) from error
+                if error.power_cycle_required:
+                    reason = (
+                        "The ECU did not accept or confirm the stock DS2 write "
+                        "authorization. The temporary Soft-BSL write was not started. "
+                        "No erase or flash command was sent, and nothing was erased. "
+                        "The authorization state is ambiguous, so the host will not "
+                        "retry the key or fall back to slow DS2."
+                    )
+                    cancel_detail = "no erase or flash command was sent"
+                    cancel_phase = "pre_phase1_authorization"
+                else:
+                    reason = (
+                        "The ECU did not finish its previous native-fast session, so "
+                        "the temporary Soft-BSL write was not started. No challenge, "
+                        "selector, erase, or flash command was sent, and nothing was "
+                        "erased."
+                    )
+                    cancel_detail = (
+                        "no challenge, selector, erase, or flash command was sent"
+                    )
+                    cancel_phase = "pre_phase1"
                 message = (
-                    "The ECU did not finish its previous native-fast session, so the "
-                    "temporary Soft-BSL write was not started. No challenge, selector, "
-                    "erase, or flash command was sent, and nothing was erased.\n\n"
+                    f"{reason}\n\n"
                     "The serial port has been disconnected and released.\n\n"
                     "Turn ignition OFF, wait at least 10 seconds, then turn ignition ON. "
                     "After ignition is ON, click Retry to continue. Click Cancel to stop "
@@ -3558,9 +3584,9 @@ def cmd_install(args):
                 )
                 if not bool(recovery_prompt(str(args.port), message)):
                     raise InstallCancelled(
-                        "installation cancelled before the temporary Phase 1 write; "
-                        "no challenge, selector, erase, or flash command was sent",
-                        phase="pre_phase1",
+                        f"installation cancelled before the temporary Phase 1 write; "
+                        f"{cancel_detail}",
+                        phase=cancel_phase,
                     ) from error
                 # An explicit Retry repeats only this already-prepared native-fast
                 # program-only write. It must never downshift into the legacy writer.

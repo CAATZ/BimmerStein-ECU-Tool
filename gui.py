@@ -6800,13 +6800,25 @@ class MS41FlashGUI(QMainWindow):
         if isinstance(error, softbsl_install.SoftBSLInstallCancelled):
             self._release_softbsl_port(port)
             self._log(f"Soft-BSL installation paused safely: {error}", "warn")
-            if getattr(error, "phase", None) == "pre_phase1":
+            cancel_phase = getattr(error, "phase", None)
+            if cancel_phase in ("pre_phase1", "pre_phase1_authorization"):
+                if cancel_phase == "pre_phase1_authorization":
+                    detail = (
+                        "The ECU did not confirm the stock DS2 authorization key, "
+                        "but no erase or flash command was sent and nothing was erased."
+                        "\n\nTurn ignition OFF, wait at least 10 seconds, then turn "
+                        "ignition ON before reconnecting or starting another write."
+                    )
+                else:
+                    detail = (
+                        "No challenge, selector, erase, or flash command was sent, "
+                        "and nothing was erased."
+                    )
                 QMessageBox.information(
                     self,
                     "Soft-BSL Installation Cancelled",
                     "The installation was cancelled before the temporary Phase 1 write. "
-                    "No challenge, selector, erase, or flash command was sent, and nothing "
-                    "was erased.\n\nThe ECU connection remains closed. Press Connect when "
+                    f"{detail}\n\nThe ECU connection remains closed. Press Connect when "
                     "you are ready to identify the ECU again.",
                 )
                 return
@@ -7682,10 +7694,22 @@ class MS41FlashGUI(QMainWindow):
             untested_names = [
                 loaded.get(pid, {}).get("title", pid) for pid in untested
             ]
+            ignition_cut_warning = ""
+            if any(
+                    (loaded.get(pid, {}).get("family_id") or pid)
+                    == "ignition_cut_v7"
+                    for pid in untested):
+                ignition_cut_warning = (
+                    "\n\nIgnition Cut is in a very early stage. It will cause "
+                    "fuel-related, misfire, and coil-related DTCs and fuel-trim issues, "
+                    "and the cut is extremely aggressive. Never use it on a car "
+                    "with catalytic converters; unburned fuel can destroy them."
+                )
             if QMessageBox.warning(
                     self, "Untested Patch",
                     "These patches are marked untested:\n"
                     + "\n".join(f"  • {name}" for name in untested_names)
+                    + ignition_cut_warning
                     + "\n\n"
                     "Emulator verification does not replace vehicle testing. Continue?",
                     QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:

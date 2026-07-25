@@ -4,7 +4,7 @@ import pytest
 
 import ds2_native_fast_service as service
 import ds2_native_fast_reentry as native_reentry
-from ds2_fast_contracts import FastOperation
+from ds2_fast_contracts import FastOperation, SessionState
 
 
 @pytest.fixture(autouse=True)
@@ -297,6 +297,48 @@ def test_program_only_reentry_timeout_closes_transport_and_preserves_gate(
     assert caught.value.safe_legacy_fallback is False
     assert transport.is_open is False
     assert native_reentry.reentry_required("COM1") is True
+
+
+def test_program_only_preerase_power_cycle_state_is_preserved(
+    monkeypatch, tmp_path
+):
+    journal = FakeJournal(
+        tmp_path / "program-power-cycle.jsonl", FastOperation.FULL_WRITE
+    )
+    transport = FakeTransport()
+    monkeypatch.setattr(service, "_new_journal", lambda port, operation: journal)
+    monkeypatch.setattr(
+        service.NativeFastFullWriteTransport,
+        "open_d2xx",
+        lambda port, event_cb=None: transport,
+    )
+
+    class KeyRejectedSession:
+        destructive_started = False
+        safe_legacy_fallback = False
+        fast_write_armed = False
+        state = SessionState.POWER_CYCLE_REQUIRED
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def execute_program_only(self):
+            raise RuntimeError(
+                "write key acknowledgement: status 0xA2, expected 0xA0"
+            )
+
+    monkeypatch.setattr(
+        service, "SlimNativeFastFullWriteSession", KeyRejectedSession
+    )
+
+    with pytest.raises(service.NativeFastPreEraseFailure) as caught:
+        service.write_program_d2xx(
+            "COM1", b"prepared bootstrap", connected_family="intel"
+        )
+
+    assert caught.value.power_cycle_required is True
+    assert caught.value.safe_legacy_fallback is False
+    assert transport.is_open is False
 
 
 def test_failed_retained_recovery_keeps_transport_and_seals_new_journal(

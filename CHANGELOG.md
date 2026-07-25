@@ -8,6 +8,26 @@ shared by BimmerStein applications.
 
 ## [Unreleased]
 
+## [0.1.0b11] - 2026-07-25
+
+### Added
+
+- Added automatic and forced Soft-BSL recovery routing, plus a built-in
+  Adaptations tab for knock, fuel-trim, idle-fuel-trim, throttle, and related
+  MS41 values.
+
+### Fixed
+
+- Tightened exact firmware compatibility and coding-family handling across
+  flashing, Soft-BSL installation, CalGuard, live data, and patch migration.
+- Added a safe pre-erase ignition-cycle Retry/Cancel path when Soft-BSL
+  installation encounters ambiguous stock DS2 write authorization.
+
+### Changed
+
+- Expanded Ignition Cut warnings to state its early-stage status, aggressive
+  behavior, expected DTC and fuel-trim effects, and catalytic-converter hazard.
+
 ## [0.1.0b10] - 2026-07-23
 
 ### Fixed
