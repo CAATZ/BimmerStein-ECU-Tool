@@ -1,6 +1,6 @@
 {
   "id": "door_magic_ms410",
-  "title": "MS41.0 magic-command normal-mode entry (DS2 0x2A)",
+  "title": "DS2 0x2A Soft-BSL entry",
   "user_description": "Adds DS2 command 0x2A as a normal-mode entry into the persistent Soft-BSL loader on MS41.0 while leaving the standard 0x43 adaptation-clear command intact.",
   "description": "MS41.0 unknown-command splice -> enter flash mode (E740=1 + commit + reset) -> reboot to the SA1 0x5A loader. Leaves 0x43 clear-adapts intact.",
   "target": "MS41.0",

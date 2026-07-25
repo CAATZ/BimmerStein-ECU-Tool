@@ -441,15 +441,17 @@ def test_golden_top_composer_shares_persistent_install_patch_set():
     assert rebuilt == image
 
 
-def test_ms411_calguard_v1_directly_upgrades_during_softbsl_compose():
+@pytest.mark.parametrize("legacy_id", ["cal_guard_v1", "cal_guard_v2"])
+def test_ms411_deprecated_calguard_directly_upgrades_during_softbsl_compose(
+        legacy_id):
     from engines.patcher.patch_ms41 import build, is_applied, load_patches
     from tests.conftest import ref
 
     patches = load_patches()
-    v1_image, _ = build(ref("MS41.1"), ["cal_guard_v1"])
+    legacy_image, _ = build(ref("MS41.1"), [legacy_id])
 
     composed, log = softbsl_install._sb._compose_image(
-        v1_image,
+        legacy_image,
         ["softbsl_loader", "door_magic_ms411", "cal_guard"],
         return_log=True,
     )
@@ -457,7 +459,7 @@ def test_ms411_calguard_v1_directly_upgrades_during_softbsl_compose():
     assert is_applied(composed, patches["softbsl_loader"])
     assert is_applied(composed, patches["door_magic_ms411"])
     assert is_applied(composed, patches["cal_guard"])
-    assert not is_applied(composed, patches["cal_guard_v1"])
+    assert not is_applied(composed, patches[legacy_id])
     assert any("exact prior revision" in line for line in log)
 
 
@@ -803,7 +805,7 @@ def test_live_compatibility_gate_reads_the_same_program_and_calibration_ids():
         "0660", "0660", b"606", True)
 
 
-def test_install_normalization_preserves_the_calibration_family_suffix():
+def test_install_normalization_uses_the_boot_image_family():
     from ms41 import (
         CODING_FAMILY_CAL_ADDRS, CODING_FAMILY_PROGRAM_ADDRS,
         FIRMWARE_COMPAT_CAL_ADDRS, FIRMWARE_COMPAT_PROGRAM_ADDRS, MS41ECU,
@@ -819,9 +821,80 @@ def test_install_normalization_preserves_the_calibration_family_suffix():
     for address in FIRMWARE_COMPAT_CAL_ADDRS:
         image[address:address + 4] = b"0960"
 
-    normalized = softbsl_install._sb._normalize_install_image(image, b"606")
+    image[MS41ECU.CODING_FAMILY_FILE_ADDR:
+          MS41ECU.CODING_FAMILY_FILE_ADDR + 3] = b"606"
+    normalized = softbsl_install._sb._normalize_install_image(image)
     assert MS41ECU.read_program_compatibility_id(normalized) == "0660"
     assert MS41ECU.read_calibration_compatibility_id(normalized) == "0660"
+
+
+def test_same_variant_different_boot_family_aborts_before_phase1(
+    tmp_path, monkeypatch
+):
+    from ms41 import (
+        CODING_FAMILY_CAL_ADDRS, CODING_FAMILY_PROGRAM_ADDRS,
+        FIRMWARE_COMPAT_CAL_ADDRS, FIRMWARE_COMPAT_PROGRAM_ADDRS, MS41ECU,
+    )
+
+    image = bytearray(b"\xFF" * MS41ECU.FULL_ROM_SIZE)
+    image[MS41ECU.CODING_FAMILY_FILE_ADDR:
+          MS41ECU.CODING_FAMILY_FILE_ADDR + 3] = b"909"
+    for address in CODING_FAMILY_PROGRAM_ADDRS:
+        image[address:address + 3] = b"909"
+    for address in CODING_FAMILY_CAL_ADDRS:
+        image[address] = ord("9")
+    for address in FIRMWARE_COMPAT_PROGRAM_ADDRS:
+        image[address:address + 4] = b"0960"
+    for address in FIRMWARE_COMPAT_CAL_ADDRS:
+        image[address:address + 4] = b"0960"
+
+    target = tmp_path / "target.bin"
+    bootstrap = tmp_path / "bootstrap.bin"
+    target.write_bytes(image)
+    bootstrap.write_bytes(image)
+    preflight = {
+        "port": "COM1",
+        "uses_d2xx": True,
+        "flash_family": "intel",
+        "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
+        "cal_variant": "MS41.1",
+        "program_variant": "MS41.1",
+        "cal_compatibility_id": "0660",
+        "program_compatibility_id": "0660",
+        "coding_family": b"606",
+        "broad_consistent": True,
+        "exact_consistent": True,
+        "consistent": True,
+    }
+    args = SimpleNamespace(
+        bootstrap=str(bootstrap),
+        target=str(target),
+        port="COM1",
+        dry_run=False,
+        yes=True,
+        preserve_cal=True,
+        chip="28f200",
+        baud="low",
+        force=False,
+        progress_cb=None,
+        bootstrap_verify_ranges=(),
+        _live_preflight=preflight,
+        confirm_convert=lambda: False,
+    )
+
+    monkeypatch.setattr(
+        softbsl_install._sb, "_patch_base_version", lambda _image: "MS41.1"
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "cmd_deploy_splice",
+        lambda _args: pytest.fail("Phase 1 must not start without conversion"),
+    )
+
+    with pytest.raises(
+        softbsl_install._sb.SoftBSLError, match="aborted \\(no conversion\\)"
+    ):
+        softbsl_install._sb.cmd_install(args)
 
 
 def test_final_install_patches_really_span_both_29f_program_sectors_and_boot():

@@ -9,8 +9,20 @@ from engines.softbsl import softbsl_host
 BLANK = b"\xFF" * 262144
 
 
-def _image_with_driver(signature):
+def _valid_image():
     image = bytearray(BLANK)
+    image[0x6025:0x602C] = b"1406464"
+    image[0x1400E:0x14016] = b"12000000"
+    for address in (0x6007, 0x6013, 0x601F, 0x1400C):
+        image[address:address + 4] = b"0912"
+    return bytes(image)
+
+
+VALID_IMAGE = _valid_image()
+
+
+def _image_with_driver(signature):
+    image = bytearray(VALID_IMAGE)
     image[ecu_info.DRV_SIG_FILE_OFFSET:
           ecu_info.DRV_SIG_FILE_OFFSET + ecu_info.DRV_SIG_LEN] = signature
     return bytes(image)
@@ -534,7 +546,7 @@ def test_run_flash_recovers_to_marker0_in_finally(monkeypatch):
     sb = _RecordingSB()
     _install_fakes(monkeypatch, sb)
 
-    softbsl_service.run_flash("COM1", BLANK, "full", prompt=lambda m: "", log=lambda *a: None,
+    softbsl_service.run_flash("COM1", VALID_IMAGE, "full", prompt=lambda m: "", log=lambda *a: None,
                               do_verify=True)
 
     assert any(isinstance(c, tuple) and c[0] == "flash_image" for c in sb.calls)
@@ -547,7 +559,7 @@ def test_run_flash_recovers_to_marker0_even_with_verify_off(monkeypatch):
     sb = _RecordingSB()
     _install_fakes(monkeypatch, sb)
 
-    softbsl_service.run_flash("COM1", BLANK, "full", prompt=lambda m: "", log=lambda *a: None,
+    softbsl_service.run_flash("COM1", VALID_IMAGE, "full", prompt=lambda m: "", log=lambda *a: None,
                               do_verify=False)
 
     # the old behavior left verify-off writes stuck in flash mode (E740=1); now they still recover.
@@ -602,7 +614,7 @@ def test_open_session_uses_steady_state_door_not_the_disposable_43_door(monkeypa
     sb = _RecordingSB()
     _install_fakes(monkeypatch, sb)
 
-    softbsl_service.run_flash("COM1", BLANK, "tune", prompt=lambda m: "", log=lambda *a: None)
+    softbsl_service.run_flash("COM1", VALID_IMAGE, "tune", prompt=lambda m: "", log=lambda *a: None)
 
     assert sb.calls[0] == ("ensure_flash_mode", {"poll_ready": True})
     assert sb.calls[1] == ("enter_retry", "5a")
@@ -684,7 +696,7 @@ def test_open_session_recovers_and_closes_when_entry_fails_after_the_door(monkey
     _install_fakes(monkeypatch, sb, close_rec=events)
 
     try:
-        softbsl_service.run_flash("COM1", BLANK, "tune", prompt=lambda m: "", log=lambda *a: None)
+        softbsl_service.run_flash("COM1", VALID_IMAGE, "tune", prompt=lambda m: "", log=lambda *a: None)
         assert False, "expected the entry failure to propagate"
     except RuntimeError:
         pass
@@ -812,7 +824,7 @@ def test_run_flash_full_program_write_falls_back_when_not_bootloader(monkeypatch
     sb.flash_image = flaky_flash
     _install_fakes(monkeypatch, sb)
 
-    softbsl_service.run_flash("COM1", BLANK, "full", prompt=lambda m: "", log=lambda *a: None,
+    softbsl_service.run_flash("COM1", VALID_IMAGE, "full", prompt=lambda m: "", log=lambda *a: None,
                               baud="high", write_bootloader=False)
     assert attempts["n"] == 2                        # program write (no boot) DID fall back
 

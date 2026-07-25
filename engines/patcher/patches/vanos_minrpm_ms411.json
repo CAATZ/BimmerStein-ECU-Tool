@@ -4,7 +4,7 @@
   "status": "EMULATOR VERIFIED - ON-CAR TEST REQUIRED",
   "tested": false,
   "verification": "Canonical ms41emu executes the real MS41.1 splice and verifies fd14.4/fd14.5 below/equal/above-threshold paths, the stock engage path when neither bit is set, and DPP hygiene. The equivalent MS41.0 retrofit is on-car proven; this MS41.1 port still needs vehicle testing.",
-  "title": "VANOS - Minimum RPM (Closed Throttle) retrofit for MS41.1",
+  "title": "VANOS minimum RPM",
   "user_description": "Adds a configurable minimum-RPM threshold for closed-throttle VANOS engagement on MS41.1. The default value preserves stock behavior; vehicle testing is still required.",
   "description": "MS41.1 port of the MS41.0 VANOS retrofit. Splices the matching fd14.4 branch at file 0x3FBC0 into a cave at file 0x3B880. The cave re-tests fd14.4/fd14.5, reads the native RPM/32 mirror at 0xE9E2, and enters the stock engage path at file 0x3FBCE only when RPM reaches VANOSRPM; otherwise it returns to the stock off path at file 0x3FBC8. VANOSRPM uses blank SA 0x3720 and defaults to 0xFF, preserving stock behavior. Marker VANOSRT2 at SA 0x3728 selects the matching RomRaider definition.",
   "target": "MS41.1",

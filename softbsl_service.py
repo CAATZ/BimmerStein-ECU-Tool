@@ -358,10 +358,11 @@ def run_flash(port, image, scope, prompt, log, baud="low", progress_cb=None,
     :class:`SoftBSLWriteRecoveryRequired`. Successful writes finalize E740=0; ``do_verify``
     controls only the requested read-back verification.
     """
-    hybrid_error = MS41ECU.check_hybrid(bytes(image))
-    if hybrid_error:
-        raise FlashImageCompatibilityError(
-            f"Flash blocked before agent entry: {hybrid_error}")
+    if scope != "sa1":
+        hybrid_error = MS41ECU.check_hybrid(bytes(image))
+        if hybrid_error:
+            raise FlashImageCompatibilityError(
+                f"Flash blocked before agent entry: {hybrid_error}")
     validate_flash_image_family(
         image, chip_family, write_bootloader=write_bootloader)
     target = bytes(image)

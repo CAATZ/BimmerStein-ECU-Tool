@@ -2709,9 +2709,12 @@ def _patch_state(image, patch):
         expected = bytes.fromhex(edit["expect"])
         applied = bytes.fromhex(edit["data"])
         current = bytes(image[offset:offset + len(applied)])
-        legacy = bytes.fromhex(edit.get("upgrade_expect", ""))
+        legacy = edit.get("upgrade_expect", [])
+        if isinstance(legacy, str):
+            legacy = [legacy]
+        legacy = [bytes.fromhex(value) for value in legacy]
         states.append("applied" if current == applied
-                      else "legacy" if legacy and current == legacy
+                      else "legacy" if current in legacy
                       else "absent" if current == expected
                       else "partial")
     if states and all(state == "applied" for state in states):
@@ -3108,10 +3111,12 @@ def _ms413_install_scope(preserve_cal=True):
     return _ms41_install_scope("MS41.3", preserve_cal)
 
 
-def _normalize_install_image(image, coding_family):
-    """Normalize a boot-preserving install image and re-establish its checksums."""
+def _normalize_install_image(image):
+    """Normalize to the coding family in the boot image being written."""
     from ms41 import MS41ECU
 
+    start = MS41ECU.CODING_FAMILY_FILE_ADDR
+    coding_family = bytes(image[start:start + 3])
     normalized = MS41ECU.graft_coding_family(bytes(image), coding_family)
     normalized, _details = checksum.correct_checksums(normalized)
     hybrid = MS41ECU.check_hybrid(normalized)
@@ -3435,9 +3440,8 @@ def cmd_install(args):
         normalized_target = normalized_bootstrap = None
         if (target_compat_available and preserve_cal and cal_v == target_version
                 and prog_v == target_version):
-            normalized_target = _normalize_install_image(target, coding_family)
-            normalized_bootstrap = _normalize_install_image(
-                bootstrap, coding_family)
+            normalized_target = _normalize_install_image(target)
+            normalized_bootstrap = _normalize_install_image(bootstrap)
             target_program_compat = (
                 MS41ECU.read_program_compatibility_id(normalized_target))
             target_cal_compat = (

@@ -1,0 +1,34 @@
+{
+  "id": "cal_guard_v2",
+  "label": "V2 unsafe odd-word guard",
+  "deprecated": true,
+  "version": "V2",
+  "status": "DEPRECATED",
+  "title": "CalGuard compatibility guard",
+  "user_description": "Unsafe CalGuard revision retained only so recovered V2 images can be identified, removed, or upgraded to CalGuard V3. Never install V2 on an ECU.",
+  "description": "Deprecated CalGuard V2 exact-ID gate. Its odd-address C166 word access can raise the ILLOPA trap during boot. Retained only for exact installed-state detection, safe removal, and direct migration to V3.",
+  "target": "MS41.3",
+  "targets": ["MS41.0", "MS41.1", "MS41.2", "MS41.3"],
+  "recompute": ["boot_crc"],
+  "requires": [],
+  "conflicts": ["cal_guard"],
+  "cave": {
+    "region": "sa1",
+    "base": 24080,
+    "splice_off": 18746,
+    "splice_op": "jmpa",
+    "relocatable": false
+  },
+  "edits": [
+    {
+      "off": 18746,
+      "expect": "f3fa40e749a12d04",
+      "data": "ea00101ecc00cc00"
+    },
+    {
+      "off": 24080,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "f3fa40e747fa0100ea204a09e6000400f3fabb3347fa53003d25f3fabc3347fa53003d20f3fabd3347fa31003d1bf3fabe3347fa76003d16f3fabf3347fa32003d11e6020f00f2f49a9af2f59c9ae602000046f49a11ea304a0946f56390ea304a090d25e6020f00f2f49a9af2f59c9ae602000046f49a113d0446f56390ea204a09f2f40e0046f431322d1146f436302d0e46f434312d0b46f434322d0846f435392d0546f438352d02ea004a09ecf2ecf3f2f20c00f2f30e00f2f407a0f2f509a040243d0640353d04fcf3fcf2ea004209fcf3fcf2ea004a09ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  ]
+}

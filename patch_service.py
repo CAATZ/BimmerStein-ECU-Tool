@@ -102,7 +102,8 @@ def available_patches(data):
             out.append({
                 "id": pid, "title": p.get("title", ""), "description": p.get("description", ""),
                 "user_description": p.get("user_description") or p.get("description", ""),
-                "target": ver, "status": p.get("status", "DEPRECATED"),
+                "target": ver, "version": p.get("version", ""),
+                "status": p.get("status", "DEPRECATED"),
                 "tested": p.get("tested"),
                 "requires": [], "conflicts": p.get("conflicts", []),
                 "ok": False, "badge": "DEPRECATED - installed; remove recommended",
@@ -120,6 +121,7 @@ def available_patches(data):
             "description": p.get("description", ""),
             "user_description": p.get("user_description") or p.get("description", ""),
             "target": ver,
+            "version": p.get("version", ""),
             "status": p.get("status", ""),
             "tested": p.get("tested"),
             "requires": p.get("requires", []),

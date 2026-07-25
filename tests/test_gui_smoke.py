@@ -1186,6 +1186,7 @@ def test_patches_tab_lists_the_ms41_3_patches():
             label.text()
             for label in w._patch_rows["ignition_cut_v7"].findChildren(gui.QLabel)
         }
+        assert "V7" in pending_badges
         assert "UNTESTED" in pending_badges
         assert "0x3992A" not in w._patch_checkboxes["ignition_cut_v7"].toolTip()
         assert "configurable ignition-cut rev limiter" in (
@@ -1210,7 +1211,7 @@ def test_patches_tab_warns_for_every_explicitly_untested_patch(monkeypatch):
 
         assert shown["title"] == "Untested Patch"
         assert "marked untested" in shown["message"]
-        assert "Ignition Cut v7" in shown["message"]
+        assert "Ignition Cut" in shown["message"]
     finally:
         w.close()
 
@@ -1226,8 +1227,10 @@ def test_patch_dependency_is_labeled_and_selected_automatically():
             label.text()
             for label in w._patch_rows["launch_control_v5"].findChildren(gui.QLabel)
         }
+        assert "V5" in labels
+        assert "UNTESTED" in labels
         assert "REQUIRES IGNITION CUT V7" in labels
-        assert "Required patch: Ignition Cut v7" in launch.toolTip()
+        assert "Required patch: Ignition Cut V7" in launch.toolTip()
 
         launch.setChecked(True)
         assert launch.isChecked()
@@ -1279,7 +1282,7 @@ def test_installed_dependency_remove_button_is_blocked_by_launch_control():
             for label in w._patch_rows["ignition_cut_v7"].findChildren(gui.QLabel)
         }
         assert remove.isEnabled() is False
-        assert "Launch Control v5" in remove.toolTip()
+        assert "Launch Control V5" in remove.toolTip()
         assert "REQUIRED BY LAUNCH CONTROL V5" in labels
     finally:
         w.close()
@@ -1297,6 +1300,12 @@ def test_patches_tab_removes_field_failed_v6_and_enables_v7(monkeypatch):
         assert w._patch_checkboxes["ignition_cut_v6"].isChecked()
         assert not w._patch_checkboxes["ignition_cut_v6"].isEnabled()
         assert not w._patch_checkboxes["ignition_cut_v7"].isEnabled()
+        badges = {
+            label.text()
+            for label in w._patch_rows["ignition_cut_v6"].findChildren(gui.QLabel)
+        }
+        assert "V6" in badges
+        assert any("DEPRECATED" in badge for badge in badges)
         buttons = w._patch_rows["ignition_cut_v6"].findChildren(QPushButton)
         assert any(button.text() == "✕ Remove" for button in buttons)
 

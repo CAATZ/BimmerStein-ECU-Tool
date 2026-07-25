@@ -7,7 +7,8 @@ import checksum
 import pytest
 
 EXPECTED_IDS = {
-    "alphan_failsafe", "amd_flash", "cal_guard", "cal_guard_v1", "door_0x43",
+    "alphan_failsafe", "amd_flash", "cal_guard", "cal_guard_v1",
+    "cal_guard_v2", "door_0x43",
     "door_0x43_ms410", "door_0x43_ms411", "door_magic", "door_magic_ms410",
     "door_magic_ms411", "ignition_cut", "ignition_cut_v2", "ignition_cut_v3", "ignition_cut_v4",
     "ignition_cut_v5", "ignition_cut_v6", "ignition_cut_v7", "launch_control", "launch_control_v2",
@@ -36,29 +37,50 @@ def test_every_edit_restores_the_full_written_range():
                 bytes.fromhex(edit["data"])
             ), (patch["id"], hex(edit["off"]))
             if "upgrade_expect" in edit:
-                assert len(bytes.fromhex(edit["upgrade_expect"])) == len(
-                    bytes.fromhex(edit["data"])
+                upgrades = edit["upgrade_expect"]
+                if isinstance(upgrades, str):
+                    upgrades = [upgrades]
+                assert all(
+                    len(bytes.fromhex(value)) == len(bytes.fromhex(edit["data"]))
+                    for value in upgrades
                 ), (patch["id"], hex(edit["off"]), "upgrade_expect")
 
 
 def test_exact_calguard_artifact_is_registered_and_prior_revision_is_upgradable():
-    from engines.patcher.cal_guard_exact import assemble
+    from engines.patcher.cal_guard_exact import _Assembler, assemble
 
     patches = patch_ms41.load_patches()
     guard = patches["cal_guard"]
     cave = next(edit for edit in guard["edits"] if edit["off"] == guard["cave"]["base"])
-    legacy = patches["cal_guard_v1"]
-    legacy_cave = next(
-        edit for edit in legacy["edits"] if edit["off"] == legacy["cave"]["base"]
-    )
+    prior_caves = [
+        next(edit for edit in patches[patch_id]["edits"]
+             if edit["off"] == patches[patch_id]["cave"]["base"])
+        for patch_id in ("cal_guard_v1", "cal_guard_v2")
+    ]
     root = Path(__file__).resolve().parents[1]
 
-    assert guard["supersedes"] == "cal_guard_v1"
-    assert legacy_cave["data"] == cave["upgrade_expect"]
+    assert guard["supersedes"] == ["cal_guard_v1", "cal_guard_v2"]
+    assert [prior["data"] for prior in prior_caves] == cave["upgrade_expect"]
     assert bytes.fromhex(cave["data"]) == assemble()
     assert cave["data"] == (
         root / "engines" / "patcher" / "cal_guard_exact.hex"
     ).read_text().strip()
+    guard_bytes = bytes.fromhex(cave["data"])
+    assert bytes.fromhex("f2f407a0f2f509a0") not in guard_bytes
+    for address in range(0xA007, 0xA00B):
+        assert bytes((0xF3, 0xFA, address & 0xFF, address >> 8)) in guard_bytes
+    with pytest.raises(ValueError, match="even address"):
+        _Assembler().mov_mem(4, 0xA007)
+
+    unsafe_v2 = bytearray(ref("MS41.1"))
+    for edit in guard["edits"]:
+        payload = bytes.fromhex(edit["data"])
+        unsafe_v2[edit["off"]:edit["off"] + len(payload)] = payload
+    unsafe_payload = bytes.fromhex(cave["upgrade_expect"][1])
+    unsafe_v2[cave["off"]:cave["off"] + len(unsafe_payload)] = unsafe_payload
+    upgraded, upgrade_log = patch_ms41.build(bytes(unsafe_v2), ["cal_guard"])
+    assert bytes(upgraded[cave["off"]:cave["off"] + len(guard_bytes)]) == guard_bytes
+    assert any("exact prior revision" in line for line in upgrade_log)
 
     base = bytearray(b"\xFF" * patch_ms41.FULL)
     base[0x6025:0x602C] = b"1429861"
@@ -112,6 +134,16 @@ def test_ms413_base_gate_uses_program_signature_and_either_cal_marker():
     assert "program signature" in patch_ms41.check_base(bytes(no_program), "MS41.3")
 
 
+def test_calguard_compose_requires_its_strict_runtime_marker():
+    credit_only = bytearray(ref("MS41.3"))
+    credit_only[0x173BB:0x173C0] = b"\xFF" * 5
+
+    assert patch_ms41.check_base(bytes(credit_only), "MS41.3") is None
+    with pytest.raises(patch_ms41.PatchError, match="strict SS1v2"):
+        patch_ms41.build(bytes(credit_only), ["cal_guard"])
+    patch_ms41.build(bytes(credit_only), ["alphan_failsafe"])
+
+
 def test_marker_only_build_recomputes_a_golden_top_image():
     out, log = patch_ms41.build(ref("MS41.3"), [], marker="T")
     assert out[0x5FFC:0x6000] == bytes([0xA5, 0x5A, 0x54, 0xAB])
@@ -123,8 +155,8 @@ def test_needs_boot_write_flags_only_the_sa1_patches():
     boot = {pid for pid, p in patches.items() if patch_ms41.needs_boot_write(p)}
     # These edit file 0x4000-0x5FFF (SA1/boot); DS2 and un-armed soft-BSL can't write there.
     assert boot == {
-        "cal_guard", "cal_guard_v1", "softbsl_loader", "softbsl_loader_legacy",
-        "softbsl_loader_relocated_v1", "amd_flash",
+        "cal_guard", "cal_guard_v1", "cal_guard_v2", "softbsl_loader",
+        "softbsl_loader_legacy", "softbsl_loader_relocated_v1", "amd_flash",
     }
     # Program/cal patches are DS2-writable.
     assert patch_ms41.needs_boot_write(patches["ignition_cut_v7"]) is False

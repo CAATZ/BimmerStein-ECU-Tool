@@ -105,3 +105,18 @@ def test_conflicting_repeated_compatibility_ids_are_rejected():
 
     assert ms41.MS41ECU.read_program_compatibility_id(data) is None
     assert "inconsistent repeated identifiers" in ms41.MS41ECU.check_hybrid(data)
+
+
+@pytest.mark.parametrize("missing", ["program", "calibration", "both"])
+def test_missing_compatibility_ids_are_rejected(missing):
+    data = _synthetic_ms410()
+    if missing in ("program", "both"):
+        for address in ms41.FIRMWARE_COMPAT_PROGRAM_ADDRS:
+            data[address:address + 4] = b"\xFF" * 4
+    if missing in ("calibration", "both"):
+        for address in ms41.FIRMWARE_COMPAT_CAL_ADDRS:
+            data[address:address + 4] = b"\xFF" * 4
+
+    error = ms41.MS41ECU.check_hybrid(data)
+    assert error is not None
+    assert "missing or invalid" in error

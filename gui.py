@@ -7453,8 +7453,10 @@ class MS41FlashGUI(QMainWindow):
             user_tip = p.get("user_description") or p["description"]
             required_names = []
             for required_id in p.get("requires", []):
-                required_title = definitions.get(required_id, {}).get("title", required_id)
-                required_names.append(required_title.split(" - ", 1)[0])
+                required = definitions.get(required_id, {})
+                required_title = required.get("title", required_id).split(" - ", 1)[0]
+                required_names.append(
+                    f"{required_title} {required.get('version', '')}".strip())
             if required_names:
                 user_tip += (
                     "\n\nRequired patch: " + ", ".join(required_names)
@@ -7464,6 +7466,8 @@ class MS41FlashGUI(QMainWindow):
             cb.setChecked(p["installed"])
             rlay.addWidget(cb)
 
+            if p.get("version"):
+                rlay.addWidget(self._badge(p["version"], "#2a2a2a", "#aaa"))
             if p.get("tested") is False:
                 untested_badge = self._badge(
                     "UNTESTED", "#5a4a1a", "#e8c46a")
@@ -7498,11 +7502,13 @@ class MS41FlashGUI(QMainWindow):
                 btn_rm.clicked.connect(lambda _=False, pid=p["id"]: self._on_patch_remove(pid))
                 required_by = p.get("required_by", [])
                 if required_by:
-                    dependent_names = [
-                        definitions.get(pid, {}).get("title", pid)
-                        .split(" - ", 1)[0].split(" / ", 1)[0]
-                        for pid in required_by
-                    ]
+                    dependent_names = []
+                    for pid in required_by:
+                        dependent = definitions.get(pid, {})
+                        dependent_title = dependent.get("title", pid).split(
+                            " - ", 1)[0].split(" / ", 1)[0]
+                        dependent_names.append(
+                            f"{dependent_title} {dependent.get('version', '')}".strip())
                     joined = ", ".join(dependent_names)
                     rlay.addWidget(self._badge(
                         f"REQUIRED BY {joined.upper()}", "#4d3524", "#ffc07a"))

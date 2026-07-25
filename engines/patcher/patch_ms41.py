@@ -334,6 +334,12 @@ def build(base_data, patch_ids, patches=None, marker=None):
     if unsupported:
         raise PatchError(
             f"BASE REJECTED: {target} is not supported by patch(es): {', '.join(unsupported)}")
+    if (target == "MS41.3"
+            and any(p["id"] == "cal_guard" for p in chosen)
+            and bytes(data[0x173BB:0x173C0]) != b"SS1v2"):
+        raise PatchError(
+            "BASE REJECTED: CalGuard requires the strict SS1v2 calibration "
+            "marker used by its runtime decision")
 
     err = check_base(data, target)
     if err:
@@ -375,16 +381,19 @@ def build(base_data, patch_ids, patches=None, marker=None):
             log.append("warn: " + w)
 
     # Verify every expect, then apply.  A descriptor may carry a precise
-    # ``upgrade_expect`` for a superseded revision of one edit.  This is not a
-    # broad bypass: only that exact prior payload may be replaced in place.
+    # ``upgrade_expect`` for superseded revisions of one edit.  This is not a
+    # broad bypass: only an exact listed prior payload may be replaced in place.
     recompute = {"program"} if target == "MS41.3" else set()
     for p in chosen:
         for e in p["edits"]:
             off = e["off"]; exp = bytes.fromhex(e["expect"])
             cur = bytes(data[off:off + len(exp)])
             if cur != exp:
-                upgrade = bytes.fromhex(e.get("upgrade_expect", ""))
-                if not upgrade or cur != upgrade:
+                upgrades = e.get("upgrade_expect", [])
+                if isinstance(upgrades, str):
+                    upgrades = [upgrades]
+                upgrades = [bytes.fromhex(value) for value in upgrades]
+                if cur not in upgrades:
                     raise PatchError(
                         f"{p['id']} @0x{off:05X}: expect {exp.hex()} but base has {cur.hex()} "
                         f"(wrong base, or already patched)")

@@ -287,6 +287,10 @@ def test_flash_plan_rejects_internally_incompatible_full_reference(tmp_path):
 
 def test_flash_plan_allows_amd_image_for_amd_geometry(tmp_path):
     image = bytearray(b"\xFF" * engine.MS41ECU.FULL_ROM_SIZE)
+    image[0x6025:0x602C] = b"1406464"
+    image[0x1400E:0x14016] = b"12000000"
+    for address in (0x6007, 0x6013, 0x601F, 0x1400C):
+        image[address:address + 4] = b"0912"
     image[ecu_info.DRV_SIG_FILE_OFFSET:
           ecu_info.DRV_SIG_FILE_OFFSET + ecu_info.DRV_SIG_LEN] = bytes.fromhex(
               "e00e0d58f04ec084")

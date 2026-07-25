@@ -1,6 +1,6 @@
 {
   "id": "alphan_failsafe",
-  "title": "AlphaN MAF-failsafe",
+  "title": "AlphaN MAF failsafe",
   "tested": false,
   "user_description": "Restores the MS41.2-style AlphaN load fallback removed by SS1v2, allowing AlphaN operation when selected or when a MAF fault is detected.",
   "description": "Restore the native MS41.2 MAF->AlphaN load failover that SS1v2 deleted, with the extended 16x20 ITB tables. Splice @0x2A9A8 -> program-high cave. Trigger: fd22.10 (AlphaN selector) OR fd30.1 (MAF fault). Engine runs with the MAF unplugged.",

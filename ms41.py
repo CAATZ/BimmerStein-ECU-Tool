@@ -329,8 +329,8 @@ class MS41ECU:
         This catches cross-family mismatches through the ECU ID and MS41.2/MS41.3
         mismatches through the program-region SS1v2 marker versus the calibration marker.
 
-        Returns a human-readable description string if a mismatch is detected,
-        or None if the ROM is internally consistent (or cannot be identified).
+        Returns a human-readable description string if a mismatch is detected
+        or either exact compatibility ID is missing, otherwise None.
         """
         if len(data) < MS41ECU.FULL_ROM_SIZE:
             return None
@@ -344,7 +344,11 @@ class MS41ECU:
             return f"Program Firmware Compatibility ID: {program_error}"
         if calibration_error:
             return f"Calibration Firmware Compatibility ID: {calibration_error}"
-        if program_id and calibration_id and program_id != calibration_id:
+        if program_id is None:
+            return "Program Firmware Compatibility ID: missing or invalid"
+        if calibration_id is None:
+            return "Calibration Firmware Compatibility ID: missing or invalid"
+        if program_id != calibration_id:
             return (
                 f"Program Firmware Compatibility ID: {program_id}  —  "
                 f"Calibration Firmware Compatibility ID: {calibration_id}  "

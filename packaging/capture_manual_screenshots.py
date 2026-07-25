@@ -50,6 +50,7 @@ def _synthetic_patch_records() -> list[dict]:
         {
             "id": "cal_guard",
             "title": "Calibration Guard",
+            "version": "V3",
             "description": "Protects startup from an incompatible calibration version.",
             "user_description": "Protects startup from an incompatible calibration version.",
             "target": "MS41.3",
@@ -67,7 +68,8 @@ def _synthetic_patch_records() -> list[dict]:
         },
         {
             "id": "ignition_cut_v7",
-            "title": "Ignition Cut V7",
+            "title": "Ignition Cut",
+            "version": "V7",
             "description": "Current ignition-cut limiter implementation.",
             "user_description": "Adds the current configurable ignition-cut limiter.",
             "target": "MS41.3",
@@ -85,7 +87,8 @@ def _synthetic_patch_records() -> list[dict]:
         },
         {
             "id": "launch_control_v5",
-            "title": "Launch Control V5",
+            "title": "Launch Control / 2-step",
+            "version": "V5",
             "description": "Current staged launch-control limiter implementation.",
             "user_description": "Adds configurable staged launch control.",
             "target": "MS41.3",
@@ -104,6 +107,7 @@ def _synthetic_patch_records() -> list[dict]:
         {
             "id": "softbsl_loader",
             "title": "Persistent Soft-BSL Loader",
+            "version": "",
             "description": "Installs the persistent Soft-BSL entry loader.",
             "user_description": "Installs the persistent Soft-BSL entry loader.",
             "target": "MS41.3",

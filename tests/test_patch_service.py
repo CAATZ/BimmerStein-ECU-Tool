@@ -76,6 +76,40 @@ def test_every_active_patch_has_a_release_facing_description():
     assert all(patch.get("user_description", "").strip() for patch in active)
 
 
+def test_patch_versions_are_badges_not_title_text():
+    expected = {
+        "cal_guard_v1": "V1",
+        "cal_guard_v2": "V2",
+        "cal_guard": "V3",
+        "ignition_cut": "V1",
+        "ignition_cut_v2": "V2",
+        "ignition_cut_v3": "V3",
+        "ignition_cut_v4": "V4",
+        "ignition_cut_v5": "V5",
+        "ignition_cut_v6": "V6",
+        "ignition_cut_v7": "V7",
+        "ignition_cut_v7_ms410": "V7",
+        "ignition_cut_v7_ms411": "V7",
+        "launch_control": "V1",
+        "launch_control_v2": "V2",
+        "launch_control_v2_ms412": "V2",
+        "launch_control_v3": "V3",
+        "launch_control_v3_ms412": "V3",
+        "launch_control_v4": "V4",
+        "launch_control_v4_ms410": "V4",
+        "launch_control_v4_ms411": "V4",
+        "launch_control_v4_ms412": "V4",
+        "launch_control_v5": "V5",
+        "softbsl_loader_relocated_v1": "V1",
+    }
+    definitions = patch_service.definitions()
+
+    for patch_id, version in expected.items():
+        patch = definitions[patch_id]
+        assert patch["version"] == version
+        assert version.lower() not in patch["title"].lower()
+
+
 def test_available_patches_exposes_only_latest_ms412_ports():
     avail = patch_service.available_patches(ref("MS41.2"))
     ids = {p["id"] for p in avail}
@@ -348,33 +382,42 @@ def test_installed_deprecated_patch_is_surfaced_for_removal():
     assert "ignition_cut_v4" not in {p["id"] for p in patch_service.available_patches(ref("MS41.3"))}
 
 
-def test_calguard_v1_is_detected_removed_and_replaced_by_v2():
+@pytest.mark.parametrize(
+    ("legacy_id", "legacy_label"),
+    [
+        ("cal_guard_v1", "V1 broad-version guard"),
+        ("cal_guard_v2", "V2 unsafe odd-word guard"),
+    ],
+)
+def test_deprecated_calguard_is_detected_removed_and_replaced_by_v3(
+        legacy_id, legacy_label):
     stock = ref("MS41.2")
-    v1_image, _ = patch_service.build_image(stock, ["cal_guard_v1"])
+    legacy_image, _ = patch_service.build_image(stock, [legacy_id])
     available = {
-        patch["id"]: patch for patch in patch_service.available_patches(v1_image)
+        patch["id"]: patch for patch in patch_service.available_patches(legacy_image)
     }
 
-    assert available["cal_guard_v1"]["installed"] is True
-    assert available["cal_guard_v1"]["removable"] is True
+    assert available[legacy_id]["installed"] is True
+    assert available[legacy_id]["removable"] is True
     assert available["cal_guard"]["installed"] is False
-    assert available["cal_guard"]["status"] == "V2"
+    assert available["cal_guard"]["version"] == "V3"
+    assert available["cal_guard"]["status"] == ""
     assert available["cal_guard"]["legacy"] == [{
-        "id": "cal_guard_v1",
-        "label": "V1 broad-version guard",
+        "id": legacy_id,
+        "label": legacy_label,
     }]
 
     directly_upgraded, direct_log = patch_service.build_image(
-        v1_image, ["cal_guard"])
+        legacy_image, ["cal_guard"])
     definitions = patch_service.definitions()
     assert patch_service.is_applied(directly_upgraded, definitions["cal_guard"])
     assert not patch_service.is_applied(
-        directly_upgraded, definitions["cal_guard_v1"])
+        directly_upgraded, definitions[legacy_id])
     assert any("exact prior revision" in line for line in direct_log)
 
-    cleaned = patch_service.revert_patch(v1_image, "cal_guard_v1")
+    cleaned = patch_service.revert_patch(legacy_image, legacy_id)
     upgraded, _ = patch_service.build_image(cleaned, ["cal_guard"])
-    assert not patch_service.is_applied(upgraded, definitions["cal_guard_v1"])
+    assert not patch_service.is_applied(upgraded, definitions[legacy_id])
     assert patch_service.is_applied(upgraded, definitions["cal_guard"])
 
 

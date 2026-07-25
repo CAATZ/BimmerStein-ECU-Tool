@@ -27,6 +27,9 @@ class _Assembler:
         self.labels[name] = self.pc
 
     def mov_mem(self, reg, address):
+        if address & 1:
+            raise ValueError(
+                f"C166 word access requires an even address, got 0x{address:04X}")
         self.emit(0xF2, 0xF0 + reg, address, address >> 8)
 
     def movb_mem(self, byte_reg, address):
@@ -44,11 +47,8 @@ class _Assembler:
     def cmpb(self, byte_reg, value):
         self.emit(0x47, 0xF0 + byte_reg, value, 0)
 
-    def push(self, reg):
-        self.emit(0xEC, 0xF0 + reg)
-
-    def pop(self, reg):
-        self.emit(0xFC, 0xF0 + reg)
+    def cmpb_rr(self, left, right):
+        self.emit(0x41, (left << 4) | right)
 
     def jmpr(self, cc, label):
         self.emit((cc << 4) | 0x0D, 0)
@@ -117,25 +117,19 @@ def assemble():
     a.jmpa(CC_UC, RECOVER_EXIT)
 
     # DPP0=4 exposes cal 0x1400C at 0x000C; DPP2=0 exposes program
-    # 0x06007 at 0xA007. Compare both native words exactly.
+    # 0x06007 at 0xA007. The program ID starts at an odd address, so compare
+    # bytes: a C166 word access at 0xA007/0xA009 raises the ILLOPA trap.
     a.label("compare_compatibility")
-    a.push(2)
-    a.push(3)
-    a.mov_mem(2, 0x000C)
-    a.mov_mem(3, 0x000E)
-    a.mov_mem(4, 0xA007)
-    a.mov_mem(5, 0xA009)
-    a.cmp_rr(2, 4)
-    a.jmpr(CC_NE, "compatibility_fail")
-    a.cmp_rr(3, 5)
-    a.jmpr(CC_NE, "compatibility_fail")
-    a.pop(3)
-    a.pop(2)
+    rl4, rl5 = 8, 10
+    for cal_address, program_address in zip(
+            range(0x000C, 0x0010), range(0xA007, 0xA00B)):
+        a.movb_mem(rl4, cal_address)
+        a.movb_mem(rl5, program_address)
+        a.cmpb_rr(rl4, rl5)
+        a.jmpr(CC_NE, "compatibility_fail")
     a.jmpa(CC_UC, BOOT_EXIT)
 
     a.label("compatibility_fail")
-    a.pop(3)
-    a.pop(2)
     a.jmpa(CC_UC, RECOVER_EXIT)
     return a.finish()
 
