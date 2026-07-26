@@ -148,6 +148,32 @@ def test_universal_batch_uses_all_six_previous_spare_slots():
     assert latest["MAF Sensor Voltage"] == ("5.000", "V")
 
 
+@pytest.mark.parametrize(
+    ("ecu_id", "battery_address"),
+    [
+        ("1429861", 0xFB47),
+        ("1437806", 0xFC9D),
+        ("1406464", 0xFC9D),
+        ("SHINDE1", 0xFC9D),
+    ],
+)
+def test_verified_firmware_uses_normalized_tps_and_correct_battery(
+        ecu_id, battery_address):
+    direct = {param.name: param.address for param in live_data.telegram_params_for(ecu_id)}
+    batch = {entry[0]: entry[1] for entry in live_data.batch_layout_for(ecu_id) if entry[0]}
+
+    assert direct["Throttle Position"] == batch["Throttle Position"] == 0xE8D0
+    assert direct["Battery Voltage"] == batch["Battery Voltage"] == battery_address
+
+
+def test_display_omits_dead_lambda_and_names_measured_vanos_angle():
+    names = [name for name, _unit in live_data.display_rows()]
+
+    assert "Lambda Upstream" not in names
+    assert "VANOS Advance" not in names
+    assert "VANOS Measured Angle" in names
+
+
 def test_wideband_batch_preserves_the_proven_38_byte_response_shape():
     layout = live_data.batch_layout_for(
         "SHINDE1", live_data.PROFILE_WIDEBAND, 0xFA98)
@@ -175,7 +201,8 @@ def test_wideband_batch_preserves_the_proven_38_byte_response_shape():
 
 def test_live_parameters_do_not_inherit_unverified_ram_addresses():
     cal59 = {param.name: param for param in live_data.telegram_params_for("1429373")}
-    assert cal59["Throttle Position"].address == 0xE8D7
+    assert "Throttle Position" not in cal59
+    assert "Battery Voltage" not in cal59
     assert "Injector PW" not in cal59
     assert "Fuel Trim LT" not in cal59
     assert "Engine Load" not in cal59
