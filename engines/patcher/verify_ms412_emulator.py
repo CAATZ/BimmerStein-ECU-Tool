@@ -54,9 +54,15 @@ sys.path.insert(0, str(EMU_ROOT))
 
 import checksum  # noqa: E402
 from engines.patcher import patch_ms41  # noqa: E402
-from engines.patcher.cal_guard_exact import assemble as assemble_cal_guard  # noqa: E402
+from engines.patcher.cal_guard_exact import (  # noqa: E402
+    BOOT_EXIT,
+    CAVE_CPU,
+    POLL_COUNT,
+    RECOVER_EXIT,
+    RECOVERY_TOKEN,
+    assemble as assemble_cal_guard,
+)
 from ms41emu import Emulator  # noqa: E402
-from ms41emu.gate import verify_cal_guard  # noqa: E402
 
 
 STOCK_410_PATH = _find_reference(TEST_DATA_ROOT, "MS41.0")
@@ -126,6 +132,32 @@ def _build_413():
 FULL_413_IMAGE = _build_413()
 
 
+def _run_calguard(image, *, e740=3, uart=None):
+    cave = assemble_cal_guard()
+    composed = bytearray(image)
+    cave_file = CAVE_CPU ^ 0x4000
+    composed[cave_file:cave_file + len(cave)] = cave
+    emu = Emulator.load(bytes(composed))
+    emu.write_byte(0xE740, e740)
+    if uart:
+        for address, value in uart.items():
+            emu.write(address, value)
+    result = emu.run_from(
+        CAVE_CPU,
+        stop_at=(BOOT_EXIT, RECOVER_EXIT),
+        max_steps=POLL_COUNT * 5 + 5000,
+    )
+    return result.final_pc, emu
+
+
+def _verify_calguard(image, *, e740=3):
+    exit_pc, _emu = _run_calguard(image, e740=e740)
+    return {
+        BOOT_EXIT: "BOOT",
+        RECOVER_EXIT: "RECOVER",
+    }.get(exit_pc, f"NO EXIT @0x{exit_pc:04X}")
+
+
 def verify_calguard_compatibility():
     """Execute the registered gate on every canonical stock family and failures."""
     guard = PATCHES["cal_guard"]
@@ -142,24 +174,56 @@ def verify_calguard_compatibility():
         "MS41.3": STOCK_413_PATH,
     }
     for version, path in references.items():
-        assert verify_cal_guard(path.read_bytes(), cave=guard_bytes) == "BOOT", version
+        assert _verify_calguard(path.read_bytes()) == "BOOT", version
 
     # Same broad generation is insufficient: ID41 calibration with ID59
     # program (or vice versa) must remain in the stock flash listener.
     id41_to_id59 = bytearray(STOCK_410_PATH.read_bytes())
     assert id41_to_id59[0x6007:0x600B] == b"0641"
     id41_to_id59[0x1400C:0x14010] = b"0659"
-    assert verify_cal_guard(id41_to_id59, cave=guard_bytes) == "RECOVER"
+    assert _verify_calguard(id41_to_id59) == "RECOVER"
 
     # The strict SS1v2 identity still takes precedence over legacy suffixes.
     strict_mismatch = bytearray(STOCK_413_PATH.read_bytes())
     assert strict_mismatch[0x173BB:0x173C0] == b"SS1v2"
     assert strict_mismatch[0x6007:0x600B] != b"0641"
     strict_mismatch[0x6007:0x600B] = b"0641"
-    assert verify_cal_guard(strict_mismatch, cave=guard_bytes) == "RECOVER"
+    assert _verify_calguard(strict_mismatch) == "RECOVER"
 
     # E740=1 is intentionally the existing stock flash-listener branch.
-    assert verify_cal_guard(STOCK_PATH.read_bytes(), e740=1, cave=guard_bytes) == "RECOVER"
+    assert _verify_calguard(STOCK_PATH.read_bytes(), e740=1) == "RECOVER"
+
+    # A quiet boot must restore the UART exactly before continuing.
+    uart = {0xFEB4: 0x1234, 0xFFB0: 0x5678, 0xFF6E: 0x9ABC}
+    exit_pc, emu = _run_calguard(STOCK_PATH.read_bytes(), uart=uart)
+    assert exit_pc == BOOT_EXIT
+    assert {address: emu.read(address) for address in uart} == uart
+
+    # The raw pre-arm token must ACK once and enter the existing stock listener.
+    cave = assemble_cal_guard()
+    poll_loop = CAVE_CPU + cave.find(bytes.fromhex("a758a7a728c1"))
+    poll_byte = CAVE_CPU + cave.find(bytes.fromhex("f3f8b2fe7eb7"))
+    assert poll_loop >= CAVE_CPU and poll_byte >= CAVE_CPU
+    composed = bytearray(FULL_IMAGE)
+    cave_file = CAVE_CPU ^ 0x4000
+    composed[cave_file:cave_file + len(cave)] = cave
+    emu = Emulator.load(bytes(composed))
+    emu.write_byte(0xE740, 3)
+    assert emu.run_from(
+        CAVE_CPU, breakpoints=(poll_loop,), max_steps=1000).final_pc == poll_loop
+    for index, byte in enumerate(RECOVERY_TOKEN):
+        emu.asc0.rx_inject(bytes([byte]))
+        emu.write_byte(0xFF6E, emu.read_byte(0xFF6E) | 0x80)
+        assert emu.run_from(
+            poll_loop, breakpoints=(poll_byte,), max_steps=10).final_pc == poll_byte
+        if index + 1 < len(RECOVERY_TOKEN):
+            assert emu.run_from(
+                poll_byte, breakpoints=(poll_loop,), max_steps=20
+            ).final_pc == poll_loop
+    emu.write_byte(0xFF6C, emu.read_byte(0xFF6C) | 0x80)
+    assert emu.run_from(
+        poll_byte, stop_at=(RECOVER_EXIT,), max_steps=100).final_pc == RECOVER_EXIT
+    assert bytes(emu.asc0.tx) == b"\x06"
 
 
 OLDER_FEATURE_LAYOUTS = {

@@ -270,7 +270,8 @@ def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=Non
 
     Automatic normal entry uses 0x2A door_magic first. An exact CalGuard mismatch, or
     ``entry_mode='direct'` recovery override, skips 0x2A and sends staged 0x5A directly.
-    The disposable 0x43 install door is never used here.
+    ``entry_mode='boot'`` first catches CalGuard V4's key-on token poll. The disposable
+    0x43 install door is never used here.
 
     `chip_family` ('amd'/'intel'/None) selects the flash agent: an Intel 28F200 needs
     agent_28f.hex (Intel command set + 12 V VPP); AMD/None default to agent.hex. Reads are
@@ -280,11 +281,11 @@ def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=Non
     E740=1 (flash-listen, non-drivable, persistent across key-cycles). Walk it back to marker 0 +
     drivable via the running agent's self-finalize before closing +
     re-raising — otherwise a missed 5a window strands a previously-drivable ECU in flash mode."""
-    if entry_mode not in ("auto", "direct"):
+    if entry_mode not in ("auto", "direct", "boot"):
         raise ValueError(f"unknown Soft-BSL entry mode {entry_mode!r}")
-    if entry_mode == "direct" and chip_family not in ("amd", "intel"):
+    if entry_mode in ("direct", "boot") and chip_family not in ("amd", "intel"):
         raise SoftBSLError(
-            "Direct Soft-BSL recovery requires a known Intel/AMD flash-driver family; "
+            "Soft-BSL recovery requires a known Intel/AMD flash-driver family; "
             "no port was opened and nothing was erased.")
 
     d = _sbds2.DS2Interface(port, baud=9600, verbose=False, echo=True)
@@ -297,13 +298,15 @@ def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=Non
     sb = _sb.SoftBSL(d, log=_agent_log(log))
     staged = baud_tier is not None and hasattr(sb, "enter_staged")
     try:
-        direct = entry_mode == "direct" or bool(
+        direct = entry_mode in ("direct", "boot") or bool(
             getattr(sb, "calguard_direct_entry_ready", lambda: False)())
         if direct and chip_family not in ("amd", "intel"):
             raise SoftBSLError(
                 "Direct Soft-BSL recovery requires a known Intel/AMD flash-driver family; "
                 "no agent was loaded and nothing was erased.")
         agent = _sb.load_agent(_sb.agent_path_for_family(chip_family))
+        if entry_mode == "boot":
+            sb.prearm_calguard_boot()
         if direct:
             if entry_mode == "direct":
                 log("Forced direct Soft-BSL recovery: sending staged 0x5A without 0x2A.")

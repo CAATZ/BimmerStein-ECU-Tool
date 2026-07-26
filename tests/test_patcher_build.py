@@ -7,7 +7,8 @@ import pytest
 
 
 def test_build_applies_cal_guard_and_recomputes_bootcrc():
-    out, log = patch_ms41.build(ref("MS41.3"), ["cal_guard"])
+    out, log = patch_ms41.build(
+        ref("MS41.3"), ["softbsl_loader", "cal_guard"])
     assert len(out) == patch_ms41.FULL
     patches = patch_ms41.load_patches()
     for e in patches["cal_guard"]["edits"]:
@@ -38,5 +39,5 @@ def test_build_rejects_unknown_and_mixed_target():
 def test_build_does_not_write_files(tmp_path):
     # build() is pure — returns bytes, touches no disk
     before = set(os.listdir(tmp_path))
-    patch_ms41.build(ref("MS41.3"), ["cal_guard"])
+    patch_ms41.build(ref("MS41.3"), ["softbsl_loader", "cal_guard"])
     assert set(os.listdir(tmp_path)) == before

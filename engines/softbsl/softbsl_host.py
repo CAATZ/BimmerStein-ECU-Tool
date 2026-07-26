@@ -572,6 +572,32 @@ class SoftBSL:
             raise SoftBSLError("timeout waiting for agent byte")
         return b[0]
 
+    def prearm_calguard_boot(self, timeout=8.0):
+        """Transmit CalGuard V4's raw token until a key-on boot poll ACKs it."""
+        token = bytes((0x5A, MAGIC_HI, MAGIC_LO))
+        deadline = time.perf_counter() + timeout
+        attempts = 0
+        self.log(
+            "CalGuard boot recovery armed: turn ignition ON now "
+            f"(waiting up to {timeout:.1f}s).")
+        while time.perf_counter() < deadline:
+            attempts += 1
+            ser = self._ser()
+            ser.reset_input_buffer()
+            ser.write(token)
+            ser.flush()
+            echoed = self.ds2._discard_echo(token)
+            if self.ds2.echo and echoed != token:
+                continue
+            ack = self.ds2._read_exact(1, 0.01)
+            if ack == bytes((ACK,)):
+                self.log(
+                    f"CalGuard boot recovery caught after {attempts} token attempts.")
+                return
+        raise SoftBSLError(
+            "CalGuard boot recovery was not acknowledged. Confirm CalGuard V4 and "
+            "Soft-BSL are installed, then retry from ignition OFF.")
+
     @staticmethod
     def _addr3(a):
         return bytes([(a >> 16) & 0xFF, (a >> 8) & 0xFF, a & 0xFF])
@@ -1480,7 +1506,12 @@ def _session(args, require_d2xx=False):
         # Keep hand-built/test request objects on the legacy path unless they
         # explicitly identify the temporary 0x43 installer door.
         trigger = getattr(args, "trigger", None)
-        if getattr(args, "auto_flash", False) and trigger == "5a":
+        if getattr(args, "boot_recovery", False):
+            if trigger != "5a":
+                raise SoftBSLError("CalGuard boot recovery requires --trigger 5a")
+            sb.prearm_calguard_boot()
+            sb.enter(agent, trigger="5a")
+        elif getattr(args, "auto_flash", False) and trigger == "5a":
             sb.ensure_flash_mode()                # 0x2A from normal -> flash mode + fresh 5a window
             sb.enter_retry(agent, trigger="5a")   # catch the post-reboot window
         elif getattr(args, "hammer_entry", False):
@@ -2639,7 +2670,19 @@ def _compose_image(base_bytes, patch_ids, *, marker=None, return_log=False):
         else:
             # ``build`` deliberately supports an empty missing list here: an already-patched
             # image may still need its bank marker changed from B to T with boot CRC recomputed.
-            image, lines = build(bytes(base_bytes), missing, patches=patches, marker=marker)
+            build_base = bytearray(base_bytes)
+            loader = patches.get("softbsl_loader")
+            if (
+                    loader
+                    and "softbsl_loader" in patch_ids
+                    and "softbsl_loader" not in missing):
+                loader_marker = next(
+                    edit for edit in loader["edits"]
+                    if int(edit["off"]) == MARKER_OFF)
+                build_base[MARKER_OFF:MARKER_OFF + 4] = bytes.fromhex(
+                    loader_marker["data"])
+            image, lines = build(
+                bytes(build_base), missing, patches=patches, marker=marker)
         return (image, lines) if return_log else image
     except PatchError as e:
         raise SoftBSLError(f"patch compose [{'+'.join(patch_ids)}] failed: {e}") from e
@@ -3640,6 +3683,10 @@ def main():
     ap.add_argument("--trigger", choices=["43", "5a", "9c"], default="43",
                     help="soft-BSL door: 43=program-region 0x43/9C9C splice (default), "
                          "5a=SA1 bootloader (flash-mode), 9c=legacy param1 stub")
+    ap.add_argument(
+        "--boot-recovery", action="store_true",
+        help="CalGuard V4 experiment: start with ignition OFF, pre-arm raw 5A/9C/9C, "
+             "then turn ignition ON; requires --trigger 5a")
     ap.add_argument("--no-echo", action="store_true", help="adapter suppresses the half-duplex echo")
     ap.add_argument("-v", "--verbose", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)

@@ -60,7 +60,9 @@ def test_exact_calguard_artifact_is_registered_and_prior_revision_is_upgradable(
     root = Path(__file__).resolve().parents[1]
 
     assert guard["supersedes"] == ["cal_guard_v1", "cal_guard_v2"]
-    assert [prior["data"] for prior in prior_caves] == cave["upgrade_expect"]
+    assert [prior["data"] for prior in prior_caves] == cave["upgrade_expect"][:2]
+    assert len(cave["upgrade_expect"]) == 3
+    assert cave["upgrade_expect"][2] != cave["data"]
     assert bytes.fromhex(cave["data"]) == assemble()
     assert cave["data"] == (
         root / "engines" / "patcher" / "cal_guard_exact.hex"
@@ -72,14 +74,16 @@ def test_exact_calguard_artifact_is_registered_and_prior_revision_is_upgradable(
     with pytest.raises(ValueError, match="even address"):
         _Assembler().mov_mem(4, 0xA007)
 
-    unsafe_v2 = bytearray(ref("MS41.1"))
+    prior_v3 = bytearray(ref("MS41.1"))
     for edit in guard["edits"]:
         payload = bytes.fromhex(edit["data"])
-        unsafe_v2[edit["off"]:edit["off"] + len(payload)] = payload
-    unsafe_payload = bytes.fromhex(cave["upgrade_expect"][1])
-    unsafe_v2[cave["off"]:cave["off"] + len(unsafe_payload)] = unsafe_payload
-    upgraded, upgrade_log = patch_ms41.build(bytes(unsafe_v2), ["cal_guard"])
+        prior_v3[edit["off"]:edit["off"] + len(payload)] = payload
+    unsafe_payload = bytes.fromhex(cave["upgrade_expect"][2])
+    prior_v3[cave["off"]:cave["off"] + len(unsafe_payload)] = unsafe_payload
+    upgraded, upgrade_log = patch_ms41.build(
+        bytes(prior_v3), ["softbsl_loader", "cal_guard"])
     assert bytes(upgraded[cave["off"]:cave["off"] + len(guard_bytes)]) == guard_bytes
+    assert patch_ms41.is_applied(upgraded, patches["softbsl_loader"])
     assert any("exact prior revision" in line for line in upgrade_log)
 
     base = bytearray(b"\xFF" * patch_ms41.FULL)

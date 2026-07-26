@@ -661,6 +661,58 @@ def test_forced_direct_5a_bypasses_detection_and_0x2a(monkeypatch):
     assert ("enter_staged", "high", "5a") in sb.calls
 
 
+def test_calguard_boot_mode_prearms_before_staged_5a(monkeypatch):
+    class BootSB(_RecordingSB):
+        def calguard_direct_entry_ready(self):
+            raise AssertionError("boot mode must bypass live DS2 detection")
+        def prearm_calguard_boot(self):
+            self.calls.append("prearm_calguard_boot")
+        def enter_staged(self, _agent, tier, trigger):
+            self.calls.append(("enter_staged", tier, trigger))
+
+    sb = BootSB()
+    _install_fakes(monkeypatch, sb)
+
+    d, _session = softbsl_service._open_session(
+        "COM1", lambda *_args: None, chip_family="intel",
+        baud_tier="low", entry_mode="boot")
+    d.close()
+
+    assert sb.calls[:2] == [
+        "prearm_calguard_boot",
+        ("enter_staged", "low", "5a"),
+    ]
+    assert not any(
+        call[0] == "ensure_flash_mode"
+        for call in sb.calls if isinstance(call, tuple))
+
+
+def test_calguard_boot_prearm_repeats_raw_token_until_ack():
+    class FakeSerial:
+        def __init__(self):
+            self.writes = []
+        def reset_input_buffer(self): pass
+        def write(self, data):
+            self.writes.append(bytes(data))
+        def flush(self): pass
+
+    class FakeDS2:
+        baud = 9600
+        echo = True
+        def __init__(self):
+            self._ser = FakeSerial()
+            self.reads = iter((b"", b"\x06"))
+        def _discard_echo(self, frame):
+            return bytes(frame)
+        def _read_exact(self, _length, _timeout):
+            return next(self.reads)
+
+    ds2 = FakeDS2()
+    softbsl_host.SoftBSL(ds2, log=lambda *_args: None).prearm_calguard_boot()
+
+    assert ds2._ser.writes == [b"\x5A\x9C\x9C", b"\x5A\x9C\x9C"]
+
+
 def test_forced_direct_requires_a_known_flash_family(monkeypatch):
     class ForcedSB(_RecordingSB):
         def enter_staged(self, _agent, tier, trigger):
