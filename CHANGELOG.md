@@ -8,6 +8,13 @@ shared by BimmerStein applications.
 
 ## [Unreleased]
 
+## [0.1.0b12] - 2026-07-26
+
+### Fixed
+
+- Corrected MS41.0 transmission control-bit decoding and limited transmission
+  edits to Byte 5 bits 0-5, preserving unrelated bit 6 and knock-detection bit 7.
+
 ## [0.1.0b11] - 2026-07-25
 
 ### Added

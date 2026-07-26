@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <strong><a href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b11">Download Beta 11</a></strong>
+  <strong><a href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b12">Download Beta 12</a></strong>
   &nbsp;&middot;&nbsp;
   <a href="manual/USER_MANUAL.md">User Manual</a>
   &nbsp;&middot;&nbsp;
@@ -204,7 +204,7 @@ Full ROMs and logs can contain VIN and ECU identity information. Treat them as p
 The illustrated manual covers normal flashing, recovery behavior, Soft-BSL, hardware BSL,
 diagnostics, offline tools, patches, and final checklists:
 
-- [Download BimmerStein ECU Tool 0.1.0 Beta 11](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b11)
+- [Download BimmerStein ECU Tool 0.1.0 Beta 12](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b12)
 - [Illustrated PDF manual](output/pdf/BimmerStein-ECU-Tool-User-Manual.pdf)
 - [User manual (web-readable Markdown)](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/manual/USER_MANUAL.md)
 - [Build and release instructions](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/BUILDING.md)
