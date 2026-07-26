@@ -258,12 +258,18 @@ class _RecordingSB:
         return b"\xA5\x5A\x42\xBD"
 
 
-def _install_fakes(monkeypatch, sb, close_rec=None):
+def _install_fakes(
+        monkeypatch, sb, close_rec=None,
+        driver_signature=bytes.fromhex("e6f45000b84c6fe0")):
     class FakeDS2:
         uses_d2xx = True
         transport_name = "d2xx"
         def __init__(self): self.is_open = False
         def open(self): self.is_open = True
+        def read_mem(self, address, length):
+            assert address == ecu_info.DRV_SIG_ADDR
+            assert length == ecu_info.DRV_SIG_LEN
+            return driver_signature
         def close(self):
             if self.is_open and close_rec is not None:
                 close_rec.append(True)
@@ -665,8 +671,8 @@ def test_calguard_boot_mode_prearms_before_staged_5a(monkeypatch):
     class BootSB(_RecordingSB):
         def calguard_direct_entry_ready(self):
             raise AssertionError("boot mode must bypass live DS2 detection")
-        def prearm_calguard_boot(self):
-            self.calls.append("prearm_calguard_boot")
+        def prearm_calguard_boot(self, timeout=8.0):
+            self.calls.append(("prearm_calguard_boot", timeout))
         def enter_staged(self, _agent, tier, trigger):
             self.calls.append(("enter_staged", tier, trigger))
 
@@ -679,12 +685,115 @@ def test_calguard_boot_mode_prearms_before_staged_5a(monkeypatch):
     d.close()
 
     assert sb.calls[:2] == [
-        "prearm_calguard_boot",
+        ("prearm_calguard_boot", 8.0),
         ("enter_staged", "low", "5a"),
     ]
     assert not any(
         call[0] == "ensure_flash_mode"
         for call in sb.calls if isinstance(call, tuple))
+
+
+def test_boot_recovery_session_stays_open_for_read_then_closes_safely(monkeypatch):
+    class BootSB(_RecordingSB):
+        def prearm_calguard_boot(self, timeout=8.0):
+            self.calls.append(("prearm_calguard_boot", timeout))
+        def enter_staged(self, _agent, tier, trigger):
+            self.calls.append(("enter_staged", tier, trigger))
+
+    sb = BootSB()
+    _install_fakes(monkeypatch, sb)
+
+    session = softbsl_service.open_boot_recovery(
+        "COM1", lambda *_args: None, timeout=15.0)
+    data = softbsl_service.read_boot_recovery(
+        session, "tune", None, lambda *_args: None)
+    sparse = softbsl_service.read_boot_recovery_range(session, 0x1CF4, 3)
+
+    assert len(data) == 24 * 1024
+    assert sparse == b"\x11" * 3
+    assert session.is_open
+    assert session.chip_family == "intel"
+    assert session.driver_signature == bytes.fromhex("e6f45000b84c6fe0")
+    assert ("prearm_calguard_boot", 15.0) in sb.calls
+    assert ("enter_staged", "high", "5a") in sb.calls
+    assert ("read_range", 0x1CF4, 3, False) in sb.calls
+    assert not any(
+        isinstance(call, tuple) and call[0] == "finalize_marker0"
+        for call in sb.calls)
+
+    assert softbsl_service.close_boot_recovery(
+        session, lambda *_args: None) is True
+    assert not session.is_open
+    assert ("finalize_marker0", False) in sb.calls
+
+
+def test_boot_recovery_selects_amd_agent_from_preserved_driver(monkeypatch):
+    class BootSB(_RecordingSB):
+        def prearm_calguard_boot(self, timeout=8.0): pass
+        def enter_staged(self, _agent, tier, trigger): pass
+
+    sb = BootSB()
+    _install_fakes(
+        monkeypatch,
+        sb,
+        driver_signature=bytes.fromhex("e00e0d58f04ec084"),
+    )
+    loaded = []
+    monkeypatch.setattr(
+        softbsl_service._sb,
+        "load_agent",
+        lambda path: loaded.append(path) or b"\x00",
+    )
+
+    session = softbsl_service.open_boot_recovery(
+        "COM1", lambda *_args: None)
+
+    assert session.chip_family == "amd"
+    assert session.driver_signature == bytes.fromhex("e00e0d58f04ec084")
+    assert loaded == ["agent.hex"]
+    assert softbsl_service.close_boot_recovery(
+        session, lambda *_args: None) is True
+
+
+def test_retained_boot_tune_write_never_reopens_or_falls_back(monkeypatch):
+    class BootSB(_RecordingSB):
+        def prearm_calguard_boot(self, timeout=8.0): pass
+        def enter_staged(self, _agent, tier, trigger): pass
+
+    sb = BootSB()
+    _install_fakes(monkeypatch, sb)
+    session = softbsl_service.open_boot_recovery(
+        "COM1", lambda *_args: None)
+
+    softbsl_service.write_tune_boot_recovery(
+        session, TUNE_24K, lambda *_args: None, do_verify=True)
+
+    assert ("write_tune_partial", len(TUNE_24K), True) in sb.calls
+    assert ("finalize_marker0", False) in sb.calls
+    assert not session.is_open
+
+
+def test_retained_boot_write_keeps_same_agent_after_erase_failure(monkeypatch):
+    class BootSB(_RecordingSB):
+        def prearm_calguard_boot(self, timeout=8.0): pass
+        def enter_staged(self, _agent, tier, trigger): pass
+        def write_tune_partial(self, partial, *, do_verify=True, progress_cb=None):
+            progress_cb(0, len(partial), "erase")
+            raise RuntimeError("injected program failure")
+
+    sb = BootSB()
+    _install_fakes(monkeypatch, sb)
+    session = softbsl_service.open_boot_recovery(
+        "COM1", lambda *_args: None)
+
+    with pytest.raises(
+            softbsl_service.SoftBSLWriteRecoveryRequired) as caught:
+        softbsl_service.write_tune_boot_recovery(
+            session, TUNE_24K, lambda *_args: None)
+
+    assert caught.value.recovery.ds2 is session.ds2
+    assert caught.value.recovery.agent is session.agent
+    assert caught.value.recovery.is_open
 
 
 def test_calguard_boot_prearm_repeats_raw_token_until_ack(monkeypatch):

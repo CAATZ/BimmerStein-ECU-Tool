@@ -26,6 +26,22 @@ class SoftBSLRecoveryStateError(RuntimeError):
 
 
 @dataclass
+class SoftBSLBootSession:
+    """CalGuard key-on recovery session kept open for a later read or write."""
+
+    port: str
+    ds2: object
+    agent: object
+    baud: str
+    chip_family: str
+    driver_signature: bytes
+
+    @property
+    def is_open(self):
+        return bool(getattr(self.ds2, "is_open", False))
+
+
+@dataclass
 class SoftBSLWriteRecovery:
     """Live post-erase RAM-agent session retained for an in-place re-flash."""
 
@@ -270,7 +286,7 @@ def crossbank_plan(image):
 
 
 def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=None,
-                  entry_mode="auto"):
+                  entry_mode="auto", boot_timeout=8.0):
     """Open the port and enter the RAM agent through the persistent 0x5A loader.
 
     Automatic normal entry uses 0x2A door_magic first. An exact CalGuard mismatch, or
@@ -279,8 +295,9 @@ def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=Non
     0x43 install door is never used here.
 
     `chip_family` ('amd'/'intel'/None) selects the flash agent: an Intel 28F200 needs
-    agent_28f.hex (Intel command set + 12 V VPP); AMD/None default to agent.hex. Reads are
-    chip-agnostic, but an ERASE/PROGRAM with the wrong agent silently fails on the real chip.
+    agent_28f.hex (Intel command set + 12 V VPP); AMD/None default to agent.hex. Boot
+    recovery instead reads the preserved boot driver's signature after acknowledgement
+    and selects the agent from that evidence.
 
     On ANY entry failure: ensure_flash_mode() may have already fired the 0x2A door, committing
     E740=1 (flash-listen, non-drivable, persistent across key-cycles). Walk it back to marker 0 +
@@ -288,7 +305,7 @@ def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=Non
     re-raising — otherwise a missed 5a window strands a previously-drivable ECU in flash mode."""
     if entry_mode not in ("auto", "direct", "boot"):
         raise ValueError(f"unknown Soft-BSL entry mode {entry_mode!r}")
-    if entry_mode in ("direct", "boot") and chip_family not in ("amd", "intel"):
+    if entry_mode == "direct" and chip_family not in ("amd", "intel"):
         raise SoftBSLError(
             "Soft-BSL recovery requires a known Intel/AMD flash-driver family; "
             "no port was opened and nothing was erased.")
@@ -305,13 +322,32 @@ def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=Non
     try:
         direct = entry_mode in ("direct", "boot") or bool(
             getattr(sb, "calguard_direct_entry_ready", lambda: False)())
-        if direct and chip_family not in ("amd", "intel"):
+        resolved_chip_family = chip_family
+        if entry_mode == "boot":
+            sb.prearm_calguard_boot(timeout=boot_timeout)
+            signature = bytes(d.read_mem(ecu_info.DRV_SIG_ADDR, ecu_info.DRV_SIG_LEN))
+            resolved_chip_family = ecu_info.chip_family(signature)
+            if resolved_chip_family not in ("amd", "intel"):
+                raise SoftBSLError(
+                    "CalGuard recovery acknowledged, but the preserved boot flash-driver "
+                    f"signature was not recognized ({signature.hex() or 'no data'}). "
+                    "No RAM agent was loaded and nothing was erased.")
+            sb.boot_chip_family = resolved_chip_family
+            sb.boot_driver_signature = signature
+            log(
+                "CalGuard recovery detected "
+                + (
+                    "Intel 28F200"
+                    if resolved_chip_family == "intel" else
+                    "AMD 29F200/29F400"
+                )
+                + " from the preserved boot flash driver."
+            )
+        if direct and resolved_chip_family not in ("amd", "intel"):
             raise SoftBSLError(
                 "Direct Soft-BSL recovery requires a known Intel/AMD flash-driver family; "
                 "no agent was loaded and nothing was erased.")
-        agent = _sb.load_agent(_sb.agent_path_for_family(chip_family))
-        if entry_mode == "boot":
-            sb.prearm_calguard_boot()
+        agent = _sb.load_agent(_sb.agent_path_for_family(resolved_chip_family))
         if direct:
             if entry_mode == "direct":
                 log("Forced direct Soft-BSL recovery: sending staged 0x5A without 0x2A.")
@@ -348,6 +384,180 @@ def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=Non
     if staged:
         sb.staged_entry = True
     return d, sb
+
+
+def open_boot_recovery(port, log, *, baud="high", timeout=15.0):
+    """Catch CalGuard V4 at key-on and retain the running RAM agent."""
+    d, sb = _open_session(
+        port,
+        log,
+        None,
+        require_d2xx=True,
+        baud_tier=baud,
+        entry_mode="boot",
+        boot_timeout=timeout,
+    )
+    return SoftBSLBootSession(
+        port=str(port),
+        ds2=d,
+        agent=sb,
+        baud=baud,
+        chip_family=sb.boot_chip_family,
+        driver_signature=sb.boot_driver_signature,
+    )
+
+
+def close_boot_recovery(session, log):
+    """Return a retained boot-recovery session to marker 0, then close COM."""
+    if not isinstance(session, SoftBSLBootSession):
+        raise TypeError("session must be a SoftBSLBootSession")
+    if not session.is_open:
+        return True
+    session.agent.log = _agent_log(log)
+    if not _recover_marker0(session.agent, log):
+        return False
+    session.ds2.close()
+    return True
+
+
+def read_boot_recovery(session, scope, progress_cb, log):
+    """Read through an already-running CalGuard/Soft-BSL recovery agent."""
+    if not isinstance(session, SoftBSLBootSession):
+        raise TypeError("session must be a SoftBSLBootSession")
+    if not session.is_open:
+        raise SoftBSLRecoveryStateError("the CalGuard recovery session is closed")
+    session.agent.log = _agent_log(log)
+    if scope == "tune":
+        return session.agent.read_range(
+            _TUNE_CPU_BASE,
+            _TUNE_SIZE,
+            progress_cb=progress_cb,
+            descramble=False,
+            log_fn=log,
+        )
+    if scope == "full":
+        return session.agent.read_range(
+            0,
+            _sb.IMAGE_SIZE,
+            progress_cb=progress_cb,
+            descramble=True,
+            log_fn=log,
+        )
+    raise ValueError(f"unknown retained read scope {scope!r}")
+
+
+def read_boot_recovery_range(session, address, length):
+    """CRC-read a small raw CPU-address range without closing the session."""
+    if not isinstance(session, SoftBSLBootSession):
+        raise TypeError("session must be a SoftBSLBootSession")
+    if not session.is_open:
+        raise SoftBSLRecoveryStateError("the CalGuard recovery session is closed")
+    return session.agent.read_range(address, length, descramble=False)
+
+
+def _retained_write_failed(session, operation, target, scope, prompt, do_verify,
+                           write_bootloader, tracker, error, log):
+    if not tracker.destructive_started:
+        raise error
+    recovery = SoftBSLWriteRecovery(
+        port=session.port,
+        ds2=session.ds2,
+        agent=session.agent,
+        operation=operation,
+        target=target,
+        scope=scope,
+        baud=session.baud,
+        prompt=prompt,
+        do_verify=bool(do_verify),
+        write_bootloader=bool(write_bootloader),
+        chip_family=session.chip_family,
+        error=error,
+    )
+    log(
+        "FLASH INCOMPLETE: erase began, so the retained CalGuard/Soft-BSL "
+        "session remains open. DO NOT TURN IGNITION OFF."
+    )
+    raise SoftBSLWriteRecoveryRequired(recovery) from error
+
+
+def write_tune_boot_recovery(session, partial, log, progress_cb=None, do_verify=True):
+    """Write a tune through the retained recovery agent, with no route fallback."""
+    if not isinstance(session, SoftBSLBootSession):
+        raise TypeError("session must be a SoftBSLBootSession")
+    if not session.is_open:
+        raise SoftBSLRecoveryStateError("the CalGuard recovery session is closed")
+    target = bytes(partial)
+    tracker = _WriteProgressTracker(progress_cb)
+    session.agent.log = _agent_log(log)
+    try:
+        _prove_write_link(session.agent, session.baud, log)
+        session.agent.write_tune_partial(
+            target,
+            do_verify=do_verify,
+            progress_cb=tracker,
+        )
+    except Exception as error:
+        _retained_write_failed(
+            session, "tune", target, "tune", None, do_verify, False,
+            tracker, error, log)
+    if not do_verify:
+        log("Read-back verification skipped (Verify off). ECU-side finalization will continue.")
+    try:
+        if not _recover_marker0(session.agent, log):
+            raise SoftBSLRecoveryStateError(
+                "tune write completed, but E740=0 / stock DS2 finalization was not confirmed")
+    finally:
+        session.ds2.close()
+    return True
+
+
+def run_flash_boot_recovery(
+        session, image, scope, prompt, log, progress_cb=None,
+        do_verify=True, write_bootloader=False):
+    """Write a full image through the retained recovery agent, with no fallback."""
+    if not isinstance(session, SoftBSLBootSession):
+        raise TypeError("session must be a SoftBSLBootSession")
+    if not session.is_open:
+        raise SoftBSLRecoveryStateError("the CalGuard recovery session is closed")
+    target = bytes(image)
+    if scope != "sa1":
+        hybrid_error = MS41ECU.check_hybrid(target)
+        if hybrid_error:
+            raise FlashImageCompatibilityError(
+                f"Flash blocked before erase: {hybrid_error}")
+    validate_flash_image_family(
+        target, session.chip_family, write_bootloader=write_bootloader)
+    tracker = _WriteProgressTracker(progress_cb)
+    session.agent.log = _agent_log(log)
+    finalized_by_flash = False
+    try:
+        _prove_write_link(session.agent, session.baud, log)
+        session.agent.flash_image(
+            target,
+            scope=scope,
+            baud=session.baud,
+            prompt=prompt,
+            do_verify=do_verify,
+            write_bootloader=write_bootloader,
+            progress_cb=tracker,
+            chip="28f200" if session.chip_family == "intel" else "29f400",
+            baud_is_set=session.baud != "low",
+        )
+        finalized_by_flash = bool(do_verify)
+    except Exception as error:
+        _retained_write_failed(
+            session, "image", target, scope, prompt, do_verify,
+            write_bootloader, tracker, error, log)
+    if not do_verify:
+        log("Read-back verification skipped (Verify off). ECU-side finalization will continue.")
+    try:
+        if not _recover_marker0(
+                session.agent, log, finalize_sent=finalized_by_flash):
+            raise SoftBSLRecoveryStateError(
+                "full write completed, but E740=0 / stock DS2 finalization was not confirmed")
+    finally:
+        session.ds2.close()
+    return True
 
 
 def _set_agent_baud_if_needed(sb, tier):

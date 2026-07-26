@@ -484,6 +484,17 @@ SYSTEM_COLOURS = {
     "Power Supply":     "#ffaa44",
 }
 
+_ECU_VARIANT_MAP = {
+    "1437806": ("MS41.1", "60"),
+    "1438068": ("MS41.1", "60"),
+    "1429861": ("MS41.0", "41"),
+    "1432401": ("MS41.0", "41"),
+    "1429373": ("MS41.0", "59"),
+    "1438137": ("MS41.0", "85"),
+    "1406464": ("MS41.2", "12"),
+    "SHINDE1": ("MS41.3", "SS"),
+}
+
 
 # ---------------------------------------------------------------------------
 # ECU identify response parser
@@ -502,18 +513,6 @@ def _populate_ecu_info(ident: bytes, labels: dict) -> tuple:
     Returns (ecu_id, variant) — e.g. ('1437806', 'MS41.1').
     Both values are None if the relevant field couldn't be parsed.
     """
-    # ECU ID → (variant label, display ID prefix)
-    _ECU_VARIANT_MAP = {
-        "1437806": ("MS41.1", "60"),
-        "1438068": ("MS41.1", "60"),
-        "1429861": ("MS41.0", "41"),
-        "1432401": ("MS41.0", "41"),
-        "1429373": ("MS41.0", "59"),
-        "1438137": ("MS41.0", "85"),
-        "1406464": ("MS41.2", "12"),
-        "SHINDE1": ("MS41.3", "SS"),
-    }
-
     ecu_id  = None
     variant = None
     try:
@@ -595,6 +594,7 @@ class MS41FlashGUI(QMainWindow):
         self._native_write_recovery = None  # retained D2XX/session after a post-erase failure
         self._softbsl_write_recovery = None # retained Soft-BSL RAM agent after a post-erase failure
         self._softbsl_install_recovery = None # retained Phase-1/2 installer transport
+        self._softbsl_boot_session = None   # CalGuard key-on entry retained until read/write
         # A completed stock write leaves volatile authorization active until a
         # real OFF -> 10 s -> ON cycle.  Gate a subsequent write on RAM state so
         # it cannot reuse that stale authorization and enter flash programming.
@@ -875,11 +875,15 @@ class MS41FlashGUI(QMainWindow):
         self.rb_recovery_auto.setChecked(True)
         self.chk_force_slow_ds2 = QRadioButton("Force Slow DS2")
         self.chk_force_softbsl = QRadioButton("Force Direct Soft-BSL (0x5A)")
+        self.rb_recovery_boot = QRadioButton("CalGuard boot recovery (OFF → ON)")
         self.rb_recovery_auto.setStyleSheet("color:#aaa; padding:4px;")
-        for button in (self.chk_force_slow_ds2, self.chk_force_softbsl):
+        for button in (
+                self.chk_force_slow_ds2, self.chk_force_softbsl,
+                self.rb_recovery_boot):
             button.setStyleSheet("color:#e8c46a; padding:4px;")
         for button in (
-                self.rb_recovery_auto, self.chk_force_slow_ds2, self.chk_force_softbsl):
+                self.rb_recovery_auto, self.chk_force_slow_ds2,
+                self.chk_force_softbsl, self.rb_recovery_boot):
             button.toggled.connect(self._update_transfer_mode)
             recovery_row.addWidget(button)
         recovery_row.addStretch()
@@ -891,6 +895,11 @@ class MS41FlashGUI(QMainWindow):
             "Bypass automatic CalGuard/door detection and attempt the installed Soft-BSL "
             "loader directly with staged command 0x5A. Never sends 0x2A or falls back to DS2. "
             "Requires a known flash-driver family; a rejected trigger stops before erase.")
+        self.rb_recovery_boot.setToolTip(
+            "Connect with ignition OFF, repeatedly send CalGuard V4's key-on token, then "
+            "retain the acknowledged Soft-BSL RAM-agent session for a full/tune read or "
+            "boot-preserving write. The preserved boot driver identifies the flash family "
+            "before the RAM agent is selected. Requires D2XX.")
         lay.addWidget(self.grp_recovery_override)
 
         # ── Boot-region write row (requires Soft-BSL) ──────────────────────
@@ -939,7 +948,7 @@ class MS41FlashGUI(QMainWindow):
         lay.addLayout(extra_row)
         lay.addStretch()
 
-        self.tabs.addTab(tab, "  Flash  ")
+        self._flash_tab_index = self.tabs.addTab(tab, "  Flash  ")
 
     # ── DTC tab ─────────────────────────────────────────────────────────
 
@@ -1157,11 +1166,25 @@ class MS41FlashGUI(QMainWindow):
         else:
             self._disconnect()
 
+    def _calguard_boot_requested(self):
+        return bool(
+            getattr(self, "rb_recovery_boot", None)
+            and self.rb_recovery_boot.isChecked()
+            and self.tabs.currentIndex() == self._flash_tab_index
+        )
+
+    def _calguard_boot_session_active(self):
+        session = getattr(self, "_softbsl_boot_session", None)
+        return bool(session is not None and session.is_open)
+
     def _connect(self):
         port = self.cb_port.currentText()
         if not port or port.startswith("("):
             QMessageBox.warning(self, "No Serial Port", "Select a valid serial port.")
             self.btn_connect.setChecked(False)
+            return
+        if self._calguard_boot_requested():
+            self._connect_calguard_boot(port)
             return
         try:
             self._port_owner.acquire("flasher")
@@ -1260,11 +1283,138 @@ class MS41FlashGUI(QMainWindow):
             on_failure=lambda e: self._on_connect_failed(e),
         )
 
+    def _connect_calguard_boot(self, port):
+        if self.chk_direct_tap.isChecked():
+            QMessageBox.warning(
+                self,
+                "K-Line Required",
+                "This experimental CalGuard boot-recovery entry currently uses the "
+                "echoing K-Line Soft-BSL transport. Uncheck Direct tap and retry.",
+            )
+            self.btn_connect.setChecked(False)
+            return
+        if QMessageBox.question(
+                self,
+                "Arm CalGuard Boot Recovery",
+                "Confirm the ECU ignition is OFF.\n\n"
+                "After choosing Yes, watch the log for the armed message and turn "
+                "ignition ON. The tool will send the CalGuard token for up to 15 seconds "
+                "and retain the Soft-BSL RAM agent after acknowledgement. The preserved "
+                "boot flash driver will select the correct Intel or AMD RAM agent.",
+                QMessageBox.Yes | QMessageBox.Cancel,
+                QMessageBox.Cancel,
+        ) != QMessageBox.Yes:
+            self.btn_connect.setChecked(False)
+            return
+        try:
+            self._port_owner.acquire("softbsl")
+        except PortBusyError as error:
+            QMessageBox.warning(
+                self,
+                "Port Busy",
+                f"The serial port is held by '{error.holder}'. Finish that operation "
+                "before arming CalGuard recovery.",
+            )
+            self.btn_connect.setChecked(False)
+            return
+
+        self._connection_echo = True
+        self._connection_port = port
+        self._log(
+            f"Arming CalGuard V4 boot recovery on {port}; keep ignition OFF "
+            "until prompted in the log.",
+            "warn",
+        )
+
+        def task(log_fn, progress_fn):
+            progress_fn(0, 1, "Waiting for CalGuard key-on acknowledgement")
+            return softbsl_service.open_boot_recovery(
+                port,
+                log_fn,
+                baud="high",
+                timeout=15.0,
+            )
+
+        self._run_task(
+            task,
+            on_success=self._on_calguard_boot_connected,
+            on_failure=self._on_calguard_boot_connect_failed,
+        )
+
+    def _on_calguard_boot_connected(self, session):
+        self._softbsl_boot_session = session
+        self._ecu_chip_sig = bytes(
+            getattr(session, "driver_signature", b"") or b"")
+        self._flash_chip_note.setText(
+            self._flash_chip_label_text(self._ecu_chip_sig))
+        self._d2xx_checked = True
+        self._d2xx_ok = True
+        self._update_d2xx_warning()
+        self._start_session_log()
+        self.lbl_status.setText("● Connected (CalGuard Recovery)")
+        self.lbl_status.setStyleSheet("color:#5f5; font-weight:bold;")
+        self.lbl_variant.setText("Soft-BSL RAM agent")
+        self.btn_connect.setText("Disconnect")
+        self._update_transfer_mode()
+        self._set_calguard_boot_buttons_enabled()
+        self._log(
+            "CalGuard acknowledged the key-on token and the Soft-BSL RAM agent is "
+            "retained. Full-ROM recovery is available immediately; tune writes remain "
+            "gated by the live program compatibility evidence.",
+            "ok",
+        )
+
+    def _on_calguard_boot_connect_failed(self, error):
+        self._softbsl_boot_session = None
+        self._port_owner.release("softbsl")
+        self._connection_port = None
+        self._d2xx_checked = False
+        self._d2xx_ok = False
+        self._update_d2xx_warning()
+        self.btn_connect.setChecked(False)
+        self.btn_connect.setText("Connect")
+        self._log(f"CalGuard boot recovery connection failed: {error}", "error")
+        QMessageBox.critical(
+            self,
+            "CalGuard Boot Recovery Failed",
+            f"{error}\n\nNothing was erased or written.",
+        )
+
     def _disconnect(self):
+        boot_session = getattr(self, "_softbsl_boot_session", None)
+        if boot_session is not None:
+            if boot_session.is_open:
+                try:
+                    safe = softbsl_service.close_boot_recovery(
+                        boot_session, self._log)
+                except Exception as error:
+                    safe = False
+                    self._log(
+                        f"CalGuard recovery disconnect failed: {error}", "error")
+                if not safe:
+                    signals_were_blocked = self.btn_connect.blockSignals(True)
+                    try:
+                        self.btn_connect.setChecked(True)
+                        self.btn_connect.setText("Disconnect")
+                    finally:
+                        self.btn_connect.blockSignals(signals_were_blocked)
+                    QMessageBox.critical(
+                        self,
+                        "Recovery Session Still Active",
+                        "The ECU could not be confirmed back at E740=0, so the retained "
+                        "Soft-BSL session was not closed. Keep ignition ON and retry the "
+                        "recovery operation or disconnect.",
+                    )
+                    return False
+            self._softbsl_boot_session = None
+            self._port_owner.release("softbsl")
         if getattr(self, "_ds2", None):
             try: self._ds2.close()
             except Exception: pass
             self._ds2 = None
+        if (self._port_owner.owner == "softbsl"
+                and self._softbsl_write_recovery is None):
+            self._port_owner.release("softbsl")
         self._port_owner.release("flasher")
         self._connection_port = None
         # Remember the MS41.3 verdict BEFORE clearing it — a soft-BSL op (install / fast R-W) frees
@@ -1306,9 +1456,10 @@ class MS41FlashGUI(QMainWindow):
         self.lbl_variant.setText("")
         self.btn_connect.setText("Connect")
         self.btn_connect.setChecked(False)
-        self._set_ecu_buttons_enabled(False)
+        self._set_all_buttons_enabled(True)
         self._update_softbsl_install_options()
         self._log("Disconnected", "warn")
+        return True
 
     @staticmethod
     def _program_is_ms41_3(ds2) -> bool:
@@ -1481,6 +1632,26 @@ class MS41FlashGUI(QMainWindow):
                 and self._identity_isn_key == self._identity_connection_key()
                 and not self._task_busy))
 
+    def _set_calguard_boot_buttons_enabled(self):
+        """Retained-agent mode exposes only the Flash read/write surface."""
+        self._set_ecu_buttons_enabled(False)
+        self.btn_read_full.setEnabled(True)
+        self.btn_read_tune.setEnabled(True)
+        self.btn_write_full.setEnabled(True)
+        self.btn_write_tune.setEnabled(True)
+        self.btn_read_full.setToolTip(
+            "Read the complete ROM through the retained CalGuard/Soft-BSL session. "
+            "The session stays open afterward.")
+        self.btn_read_tune.setToolTip(
+            "Read the 24 KB calibration through the retained CalGuard/Soft-BSL "
+            "session. The session stays open afterward.")
+        self.btn_write_full.setToolTip(
+            "Write a validated full ROM through the retained CalGuard/Soft-BSL "
+            "session. The existing boot/identity region is preserved.")
+        self.btn_write_tune.setToolTip(
+            "Write a tune only when its Firmware Compatibility ID matches the "
+            "identifiable live program. A missing or corrupt program ID blocks it.")
+
     def _fast_read_available(self):
         """Whether the complete normal-mode Soft-BSL entry path is usable.
 
@@ -1508,6 +1679,8 @@ class MS41FlashGUI(QMainWindow):
 
     def _auto_transfer_route(self):
         """Return the preferred route without conflating Soft-BSL and native DS2."""
+        if self._calguard_boot_session_active():
+            return "softbsl"
         if (getattr(self, "chk_force_slow_ds2", None) is not None
                 and self.chk_force_slow_ds2.isChecked()):
             return "legacy_ds2"
@@ -1528,6 +1701,8 @@ class MS41FlashGUI(QMainWindow):
         )
 
     def _softbsl_entry_mode(self):
+        if self._calguard_boot_session_active():
+            return "retained"
         return "direct" if self._force_softbsl_recovery() else "auto"
 
     def _update_transfer_mode(self):
@@ -1538,7 +1713,21 @@ class MS41FlashGUI(QMainWindow):
             getattr(self, "chk_force_slow_ds2", None)
             and self.chk_force_slow_ds2.isChecked()
         )
-        if force_slow:
+        if self._calguard_boot_session_active():
+            self.lbl_transfer_mode.setText(
+                "Transfer: Retained CalGuard / Soft-BSL recovery session")
+            self.lbl_transfer_mode.setStyleSheet("color:#9ece6a; padding:4px;")
+            self.lbl_transfer_mode.setToolTip(
+                "The acknowledged key-on recovery session owns the port. Flash reads "
+                "and writes reuse this RAM agent without DS2 fallback or reopening COM.")
+        elif self._calguard_boot_requested():
+            self.lbl_transfer_mode.setText(
+                "Transfer: CalGuard boot recovery (connect with ignition OFF)")
+            self.lbl_transfer_mode.setStyleSheet("color:#e8c46a; padding:4px;")
+            self.lbl_transfer_mode.setToolTip(
+                "Connect will arm the raw CalGuard token, prompt for ignition ON, "
+                "and retain the Soft-BSL RAM agent after acknowledgement.")
+        elif force_slow:
             self.lbl_transfer_mode.setText("Transfer: DS2 9600 (forced ECU recovery)")
             self.lbl_transfer_mode.setStyleSheet("color:#e8c46a; padding:4px;")
             self.lbl_transfer_mode.setToolTip(
@@ -1668,6 +1857,12 @@ class MS41FlashGUI(QMainWindow):
         if cached is not None and len(cached) == MS41ECU.FULL_ROM_SIZE:
             start = MS41ECU.CODING_FAMILY_FILE_ADDR
             family = bytes(cached[start:start + 3])
+        elif self._calguard_boot_session_active():
+            family = bytes(softbsl_service.read_boot_recovery_range(
+                self._softbsl_boot_session,
+                MS41ECU.CODING_FAMILY_DS2_ADDR,
+                3,
+            ))
         else:
             if self._ds2 is None:
                 raise RuntimeError("normal DS2 is not connected")
@@ -1678,6 +1873,51 @@ class MS41FlashGUI(QMainWindow):
             shown = family.hex(" ") if family else "no data"
             raise RuntimeError(f"invalid live coding-family value ({shown})")
         return family
+
+    def _refresh_retained_program_evidence(self):
+        """Read only the program identifiers needed to gate a recovery tune."""
+        if not self._calguard_boot_session_active():
+            return
+        session = self._softbsl_boot_session
+        self._ecu_program_compatibility_id = None
+        self._ecu_program_variant = None
+        try:
+            ids = [
+                bytes(softbsl_service.read_boot_recovery_range(
+                    session, address ^ 0x4000, 4))
+                for address in FIRMWARE_COMPAT_PROGRAM_ADDRS
+            ]
+            if all(value.isdigit() for value in ids) and len(set(ids)) == 1:
+                self._ecu_program_compatibility_id = ids[0].decode("ascii")
+        except Exception as error:
+            self._log(f"Recovery program-ID read failed: {error}", "warn")
+            return
+        try:
+            ecu_id_raw = bytes(softbsl_service.read_boot_recovery_range(
+                session, ecu_info.FW_VERSION_ADDR, ecu_info.FW_VERSION_LEN))
+            signature = bytes(softbsl_service.read_boot_recovery_range(
+                session, SS1V2_PROG_SIG_ADDR ^ 0x4000, len(SS1V2_PROG_SIG)))
+            ecu_id = ecu_id_raw.decode("ascii") if ecu_id_raw.isdigit() else None
+            variant = (
+                "MS41.3"
+                if signature == SS1V2_PROG_SIG else
+                _ECU_VARIANT_MAP.get(ecu_id, (None, None))[0]
+            )
+            self._ecu_id = ecu_id
+            self._ecu_program_variant = variant
+            self._ecu_variant = variant
+        except Exception as error:
+            self._log(f"Recovery program-variant read failed: {error}", "warn")
+        if self._ecu_program_compatibility_id:
+            self._log(
+                "Recovery tune gate: live program compatibility "
+                f"{self._ecu_program_compatibility_id}"
+                + (
+                    f", {self._ecu_program_variant}."
+                    if self._ecu_program_variant else "."
+                ),
+                "ok",
+            )
 
     @staticmethod
     def _conversion_warning_policy():
@@ -1879,7 +2119,7 @@ class MS41FlashGUI(QMainWindow):
         self._log(f"Additional {label} copy saved: {copy_path}", "ok")
 
     def _on_read(self, mode: str):
-        if not self._ds2:
+        if not self._ds2 and not self._calguard_boot_session_active():
             QMessageBox.warning(self, "Not Connected", "Connect to the ECU first.")
             return
         is_full = (mode == "full")
@@ -1891,7 +2131,18 @@ class MS41FlashGUI(QMainWindow):
         entry_mode = self._softbsl_entry_mode()
 
         def task(log_fn, progress_fn):
-            if is_full:
+            if entry_mode == "retained":
+                log_fn(
+                    "Reading through the retained CalGuard/Soft-BSL recovery session.",
+                    "ok",
+                )
+                data = softbsl_service.read_boot_recovery(
+                    self._softbsl_boot_session,
+                    mode,
+                    progress_fn,
+                    log_fn,
+                )
+            elif is_full:
                 if transfer_route == "softbsl":
                     log_fn("Using the Soft-BSL RAM agent with automatic baud fallback.", "ok")
                     data = self._run_via_softbsl(
@@ -1944,6 +2195,8 @@ class MS41FlashGUI(QMainWindow):
             try:
                 if is_full:
                     entry = self._record_full_ecu_read(data, source="ECU read")
+                    if self._calguard_boot_session_active():
+                        self._set_calguard_boot_buttons_enabled()
                 else:
                     entry = self._backup_save_bytes(
                         bytearray(data), "tune", source="ECU read")
@@ -2038,7 +2291,7 @@ class MS41FlashGUI(QMainWindow):
                 f"Flash aborted.")
             return
 
-        if self._ds2 is not None:
+        if self._ds2 is not None or self._calguard_boot_session_active():
             if mode == "full":
                 self._ds2_write_full(data, os.path.basename(path))
             else:
@@ -2138,6 +2391,10 @@ class MS41FlashGUI(QMainWindow):
                 self._log("DS2 write cancelled — checksum not valid.", "warn")
                 return
 
+        retained_recovery = self._softbsl_entry_mode() == "retained"
+        if retained_recovery:
+            self._refresh_retained_program_evidence()
+
         # ── Program / calibration compatibility guard ────────────────────────
         # A partial calibration that does not match the live program can brick the ECU.
         from ms41 import MS41ECU
@@ -2186,7 +2443,8 @@ class MS41FlashGUI(QMainWindow):
                     "Firmware compatibility mismatch — ECU program "
                     f"'{ecu_program_compatibility_id}' vs tune calibration "
                     f"'{file_compatibility_id}'.")
-        if not confirmed_mismatch and not ecu_variant:
+        if (not confirmed_mismatch and not ecu_variant
+                and not ecu_program_compatibility_id):
             uncertain_warn = ("Connected ECU variant could not be determined — "
                               "cannot confirm this tune belongs to the connected ECU.")
 
@@ -2216,6 +2474,8 @@ class MS41FlashGUI(QMainWindow):
         backup_before_write = self.chk_backup_before_write.isChecked()
         if fast_route:
             transport = (
+                "Retained CalGuard / Soft-BSL recovery session"
+                if retained_recovery else
                 "Direct Soft-BSL 0x5A (forced recovery; no 0x2A/DS2 fallback)"
                 if entry_mode == "direct" else
                 "Direct Soft-BSL 0x5A (automatic CalGuard recovery)"
@@ -2244,6 +2504,8 @@ class MS41FlashGUI(QMainWindow):
             return
 
         image_bytes = bytes(image)
+        retained_coding_family = (
+            self._live_coding_family() if retained_recovery else None)
         backup_entry_box = [None]
         self._invalidate_current_full_read("calibration write started")
 
@@ -2262,6 +2524,7 @@ class MS41FlashGUI(QMainWindow):
                 verify_write=verify_write,
                 route=transfer_route,
                 entry_mode=entry_mode,
+                coding_family=retained_coding_family,
             )
             if verify_write:
                 return "Calibration write completed and read-back verification passed."
@@ -2275,6 +2538,8 @@ class MS41FlashGUI(QMainWindow):
                 self._ecu_calguard_recovery_ready = False
                 self._update_transfer_mode()
             self._finish_flash_success("Calibration Write Complete", msg)
+            if retained_recovery:
+                self._disconnect()
 
         def on_failure(error_msg):
             if backup_entry_box[0] is not None:
@@ -2288,6 +2553,8 @@ class MS41FlashGUI(QMainWindow):
             if self._offer_active_flash_recovery(
                     f"The calibration write failed after erase began:\n{error_msg}"):
                 return
+            if retained_recovery and not self._calguard_boot_session_active():
+                self._disconnect()
             QMessageBox.critical(self, "Calibration Write Failed",
                 f"The calibration write failed:\n{error_msg}\n\n"
                 "If the write was interrupted mid-way, the ECU may have a partially "
@@ -2343,8 +2610,9 @@ class MS41FlashGUI(QMainWindow):
         native_route = transfer_route == "native_ds2"
         entry_mode = self._softbsl_entry_mode()
         force_direct = entry_mode == "direct"
+        retained_recovery = entry_mode == "retained"
         automatic_recovery = self._calguard_recovery_available()
-        recovery_direct = force_direct or automatic_recovery
+        recovery_direct = force_direct or retained_recovery or automatic_recovery
         verify_write = self.chk_verify.isChecked()
         backup_before_write = self.chk_backup_before_write.isChecked()
         if archived_prewrite_image is not None:
@@ -2611,6 +2879,8 @@ class MS41FlashGUI(QMainWindow):
         chip_family = connected_chip_family if fast_route else None
         if fast_route:
             transport = (
+                "Retained CalGuard / Soft-BSL recovery session"
+                if retained_recovery else
                 "Direct Soft-BSL 0x5A (forced recovery; no 0x2A/DS2 fallback)"
                 if force_direct else
                 "Direct Soft-BSL 0x5A (automatic CalGuard recovery)"
@@ -2681,8 +2951,21 @@ class MS41FlashGUI(QMainWindow):
                     # SA1 file 0x4000-0x5FFF maps linearly to DS2 0x0000-0x1FFF via XOR 0x4000.
                     # read_memory_range handles DS2's 247-byte frame cap. This runs before the
                     # soft-BSL port handoff and reads no unrelated identity/descriptor bytes.
-                    sparse = [(lo, self._ds2.read_memory_range(lo ^ 0x4000, hi - lo))
-                              for lo, hi in ranges]
+                    if retained_recovery:
+                        sparse = [
+                            (lo, softbsl_service.read_boot_recovery_range(
+                                self._softbsl_boot_session,
+                                lo ^ 0x4000,
+                                hi - lo,
+                            ))
+                            for lo, hi in ranges
+                        ]
+                    else:
+                        sparse = [
+                            (lo, self._ds2.read_memory_range(
+                                lo ^ 0x4000, hi - lo))
+                            for lo, hi in ranges
+                        ]
                 except Exception as e:
                     return _BootGateBlock(boot_ids, reason=f"could not be read ({e})")  # fail-safe: no erase
                 missing = patch_service.missing_boot_patches_sparse(image_bytes, sparse)
@@ -2690,15 +2973,34 @@ class MS41FlashGUI(QMainWindow):
                     return _BootGateBlock(missing)     # abort BEFORE any erase
             log_fn("Starting full ROM write sequence…")
             if fast_route:
-                log_fn("Using the Soft-BSL RAM agent with automatic baud fallback.", "ok")
-                self._run_via_softbsl(
-                    lambda port, pf, lf: softbsl_service.run_flash(
-                        port, image_bytes, "full", self._softbsl_prompt, lf, baud="high",
-                        progress_cb=pf, do_verify=verify_write,
-                        write_bootloader=will_write_boot, chip_family=chip_family,
-                        entry_mode=entry_mode),
-                    log_fn, progress_fn,
-                    restore_after_success=not softbsl_missing_after_write)
+                if retained_recovery:
+                    log_fn(
+                        "Using the retained CalGuard/Soft-BSL RAM agent with no "
+                        "transport fallback.",
+                        "ok",
+                    )
+                    self._run_retained_softbsl_write(
+                        lambda session: softbsl_service.run_flash_boot_recovery(
+                            session,
+                            image_bytes,
+                            "full",
+                            self._softbsl_prompt,
+                            log_fn,
+                            progress_cb=progress_fn,
+                            do_verify=verify_write,
+                            write_bootloader=False,
+                        )
+                    )
+                else:
+                    log_fn("Using the Soft-BSL RAM agent with automatic baud fallback.", "ok")
+                    self._run_via_softbsl(
+                        lambda port, pf, lf: softbsl_service.run_flash(
+                            port, image_bytes, "full", self._softbsl_prompt, lf, baud="high",
+                            progress_cb=pf, do_verify=verify_write,
+                            write_bootloader=will_write_boot, chip_family=chip_family,
+                            entry_mode=entry_mode),
+                        log_fn, progress_fn,
+                        restore_after_success=not softbsl_missing_after_write)
             elif native_route:
                 log_fn(
                     "Using stock native DS2 with direct 187500 entry and a short "
@@ -2744,7 +3046,8 @@ class MS41FlashGUI(QMainWindow):
                     "The written image no longer contains a complete Soft-BSL entry "
                     f"path ({missing_text}). Disconnected so the next connection "
                     "detects the ECU's actual transfer route.", "warn")
-            if disconnect_after_success or native_route or softbsl_missing_after_write:
+            if (disconnect_after_success or native_route or retained_recovery
+                    or softbsl_missing_after_write):
                 # Stock full writes remain at high rate. A Soft-BSL write whose
                 # effective target loses the loader or normal-mode hook is also
                 # left disconnected so Connect performs fresh route detection.
@@ -2762,6 +3065,8 @@ class MS41FlashGUI(QMainWindow):
             if self._offer_active_flash_recovery(
                     f"The full write failed after erase began:\n{error_msg}"):
                 return
+            if retained_recovery and not self._calguard_boot_session_active():
+                self._disconnect()
             QMessageBox.critical(self, "Full ROM Write Failed",
                 f"The full ROM write failed:\n{error_msg}\n\n"
                 "If write was interrupted mid-way the ECU may be in a partially "
@@ -4975,7 +5280,8 @@ class MS41FlashGUI(QMainWindow):
 
     def _identity_connection_key(self, serial=None):
         """Fingerprint the live ECU/bank that is allowed to own cached critical data."""
-        if self._ds2 is None or not self._connection_port:
+        if ((self._ds2 is None and not self._calguard_boot_session_active())
+                or not self._connection_port):
             return None
         if not serial:
             try:
@@ -5893,6 +6199,9 @@ class MS41FlashGUI(QMainWindow):
     def _fast_chip_family(self):
         """The detected flash driver family ('amd'/'intel'/None) for picking the soft-BSL agent —
         an Intel 28F200 needs agent_28f.hex, not the AMD agent. From the connect-time chip probe."""
+        session = getattr(self, "_softbsl_boot_session", None)
+        if session is not None:
+            return session.chip_family
         return ecu_info.chip_family(getattr(self, "_ecu_chip_sig", b"") or b"")
 
     def _active_write_recovery(self):
@@ -8115,6 +8424,9 @@ class MS41FlashGUI(QMainWindow):
             if self._ecu_variant != program_variant:
                 self._ecu_variant = program_variant
                 self._log(f"Program variant confirmed from full read: {program_variant}", "ok")
+        program_compatibility_id = MS41ECU.read_program_compatibility_id(data)
+        if program_compatibility_id:
+            self._ecu_program_compatibility_id = program_compatibility_id
         identity_info = identity.decode_identity(data)
         if identity_info.serial and not self._ecu_identity_source:
             self._ecu_identity_source = data[:identity.BOOT_DATA_OFF + identity.BOOT_DATA_SIZE]
@@ -8515,6 +8827,17 @@ class MS41FlashGUI(QMainWindow):
         route = self._auto_transfer_route()
         if route == "softbsl":
             entry_mode = self._softbsl_entry_mode()
+            if entry_mode == "retained":
+                log_fn(
+                    "Retained CalGuard/Soft-BSL recovery read; COM stays open.",
+                    "ok",
+                )
+                return softbsl_service.read_boot_recovery(
+                    self._softbsl_boot_session,
+                    which,
+                    progress_fn,
+                    log_fn,
+                )
             label = (
                 "Direct Soft-BSL 0x5A recovery read"
                 if entry_mode == "direct" else
@@ -8547,9 +8870,10 @@ class MS41FlashGUI(QMainWindow):
         verify_write,
         route=None,
         entry_mode=None,
+        coding_family=None,
     ):
         """Write a tune through the same automatic route as the Flash tab."""
-        family = self._live_coding_family()
+        family = coding_family or self._live_coding_family()
         prepared = MS41ECU.graft_coding_family(bytes(image_bytes), family)
         if prepared != bytes(image_bytes):
             log_fn(
@@ -8566,6 +8890,23 @@ class MS41FlashGUI(QMainWindow):
         route = route or self._auto_transfer_route()
         if route == "softbsl":
             entry_mode = entry_mode or self._softbsl_entry_mode()
+            if entry_mode == "retained":
+                log_fn(
+                    "Retained CalGuard/Soft-BSL recovery tune write; no route fallback.",
+                    "ok",
+                )
+                self._run_retained_softbsl_write(
+                    lambda session: softbsl_service.write_tune_boot_recovery(
+                        session,
+                        bytes(image_bytes),
+                        log_fn,
+                        progress_cb=progress_fn,
+                        do_verify=verify_write,
+                    )
+                )
+                if not verify_write:
+                    log_fn(VERIFY_OFF_MESSAGE, "warn")
+                return
             label = (
                 "Direct Soft-BSL 0x5A recovery write"
                 if entry_mode == "direct" else
@@ -8596,6 +8937,24 @@ class MS41FlashGUI(QMainWindow):
             self._ds2_write("tune", bytes(image_bytes), progress_fn, log_fn)
             if verify_write:
                 self._ds2_verify_after_write("tune", bytes(image_bytes), log_fn, progress_fn)
+
+    def _run_retained_softbsl_write(self, operation):
+        """Run one write on the connected recovery agent and transfer failures safely."""
+        session = self._softbsl_boot_session
+        if session is None or not session.is_open:
+            raise RuntimeError("The retained CalGuard recovery session is not open.")
+        try:
+            result = operation(session)
+        except softbsl_service.SoftBSLWriteRecoveryRequired as error:
+            self._softbsl_write_recovery = error.recovery
+            self._softbsl_boot_session = None
+            raise
+        except Exception:
+            if not session.is_open:
+                self._softbsl_boot_session = None
+            raise
+        self._softbsl_boot_session = None
+        return result
 
     def _run_task(self, task_fn, on_success=None, on_failure=None):
         # A live-data poller owns the same DS2 link from a background thread.
@@ -8749,9 +9108,12 @@ class MS41FlashGUI(QMainWindow):
 
     def _set_all_buttons_enabled(self, enabled: bool):
         for button in (
-                self.rb_recovery_auto, self.chk_force_slow_ds2, self.chk_force_softbsl):
+                self.rb_recovery_auto, self.chk_force_slow_ds2,
+                self.chk_force_softbsl, self.rb_recovery_boot):
             button.setEnabled(enabled)
-        if enabled and self._ds2 is not None:
+        if enabled and self._calguard_boot_session_active():
+            self._set_calguard_boot_buttons_enabled()
+        elif enabled and self._ds2 is not None:
             self._set_ds2_buttons_enabled()          # DS2 connected: enable ECU ops
         else:
             self._set_ecu_buttons_enabled(False)     # disconnected: disable ECU ops
@@ -8759,9 +9121,18 @@ class MS41FlashGUI(QMainWindow):
             w.setEnabled(enabled)
         # Direct Tap controls transport construction (echo suppression) and cannot be changed
         # on an already-open DS2 session. Keep the selected value, but lock it with the port.
-        connection_editable = enabled and self._ds2 is None
+        connection_editable = (
+            enabled
+            and self._ds2 is None
+            and not self._calguard_boot_session_active()
+        )
         self.cb_port.setEnabled(connection_editable)
         self.chk_direct_tap.setEnabled(connection_editable)
+        if self._calguard_boot_session_active():
+            for button in (
+                    self.rb_recovery_auto, self.chk_force_slow_ds2,
+                    self.chk_force_softbsl, self.rb_recovery_boot):
+                button.setEnabled(False)
         self._set_bsl_controls_enabled(enabled)
         self._update_softbsl_crossbank_button()
         self._update_transfer_mode()
@@ -8852,7 +9223,9 @@ class MS41FlashGUI(QMainWindow):
                 "warn",
             )
         self._on_live_stop()
-        self._disconnect()                       # closes the DS2 handle + releases the 'flasher' owner
+        if self._disconnect() is False:
+            event.ignore()
+            return
         # Defensively release the soft-BSL owner too: a Fast op normally releases it in its own finally,
         # but a mid-flight close might not have reached that, which would leave the port marked busy.
         try:
