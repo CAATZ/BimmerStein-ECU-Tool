@@ -2928,7 +2928,7 @@ def test_force_slow_ds2_overrides_softbsl_and_disables_boot_write():
         w.chk_force_slow_ds2.setChecked(True)
 
         assert w._auto_transfer_route() == "legacy_ds2"
-        assert "forced ECU recovery" in w.lbl_transfer_mode.text()
+        assert w.lbl_transfer_mode.text() == "Transfer: DS2 (slow, forced)"
         assert w.chk_bootloader_write.isChecked() is False
         assert w.chk_bootloader_write.isEnabled() is False
     finally:
@@ -2950,7 +2950,7 @@ def test_recovery_override_group_can_force_direct_softbsl_without_detection():
         assert w.chk_force_slow_ds2.isChecked() is False
         assert w._auto_transfer_route() == "softbsl"
         assert w._softbsl_entry_mode() == "direct"
-        assert "Direct Soft-BSL 0x5A" in w.lbl_transfer_mode.text()
+        assert w.lbl_transfer_mode.text() == "Transfer: Soft-BSL recovery (forced)"
         assert w.chk_bootloader_write.isChecked() is False
         assert w.chk_bootloader_write.isEnabled() is False
     finally:
@@ -3013,7 +3013,7 @@ def test_calguard_boot_connect_retains_softbsl_and_locks_flash_route(monkeypatch
         }
         assert w._port_owner.owner == "softbsl"
         assert w._softbsl_entry_mode() == "retained"
-        assert "Retained CalGuard" in w.lbl_transfer_mode.text()
+        assert w.lbl_transfer_mode.text() == "Transfer: CalGuard recovery"
         assert "Intel driver" in w._flash_chip_note.text()
         assert "28F200" in w._flash_chip_note.text()
         assert "AMD 29F" not in w._flash_chip_note.text()
@@ -3100,7 +3100,7 @@ def test_automatic_calguard_recovery_routes_without_normal_softbsl_detection():
         assert w._fast_read_available() is False
         assert w._auto_transfer_route() == "softbsl"
         assert w._softbsl_entry_mode() == "auto"
-        assert "CalGuard recovery, auto" in w.lbl_transfer_mode.text()
+        assert w.lbl_transfer_mode.text() == "Transfer: Soft-BSL recovery"
         assert w.chk_bootloader_write.isEnabled() is False
     finally:
         w.close()
@@ -3129,7 +3129,8 @@ def test_transfer_mode_uses_native_ds2_when_loader_exists_without_hook():
 
         assert w._fast_read_available() is False
         assert w._auto_transfer_route() == "native_ds2"
-        assert "Soft-BSL hook not detected" in w.lbl_transfer_mode.text()
+        assert w.lbl_transfer_mode.text() == (
+            "Transfer: Native DS2 (Soft-BSL unavailable)")
     finally:
         w.close()
 
@@ -3175,7 +3176,7 @@ def test_transfer_mode_ds2_without_d2xx_even_with_marker():
         w._ecu_softbsl_hook_present = True
         w._update_transfer_mode()
         assert w._fast_read_available() is False
-        assert "D2XX" in w.lbl_transfer_mode.text()
+        assert w.lbl_transfer_mode.text() == "Transfer: DS2 (slow)"
     finally:
         w.close()
 
