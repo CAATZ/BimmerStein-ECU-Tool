@@ -282,6 +282,19 @@ def test_ac_type_feature_exposes_requested_combobox_choices():
     assert feature.options == [("E39", 0x10), ("E36", 0x06)]
 
 
+def test_transmission_uses_only_low_six_bits_and_preserves_other_bits():
+    feature = next(f for f in ecu_config.FEATURES if f.name == "Transmission")
+
+    assert feature.current(0xAC) == "AT/MT (auto)"  # MS41.0
+    assert feature.current(0xEC) == "AT/MT (auto)"  # MS41.1
+    assert feature.current(0xC0) == "MT Only"       # MS41.2/3
+    for original in range(0x100):
+        for label, value in feature.options:
+            changed = feature.apply(original, label)
+            assert changed & 0xC0 == original & 0xC0
+            assert changed & 0x3F == value
+
+
 def test_ac_type_decodes_known_working_e39_and_e36_values():
     assert ecu_config.read_config(_partial_with_byte4(0x30))["A/C Type"] == "E39"
     assert ecu_config.read_config(_partial_with_byte4(0x26))["A/C Type"] == "E36"
