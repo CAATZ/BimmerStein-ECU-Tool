@@ -298,7 +298,7 @@ Special thanks to the people who helped shape and validate BimmerStein ECU Tool.
 | **Alphamk4** | MS41.0 patch testing |
 | [**Siemens_MS41_Checksum**](https://github.com/kimfreding/Siemens_MS41_Checksum) (kimfreding) and [**pyms41**](https://github.com/OpenMS41/pyms41) (jpiccari) | MS41 CRC-16 checksum work that `ms41_checksum.py` builds on |
 | [**c166-ghidra-module**](https://github.com/keyhana/c166-ghidra-module) (keyhana) | C166 SLEIGH processor module for [**Ghidra**](https://github.com/NationalSecurityAgency/ghidra), used to disassemble and assemble the RAM monitor and the `0xFA40` stubs |
-| [**handmade0octopus**](https://github.com/handmade0octopus) | DS2 protocol references |
+| [**handmade0octopus**](https://github.com/handmade0octopus) | DS2 protocol references and boot recovery idea |
 
 ## License and provenance
 
