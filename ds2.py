@@ -487,7 +487,7 @@ class DS2Interface:
     # Per-ECU-family addresses for entries that vary across MS41 variants.
     # Entries 0-4, 6-13, 18-23 are shared (same address on every MS41).
     #
-    # Columns: (tps, lt_b1, lt_b2, st_b1_hi, st_b2_hi, injector_pw, engine_load)
+    # Columns: (tps, lt_b1, lt_b2, st_b1_hi, st_b2_hi, injector_pw, engine_load, battery)
     #   tps   — throttle position (1b)
     #   lt_b1/b2 — long-term additive fuel trim banks 1/2 (2b, unsigned LE, centre 0x8000)
     #   st_b1/b2 — short-term integrator banks 1/2 (1b = high byte of LE 16b value,
@@ -495,18 +495,18 @@ class DS2Interface:
     #              Cross-checked: 1406464 st_b1=0xF01F = 0xF01E+1 ✓, st_b2=0xF0CB = 0xF0CA+1 ✓
     _BATCH_ECU_ADDRS = {
         # MS41.1 — E36/E39/Z3 M52
-        "1437806": (0xE8D7, 0xF048, 0xF104, 0xF037, 0xF0F3, 0xEF96, 0xFC52),
-        "1438068": (0xE8D7, 0xF048, 0xF104, 0xF037, 0xF0F3, 0xEF96, 0xFC52),
+        "1437806": (0xE8D0, 0xF048, 0xF104, 0xF037, 0xF0F3, 0xEF96, 0xFC52, 0xFC9D),
+        "1438068": (0xE8D0, 0xF048, 0xF104, 0xF037, 0xF0F3, 0xEF96, 0xFC52, 0xFC9D),
         # MS41.0
-        "1429861": (0xE8D7, 0xED6E, 0xEDA8, 0xED5D, 0xED97, 0xECBC, 0xFAFC),
-        "1432401": (0xE8D7, 0xED6E, 0xEDA8, 0xED5D, 0xED97, 0xECBC, 0xFAFC),
-        "1429373": (0xE8D7, 0xED6E, 0xEDA8, 0xED5D, 0xED97, 0xECBC, 0xFAFC),
-        "1438137": (0xE8D7, 0xED6E, 0xEDA8, 0xED5D, 0xED97, 0xECBC, 0xFAFC),
+        "1429861": (0xE8D0, 0xED6E, 0xEDA8, 0xED5D, 0xED97, 0xECBC, 0xFAFC, 0xFB47),
+        "1432401": (0xE8D0, 0xED6E, 0xEDA8, 0xED5D, 0xED97, 0xECBC, 0xFAFC, 0xFB47),
+        "1429373": (0xE8D0, 0xED6E, 0xEDA8, 0xED5D, 0xED97, 0xECBC, 0xFAFC, 0xFB47),
+        "1438137": (0xE8D0, 0xED6E, 0xEDA8, 0xED5D, 0xED97, 0xECBC, 0xFAFC, 0xFB47),
         # MS41.2 E36 M3 S52 / MS41.3 bench build (shares MS41.2 RAM layout)
-        "1406464": (0xE8D0, 0xF030, 0xF0DC, 0xF01F, 0xF0CB, 0xEF7E, 0xFC52),
-        "SHINDE1": (0xE8D0, 0xF030, 0xF0DC, 0xF01F, 0xF0CB, 0xEF7E, 0xFC52),
+        "1406464": (0xE8D0, 0xF030, 0xF0DC, 0xF01F, 0xF0CB, 0xEF7E, 0xFC52, 0xFC9D),
+        "SHINDE1": (0xE8D0, 0xF030, 0xF0DC, 0xF01F, 0xF0CB, 0xEF7E, 0xFC52, 0xFC9D),
     }
-    _BATCH_ECU_DEFAULT = (0xE8D7, 0xF048, 0xF104, 0xF037, 0xF0F3, 0xEF96, 0xFC52)
+    _BATCH_ECU_DEFAULT = (0xE8D0, 0xF048, 0xF104, 0xF037, 0xF0F3, 0xEF96, 0xFC52, 0xFC9D)
 
     # Session ID used in both setup and poll frames
     _BATCH_SESSION_ID = 0x1A
@@ -517,7 +517,7 @@ class DS2Interface:
         if entries is not None:
             return cls._build_custom_batch_setup(entries)
         key = str(ecu_id)[:7].strip() if ecu_id else ""
-        tps, lt1, lt2, st1, st2, inj, load = cls._BATCH_ECU_ADDRS.get(
+        tps, lt1, lt2, st1, st2, inj, load, battery = cls._BATCH_ECU_ADDRS.get(
             key, cls._BATCH_ECU_DEFAULT)
         return bytes.fromhex(
             "011A"                  # subcmd=0x01, session_id=0x1A
@@ -532,9 +532,9 @@ class DS2Interface:
             "010000DA34"            # entry  7: 2b @ 0xDA34  Mass Air Flow
             "000000DA5A"            # entry  8: 1b @ 0xDA5A  Coolant Temp
             "000000DA50"            # entry  9: 1b @ 0xDA50  Intake Air Temp
-            "000000FC9D"            # entry 10: 1b @ 0xFC9D  Battery Voltage
+            f"000000{battery:04X}"   # entry 10: 1b Battery Voltage
             "000000E9D9"            # entry 11: 1b Global Knock Retard
-            "000000E9E6"            # entry 12: 1b VANOS Advance
+            "000000E9E6"            # entry 12: 1b VANOS measured angle
             "000000DA56"            # entry 13: 1b @ 0xDA56  CPV Duty Cycle
             f"010000{lt1:04X}"      # entry 14: 2b @ lt1    Fuel Trim LT B1
             f"010000{lt2:04X}"      # entry 15: 2b @ lt2    Fuel Trim LT B2

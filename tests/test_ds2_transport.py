@@ -694,7 +694,8 @@ def test_ms412_batch_setup_includes_all_fast_logger_parameters():
     payload = DS2Interface._build_batch_setup("1406464")
     # Dynamic MS41.2/MS41.3 addresses: injector PW, load, TPS, and both trim banks.
     for entry in ("010000EF7E", "010000FC52", "000000E8D0",
-                  "010000F030", "010000F0DC", "000000F01F", "000000F0CB"):
+                  "010000F030", "010000F0DC", "000000F01F", "000000F0CB",
+                  "000000FC9D"):
         assert bytes.fromhex(entry) in payload
     # Shared parameters that previously required six extra cmd-0x06 transactions.
     for entry in ("010000DA36", "000000DA63", "000000E9D9", "000000E9E6"):
@@ -705,6 +706,15 @@ def test_ms412_batch_setup_includes_all_fast_logger_parameters():
         assert bytes.fromhex(entry) in payload
     assert bytes.fromhex("000000F189") not in payload
     assert bytes.fromhex("000000F191") not in payload
+
+
+def test_ms410_batch_setup_uses_normalized_tps_and_ms410_battery():
+    payload = DS2Interface._build_batch_setup("1429861")
+
+    assert bytes.fromhex("000000E8D0") in payload
+    assert bytes.fromhex("000000FB47") in payload
+    assert bytes.fromhex("000000E8D7") not in payload
+    assert bytes.fromhex("000000FC9D") not in payload
 
 
 def test_custom_batch_plan_preserves_group_lengths_and_wire_size():
