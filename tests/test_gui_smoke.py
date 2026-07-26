@@ -2957,6 +2957,135 @@ def test_recovery_override_group_can_force_direct_softbsl_without_detection():
         w.close()
 
 
+def test_calguard_boot_connect_retains_softbsl_and_locks_flash_route(monkeypatch):
+    app, w = _gui()
+    opened = {}
+
+    class Session:
+        is_open = True
+        chip_family = "intel"
+        driver_signature = bytes.fromhex("e6f45000b84c6fe0")
+
+    session = Session()
+
+    def run_now(task, on_success=None, on_failure=None):
+        try:
+            result = task(lambda *_args, **_kwargs: None, lambda *_args: None)
+            if on_success:
+                on_success(result)
+        except Exception as error:
+            if on_failure:
+                on_failure(error)
+
+    try:
+        monkeypatch.setattr(w, "_run_task", run_now)
+        monkeypatch.setattr(w, "_start_session_log", lambda: None)
+        monkeypatch.setattr(
+            QMessageBox,
+            "question",
+            staticmethod(lambda *_args, **_kwargs: QMessageBox.Yes),
+        )
+        monkeypatch.setattr(
+            gui.softbsl_service,
+            "open_boot_recovery",
+            lambda port, log, **kwargs:
+                opened.update(port=port, kwargs=kwargs) or session,
+        )
+
+        def close_retained(target, _log):
+            assert target is session
+            target.is_open = False
+            return True
+
+        monkeypatch.setattr(
+            gui.softbsl_service, "close_boot_recovery", close_retained)
+
+        w.cb_port.clear()
+        w.cb_port.addItem("COM_TEST")
+        w.rb_recovery_boot.setChecked(True)
+        w.btn_connect.setChecked(True)
+        w._connect()
+        w._set_all_buttons_enabled(True)
+
+        assert opened == {
+            "port": "COM_TEST",
+            "kwargs": {"baud": "high", "timeout": 15.0},
+        }
+        assert w._port_owner.owner == "softbsl"
+        assert w._softbsl_entry_mode() == "retained"
+        assert "Retained CalGuard" in w.lbl_transfer_mode.text()
+        assert "Intel driver" in w._flash_chip_note.text()
+        assert "28F200" in w._flash_chip_note.text()
+        assert "AMD 29F" not in w._flash_chip_note.text()
+        assert w.btn_read_full.isEnabled()
+        assert w.btn_read_tune.isEnabled()
+        assert w.btn_write_full.isEnabled()
+        assert w.btn_write_tune.isEnabled()
+        assert not w.cb_port.isEnabled()
+
+        assert w._disconnect() is True
+        assert w._port_owner.is_free()
+        assert w._softbsl_boot_session is None
+        assert w.rb_recovery_auto.isEnabled()
+        assert w.chk_force_slow_ds2.isEnabled()
+        assert w.chk_force_softbsl.isEnabled()
+        assert w.rb_recovery_boot.isEnabled()
+    finally:
+        w.close()
+
+
+def test_calguard_boot_selection_is_scoped_to_flash_tab():
+    app, w = _gui()
+    try:
+        w.rb_recovery_boot.setChecked(True)
+        assert w._calguard_boot_requested()
+
+        softbsl_index = next(
+            index for index in range(w.tabs.count())
+            if w.tabs.tabText(index).strip() == "Soft-BSL"
+        )
+        w.tabs.setCurrentIndex(softbsl_index)
+
+        assert not w._calguard_boot_requested()
+        assert w._softbsl_entry_mode() == "auto"
+    finally:
+        w.close()
+
+
+def test_calguard_boot_uses_sparse_boot_and_program_evidence(monkeypatch):
+    app, w = _gui()
+
+    class Session:
+        is_open = True
+        chip_family = "intel"
+
+    values = {
+        MS41ECU.CODING_FAMILY_DS2_ADDR: b"909",
+        **{
+            address ^ 0x4000: b"0960"
+            for address in gui.FIRMWARE_COMPAT_PROGRAM_ADDRS
+        },
+        gui.ecu_info.FW_VERSION_ADDR: b"1437806",
+        gui.SS1V2_PROG_SIG_ADDR ^ 0x4000: b"\xFF" * len(gui.SS1V2_PROG_SIG),
+    }
+    try:
+        w._softbsl_boot_session = Session()
+        monkeypatch.setattr(
+            gui.softbsl_service,
+            "read_boot_recovery_range",
+            lambda _session, address, length: values[address][:length],
+        )
+
+        assert w._live_coding_family() == b"909"
+        w._refresh_retained_program_evidence()
+
+        assert w._ecu_program_compatibility_id == "0960"
+        assert w._ecu_program_variant == "MS41.1"
+    finally:
+        w._softbsl_boot_session = None
+        w.close()
+
+
 def test_automatic_calguard_recovery_routes_without_normal_softbsl_detection():
     app, w = _gui()
     try:
@@ -4671,6 +4800,22 @@ def test_close_event_warns_and_can_abort_when_task_busy(monkeypatch):
         assert not ev.isAccepted()             # chose No -> the close is vetoed
     finally:
         w._task_busy = False
+        w.close()
+
+
+def test_close_event_vetoes_when_retained_boot_session_cannot_finalize(monkeypatch):
+    from PyQt5.QtGui import QCloseEvent
+    app, w = _gui()
+    try:
+        monkeypatch.setattr(w, "_on_live_stop", lambda: None)
+        monkeypatch.setattr(w, "_disconnect", lambda: False)
+        event = QCloseEvent()
+
+        w.closeEvent(event)
+
+        assert not event.isAccepted()
+    finally:
+        monkeypatch.setattr(w, "_disconnect", lambda: True)
         w.close()
 
 
