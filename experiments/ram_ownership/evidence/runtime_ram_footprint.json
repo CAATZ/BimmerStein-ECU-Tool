@@ -1,0 +1,2163 @@
+{
+  "certification": "An untouched byte is not certified free.",
+  "direct_cases": [
+    "adc_t3_primary",
+    "adc_t3_secondary",
+    "pin_latch_low",
+    "pin_latch_high",
+    "ssc_rx",
+    "pec0_profile_bit_0",
+    "pec0_profile_bit_1",
+    "pec0_profile_bit_2",
+    "pec0_profile_bit_3",
+    "pec0_profile_bit_4",
+    "pec0_profile_bit_5",
+    "pec0_profile_bit_6",
+    "pec0_profile_bit_7",
+    "pec0_profile_bit_8",
+    "pec0_profile_bit_9",
+    "pec0_profile_bit_10",
+    "pec0_profile_bit_11",
+    "pec0_profile_bit_12",
+    "pec0_profile_bit_13"
+  ],
+  "limitations": [
+    "Interrupt scheduling is not modeled; body slices are invoked explicitly.",
+    "SCXT prologues and POP/RETI epilogues are excluded and their CP/DPP context is seeded.",
+    "The ADC slice starts at its common post-status path; the PEC eligibility guard is skipped and its pending profile bit is seeded.",
+    "PEC payload transfers are hardware events and are not executed by these body slices.",
+    "The emulator does not model CP-window register-bank aliasing.",
+    "Unsupported opcodes and operands are recorded, never guessed or counted as complete."
+  ],
+  "passed": 53,
+  "per_test": [
+    {
+      "nodeid": "direct::adc_t3_primary",
+      "outcome": "passed",
+      "read_bytes": 24,
+      "read_ranges": [
+        {
+          "bytes": 4,
+          "range": "0xFA9C-0xFA9F"
+        },
+        {
+          "bytes": 5,
+          "range": "0xFAAA-0xFAAE"
+        },
+        {
+          "bytes": 1,
+          "range": "0xFAB7-0xFAB7"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFBF8-0xFBFB"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFC50-0xFC51"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFCAC-0xFCAD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFD00-0xFD03"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFD22-0xFD23"
+        }
+      ],
+      "write_bytes": 14,
+      "write_ranges": [
+        {
+          "bytes": 5,
+          "range": "0xFAAA-0xFAAE"
+        },
+        {
+          "bytes": 1,
+          "range": "0xFAB7-0xFAB7"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFBF8-0xFBFB"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFCAC-0xFCAD"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFDFE-0xFDFF"
+        }
+      ]
+    },
+    {
+      "nodeid": "direct::adc_t3_secondary",
+      "outcome": "passed",
+      "read_bytes": 24,
+      "read_ranges": [
+        {
+          "bytes": 4,
+          "range": "0xFA9C-0xFA9F"
+        },
+        {
+          "bytes": 5,
+          "range": "0xFAB0-0xFAB4"
+        },
+        {
+          "bytes": 1,
+          "range": "0xFAB7-0xFAB7"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFBF8-0xFBFB"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFC50-0xFC51"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFCAC-0xFCAD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFD00-0xFD03"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFD22-0xFD23"
+        }
+      ],
+      "write_bytes": 14,
+      "write_ranges": [
+        {
+          "bytes": 5,
+          "range": "0xFAB0-0xFAB4"
+        },
+        {
+          "bytes": 1,
+          "range": "0xFAB7-0xFAB7"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFBF8-0xFBFB"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFCAC-0xFCAD"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFDFE-0xFDFF"
+        }
+      ]
+    },
+    {
+      "nodeid": "direct::pec0_profile_bit_0",
+      "outcome": "passed",
+      "read_bytes": 2,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        }
+      ],
+      "write_bytes": 6,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFDE0-0xFDE3"
+        }
+      ]
+    },
+    {
+      "nodeid": "direct::pec0_profile_bit_1",
+      "outcome": "passed",
+      "read_bytes": 2,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        }
+      ],
+      "write_bytes": 6,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFDE0-0xFDE3"
+        }
+      ]
+    },
+    {
+      "nodeid": "direct::pec0_profile_bit_10",
+      "outcome": "passed",
+      "read_bytes": 2,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        }
+      ],
+      "write_bytes": 6,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFDE0-0xFDE3"
+        }
+      ]
+    },
+    {
+      "nodeid": "direct::pec0_profile_bit_11",
+      "outcome": "passed",
+      "read_bytes": 2,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        }
+      ],
+      "write_bytes": 6,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFDE0-0xFDE3"
+        }
+      ]
+    },
+    {
+      "nodeid": "direct::pec0_profile_bit_12",
+      "outcome": "passed",
+      "read_bytes": 3,
+      "read_ranges": [
+        {
+          "bytes": 1,
+          "range": "0xE64A-0xE64A"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        }
+      ],
+      "write_bytes": 6,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFDE0-0xFDE3"
+        }
+      ]
+    },
+    {
+      "nodeid": "direct::pec0_profile_bit_13",
+      "outcome": "passed",
+      "read_bytes": 2,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        }
+      ],
+      "write_bytes": 6,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFDE0-0xFDE3"
+        }
+      ]
+    },
+    {
+      "nodeid": "direct::pec0_profile_bit_2",
+      "outcome": "passed",
+      "read_bytes": 4,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFD02-0xFD03"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        }
+      ],
+      "write_bytes": 8,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFD02-0xFD03"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFDE0-0xFDE3"
+        }
+      ]
+    },
+    {
+      "nodeid": "direct::pec0_profile_bit_3",
+      "outcome": "passed",
+      "read_bytes": 2,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        }
+      ],
+      "write_bytes": 6,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFDE0-0xFDE3"
+        }
+      ]
+    },
+    {
+      "nodeid": "direct::pec0_profile_bit_4",
+      "outcome": "passed",
+      "read_bytes": 2,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        }
+      ],
+      "write_bytes": 6,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFDE0-0xFDE3"
+        }
+      ]
+    },
+    {
+      "nodeid": "direct::pec0_profile_bit_5",
+      "outcome": "passed",
+      "read_bytes": 2,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        }
+      ],
+      "write_bytes": 6,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFDE0-0xFDE3"
+        }
+      ]
+    },
+    {
+      "nodeid": "direct::pec0_profile_bit_6",
+      "outcome": "passed",
+      "read_bytes": 2,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        }
+      ],
+      "write_bytes": 6,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFDE0-0xFDE3"
+        }
+      ]
+    },
+    {
+      "nodeid": "direct::pec0_profile_bit_7",
+      "outcome": "passed",
+      "read_bytes": 2,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        }
+      ],
+      "write_bytes": 6,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFDE0-0xFDE3"
+        }
+      ]
+    },
+    {
+      "nodeid": "direct::pec0_profile_bit_8",
+      "outcome": "passed",
+      "read_bytes": 2,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        }
+      ],
+      "write_bytes": 6,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFDE0-0xFDE3"
+        }
+      ]
+    },
+    {
+      "nodeid": "direct::pec0_profile_bit_9",
+      "outcome": "passed",
+      "read_bytes": 2,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        }
+      ],
+      "write_bytes": 6,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFDE0-0xFDE3"
+        }
+      ]
+    },
+    {
+      "nodeid": "direct::pin_latch_high",
+      "outcome": "passed",
+      "read_bytes": 2,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFD60-0xFD61"
+        }
+      ],
+      "write_bytes": 2,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFD60-0xFD61"
+        }
+      ]
+    },
+    {
+      "nodeid": "direct::pin_latch_low",
+      "outcome": "passed",
+      "read_bytes": 2,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFD60-0xFD61"
+        }
+      ],
+      "write_bytes": 2,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFD60-0xFD61"
+        }
+      ]
+    },
+    {
+      "nodeid": "direct::ssc_rx",
+      "outcome": "passed",
+      "read_bytes": 3,
+      "read_ranges": [
+        {
+          "bytes": 1,
+          "range": "0xF6E2-0xF6E2"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFD02-0xFD03"
+        }
+      ],
+      "write_bytes": 4,
+      "write_ranges": [
+        {
+          "bytes": 1,
+          "range": "0xF6FC-0xF6FC"
+        },
+        {
+          "bytes": 1,
+          "range": "0xF70F-0xF70F"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFD02-0xFD03"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/boot/test_boot_ram_footprint.py::test_boot_ram_footprint_covers_written_ram[.0]",
+      "outcome": "passed",
+      "read_bytes": 0,
+      "read_ranges": [],
+      "write_bytes": 0,
+      "write_ranges": []
+    },
+    {
+      "nodeid": "tests/boot/test_boot_ram_footprint.py::test_boot_ram_footprint_covers_written_ram[.1]",
+      "outcome": "passed",
+      "read_bytes": 0,
+      "read_ranges": [],
+      "write_bytes": 0,
+      "write_ranges": []
+    },
+    {
+      "nodeid": "tests/boot/test_boot_ram_footprint.py::test_boot_ram_footprint_covers_written_ram[.2]",
+      "outcome": "passed",
+      "read_bytes": 0,
+      "read_ranges": [],
+      "write_bytes": 0,
+      "write_ranges": []
+    },
+    {
+      "nodeid": "tests/boot/test_boot_ram_footprint.py::test_boot_ram_footprint_covers_written_ram[.3]",
+      "outcome": "passed",
+      "read_bytes": 0,
+      "read_ranges": [],
+      "write_bytes": 0,
+      "write_ranges": []
+    },
+    {
+      "nodeid": "tests/boot/test_boot_ram_footprint.py::test_boot_ram_selftest_footprint_matches_oracle[.0]",
+      "outcome": "passed",
+      "read_bytes": 7682,
+      "read_ranges": [
+        {
+          "bytes": 6658,
+          "range": "0xD800-0xF201"
+        },
+        {
+          "bytes": 1024,
+          "range": "0xFA00-0xFDFF"
+        }
+      ],
+      "write_bytes": 7682,
+      "write_ranges": [
+        {
+          "bytes": 6658,
+          "range": "0xD800-0xF201"
+        },
+        {
+          "bytes": 1024,
+          "range": "0xFA00-0xFDFF"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/boot/test_boot_ram_footprint.py::test_boot_ram_selftest_footprint_matches_oracle[.1]",
+      "outcome": "passed",
+      "read_bytes": 9200,
+      "read_ranges": [
+        {
+          "bytes": 8176,
+          "range": "0xD800-0xF7EF"
+        },
+        {
+          "bytes": 1024,
+          "range": "0xFA00-0xFDFF"
+        }
+      ],
+      "write_bytes": 9200,
+      "write_ranges": [
+        {
+          "bytes": 8176,
+          "range": "0xD800-0xF7EF"
+        },
+        {
+          "bytes": 1024,
+          "range": "0xFA00-0xFDFF"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/boot/test_boot_ram_footprint.py::test_boot_ram_selftest_footprint_matches_oracle[.2]",
+      "outcome": "passed",
+      "read_bytes": 9204,
+      "read_ranges": [
+        {
+          "bytes": 8180,
+          "range": "0xD800-0xF7F3"
+        },
+        {
+          "bytes": 1024,
+          "range": "0xFA00-0xFDFF"
+        }
+      ],
+      "write_bytes": 9204,
+      "write_ranges": [
+        {
+          "bytes": 8180,
+          "range": "0xD800-0xF7F3"
+        },
+        {
+          "bytes": 1024,
+          "range": "0xFA00-0xFDFF"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/boot/test_boot_ram_footprint.py::test_boot_ram_selftest_footprint_matches_oracle[.3]",
+      "outcome": "passed",
+      "read_bytes": 9204,
+      "read_ranges": [
+        {
+          "bytes": 8180,
+          "range": "0xD800-0xF7F3"
+        },
+        {
+          "bytes": 1024,
+          "range": "0xFA00-0xFDFF"
+        }
+      ],
+      "write_bytes": 9204,
+      "write_ranges": [
+        {
+          "bytes": 8180,
+          "range": "0xD800-0xF7F3"
+        },
+        {
+          "bytes": 1024,
+          "range": "0xFA00-0xFDFF"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/test_ds2.py::test_ds2_bad_request_checksum_is_not_accepted",
+      "outcome": "passed",
+      "read_bytes": 13,
+      "read_ranges": [
+        {
+          "bytes": 1,
+          "range": "0xE421-0xE421"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE64E-0xE64E"
+        },
+        {
+          "bytes": 3,
+          "range": "0xE650-0xE652"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE730-0xE731"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFBFC-0xFBFF"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFDDE-0xFDDF"
+        }
+      ],
+      "write_bytes": 17,
+      "write_ranges": [
+        {
+          "bytes": 4,
+          "range": "0xE420-0xE423"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE64E-0xE64E"
+        },
+        {
+          "bytes": 3,
+          "range": "0xE650-0xE652"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE65E-0xE65E"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE730-0xE731"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFBFC-0xFBFF"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFDDE-0xFDDF"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/test_ds2.py::test_ds2_identify_builds_46_byte_response_block",
+      "outcome": "passed",
+      "read_bytes": 35,
+      "read_ranges": [
+        {
+          "bytes": 10,
+          "range": "0xE520-0xE529"
+        },
+        {
+          "bytes": 4,
+          "range": "0xE532-0xE535"
+        },
+        {
+          "bytes": 10,
+          "range": "0xE544-0xE54D"
+        },
+        {
+          "bytes": 11,
+          "range": "0xE75C-0xE766"
+        }
+      ],
+      "write_bytes": 53,
+      "write_ranges": [
+        {
+          "bytes": 46,
+          "range": "0xE520-0xE54D"
+        },
+        {
+          "bytes": 7,
+          "range": "0xE760-0xE766"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/test_ds2.py::test_ds2_identify_end_to_end_over_the_byte_pipe",
+      "outcome": "passed",
+      "read_bytes": 80,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xE421-0xE422"
+        },
+        {
+          "bytes": 46,
+          "range": "0xE520-0xE54D"
+        },
+        {
+          "bytes": 3,
+          "range": "0xE64C-0xE64E"
+        },
+        {
+          "bytes": 4,
+          "range": "0xE650-0xE653"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE65A-0xE65B"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE730-0xE731"
+        },
+        {
+          "bytes": 11,
+          "range": "0xE75C-0xE766"
+        },
+        {
+          "bytes": 8,
+          "range": "0xFBF8-0xFBFF"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFDDE-0xFDDF"
+        }
+      ],
+      "write_bytes": 80,
+      "write_ranges": [
+        {
+          "bytes": 4,
+          "range": "0xE420-0xE423"
+        },
+        {
+          "bytes": 46,
+          "range": "0xE520-0xE54D"
+        },
+        {
+          "bytes": 3,
+          "range": "0xE64C-0xE64E"
+        },
+        {
+          "bytes": 4,
+          "range": "0xE650-0xE653"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE65A-0xE65B"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE72C-0xE72D"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE730-0xE731"
+        },
+        {
+          "bytes": 7,
+          "range": "0xE760-0xE766"
+        },
+        {
+          "bytes": 8,
+          "range": "0xFBF8-0xFBFF"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFDDE-0xFDDF"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/test_ds2.py::test_ds2_identify_via_full_dispatcher_matches_builder",
+      "outcome": "passed",
+      "read_bytes": 26,
+      "read_ranges": [
+        {
+          "bytes": 10,
+          "range": "0xE520-0xE529"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE653-0xE653"
+        },
+        {
+          "bytes": 11,
+          "range": "0xE75C-0xE766"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFBFC-0xFBFF"
+        }
+      ],
+      "write_bytes": 58,
+      "write_ranges": [
+        {
+          "bytes": 46,
+          "range": "0xE520-0xE54D"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE653-0xE653"
+        },
+        {
+          "bytes": 7,
+          "range": "0xE760-0xE766"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFBFC-0xFBFF"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/test_ds2.py::test_ds2_seedkey_correct_key_arms_write_phase",
+      "outcome": "passed",
+      "read_bytes": 17,
+      "read_ranges": [
+        {
+          "bytes": 5,
+          "range": "0xE422-0xE426"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE521-0xE521"
+        },
+        {
+          "bytes": 4,
+          "range": "0xE525-0xE528"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE658-0xE658"
+        },
+        {
+          "bytes": 6,
+          "range": "0xE746-0xE74B"
+        }
+      ],
+      "write_bytes": 16,
+      "write_ranges": [
+        {
+          "bytes": 5,
+          "range": "0xE422-0xE426"
+        },
+        {
+          "bytes": 4,
+          "range": "0xE525-0xE528"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE658-0xE658"
+        },
+        {
+          "bytes": 6,
+          "range": "0xE746-0xE74B"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/test_ds2.py::test_ds2_seedkey_derives_key_from_seed_and_flash_constants",
+      "outcome": "passed",
+      "read_bytes": 13,
+      "read_ranges": [
+        {
+          "bytes": 1,
+          "range": "0xE422-0xE422"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE521-0xE521"
+        },
+        {
+          "bytes": 4,
+          "range": "0xE525-0xE528"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE658-0xE658"
+        },
+        {
+          "bytes": 6,
+          "range": "0xE746-0xE74B"
+        }
+      ],
+      "write_bytes": 12,
+      "write_ranges": [
+        {
+          "bytes": 1,
+          "range": "0xE422-0xE422"
+        },
+        {
+          "bytes": 4,
+          "range": "0xE525-0xE528"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE658-0xE658"
+        },
+        {
+          "bytes": 6,
+          "range": "0xE746-0xE74B"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/test_flash.py::test_code_execution_from_seg0_ram_window",
+      "outcome": "passed",
+      "read_bytes": 4,
+      "read_ranges": [
+        {
+          "bytes": 4,
+          "range": "0xE320-0xE323"
+        }
+      ],
+      "write_bytes": 4,
+      "write_ranges": [
+        {
+          "bytes": 4,
+          "range": "0xE320-0xE323"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/test_flash.py::test_flash_erase_driver_runs_from_ram_copy",
+      "outcome": "passed",
+      "read_bytes": 184,
+      "read_ranges": [
+        {
+          "bytes": 27,
+          "range": "0xE320-0xE33A"
+        },
+        {
+          "bytes": 9,
+          "range": "0xE33C-0xE344"
+        },
+        {
+          "bytes": 9,
+          "range": "0xE346-0xE34E"
+        },
+        {
+          "bytes": 11,
+          "range": "0xE350-0xE35A"
+        },
+        {
+          "bytes": 12,
+          "range": "0xE35E-0xE369"
+        },
+        {
+          "bytes": 3,
+          "range": "0xE370-0xE372"
+        },
+        {
+          "bytes": 41,
+          "range": "0xE374-0xE39C"
+        },
+        {
+          "bytes": 21,
+          "range": "0xE39E-0xE3B2"
+        },
+        {
+          "bytes": 10,
+          "range": "0xE3B4-0xE3BD"
+        },
+        {
+          "bytes": 3,
+          "range": "0xE3DC-0xE3DE"
+        },
+        {
+          "bytes": 9,
+          "range": "0xE3E0-0xE3E8"
+        },
+        {
+          "bytes": 24,
+          "range": "0xE3EA-0xE401"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE656-0xE657"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE742-0xE742"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE744-0xE745"
+        }
+      ],
+      "write_bytes": 231,
+      "write_ranges": [
+        {
+          "bytes": 226,
+          "range": "0xE320-0xE401"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE656-0xE657"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE742-0xE742"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE744-0xE745"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/test_flash.py::test_flash_erase_error_sets_status_fail[erase]",
+      "outcome": "passed",
+      "read_bytes": 5,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xE656-0xE657"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE742-0xE742"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE744-0xE745"
+        }
+      ],
+      "write_bytes": 5,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xE656-0xE657"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE742-0xE742"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE744-0xE745"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/test_flash.py::test_flash_erase_error_sets_status_fail[seq]",
+      "outcome": "passed",
+      "read_bytes": 5,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xE656-0xE657"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE742-0xE742"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE744-0xE745"
+        }
+      ],
+      "write_bytes": 5,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xE656-0xE657"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE742-0xE742"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE744-0xE745"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/test_flash.py::test_flash_erase_error_sets_status_fail[vpp]",
+      "outcome": "passed",
+      "read_bytes": 5,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xE656-0xE657"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE742-0xE742"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE744-0xE745"
+        }
+      ],
+      "write_bytes": 5,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xE656-0xE657"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE742-0xE742"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE744-0xE745"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/test_flash.py::test_flash_erase_success_drives_intel_sequence_and_status_ok",
+      "outcome": "passed",
+      "read_bytes": 5,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xE656-0xE657"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE742-0xE742"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE744-0xE745"
+        }
+      ],
+      "write_bytes": 5,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xE656-0xE657"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE742-0xE742"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE744-0xE745"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/test_flash.py::test_flash_model_erase_error_sets_sr5",
+      "outcome": "passed",
+      "read_bytes": 0,
+      "read_ranges": [],
+      "write_bytes": 0,
+      "write_ranges": []
+    },
+    {
+      "nodeid": "tests/test_flash.py::test_flash_model_erase_success_reports_ready_after_busy",
+      "outcome": "passed",
+      "read_bytes": 0,
+      "read_ranges": [],
+      "write_bytes": 0,
+      "write_ranges": []
+    },
+    {
+      "nodeid": "tests/test_flash.py::test_flash_model_handles_only_its_target_cell",
+      "outcome": "passed",
+      "read_bytes": 0,
+      "read_ranges": [],
+      "write_bytes": 0,
+      "write_ranges": []
+    },
+    {
+      "nodeid": "tests/test_flash.py::test_flash_model_program_datum_starts_wsm_then_reports_ready",
+      "outcome": "passed",
+      "read_bytes": 0,
+      "read_ranges": [],
+      "write_bytes": 0,
+      "write_ranges": []
+    },
+    {
+      "nodeid": "tests/test_flash.py::test_flash_model_read_array_after_ff",
+      "outcome": "passed",
+      "read_bytes": 0,
+      "read_ranges": [],
+      "write_bytes": 0,
+      "write_ranges": []
+    },
+    {
+      "nodeid": "tests/test_flash.py::test_flash_model_vpp_and_seq_errors",
+      "outcome": "passed",
+      "read_bytes": 0,
+      "read_ranges": [],
+      "write_bytes": 0,
+      "write_ranges": []
+    },
+    {
+      "nodeid": "tests/test_flash.py::test_flash_program_error_sets_status_fail[prog]",
+      "outcome": "passed",
+      "read_bytes": 8,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xE656-0xE657"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE73A-0xE73A"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE73C-0xE73D"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE742-0xE742"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE800-0xE801"
+        }
+      ],
+      "write_bytes": 11,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xE656-0xE657"
+        },
+        {
+          "bytes": 4,
+          "range": "0xE73A-0xE73D"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE742-0xE742"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE744-0xE745"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE800-0xE801"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/test_flash.py::test_flash_program_error_sets_status_fail[vpp]",
+      "outcome": "passed",
+      "read_bytes": 8,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xE656-0xE657"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE73A-0xE73A"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE73C-0xE73D"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE742-0xE742"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE800-0xE801"
+        }
+      ],
+      "write_bytes": 11,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xE656-0xE657"
+        },
+        {
+          "bytes": 4,
+          "range": "0xE73A-0xE73D"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE742-0xE742"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE744-0xE745"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE800-0xE801"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/test_flash.py::test_flash_program_success_sets_status_ok",
+      "outcome": "passed",
+      "read_bytes": 9,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xE656-0xE657"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE73A-0xE73A"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE73C-0xE73D"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE741-0xE742"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE800-0xE801"
+        }
+      ],
+      "write_bytes": 12,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xE656-0xE657"
+        },
+        {
+          "bytes": 4,
+          "range": "0xE73A-0xE73D"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE741-0xE742"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE744-0xE745"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE800-0xE801"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/test_flash.py::test_t1_free_running_timer_advances_each_read",
+      "outcome": "passed",
+      "read_bytes": 0,
+      "read_ranges": [],
+      "write_bytes": 0,
+      "write_ranges": []
+    },
+    {
+      "nodeid": "tests/test_flash.py::test_t1_word_read_is_consistent_low_then_high",
+      "outcome": "passed",
+      "read_bytes": 0,
+      "read_ranges": [],
+      "write_bytes": 0,
+      "write_ranges": []
+    },
+    {
+      "nodeid": "tests/test_fun_024670.py::test_fun_024670_builds_config_masks",
+      "outcome": "passed",
+      "read_bytes": 6,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFD22-0xFD23"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFD5A-0xFD5D"
+        }
+      ],
+      "write_bytes": 16,
+      "write_ranges": [
+        {
+          "bytes": 10,
+          "range": "0xE800-0xE809"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFD22-0xFD23"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFD5A-0xFD5D"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/test_fun_024670.py::test_fun_024670_individual_switch_bits",
+      "outcome": "passed",
+      "read_bytes": 6,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFD22-0xFD23"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFD5A-0xFD5D"
+        }
+      ],
+      "write_bytes": 16,
+      "write_ranges": [
+        {
+          "bytes": 10,
+          "range": "0xE800-0xE809"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFD22-0xFD23"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFD5A-0xFD5D"
+        }
+      ]
+    },
+    {
+      "nodeid": "tests/test_fun_024670.py::test_fun_024670_stock_switches_set_no_fd22_bits",
+      "outcome": "passed",
+      "read_bytes": 2,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFD22-0xFD23"
+        }
+      ],
+      "write_bytes": 14,
+      "write_ranges": [
+        {
+          "bytes": 10,
+          "range": "0xE800-0xE809"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFD22-0xFD23"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFD5A-0xFD5B"
+        }
+      ]
+    }
+  ],
+  "scenarios": {
+    "adc_timer_isr": {
+      "complete_cases": 2,
+      "read_bytes": 29,
+      "read_ranges": [
+        {
+          "bytes": 4,
+          "range": "0xFA9C-0xFA9F"
+        },
+        {
+          "bytes": 5,
+          "range": "0xFAAA-0xFAAE"
+        },
+        {
+          "bytes": 5,
+          "range": "0xFAB0-0xFAB4"
+        },
+        {
+          "bytes": 1,
+          "range": "0xFAB7-0xFAB7"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFBF8-0xFBFB"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFC50-0xFC51"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFCAC-0xFCAD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFD00-0xFD03"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFD22-0xFD23"
+        }
+      ],
+      "touched_bytes": 31,
+      "touched_ranges": [
+        {
+          "bytes": 4,
+          "range": "0xFA9C-0xFA9F"
+        },
+        {
+          "bytes": 5,
+          "range": "0xFAAA-0xFAAE"
+        },
+        {
+          "bytes": 5,
+          "range": "0xFAB0-0xFAB4"
+        },
+        {
+          "bytes": 1,
+          "range": "0xFAB7-0xFAB7"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFBF8-0xFBFB"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFC50-0xFC51"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFCAC-0xFCAD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFD00-0xFD03"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFD22-0xFD23"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFDFE-0xFDFF"
+        }
+      ],
+      "unsupported_cases": 0,
+      "write_bytes": 19,
+      "write_ranges": [
+        {
+          "bytes": 5,
+          "range": "0xFAAA-0xFAAE"
+        },
+        {
+          "bytes": 5,
+          "range": "0xFAB0-0xFAB4"
+        },
+        {
+          "bytes": 1,
+          "range": "0xFAB7-0xFAB7"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFBF8-0xFBFB"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFCAC-0xFCAD"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFDFE-0xFDFF"
+        }
+      ]
+    },
+    "boot": {
+      "complete_cases": 8,
+      "read_bytes": 9204,
+      "read_ranges": [
+        {
+          "bytes": 8180,
+          "range": "0xD800-0xF7F3"
+        },
+        {
+          "bytes": 1024,
+          "range": "0xFA00-0xFDFF"
+        }
+      ],
+      "touched_bytes": 9204,
+      "touched_ranges": [
+        {
+          "bytes": 8180,
+          "range": "0xD800-0xF7F3"
+        },
+        {
+          "bytes": 1024,
+          "range": "0xFA00-0xFDFF"
+        }
+      ],
+      "unsupported_cases": 0,
+      "write_bytes": 9204,
+      "write_ranges": [
+        {
+          "bytes": 8180,
+          "range": "0xD800-0xF7F3"
+        },
+        {
+          "bytes": 1024,
+          "range": "0xFA00-0xFDFF"
+        }
+      ]
+    },
+    "ds2": {
+      "complete_cases": 6,
+      "read_bytes": 91,
+      "read_ranges": [
+        {
+          "bytes": 6,
+          "range": "0xE421-0xE426"
+        },
+        {
+          "bytes": 46,
+          "range": "0xE520-0xE54D"
+        },
+        {
+          "bytes": 3,
+          "range": "0xE64C-0xE64E"
+        },
+        {
+          "bytes": 4,
+          "range": "0xE650-0xE653"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE658-0xE658"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE65A-0xE65B"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE730-0xE731"
+        },
+        {
+          "bytes": 6,
+          "range": "0xE746-0xE74B"
+        },
+        {
+          "bytes": 11,
+          "range": "0xE75C-0xE766"
+        },
+        {
+          "bytes": 8,
+          "range": "0xFBF8-0xFBFF"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFDDE-0xFDDF"
+        }
+      ],
+      "touched_bytes": 95,
+      "touched_ranges": [
+        {
+          "bytes": 7,
+          "range": "0xE420-0xE426"
+        },
+        {
+          "bytes": 46,
+          "range": "0xE520-0xE54D"
+        },
+        {
+          "bytes": 3,
+          "range": "0xE64C-0xE64E"
+        },
+        {
+          "bytes": 4,
+          "range": "0xE650-0xE653"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE658-0xE658"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE65A-0xE65B"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE65E-0xE65E"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE72C-0xE72D"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE730-0xE731"
+        },
+        {
+          "bytes": 6,
+          "range": "0xE746-0xE74B"
+        },
+        {
+          "bytes": 11,
+          "range": "0xE75C-0xE766"
+        },
+        {
+          "bytes": 8,
+          "range": "0xFBF8-0xFBFF"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFDDE-0xFDDF"
+        }
+      ],
+      "unsupported_cases": 0,
+      "write_bytes": 91,
+      "write_ranges": [
+        {
+          "bytes": 7,
+          "range": "0xE420-0xE426"
+        },
+        {
+          "bytes": 46,
+          "range": "0xE520-0xE54D"
+        },
+        {
+          "bytes": 3,
+          "range": "0xE64C-0xE64E"
+        },
+        {
+          "bytes": 4,
+          "range": "0xE650-0xE653"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE658-0xE658"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE65A-0xE65B"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE65E-0xE65E"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE72C-0xE72D"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE730-0xE731"
+        },
+        {
+          "bytes": 6,
+          "range": "0xE746-0xE74B"
+        },
+        {
+          "bytes": 7,
+          "range": "0xE760-0xE766"
+        },
+        {
+          "bytes": 8,
+          "range": "0xFBF8-0xFBFF"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFDDE-0xFDDF"
+        }
+      ]
+    },
+    "feature_dispatch": {
+      "complete_cases": 3,
+      "read_bytes": 6,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFD22-0xFD23"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFD5A-0xFD5D"
+        }
+      ],
+      "touched_bytes": 16,
+      "touched_ranges": [
+        {
+          "bytes": 10,
+          "range": "0xE800-0xE809"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFD22-0xFD23"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFD5A-0xFD5D"
+        }
+      ],
+      "unsupported_cases": 0,
+      "write_bytes": 16,
+      "write_ranges": [
+        {
+          "bytes": 10,
+          "range": "0xE800-0xE809"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFD22-0xFD23"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFD5A-0xFD5D"
+        }
+      ]
+    },
+    "flash": {
+      "complete_cases": 17,
+      "read_bytes": 190,
+      "read_ranges": [
+        {
+          "bytes": 27,
+          "range": "0xE320-0xE33A"
+        },
+        {
+          "bytes": 9,
+          "range": "0xE33C-0xE344"
+        },
+        {
+          "bytes": 9,
+          "range": "0xE346-0xE34E"
+        },
+        {
+          "bytes": 11,
+          "range": "0xE350-0xE35A"
+        },
+        {
+          "bytes": 12,
+          "range": "0xE35E-0xE369"
+        },
+        {
+          "bytes": 3,
+          "range": "0xE370-0xE372"
+        },
+        {
+          "bytes": 41,
+          "range": "0xE374-0xE39C"
+        },
+        {
+          "bytes": 21,
+          "range": "0xE39E-0xE3B2"
+        },
+        {
+          "bytes": 10,
+          "range": "0xE3B4-0xE3BD"
+        },
+        {
+          "bytes": 3,
+          "range": "0xE3DC-0xE3DE"
+        },
+        {
+          "bytes": 9,
+          "range": "0xE3E0-0xE3E8"
+        },
+        {
+          "bytes": 24,
+          "range": "0xE3EA-0xE401"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE656-0xE657"
+        },
+        {
+          "bytes": 1,
+          "range": "0xE73A-0xE73A"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE73C-0xE73D"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE741-0xE742"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE744-0xE745"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE800-0xE801"
+        }
+      ],
+      "touched_bytes": 238,
+      "touched_ranges": [
+        {
+          "bytes": 226,
+          "range": "0xE320-0xE401"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE656-0xE657"
+        },
+        {
+          "bytes": 4,
+          "range": "0xE73A-0xE73D"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE741-0xE742"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE744-0xE745"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE800-0xE801"
+        }
+      ],
+      "unsupported_cases": 0,
+      "write_bytes": 238,
+      "write_ranges": [
+        {
+          "bytes": 226,
+          "range": "0xE320-0xE401"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE656-0xE657"
+        },
+        {
+          "bytes": 4,
+          "range": "0xE73A-0xE73D"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE741-0xE742"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE744-0xE745"
+        },
+        {
+          "bytes": 2,
+          "range": "0xE800-0xE801"
+        }
+      ]
+    },
+    "pec0_config_isr": {
+      "complete_cases": 14,
+      "read_bytes": 5,
+      "read_ranges": [
+        {
+          "bytes": 1,
+          "range": "0xE64A-0xE64A"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFD02-0xFD03"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        }
+      ],
+      "touched_bytes": 9,
+      "touched_ranges": [
+        {
+          "bytes": 1,
+          "range": "0xE64A-0xE64A"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFD02-0xFD03"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFDE0-0xFDE3"
+        }
+      ],
+      "unsupported_cases": 0,
+      "write_bytes": 8,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFD02-0xFD03"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFDDC-0xFDDD"
+        },
+        {
+          "bytes": 4,
+          "range": "0xFDE0-0xFDE3"
+        }
+      ]
+    },
+    "pin_latch_isr": {
+      "complete_cases": 2,
+      "read_bytes": 2,
+      "read_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFD60-0xFD61"
+        }
+      ],
+      "touched_bytes": 2,
+      "touched_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFD60-0xFD61"
+        }
+      ],
+      "unsupported_cases": 0,
+      "write_bytes": 2,
+      "write_ranges": [
+        {
+          "bytes": 2,
+          "range": "0xFD60-0xFD61"
+        }
+      ]
+    },
+    "ssc_rx_isr": {
+      "complete_cases": 1,
+      "read_bytes": 3,
+      "read_ranges": [
+        {
+          "bytes": 1,
+          "range": "0xF6E2-0xF6E2"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFD02-0xFD03"
+        }
+      ],
+      "touched_bytes": 5,
+      "touched_ranges": [
+        {
+          "bytes": 1,
+          "range": "0xF6E2-0xF6E2"
+        },
+        {
+          "bytes": 1,
+          "range": "0xF6FC-0xF6FC"
+        },
+        {
+          "bytes": 1,
+          "range": "0xF70F-0xF70F"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFD02-0xFD03"
+        }
+      ],
+      "unsupported_cases": 0,
+      "write_bytes": 4,
+      "write_ranges": [
+        {
+          "bytes": 1,
+          "range": "0xF6FC-0xF6FC"
+        },
+        {
+          "bytes": 1,
+          "range": "0xF70F-0xF70F"
+        },
+        {
+          "bytes": 2,
+          "range": "0xFD02-0xFD03"
+        }
+      ]
+    }
+  },
+  "scope": "existing emulator tests plus sliced post-boot ISR bodies; pytest setup/assertion accesses are included, direct-case preloads are excluded, and unsupported slices contribute only the prefix executed before failure",
+  "tests": [
+    "tests/boot/test_boot_ram_footprint.py",
+    "tests/test_ds2.py",
+    "tests/test_flash.py",
+    "tests/test_fun_024670.py"
+  ],
+  "unsupported_direct_cases": {}
+}
