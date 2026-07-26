@@ -50,11 +50,11 @@ def _gui():
     return app, w
 
 
-def test_same_broad_variant_with_different_cal_family_is_a_conversion():
+def test_same_broad_variant_conversion_uses_program_version():
     assert gui._is_firmware_conversion(
-        "MS41.0", "MS41.0", "59000000", "41000000")
+        "MS41.0", "MS41.0", "0659", "0641")
     assert not gui._is_firmware_conversion(
-        "MS41.0", "MS41.0", "59000000", "59010000")
+        "MS41.0", "MS41.0", "0641", "0641")
 
 
 def _warning_router(monkeypatch, rules, default=None):
