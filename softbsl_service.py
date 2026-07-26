@@ -253,6 +253,11 @@ def marker(image):
     return _sb.image_marker(bytes(image))
 
 
+def calguard_recovery_ready(ds2, log):
+    """Read-only probe for a CalGuard-held direct 0x5A recovery path."""
+    return _sb.SoftBSL(ds2, log=_agent_log(log)).calguard_direct_entry_ready()
+
+
 def _capture(fn, *args, **kw):
     lines = []
     fn(*args, log=lines.append, **kw)
