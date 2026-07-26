@@ -1,0 +1,6811 @@
+{
+  "family_safe_intersection": {
+    "iram": {
+      "certified_bytes": 38,
+      "ranges": [
+        {
+          "bytes": 38,
+          "range": "0xFDB6-0xFDDB",
+          "word_aligned_subrange": "0xFDB6-0xFDDB"
+        }
+      ],
+      "word_aligned_certified_bytes": 38
+    },
+    "xram": {
+      "certified_bytes": 110,
+      "ranges": [
+        {
+          "bytes": 64,
+          "range": "0xD800-0xD83F",
+          "word_aligned_subrange": "0xD800-0xD83F"
+        },
+        {
+          "bytes": 21,
+          "range": "0xDB8F-0xDBA3",
+          "word_aligned_subrange": "0xDB90-0xDBA3"
+        },
+        {
+          "bytes": 25,
+          "range": "0xE847-0xE85F",
+          "word_aligned_subrange": "0xE848-0xE85F"
+        }
+      ],
+      "word_aligned_certified_bytes": 108
+    }
+  },
+  "limits": [
+    "No unlisted range is certified available.",
+    "A different firmware hash needs a new run.",
+    "Soft-BSL transport/entry support is separate from RAM non-collision.",
+    "Hardware execution and readback remain required before deployment."
+  ],
+  "method": "MS41.3 certified candidates were re-tested against each exact target image using conservative control-flow closure, exact source-proof transfers, target-specific pointer bounds, ECU-ID logger claims, context banks, stacks, PEC, DPP3, loaders, and startup lifetimes.",
+  "scope": "Collision-safe post-startup allocation map for the exact canonical MS41.0/MS41.1/MS41.2/MS41.3 images; not a universal firmware-family map.",
+  "source_baseline": {
+    "reference": "C:\\Users\\crist\\MS41 Projects\\_shared\\REF_MS41.3\\MS41.3_s52_stock_fullread.bin",
+    "reference_sha256": "89f31cbb70466ad39b23571e3c1c533251275182e8e2502c214a208e83f64487",
+    "report": "C:\\Users\\crist\\MS41 Projects\\Flasher-Dev\\experiments\\ram_ownership\\evidence\\static_ram_ownership.json",
+    "report_sha256": "38b61c9ba781b2922c6dbc3b094736bd43a65ca6560261197bcd561eaa3ceca4"
+  },
+  "variants": {
+    "MS41.0": {
+      "certification": {
+        "conditions": [
+          "Use only with the exact image hash shown above.",
+          "Initialize only after the startup RAM self-test and main handoff.",
+          "Do not expect contents to survive reset.",
+          "Do not change DPP3, CP banks, stack bounds, or PEC configuration.",
+          "Re-run the analyzer after native control-flow or pointer changes."
+        ],
+        "iram": {
+          "certified_bytes": 92,
+          "complete_byte_class_map": [
+            {
+              "bytes": 896,
+              "range": "0xFA00-0xFD7F",
+              "status": "owned/reserved; no allocation certificate"
+            },
+            {
+              "bytes": 92,
+              "range": "0xFD80-0xFDDB",
+              "status": "conditionally available after startup"
+            },
+            {
+              "bytes": 36,
+              "range": "0xFDDC-0xFDFF",
+              "status": "owned/reserved; no allocation certificate"
+            }
+          ],
+          "ranges": [
+            {
+              "bytes": 92,
+              "range": "0xFD80-0xFDDB",
+              "word_aligned_subrange": "0xFD80-0xFDDB"
+            }
+          ],
+          "word_aligned_certified_bytes": 92
+        },
+        "status": "conditionally certified for exact-image post-startup use",
+        "xram": {
+          "certified_bytes": 234,
+          "complete_byte_class_map": [
+            {
+              "bytes": 64,
+              "range": "0xD800-0xD83F",
+              "status": "conditionally available after startup"
+            },
+            {
+              "bytes": 847,
+              "range": "0xD840-0xDB8E",
+              "status": "owned/reserved; no allocation certificate"
+            },
+            {
+              "bytes": 145,
+              "range": "0xDB8F-0xDC1F",
+              "status": "conditionally available after startup"
+            },
+            {
+              "bytes": 3111,
+              "range": "0xDC20-0xE846",
+              "status": "owned/reserved; no allocation certificate"
+            },
+            {
+              "bytes": 25,
+              "range": "0xE847-0xE85F",
+              "status": "conditionally available after startup"
+            },
+            {
+              "bytes": 4000,
+              "range": "0xE860-0xF7FF",
+              "status": "owned/reserved; no allocation certificate"
+            }
+          ],
+          "ranges": [
+            {
+              "bytes": 64,
+              "range": "0xD800-0xD83F",
+              "word_aligned_subrange": "0xD800-0xD83F"
+            },
+            {
+              "bytes": 145,
+              "range": "0xDB8F-0xDC1F",
+              "word_aligned_subrange": "0xDB90-0xDC1F"
+            },
+            {
+              "bytes": 25,
+              "range": "0xE847-0xE85F",
+              "word_aligned_subrange": "0xE848-0xE85F"
+            }
+          ],
+          "word_aligned_certified_bytes": 232
+        }
+      },
+      "context_bank_invariant": {
+        "known_cp_bases": [
+          "0xFA00",
+          "0xFA16",
+          "0xFC00",
+          "0xFC20",
+          "0xFC22",
+          "0xFC24",
+          "0xFC2E",
+          "0xFC34",
+          "0xFC5C",
+          "0xFC64",
+          "0xFC84",
+          "0xFCA4",
+          "0xFCC4",
+          "0xFCC8",
+          "0xFCCC",
+          "0xFCCE",
+          "0xFCD2",
+          "0xFCD8"
+        ],
+        "reserved_ranges": [
+          "0xFA00-0xFA1F",
+          "0xFA16-0xFA35",
+          "0xFC00-0xFC1F",
+          "0xFC20-0xFC3F",
+          "0xFC22-0xFC41",
+          "0xFC24-0xFC43",
+          "0xFC2E-0xFC4D",
+          "0xFC34-0xFC53",
+          "0xFC5C-0xFC7B",
+          "0xFC64-0xFC83",
+          "0xFC84-0xFCA3",
+          "0xFCA4-0xFCC3",
+          "0xFCC4-0xFCE3",
+          "0xFCC8-0xFCE7",
+          "0xFCCC-0xFCEB",
+          "0xFCCE-0xFCED",
+          "0xFCD2-0xFCF1",
+          "0xFCD8-0xFCF7"
+        ],
+        "status": "proven for the exact image"
+      },
+      "control_flow_gate": {
+        "absolute_pattern_roots": [
+          {
+            "file_offset": "0x004000",
+            "file_target": "0x004430"
+          },
+          {
+            "file_offset": "0x004004",
+            "file_target": "0x006104"
+          },
+          {
+            "file_offset": "0x004008",
+            "file_target": "0x006108"
+          },
+          {
+            "file_offset": "0x00400C",
+            "file_target": "0x00610C"
+          },
+          {
+            "file_offset": "0x004010",
+            "file_target": "0x006110"
+          },
+          {
+            "file_offset": "0x004014",
+            "file_target": "0x006114"
+          },
+          {
+            "file_offset": "0x004018",
+            "file_target": "0x006118"
+          },
+          {
+            "file_offset": "0x00401C",
+            "file_target": "0x00611C"
+          },
+          {
+            "file_offset": "0x004020",
+            "file_target": "0x006120"
+          },
+          {
+            "file_offset": "0x004024",
+            "file_target": "0x006124"
+          },
+          {
+            "file_offset": "0x004028",
+            "file_target": "0x006128"
+          },
+          {
+            "file_offset": "0x00402C",
+            "file_target": "0x00612C"
+          },
+          {
+            "file_offset": "0x004030",
+            "file_target": "0x006130"
+          },
+          {
+            "file_offset": "0x004034",
+            "file_target": "0x006134"
+          },
+          {
+            "file_offset": "0x004038",
+            "file_target": "0x006138"
+          },
+          {
+            "file_offset": "0x00403C",
+            "file_target": "0x00613C"
+          },
+          {
+            "file_offset": "0x004040",
+            "file_target": "0x006140"
+          },
+          {
+            "file_offset": "0x004044",
+            "file_target": "0x006144"
+          },
+          {
+            "file_offset": "0x004048",
+            "file_target": "0x006148"
+          },
+          {
+            "file_offset": "0x00404C",
+            "file_target": "0x00614C"
+          },
+          {
+            "file_offset": "0x004050",
+            "file_target": "0x006150"
+          },
+          {
+            "file_offset": "0x004054",
+            "file_target": "0x006154"
+          },
+          {
+            "file_offset": "0x004058",
+            "file_target": "0x006158"
+          },
+          {
+            "file_offset": "0x00405C",
+            "file_target": "0x00615C"
+          },
+          {
+            "file_offset": "0x004060",
+            "file_target": "0x006160"
+          },
+          {
+            "file_offset": "0x004064",
+            "file_target": "0x006164"
+          },
+          {
+            "file_offset": "0x004068",
+            "file_target": "0x006168"
+          },
+          {
+            "file_offset": "0x00406C",
+            "file_target": "0x00616C"
+          },
+          {
+            "file_offset": "0x004070",
+            "file_target": "0x006170"
+          },
+          {
+            "file_offset": "0x004074",
+            "file_target": "0x006174"
+          },
+          {
+            "file_offset": "0x004078",
+            "file_target": "0x006178"
+          },
+          {
+            "file_offset": "0x00407C",
+            "file_target": "0x00617C"
+          },
+          {
+            "file_offset": "0x004080",
+            "file_target": "0x006180"
+          },
+          {
+            "file_offset": "0x004084",
+            "file_target": "0x006184"
+          },
+          {
+            "file_offset": "0x004088",
+            "file_target": "0x006188"
+          },
+          {
+            "file_offset": "0x00408C",
+            "file_target": "0x00618C"
+          },
+          {
+            "file_offset": "0x004090",
+            "file_target": "0x006190"
+          },
+          {
+            "file_offset": "0x004094",
+            "file_target": "0x006194"
+          },
+          {
+            "file_offset": "0x004098",
+            "file_target": "0x006198"
+          },
+          {
+            "file_offset": "0x00409C",
+            "file_target": "0x00619C"
+          },
+          {
+            "file_offset": "0x0040A0",
+            "file_target": "0x0061A0"
+          },
+          {
+            "file_offset": "0x0040A4",
+            "file_target": "0x0061A4"
+          },
+          {
+            "file_offset": "0x0040A8",
+            "file_target": "0x0061A8"
+          },
+          {
+            "file_offset": "0x0040AC",
+            "file_target": "0x0061AC"
+          },
+          {
+            "file_offset": "0x0040B0",
+            "file_target": "0x0061B0"
+          },
+          {
+            "file_offset": "0x0040B4",
+            "file_target": "0x0061B4"
+          },
+          {
+            "file_offset": "0x0040B8",
+            "file_target": "0x0061B8"
+          },
+          {
+            "file_offset": "0x0040BC",
+            "file_target": "0x0061BC"
+          },
+          {
+            "file_offset": "0x0040C0",
+            "file_target": "0x0061C0"
+          },
+          {
+            "file_offset": "0x0040C4",
+            "file_target": "0x0061C4"
+          },
+          {
+            "file_offset": "0x0040C8",
+            "file_target": "0x0061C8"
+          },
+          {
+            "file_offset": "0x0040CC",
+            "file_target": "0x0061CC"
+          },
+          {
+            "file_offset": "0x0040D0",
+            "file_target": "0x0061D0"
+          },
+          {
+            "file_offset": "0x0040D4",
+            "file_target": "0x0061D4"
+          },
+          {
+            "file_offset": "0x0040D8",
+            "file_target": "0x0061D8"
+          },
+          {
+            "file_offset": "0x0040DC",
+            "file_target": "0x0061DC"
+          },
+          {
+            "file_offset": "0x0040E0",
+            "file_target": "0x0061E0"
+          },
+          {
+            "file_offset": "0x0040E4",
+            "file_target": "0x0061E4"
+          },
+          {
+            "file_offset": "0x0040E8",
+            "file_target": "0x0061E8"
+          },
+          {
+            "file_offset": "0x0040EC",
+            "file_target": "0x0061EC"
+          },
+          {
+            "file_offset": "0x0040F0",
+            "file_target": "0x0061F0"
+          },
+          {
+            "file_offset": "0x0040F4",
+            "file_target": "0x0061F4"
+          },
+          {
+            "file_offset": "0x0040F8",
+            "file_target": "0x0061F8"
+          },
+          {
+            "file_offset": "0x0040FC",
+            "file_target": "0x0061FC"
+          },
+          {
+            "file_offset": "0x004100",
+            "file_target": "0x006200"
+          },
+          {
+            "file_offset": "0x004104",
+            "file_target": "0x006204"
+          },
+          {
+            "file_offset": "0x004108",
+            "file_target": "0x006208"
+          },
+          {
+            "file_offset": "0x00410C",
+            "file_target": "0x00620C"
+          },
+          {
+            "file_offset": "0x004110",
+            "file_target": "0x006210"
+          },
+          {
+            "file_offset": "0x004114",
+            "file_target": "0x006214"
+          },
+          {
+            "file_offset": "0x004118",
+            "file_target": "0x006218"
+          },
+          {
+            "file_offset": "0x00411C",
+            "file_target": "0x00621C"
+          },
+          {
+            "file_offset": "0x004120",
+            "file_target": "0x006220"
+          },
+          {
+            "file_offset": "0x004124",
+            "file_target": "0x006224"
+          },
+          {
+            "file_offset": "0x004128",
+            "file_target": "0x006228"
+          },
+          {
+            "file_offset": "0x00412C",
+            "file_target": "0x00622C"
+          },
+          {
+            "file_offset": "0x004130",
+            "file_target": "0x006230"
+          },
+          {
+            "file_offset": "0x004134",
+            "file_target": "0x006234"
+          },
+          {
+            "file_offset": "0x004138",
+            "file_target": "0x006238"
+          },
+          {
+            "file_offset": "0x00413C",
+            "file_target": "0x00623C"
+          },
+          {
+            "file_offset": "0x004140",
+            "file_target": "0x006240"
+          },
+          {
+            "file_offset": "0x004144",
+            "file_target": "0x006244"
+          },
+          {
+            "file_offset": "0x004148",
+            "file_target": "0x006248"
+          },
+          {
+            "file_offset": "0x00414C",
+            "file_target": "0x00624C"
+          },
+          {
+            "file_offset": "0x004150",
+            "file_target": "0x006250"
+          },
+          {
+            "file_offset": "0x004154",
+            "file_target": "0x006254"
+          },
+          {
+            "file_offset": "0x004158",
+            "file_target": "0x006258"
+          },
+          {
+            "file_offset": "0x00415C",
+            "file_target": "0x00625C"
+          },
+          {
+            "file_offset": "0x004160",
+            "file_target": "0x006260"
+          },
+          {
+            "file_offset": "0x004164",
+            "file_target": "0x006264"
+          },
+          {
+            "file_offset": "0x004168",
+            "file_target": "0x006268"
+          },
+          {
+            "file_offset": "0x00416C",
+            "file_target": "0x00626C"
+          },
+          {
+            "file_offset": "0x004170",
+            "file_target": "0x006270"
+          },
+          {
+            "file_offset": "0x004174",
+            "file_target": "0x006274"
+          },
+          {
+            "file_offset": "0x004178",
+            "file_target": "0x006278"
+          },
+          {
+            "file_offset": "0x00417C",
+            "file_target": "0x00627C"
+          },
+          {
+            "file_offset": "0x004180",
+            "file_target": "0x006280"
+          },
+          {
+            "file_offset": "0x004184",
+            "file_target": "0x006284"
+          },
+          {
+            "file_offset": "0x004188",
+            "file_target": "0x006288"
+          },
+          {
+            "file_offset": "0x00418C",
+            "file_target": "0x00628C"
+          },
+          {
+            "file_offset": "0x004190",
+            "file_target": "0x006290"
+          },
+          {
+            "file_offset": "0x004194",
+            "file_target": "0x006294"
+          },
+          {
+            "file_offset": "0x004198",
+            "file_target": "0x006298"
+          },
+          {
+            "file_offset": "0x00419C",
+            "file_target": "0x00629C"
+          },
+          {
+            "file_offset": "0x0041A0",
+            "file_target": "0x0062A0"
+          },
+          {
+            "file_offset": "0x0041A4",
+            "file_target": "0x0062A4"
+          },
+          {
+            "file_offset": "0x0041A8",
+            "file_target": "0x0062A8"
+          },
+          {
+            "file_offset": "0x0041AC",
+            "file_target": "0x0062AC"
+          },
+          {
+            "file_offset": "0x0041B0",
+            "file_target": "0x0062B0"
+          },
+          {
+            "file_offset": "0x0041B4",
+            "file_target": "0x0062B4"
+          },
+          {
+            "file_offset": "0x0041B8",
+            "file_target": "0x0062B8"
+          },
+          {
+            "file_offset": "0x0041BC",
+            "file_target": "0x0062BC"
+          },
+          {
+            "file_offset": "0x0041C0",
+            "file_target": "0x0062C0"
+          },
+          {
+            "file_offset": "0x0041C4",
+            "file_target": "0x0062C4"
+          },
+          {
+            "file_offset": "0x0041C8",
+            "file_target": "0x0062C8"
+          },
+          {
+            "file_offset": "0x0041CC",
+            "file_target": "0x0062CC"
+          },
+          {
+            "file_offset": "0x0041D0",
+            "file_target": "0x0062D0"
+          },
+          {
+            "file_offset": "0x0041D4",
+            "file_target": "0x0062D4"
+          },
+          {
+            "file_offset": "0x0041D8",
+            "file_target": "0x0062D8"
+          },
+          {
+            "file_offset": "0x0041DC",
+            "file_target": "0x0062DC"
+          },
+          {
+            "file_offset": "0x0041E0",
+            "file_target": "0x0062E0"
+          },
+          {
+            "file_offset": "0x0041E4",
+            "file_target": "0x0062E4"
+          },
+          {
+            "file_offset": "0x0041E8",
+            "file_target": "0x0062E8"
+          },
+          {
+            "file_offset": "0x0041EC",
+            "file_target": "0x0062EC"
+          },
+          {
+            "file_offset": "0x0041F0",
+            "file_target": "0x0062F0"
+          },
+          {
+            "file_offset": "0x0041F4",
+            "file_target": "0x0062F4"
+          },
+          {
+            "file_offset": "0x0041F8",
+            "file_target": "0x0062F8"
+          },
+          {
+            "file_offset": "0x0041FC",
+            "file_target": "0x0062FC"
+          },
+          {
+            "file_offset": "0x0046E2",
+            "file_target": "0x0048F6"
+          },
+          {
+            "file_offset": "0x004742",
+            "file_target": "0x0046EC"
+          },
+          {
+            "file_offset": "0x004746",
+            "file_target": "0x00470E"
+          },
+          {
+            "file_offset": "0x00483A",
+            "file_target": "0x004732"
+          },
+          {
+            "file_offset": "0x00484E",
+            "file_target": "0x0055A6"
+          },
+          {
+            "file_offset": "0x004888",
+            "file_target": "0x004732"
+          },
+          {
+            "file_offset": "0x00489E",
+            "file_target": "0x0056CE"
+          },
+          {
+            "file_offset": "0x0048AC",
+            "file_target": "0x00560E"
+          },
+          {
+            "file_offset": "0x0048BE",
+            "file_target": "0x004720"
+          },
+          {
+            "file_offset": "0x0048D4",
+            "file_target": "0x004720"
+          },
+          {
+            "file_offset": "0x0048EC",
+            "file_target": "0x004720"
+          },
+          {
+            "file_offset": "0x004924",
+            "file_target": "0x0046EC"
+          },
+          {
+            "file_offset": "0x004928",
+            "file_target": "0x00470E"
+          },
+          {
+            "file_offset": "0x00492C",
+            "file_target": "0x005ACA"
+          },
+          {
+            "file_offset": "0x004930",
+            "file_target": "0x005A1C"
+          },
+          {
+            "file_offset": "0x004944",
+            "file_target": "0x004720"
+          },
+          {
+            "file_offset": "0x004962",
+            "file_target": "0x00496C"
+          },
+          {
+            "file_offset": "0x004966",
+            "file_target": "0x00473C"
+          },
+          {
+            "file_offset": "0x004AD2",
+            "file_target": "0x004C32"
+          },
+          {
+            "file_offset": "0x004AF0",
+            "file_target": "0x004A24"
+          },
+          {
+            "file_offset": "0x004BA2",
+            "file_target": "0x004A70"
+          },
+          {
+            "file_offset": "0x004BBE",
+            "file_target": "0x004A34"
+          },
+          {
+            "file_offset": "0x004BDE",
+            "file_target": "0x004A24"
+          },
+          {
+            "file_offset": "0x004C0C",
+            "file_target": "0x004A70"
+          },
+          {
+            "file_offset": "0x004C22",
+            "file_target": "0x004A24"
+          },
+          {
+            "file_offset": "0x004C28",
+            "file_target": "0x004A24"
+          },
+          {
+            "file_offset": "0x004D54",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004D60",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004D6C",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004D78",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004D84",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004D90",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004D9C",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004DA8",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004E6C",
+            "file_target": "0x004A34"
+          },
+          {
+            "file_offset": "0x004E72",
+            "file_target": "0x004A34"
+          },
+          {
+            "file_offset": "0x005052",
+            "file_target": "0x005A8E"
+          },
+          {
+            "file_offset": "0x00506C",
+            "file_target": "0x005A62"
+          },
+          {
+            "file_offset": "0x005074",
+            "file_target": "0x004732"
+          },
+          {
+            "file_offset": "0x0050B0",
+            "file_target": "0x004E80"
+          },
+          {
+            "file_offset": "0x0050C6",
+            "file_target": "0x004E80"
+          },
+          {
+            "file_offset": "0x0050DC",
+            "file_target": "0x004E80"
+          },
+          {
+            "file_offset": "0x0050F4",
+            "file_target": "0x004E80"
+          },
+          {
+            "file_offset": "0x0051F4",
+            "file_target": "0x004732"
+          },
+          {
+            "file_offset": "0x005222",
+            "file_target": "0x004732"
+          },
+          {
+            "file_offset": "0x005226",
+            "file_target": "0x004E80"
+          },
+          {
+            "file_offset": "0x005288",
+            "file_target": "0x005ADE"
+          },
+          {
+            "file_offset": "0x00529A",
+            "file_target": "0x005ADE"
+          },
+          {
+            "file_offset": "0x0052AA",
+            "file_target": "0x005B4C"
+          },
+          {
+            "file_offset": "0x0052C6",
+            "file_target": "0x005ADE"
+          },
+          {
+            "file_offset": "0x0052D6",
+            "file_target": "0x005BCC"
+          },
+          {
+            "file_offset": "0x00534A",
+            "file_target": "0x005A62"
+          },
+          {
+            "file_offset": "0x005392",
+            "file_target": "0x005A62"
+          },
+          {
+            "file_offset": "0x005422",
+            "file_target": "0x004A24"
+          },
+          {
+            "file_offset": "0x005428",
+            "file_target": "0x004A34"
+          },
+          {
+            "file_offset": "0x005450",
+            "file_target": "0x004720"
+          },
+          {
+            "file_offset": "0x00545C",
+            "file_target": "0x004A60"
+          },
+          {
+            "file_offset": "0x005474",
+            "file_target": "0x004A60"
+          },
+          {
+            "file_offset": "0x0054C8",
+            "file_target": "0x004A24"
+          },
+          {
+            "file_offset": "0x0054D4",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x0054DE",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x0054E8",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x0054F4",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x005500",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x00550C",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x005518",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x005552",
+            "file_target": "0x004E86"
+          },
+          {
+            "file_offset": "0x005558",
+            "file_target": "0x004DB0"
+          },
+          {
+            "file_offset": "0x00555E",
+            "file_target": "0x004C32"
+          },
+          {
+            "file_offset": "0x005564",
+            "file_target": "0x005438"
+          },
+          {
+            "file_offset": "0x00556A",
+            "file_target": "0x004D28"
+          },
+          {
+            "file_offset": "0x005588",
+            "file_target": "0x004A84"
+          },
+          {
+            "file_offset": "0x00559A",
+            "file_target": "0x004A60"
+          },
+          {
+            "file_offset": "0x0055A0",
+            "file_target": "0x004A44"
+          },
+          {
+            "file_offset": "0x0055C8",
+            "file_target": "0x00552E"
+          },
+          {
+            "file_offset": "0x0055D0",
+            "file_target": "0x0056A2"
+          },
+          {
+            "file_offset": "0x0055EE",
+            "file_target": "0x00552E"
+          },
+          {
+            "file_offset": "0x005656",
+            "file_target": "0x00496C"
+          },
+          {
+            "file_offset": "0x00568A",
+            "file_target": "0x00496C"
+          },
+          {
+            "file_offset": "0x005690",
+            "file_target": "0x00496C"
+          },
+          {
+            "file_offset": "0x005696",
+            "file_target": "0x00496C"
+          },
+          {
+            "file_offset": "0x0056B0",
+            "file_target": "0x0049FA"
+          },
+          {
+            "file_offset": "0x0056DA",
+            "file_target": "0x00496C"
+          },
+          {
+            "file_offset": "0x005732",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005738",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x00573E",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00574E",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x005754",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00576C",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005786",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00578C",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00579C",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0057A2",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0057B8",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x0057BE",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x0057C6",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x0057CE",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x0057D4",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0057E8",
+            "file_target": "0x005718"
+          },
+          {
+            "file_offset": "0x005806",
+            "file_target": "0x0057B4"
+          },
+          {
+            "file_offset": "0x005814",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00581C",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005822",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x00582A",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00586C",
+            "file_target": "0x004732"
+          },
+          {
+            "file_offset": "0x005872",
+            "file_target": "0x0057F0"
+          },
+          {
+            "file_offset": "0x005882",
+            "file_target": "0x005718"
+          },
+          {
+            "file_offset": "0x00588A",
+            "file_target": "0x005718"
+          },
+          {
+            "file_offset": "0x0058A0",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0058A8",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0058AE",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x0058B6",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0058EC",
+            "file_target": "0x0057F0"
+          },
+          {
+            "file_offset": "0x005908",
+            "file_target": "0x005718"
+          },
+          {
+            "file_offset": "0x005912",
+            "file_target": "0x0057B4"
+          },
+          {
+            "file_offset": "0x005916",
+            "file_target": "0x005778"
+          },
+          {
+            "file_offset": "0x005956",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00595E",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005964",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x005970",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005978",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00597E",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x00598A",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005992",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005998",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x0059A0",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0059C6",
+            "file_target": "0x00584A"
+          },
+          {
+            "file_offset": "0x0059D2",
+            "file_target": "0x0058C8"
+          },
+          {
+            "file_offset": "0x005A88",
+            "file_target": "0x0059B0"
+          },
+          {
+            "file_offset": "0x005A98",
+            "file_target": "0x005ADE"
+          },
+          {
+            "file_offset": "0x005AA6",
+            "file_target": "0x005ADE"
+          },
+          {
+            "file_offset": "0x005AB4",
+            "file_target": "0x005ADE"
+          },
+          {
+            "file_offset": "0x005AC4",
+            "file_target": "0x0059B0"
+          },
+          {
+            "file_offset": "0x005AD8",
+            "file_target": "0x0058C8"
+          },
+          {
+            "file_offset": "0x005BD8",
+            "file_target": "0x005B4C"
+          },
+          {
+            "file_offset": "0x006100",
+            "file_target": "0x004430"
+          },
+          {
+            "file_offset": "0x006104",
+            "file_target": "0x006104"
+          },
+          {
+            "file_offset": "0x006108",
+            "file_target": "0x02BF7A"
+          },
+          {
+            "file_offset": "0x00610C",
+            "file_target": "0x00610C"
+          },
+          {
+            "file_offset": "0x006110",
+            "file_target": "0x0365D2"
+          },
+          {
+            "file_offset": "0x006114",
+            "file_target": "0x006114"
+          },
+          {
+            "file_offset": "0x006118",
+            "file_target": "0x0365EC"
+          },
+          {
+            "file_offset": "0x00611C",
+            "file_target": "0x00611C"
+          },
+          {
+            "file_offset": "0x006120",
+            "file_target": "0x006120"
+          },
+          {
+            "file_offset": "0x006124",
+            "file_target": "0x006124"
+          },
+          {
+            "file_offset": "0x006128",
+            "file_target": "0x02BCE2"
+          },
+          {
+            "file_offset": "0x00612C",
+            "file_target": "0x00612C"
+          },
+          {
+            "file_offset": "0x006130",
+            "file_target": "0x006130"
+          },
+          {
+            "file_offset": "0x006134",
+            "file_target": "0x006134"
+          },
+          {
+            "file_offset": "0x006138",
+            "file_target": "0x006138"
+          },
+          {
+            "file_offset": "0x00613C",
+            "file_target": "0x00613C"
+          },
+          {
+            "file_offset": "0x006140",
+            "file_target": "0x036614"
+          },
+          {
+            "file_offset": "0x006144",
+            "file_target": "0x036620"
+          },
+          {
+            "file_offset": "0x006148",
+            "file_target": "0x03662C"
+          },
+          {
+            "file_offset": "0x00614C",
+            "file_target": "0x036638"
+          },
+          {
+            "file_offset": "0x006150",
+            "file_target": "0x036644"
+          },
+          {
+            "file_offset": "0x006154",
+            "file_target": "0x036650"
+          },
+          {
+            "file_offset": "0x006158",
+            "file_target": "0x0366D0"
+          },
+          {
+            "file_offset": "0x00615C",
+            "file_target": "0x03678C"
+          },
+          {
+            "file_offset": "0x006160",
+            "file_target": "0x006160"
+          },
+          {
+            "file_offset": "0x006164",
+            "file_target": "0x006164"
+          },
+          {
+            "file_offset": "0x006168",
+            "file_target": "0x0366BE"
+          },
+          {
+            "file_offset": "0x00616C",
+            "file_target": "0x02BFF6"
+          },
+          {
+            "file_offset": "0x006170",
+            "file_target": "0x006170"
+          },
+          {
+            "file_offset": "0x006174",
+            "file_target": "0x035FAA"
+          },
+          {
+            "file_offset": "0x006178",
+            "file_target": "0x02BCFC"
+          },
+          {
+            "file_offset": "0x006180",
+            "file_target": "0x0362EC"
+          },
+          {
+            "file_offset": "0x006184",
+            "file_target": "0x036606"
+          },
+          {
+            "file_offset": "0x006188",
+            "file_target": "0x006188"
+          },
+          {
+            "file_offset": "0x00618C",
+            "file_target": "0x02BB42"
+          },
+          {
+            "file_offset": "0x006194",
+            "file_target": "0x03665C"
+          },
+          {
+            "file_offset": "0x00619C",
+            "file_target": "0x00619C"
+          },
+          {
+            "file_offset": "0x0061A0",
+            "file_target": "0x02BAFC"
+          },
+          {
+            "file_offset": "0x0061A4",
+            "file_target": "0x02BAB6"
+          },
+          {
+            "file_offset": "0x0061A8",
+            "file_target": "0x02BE82"
+          },
+          {
+            "file_offset": "0x0061AC",
+            "file_target": "0x02BD10"
+          },
+          {
+            "file_offset": "0x0061B0",
+            "file_target": "0x02BF22"
+          },
+          {
+            "file_offset": "0x0061B4",
+            "file_target": "0x0365C2"
+          },
+          {
+            "file_offset": "0x0061B8",
+            "file_target": "0x02BFB8"
+          },
+          {
+            "file_offset": "0x0061BC",
+            "file_target": "0x036378"
+          },
+          {
+            "file_offset": "0x0061C4",
+            "file_target": "0x0061C4"
+          },
+          {
+            "file_offset": "0x0061C8",
+            "file_target": "0x0061C8"
+          },
+          {
+            "file_offset": "0x0061CC",
+            "file_target": "0x0061CC"
+          },
+          {
+            "file_offset": "0x0061D0",
+            "file_target": "0x0061D0"
+          },
+          {
+            "file_offset": "0x0061D4",
+            "file_target": "0x0061D4"
+          },
+          {
+            "file_offset": "0x0061D8",
+            "file_target": "0x0061D8"
+          },
+          {
+            "file_offset": "0x0061DC",
+            "file_target": "0x0061DC"
+          },
+          {
+            "file_offset": "0x0061E0",
+            "file_target": "0x0061E0"
+          },
+          {
+            "file_offset": "0x0061E4",
+            "file_target": "0x0061E4"
+          },
+          {
+            "file_offset": "0x0061E8",
+            "file_target": "0x0061E8"
+          },
+          {
+            "file_offset": "0x0061EC",
+            "file_target": "0x0061EC"
+          },
+          {
+            "file_offset": "0x0061F0",
+            "file_target": "0x0061F0"
+          },
+          {
+            "file_offset": "0x0061F4",
+            "file_target": "0x0061F4"
+          },
+          {
+            "file_offset": "0x0061F8",
+            "file_target": "0x0061F8"
+          },
+          {
+            "file_offset": "0x0061FC",
+            "file_target": "0x0061FC"
+          },
+          {
+            "file_offset": "0x006200",
+            "file_target": "0x006200"
+          },
+          {
+            "file_offset": "0x006204",
+            "file_target": "0x006204"
+          },
+          {
+            "file_offset": "0x006208",
+            "file_target": "0x006208"
+          },
+          {
+            "file_offset": "0x00620C",
+            "file_target": "0x00620C"
+          },
+          {
+            "file_offset": "0x006210",
+            "file_target": "0x006210"
+          },
+          {
+            "file_offset": "0x006214",
+            "file_target": "0x006214"
+          },
+          {
+            "file_offset": "0x006218",
+            "file_target": "0x006218"
+          },
+          {
+            "file_offset": "0x00621C",
+            "file_target": "0x00621C"
+          },
+          {
+            "file_offset": "0x006220",
+            "file_target": "0x006220"
+          },
+          {
+            "file_offset": "0x006224",
+            "file_target": "0x006224"
+          },
+          {
+            "file_offset": "0x006228",
+            "file_target": "0x006228"
+          },
+          {
+            "file_offset": "0x00622C",
+            "file_target": "0x00622C"
+          },
+          {
+            "file_offset": "0x006230",
+            "file_target": "0x006230"
+          },
+          {
+            "file_offset": "0x006234",
+            "file_target": "0x006234"
+          },
+          {
+            "file_offset": "0x006238",
+            "file_target": "0x006238"
+          },
+          {
+            "file_offset": "0x00623C",
+            "file_target": "0x00623C"
+          },
+          {
+            "file_offset": "0x006240",
+            "file_target": "0x006240"
+          },
+          {
+            "file_offset": "0x006244",
+            "file_target": "0x006244"
+          },
+          {
+            "file_offset": "0x006248",
+            "file_target": "0x006248"
+          },
+          {
+            "file_offset": "0x00624C",
+            "file_target": "0x00624C"
+          },
+          {
+            "file_offset": "0x006250",
+            "file_target": "0x006250"
+          },
+          {
+            "file_offset": "0x006254",
+            "file_target": "0x006254"
+          },
+          {
+            "file_offset": "0x006258",
+            "file_target": "0x006258"
+          },
+          {
+            "file_offset": "0x00625C",
+            "file_target": "0x00625C"
+          },
+          {
+            "file_offset": "0x006260",
+            "file_target": "0x006260"
+          },
+          {
+            "file_offset": "0x006264",
+            "file_target": "0x006264"
+          },
+          {
+            "file_offset": "0x006268",
+            "file_target": "0x006268"
+          },
+          {
+            "file_offset": "0x00626C",
+            "file_target": "0x00626C"
+          },
+          {
+            "file_offset": "0x006270",
+            "file_target": "0x006270"
+          },
+          {
+            "file_offset": "0x006274",
+            "file_target": "0x006274"
+          },
+          {
+            "file_offset": "0x006278",
+            "file_target": "0x006278"
+          },
+          {
+            "file_offset": "0x00627C",
+            "file_target": "0x00627C"
+          },
+          {
+            "file_offset": "0x006280",
+            "file_target": "0x006280"
+          },
+          {
+            "file_offset": "0x006284",
+            "file_target": "0x006284"
+          },
+          {
+            "file_offset": "0x006288",
+            "file_target": "0x006288"
+          },
+          {
+            "file_offset": "0x00628C",
+            "file_target": "0x00628C"
+          },
+          {
+            "file_offset": "0x006290",
+            "file_target": "0x006290"
+          },
+          {
+            "file_offset": "0x006294",
+            "file_target": "0x006294"
+          },
+          {
+            "file_offset": "0x006298",
+            "file_target": "0x006298"
+          },
+          {
+            "file_offset": "0x00629C",
+            "file_target": "0x00629C"
+          },
+          {
+            "file_offset": "0x0062A0",
+            "file_target": "0x0062A0"
+          },
+          {
+            "file_offset": "0x0062A4",
+            "file_target": "0x0062A4"
+          },
+          {
+            "file_offset": "0x0062A8",
+            "file_target": "0x0062A8"
+          },
+          {
+            "file_offset": "0x0062AC",
+            "file_target": "0x0062AC"
+          },
+          {
+            "file_offset": "0x0062B0",
+            "file_target": "0x0062B0"
+          },
+          {
+            "file_offset": "0x0062B4",
+            "file_target": "0x0062B4"
+          },
+          {
+            "file_offset": "0x0062B8",
+            "file_target": "0x0062B8"
+          },
+          {
+            "file_offset": "0x0062BC",
+            "file_target": "0x0062BC"
+          },
+          {
+            "file_offset": "0x0062C0",
+            "file_target": "0x0062C0"
+          },
+          {
+            "file_offset": "0x0062C4",
+            "file_target": "0x0062C4"
+          },
+          {
+            "file_offset": "0x0062C8",
+            "file_target": "0x0062C8"
+          },
+          {
+            "file_offset": "0x0062CC",
+            "file_target": "0x0062CC"
+          },
+          {
+            "file_offset": "0x0062D0",
+            "file_target": "0x0062D0"
+          },
+          {
+            "file_offset": "0x0062D4",
+            "file_target": "0x0062D4"
+          },
+          {
+            "file_offset": "0x0062D8",
+            "file_target": "0x0062D8"
+          },
+          {
+            "file_offset": "0x0062DC",
+            "file_target": "0x0062DC"
+          },
+          {
+            "file_offset": "0x0062E0",
+            "file_target": "0x0062E0"
+          },
+          {
+            "file_offset": "0x0062E4",
+            "file_target": "0x0062E4"
+          },
+          {
+            "file_offset": "0x0062E8",
+            "file_target": "0x0062E8"
+          },
+          {
+            "file_offset": "0x0062EC",
+            "file_target": "0x036816"
+          },
+          {
+            "file_offset": "0x0062F0",
+            "file_target": "0x0062F0"
+          },
+          {
+            "file_offset": "0x0062FC",
+            "file_target": "0x005C14"
+          },
+          {
+            "file_offset": "0x006862",
+            "file_target": "0x004000"
+          },
+          {
+            "file_offset": "0x006D96",
+            "file_target": "0x020EF4"
+          },
+          {
+            "file_offset": "0x006DA0",
+            "file_target": "0x02B8F0"
+          },
+          {
+            "file_offset": "0x006DAA",
+            "file_target": "0x02276E"
+          },
+          {
+            "file_offset": "0x006E88",
+            "file_target": "0x0248A0"
+          },
+          {
+            "file_offset": "0x006EDE",
+            "file_target": "0x027118"
+          },
+          {
+            "file_offset": "0x007096",
+            "file_target": "0x0248A0"
+          },
+          {
+            "file_offset": "0x0070E4",
+            "file_target": "0x0248A0"
+          },
+          {
+            "file_offset": "0x007106",
+            "file_target": "0x021C9C"
+          },
+          {
+            "file_offset": "0x007134",
+            "file_target": "0x0248A0"
+          },
+          {
+            "file_offset": "0x007178",
+            "file_target": "0x0248A0"
+          },
+          {
+            "file_offset": "0x00719C",
+            "file_target": "0x0248A0"
+          },
+          {
+            "file_offset": "0x00720E",
+            "file_target": "0x02440C"
+          },
+          {
+            "file_offset": "0x007212",
+            "file_target": "0x02524E"
+          },
+          {
+            "file_offset": "0x007216",
+            "file_target": "0x025404"
+          },
+          {
+            "file_offset": "0x00721A",
+            "file_target": "0x02F15C"
+          },
+          {
+            "file_offset": "0x007220",
+            "file_target": "0x02B766"
+          },
+          {
+            "file_offset": "0x007228",
+            "file_target": "0x0252EC"
+          },
+          {
+            "file_offset": "0x00722C",
+            "file_target": "0x024000"
+          },
+          {
+            "file_offset": "0x007230",
+            "file_target": "0x02EB06"
+          },
+          {
+            "file_offset": "0x007236",
+            "file_target": "0x026394"
+          },
+          {
+            "file_offset": "0x00723A",
+            "file_target": "0x02EB1C"
+          },
+          {
+            "file_offset": "0x00723E",
+            "file_target": "0x02E6DE"
+          },
+          {
+            "file_offset": "0x007242",
+            "file_target": "0x0237E0"
+          },
+          {
+            "file_offset": "0x007288",
+            "file_target": "0x02276E"
+          },
+          {
+            "file_offset": "0x00739C",
+            "file_target": "0x02DB14"
+          },
+          {
+            "file_offset": "0x0073B4",
+            "file_target": "0x0248A0"
+          },
+          {
+            "file_offset": "0x007460",
+            "file_target": "0x0248A0"
+          },
+          {
+            "file_offset": "0x007486",
+            "file_target": "0x0248A0"
+          },
+          {
+            "file_offset": "0x00748E",
+            "file_target": "0x0248A0"
+          },
+          {
+            "file_offset": "0x007496",
+            "file_target": "0x0248A0"
+          },
+          {
+            "file_offset": "0x007550",
+            "file_target": "0x0280F2"
+          },
+          {
+            "file_offset": "0x007558",
+            "file_target": "0x028296"
+          },
+          {
+            "file_offset": "0x007606",
+            "file_target": "0x0248A0"
+          },
+          {
+            "file_offset": "0x00760E",
+            "file_target": "0x0248A0"
+          },
+          {
+            "file_offset": "0x00761A",
+            "file_target": "0x0248A0"
+          },
+          {
+            "file_offset": "0x00766A",
+            "file_target": "0x0248A0"
+          },
+          {
+            "file_offset": "0x007672",
+            "file_target": "0x0248A0"
+          },
+          {
+            "file_offset": "0x00767A",
+            "file_target": "0x0248A0"
+          },
+          {
+            "file_offset": "0x01416C",
+            "file_target": "0x004A0A"
+          },
+          {
+            "file_offset": "0x025FDC",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x025FF6",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x027C6C",
+            "file_target": "0x00000E"
+          },
+          {
+            "file_offset": "0x02D05C",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x02D076",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x02E1E4",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x02E1EE",
+            "file_target": "0x000000"
+          }
+        ],
+        "computed_entries": 165,
+        "computed_tables": 15,
+        "missing_computed_targets": [],
+        "reachable_instructions": 7807,
+        "root_policy": "Reset, startup, interrupt vectors, and exact-image CALLS/JMPS patterns whose decoded targets exist in the exact listing are roots. Direct control flow and the immutable tables close the graph.",
+        "status": "proven",
+        "unknown_reachable_control_transfers": []
+      },
+      "dpp3_invariant": {
+        "status": "proven unchanged at reset page 3",
+        "stock_live_writes": []
+      },
+      "ecu_id": "1429861",
+      "indirect_closure": {
+        "exact_source_proof_transfers": 222,
+        "manual_rules": [
+          {
+            "effective_address_envelopes": [
+              "0x0000-0x01FE",
+              "0x2B4A-0x2D48"
+            ],
+            "evidence": "FC50 is written only with 0x2B4A (or reset zero); the masked FAFA index contributes at most 0x1FE.",
+            "name": "FC50 bounded lookup",
+            "pc_range": "0x2BB8C-0x2BB8C",
+            "stock_live_sites": 1
+          },
+          {
+            "effective_address_envelopes": [
+              "0xE885-0xE984"
+            ],
+            "evidence": "The index is zero-extended from one byte.",
+            "name": "byte-indexed E885 writer",
+            "pc_range": "0x2DC00-0x2DCFF",
+            "stock_live_sites": 1
+          },
+          {
+            "effective_address_envelopes": [
+              "0x0000-0xC002",
+              "0xFB5A-0xFB5A"
+            ],
+            "evidence": "Parser descriptors and lookup axes stay at or below 0xC002.",
+            "name": "calibration parser and lookup",
+            "pc_range": "0x28000-0x283FF",
+            "stock_live_sites": 11
+          },
+          {
+            "effective_address_envelopes": [
+              "0xE44B-0xE4DA",
+              "0xED01-0xF0FF"
+            ],
+            "evidence": "Exact call arguments and loop guards bound the receive payload, checksum, and transfer buffers.",
+            "name": "high serial helpers",
+            "pc_range": "0x20300-0x204FF",
+            "stock_live_sites": 2
+          },
+          {
+            "effective_address_envelopes": [
+              "0xA000-0xBFFF",
+              "0xFA62-0xFA73",
+              "0xFB2C-0xFB43"
+            ],
+            "evidence": "FA5F is sourced from the proven 0..5 FA80 selector; exact channel and destination tables close every indirect access.",
+            "name": "high serial interrupt block",
+            "pc_range": "0x36600-0x367FF",
+            "stock_live_sites": 1
+          },
+          {
+            "effective_address_envelopes": [
+              "0xFA00-0xFA45"
+            ],
+            "evidence": "Startup fixes r0 at FA46; all normal saves/restores and local frames remain in the proven FA00-FA45 software-stack arena.",
+            "name": "r0 software-stack frame",
+            "pc_range": "0x367EE-0x367EE",
+            "stock_live_sites": 70
+          },
+          {
+            "effective_address_envelopes": [
+              "0xA000-0xCFFF",
+              "0xE900-0xF7FF",
+              "0xFB00-0xFBFF"
+            ],
+            "evidence": "Immediate record/descriptor arguments, byte-sized indexes, and the exact A8A2 descriptor words close both record updaters.",
+            "name": "record and checksum helpers",
+            "pc_range": "0x20C00-0x21DFF",
+            "stock_live_sites": 70
+          },
+          {
+            "effective_address_envelopes": [
+              "0xD000-0xD0FF",
+              "0xED00-0xF1FF"
+            ],
+            "evidence": "All mutable status pointers have exact D0xx/EDxx/F1xx values.",
+            "name": "status pointer helpers",
+            "pc_range": "0x24E00-0x252FF",
+            "stock_live_sites": 5
+          },
+          {
+            "effective_address_envelopes": [
+              "0xA000-0xBFFF",
+              "0xF100-0xF1FF",
+              "0xFB2C-0xFB43"
+            ],
+            "evidence": "FA80 is exactly 0..5; AA08/AD70 contain the six FB2C-FB40 destinations and the bounded receive ring ends at F16A.",
+            "name": "timer and serial interrupt tables",
+            "pc_range": "0x2BC00-0x2BFFF",
+            "stock_live_sites": 4
+          }
+        ],
+        "manual_target_specific_sites": 165,
+        "status": "proven for the exact image",
+        "stock_live_sites": 387,
+        "transfer_methods": {
+          "same-PC exact 24-byte context": 193,
+          "unique relocated exact 24-byte context": 29
+        },
+        "unclosed_sites": 0
+      },
+      "inputs": {
+        "functions": {
+          "path": "C:\\Users\\crist\\MS41 Projects\\Flasher-Dev\\experiments\\ram_ownership\\evidence\\family_raw\\ms41_0_functions.tsv",
+          "sha256": "e472cb1bf462d7927bb28787e91d81ce7b361fa1fb58a3b47b8a3568f551d7d5"
+        },
+        "listing": {
+          "path": "C:\\Users\\crist\\MS41 Projects\\Decompilation\\MS41.0\\ms41_0_disasm.asm",
+          "sha256": "49f1647939f970936900c2a006d9495f365aa44a9a53d1faa102ae780005fc43"
+        },
+        "supplemental": [
+          {
+            "path": "C:\\Users\\crist\\MS41 Projects\\Flasher-Dev\\experiments\\ram_ownership\\evidence\\family_raw\\ms41_0_recovered.asm",
+            "sha256": "e3e58f5778a1ed4cf33f1c537ab5fe3e71bb63282f9fe0d41342a14ea13739ed"
+          },
+          {
+            "path": "C:\\Users\\crist\\MS41 Projects\\Flasher-Dev\\experiments\\ram_ownership\\evidence\\family_raw\\ms41_0_low_recovered.asm",
+            "sha256": "a5bcc1b2394a1c466ced32064bc0557a33252277923e1bd9188d893d3720cc29"
+          }
+        ],
+        "supporting": [
+          {
+            "path": "C:\\Users\\crist\\MS41 Projects\\Decompilation\\MS41.0\\fn_records.tsv",
+            "sha256": "26e51a58baa22606ff7ab25e27febbd1f5f822647e9e99785bb11f13cbf20acf"
+          },
+          {
+            "path": "C:\\Users\\crist\\MS41 Projects\\Flasher-Dev\\experiments\\ram_ownership\\evidence\\family_raw\\ms41_0_indirect_pcode.tsv",
+            "sha256": "a88396d459fe12a698387e342b1b982ebbd709903175b71ac7d4826fec90da79"
+          },
+          {
+            "path": "C:\\Users\\crist\\MS41 Projects\\Flasher-Dev\\experiments\\ram_ownership\\evidence\\family_raw\\ms41_0_indirect_pcode_part2.tsv",
+            "sha256": "cbceb4ca9255ee93cb2071bff5e7e1bce6798ab826fb77e894a41ba807481495"
+          }
+        ]
+      },
+      "loader_lifetimes": {
+        "hardware_bsl": {
+          "range": "0xFA00-0xFA5F",
+          "status": "reserved during built-in bootstrap execution"
+        },
+        "soft_bsl": {
+          "status": "not supported by the current repository; memory non-collision alone is not a port certificate"
+        },
+        "stock_ds2_download_target": "0xDC20-0xE31F",
+        "stock_flash_protocol_state": "0xE420-0xE528",
+        "stock_ram_flash_driver": "0xE320-0xE41F"
+      },
+      "pec3_6_invariant": {
+        "status": "proven inactive for the exact image",
+        "stock_live_control_or_pointer_writes": []
+      },
+      "reference": "C:\\Users\\crist\\MS41 Projects\\_shared\\REF_MS41.0\\1429861_WBACE71010EU86940_fullread_323.bin",
+      "reference_sha256": "c61674c5812f5fe0a4a6f86e96311e9a8e540a905f9e7f681fdd045254249521",
+      "startup_ram_test": {
+        "iram_range": "0xFA00-0xFDFF",
+        "lifetime": "reset/startup before the main firmware handoff",
+        "table": {
+          "0xA300": "0xFDFE",
+          "0xA302": "0xD800",
+          "0xA304": "0xDBFE",
+          "0xA306": "0xE420",
+          "0xA308": "0xF7FE",
+          "0xA30A": "0xDC00",
+          "0xA30C": "0xE41E",
+          "0xA30E": "0xD080",
+          "0xA310": "0xD0FF",
+          "0xA312": "0xF200",
+          "0xA314": "0xFA00"
+        },
+        "xram_range": "0xD800-0xF201"
+      },
+      "system_stack_invariant": {
+        "normal_runtime_envelope": "0xFB64-0xFBFF",
+        "r0_software_stack": "0xFA00-0xFA45",
+        "status": "proven for the exact image"
+      },
+      "variant": "MS41.0"
+    },
+    "MS41.1": {
+      "certification": {
+        "conditions": [
+          "Use only with the exact image hash shown above.",
+          "Initialize only after the startup RAM self-test and main handoff.",
+          "Do not expect contents to survive reset.",
+          "Do not change DPP3, CP banks, stack bounds, or PEC configuration.",
+          "Re-run the analyzer after native control-flow or pointer changes."
+        ],
+        "iram": {
+          "certified_bytes": 41,
+          "complete_byte_class_map": [
+            {
+              "bytes": 575,
+              "range": "0xFA00-0xFC3E",
+              "status": "owned/reserved; no allocation certificate"
+            },
+            {
+              "bytes": 3,
+              "range": "0xFC3F-0xFC41",
+              "status": "conditionally available after startup"
+            },
+            {
+              "bytes": 372,
+              "range": "0xFC42-0xFDB5",
+              "status": "owned/reserved; no allocation certificate"
+            },
+            {
+              "bytes": 38,
+              "range": "0xFDB6-0xFDDB",
+              "status": "conditionally available after startup"
+            },
+            {
+              "bytes": 36,
+              "range": "0xFDDC-0xFDFF",
+              "status": "owned/reserved; no allocation certificate"
+            }
+          ],
+          "ranges": [
+            {
+              "bytes": 3,
+              "range": "0xFC3F-0xFC41",
+              "word_aligned_subrange": "0xFC40-0xFC41"
+            },
+            {
+              "bytes": 38,
+              "range": "0xFDB6-0xFDDB",
+              "word_aligned_subrange": "0xFDB6-0xFDDB"
+            }
+          ],
+          "word_aligned_certified_bytes": 40
+        },
+        "status": "conditionally certified for exact-image post-startup use",
+        "xram": {
+          "certified_bytes": 110,
+          "complete_byte_class_map": [
+            {
+              "bytes": 64,
+              "range": "0xD800-0xD83F",
+              "status": "conditionally available after startup"
+            },
+            {
+              "bytes": 847,
+              "range": "0xD840-0xDB8E",
+              "status": "owned/reserved; no allocation certificate"
+            },
+            {
+              "bytes": 21,
+              "range": "0xDB8F-0xDBA3",
+              "status": "conditionally available after startup"
+            },
+            {
+              "bytes": 3235,
+              "range": "0xDBA4-0xE846",
+              "status": "owned/reserved; no allocation certificate"
+            },
+            {
+              "bytes": 25,
+              "range": "0xE847-0xE85F",
+              "status": "conditionally available after startup"
+            },
+            {
+              "bytes": 4000,
+              "range": "0xE860-0xF7FF",
+              "status": "owned/reserved; no allocation certificate"
+            }
+          ],
+          "ranges": [
+            {
+              "bytes": 64,
+              "range": "0xD800-0xD83F",
+              "word_aligned_subrange": "0xD800-0xD83F"
+            },
+            {
+              "bytes": 21,
+              "range": "0xDB8F-0xDBA3",
+              "word_aligned_subrange": "0xDB90-0xDBA3"
+            },
+            {
+              "bytes": 25,
+              "range": "0xE847-0xE85F",
+              "word_aligned_subrange": "0xE848-0xE85F"
+            }
+          ],
+          "word_aligned_certified_bytes": 108
+        }
+      },
+      "context_bank_invariant": {
+        "known_cp_bases": [
+          "0xFA00",
+          "0xFA16",
+          "0xFB2E",
+          "0xFB30",
+          "0xFB32",
+          "0xFB3C",
+          "0xFB44",
+          "0xFC00",
+          "0xFC42",
+          "0xFCAE",
+          "0xFCB4",
+          "0xFCC2",
+          "0xFCDC",
+          "0xFCFC",
+          "0xFD66",
+          "0xFD86",
+          "0xFD8A",
+          "0xFD8C",
+          "0xFD90",
+          "0xFD96"
+        ],
+        "reserved_ranges": [
+          "0xFA00-0xFA1F",
+          "0xFA16-0xFA35",
+          "0xFB2E-0xFB4D",
+          "0xFB30-0xFB4F",
+          "0xFB32-0xFB51",
+          "0xFB3C-0xFB5B",
+          "0xFB44-0xFB63",
+          "0xFC00-0xFC1F",
+          "0xFC42-0xFC61",
+          "0xFCAE-0xFCCD",
+          "0xFCB4-0xFCD3",
+          "0xFCC2-0xFCE1",
+          "0xFCDC-0xFCFB",
+          "0xFCFC-0xFD1B",
+          "0xFD66-0xFD85",
+          "0xFD86-0xFDA5",
+          "0xFD8A-0xFDA9",
+          "0xFD8C-0xFDAB",
+          "0xFD90-0xFDAF",
+          "0xFD96-0xFDB5"
+        ],
+        "status": "proven for the exact image"
+      },
+      "control_flow_gate": {
+        "absolute_pattern_roots": [
+          {
+            "file_offset": "0x004000",
+            "file_target": "0x004430"
+          },
+          {
+            "file_offset": "0x004004",
+            "file_target": "0x006104"
+          },
+          {
+            "file_offset": "0x004008",
+            "file_target": "0x006108"
+          },
+          {
+            "file_offset": "0x00400C",
+            "file_target": "0x00610C"
+          },
+          {
+            "file_offset": "0x004010",
+            "file_target": "0x006110"
+          },
+          {
+            "file_offset": "0x004014",
+            "file_target": "0x006114"
+          },
+          {
+            "file_offset": "0x004018",
+            "file_target": "0x006118"
+          },
+          {
+            "file_offset": "0x00401C",
+            "file_target": "0x00611C"
+          },
+          {
+            "file_offset": "0x004020",
+            "file_target": "0x006120"
+          },
+          {
+            "file_offset": "0x004024",
+            "file_target": "0x006124"
+          },
+          {
+            "file_offset": "0x004028",
+            "file_target": "0x006128"
+          },
+          {
+            "file_offset": "0x00402C",
+            "file_target": "0x00612C"
+          },
+          {
+            "file_offset": "0x004030",
+            "file_target": "0x006130"
+          },
+          {
+            "file_offset": "0x004034",
+            "file_target": "0x006134"
+          },
+          {
+            "file_offset": "0x004038",
+            "file_target": "0x006138"
+          },
+          {
+            "file_offset": "0x00403C",
+            "file_target": "0x00613C"
+          },
+          {
+            "file_offset": "0x004040",
+            "file_target": "0x006140"
+          },
+          {
+            "file_offset": "0x004044",
+            "file_target": "0x006144"
+          },
+          {
+            "file_offset": "0x004048",
+            "file_target": "0x006148"
+          },
+          {
+            "file_offset": "0x00404C",
+            "file_target": "0x00614C"
+          },
+          {
+            "file_offset": "0x004050",
+            "file_target": "0x006150"
+          },
+          {
+            "file_offset": "0x004054",
+            "file_target": "0x006154"
+          },
+          {
+            "file_offset": "0x004058",
+            "file_target": "0x006158"
+          },
+          {
+            "file_offset": "0x00405C",
+            "file_target": "0x00615C"
+          },
+          {
+            "file_offset": "0x004060",
+            "file_target": "0x006160"
+          },
+          {
+            "file_offset": "0x004064",
+            "file_target": "0x006164"
+          },
+          {
+            "file_offset": "0x004068",
+            "file_target": "0x006168"
+          },
+          {
+            "file_offset": "0x00406C",
+            "file_target": "0x00616C"
+          },
+          {
+            "file_offset": "0x004070",
+            "file_target": "0x006170"
+          },
+          {
+            "file_offset": "0x004074",
+            "file_target": "0x006174"
+          },
+          {
+            "file_offset": "0x004078",
+            "file_target": "0x006178"
+          },
+          {
+            "file_offset": "0x00407C",
+            "file_target": "0x00617C"
+          },
+          {
+            "file_offset": "0x004080",
+            "file_target": "0x006180"
+          },
+          {
+            "file_offset": "0x004084",
+            "file_target": "0x006184"
+          },
+          {
+            "file_offset": "0x004088",
+            "file_target": "0x006188"
+          },
+          {
+            "file_offset": "0x00408C",
+            "file_target": "0x00618C"
+          },
+          {
+            "file_offset": "0x004090",
+            "file_target": "0x006190"
+          },
+          {
+            "file_offset": "0x004094",
+            "file_target": "0x006194"
+          },
+          {
+            "file_offset": "0x004098",
+            "file_target": "0x006198"
+          },
+          {
+            "file_offset": "0x00409C",
+            "file_target": "0x00619C"
+          },
+          {
+            "file_offset": "0x0040A0",
+            "file_target": "0x0061A0"
+          },
+          {
+            "file_offset": "0x0040A4",
+            "file_target": "0x0061A4"
+          },
+          {
+            "file_offset": "0x0040A8",
+            "file_target": "0x0061A8"
+          },
+          {
+            "file_offset": "0x0040AC",
+            "file_target": "0x0061AC"
+          },
+          {
+            "file_offset": "0x0040B0",
+            "file_target": "0x0061B0"
+          },
+          {
+            "file_offset": "0x0040B4",
+            "file_target": "0x0061B4"
+          },
+          {
+            "file_offset": "0x0040B8",
+            "file_target": "0x0061B8"
+          },
+          {
+            "file_offset": "0x0040BC",
+            "file_target": "0x0061BC"
+          },
+          {
+            "file_offset": "0x0040C0",
+            "file_target": "0x0061C0"
+          },
+          {
+            "file_offset": "0x0040C4",
+            "file_target": "0x0061C4"
+          },
+          {
+            "file_offset": "0x0040C8",
+            "file_target": "0x0061C8"
+          },
+          {
+            "file_offset": "0x0040CC",
+            "file_target": "0x0061CC"
+          },
+          {
+            "file_offset": "0x0040D0",
+            "file_target": "0x0061D0"
+          },
+          {
+            "file_offset": "0x0040D4",
+            "file_target": "0x0061D4"
+          },
+          {
+            "file_offset": "0x0040D8",
+            "file_target": "0x0061D8"
+          },
+          {
+            "file_offset": "0x0040DC",
+            "file_target": "0x0061DC"
+          },
+          {
+            "file_offset": "0x0040E0",
+            "file_target": "0x0061E0"
+          },
+          {
+            "file_offset": "0x0040E4",
+            "file_target": "0x0061E4"
+          },
+          {
+            "file_offset": "0x0040E8",
+            "file_target": "0x0061E8"
+          },
+          {
+            "file_offset": "0x0040EC",
+            "file_target": "0x0061EC"
+          },
+          {
+            "file_offset": "0x0040F0",
+            "file_target": "0x0061F0"
+          },
+          {
+            "file_offset": "0x0040F4",
+            "file_target": "0x0061F4"
+          },
+          {
+            "file_offset": "0x0040F8",
+            "file_target": "0x0061F8"
+          },
+          {
+            "file_offset": "0x0040FC",
+            "file_target": "0x0061FC"
+          },
+          {
+            "file_offset": "0x004100",
+            "file_target": "0x006200"
+          },
+          {
+            "file_offset": "0x004104",
+            "file_target": "0x006204"
+          },
+          {
+            "file_offset": "0x004108",
+            "file_target": "0x006208"
+          },
+          {
+            "file_offset": "0x00410C",
+            "file_target": "0x00620C"
+          },
+          {
+            "file_offset": "0x004110",
+            "file_target": "0x006210"
+          },
+          {
+            "file_offset": "0x004114",
+            "file_target": "0x006214"
+          },
+          {
+            "file_offset": "0x004118",
+            "file_target": "0x006218"
+          },
+          {
+            "file_offset": "0x00411C",
+            "file_target": "0x00621C"
+          },
+          {
+            "file_offset": "0x004120",
+            "file_target": "0x006220"
+          },
+          {
+            "file_offset": "0x004124",
+            "file_target": "0x006224"
+          },
+          {
+            "file_offset": "0x004128",
+            "file_target": "0x006228"
+          },
+          {
+            "file_offset": "0x00412C",
+            "file_target": "0x00622C"
+          },
+          {
+            "file_offset": "0x004130",
+            "file_target": "0x006230"
+          },
+          {
+            "file_offset": "0x004134",
+            "file_target": "0x006234"
+          },
+          {
+            "file_offset": "0x004138",
+            "file_target": "0x006238"
+          },
+          {
+            "file_offset": "0x00413C",
+            "file_target": "0x00623C"
+          },
+          {
+            "file_offset": "0x004140",
+            "file_target": "0x006240"
+          },
+          {
+            "file_offset": "0x004144",
+            "file_target": "0x006244"
+          },
+          {
+            "file_offset": "0x004148",
+            "file_target": "0x006248"
+          },
+          {
+            "file_offset": "0x00414C",
+            "file_target": "0x00624C"
+          },
+          {
+            "file_offset": "0x004150",
+            "file_target": "0x006250"
+          },
+          {
+            "file_offset": "0x004154",
+            "file_target": "0x006254"
+          },
+          {
+            "file_offset": "0x004158",
+            "file_target": "0x006258"
+          },
+          {
+            "file_offset": "0x00415C",
+            "file_target": "0x00625C"
+          },
+          {
+            "file_offset": "0x004160",
+            "file_target": "0x006260"
+          },
+          {
+            "file_offset": "0x004164",
+            "file_target": "0x006264"
+          },
+          {
+            "file_offset": "0x004168",
+            "file_target": "0x006268"
+          },
+          {
+            "file_offset": "0x00416C",
+            "file_target": "0x00626C"
+          },
+          {
+            "file_offset": "0x004170",
+            "file_target": "0x006270"
+          },
+          {
+            "file_offset": "0x004174",
+            "file_target": "0x006274"
+          },
+          {
+            "file_offset": "0x004178",
+            "file_target": "0x006278"
+          },
+          {
+            "file_offset": "0x00417C",
+            "file_target": "0x00627C"
+          },
+          {
+            "file_offset": "0x004180",
+            "file_target": "0x006280"
+          },
+          {
+            "file_offset": "0x004184",
+            "file_target": "0x006284"
+          },
+          {
+            "file_offset": "0x004188",
+            "file_target": "0x006288"
+          },
+          {
+            "file_offset": "0x00418C",
+            "file_target": "0x00628C"
+          },
+          {
+            "file_offset": "0x004190",
+            "file_target": "0x006290"
+          },
+          {
+            "file_offset": "0x004194",
+            "file_target": "0x006294"
+          },
+          {
+            "file_offset": "0x004198",
+            "file_target": "0x006298"
+          },
+          {
+            "file_offset": "0x00419C",
+            "file_target": "0x00629C"
+          },
+          {
+            "file_offset": "0x0041A0",
+            "file_target": "0x0062A0"
+          },
+          {
+            "file_offset": "0x0041A4",
+            "file_target": "0x0062A4"
+          },
+          {
+            "file_offset": "0x0041A8",
+            "file_target": "0x0062A8"
+          },
+          {
+            "file_offset": "0x0041AC",
+            "file_target": "0x0062AC"
+          },
+          {
+            "file_offset": "0x0041B0",
+            "file_target": "0x0062B0"
+          },
+          {
+            "file_offset": "0x0041B4",
+            "file_target": "0x0062B4"
+          },
+          {
+            "file_offset": "0x0041B8",
+            "file_target": "0x0062B8"
+          },
+          {
+            "file_offset": "0x0041BC",
+            "file_target": "0x0062BC"
+          },
+          {
+            "file_offset": "0x0041C0",
+            "file_target": "0x0062C0"
+          },
+          {
+            "file_offset": "0x0041C4",
+            "file_target": "0x0062C4"
+          },
+          {
+            "file_offset": "0x0041C8",
+            "file_target": "0x0062C8"
+          },
+          {
+            "file_offset": "0x0041CC",
+            "file_target": "0x0062CC"
+          },
+          {
+            "file_offset": "0x0041D0",
+            "file_target": "0x0062D0"
+          },
+          {
+            "file_offset": "0x0041D4",
+            "file_target": "0x0062D4"
+          },
+          {
+            "file_offset": "0x0041D8",
+            "file_target": "0x0062D8"
+          },
+          {
+            "file_offset": "0x0041DC",
+            "file_target": "0x0062DC"
+          },
+          {
+            "file_offset": "0x0041E0",
+            "file_target": "0x0062E0"
+          },
+          {
+            "file_offset": "0x0041E4",
+            "file_target": "0x0062E4"
+          },
+          {
+            "file_offset": "0x0041E8",
+            "file_target": "0x0062E8"
+          },
+          {
+            "file_offset": "0x0041EC",
+            "file_target": "0x0062EC"
+          },
+          {
+            "file_offset": "0x0041F0",
+            "file_target": "0x0062F0"
+          },
+          {
+            "file_offset": "0x0041F4",
+            "file_target": "0x0062F4"
+          },
+          {
+            "file_offset": "0x0041F8",
+            "file_target": "0x0062F8"
+          },
+          {
+            "file_offset": "0x0041FC",
+            "file_target": "0x0062FC"
+          },
+          {
+            "file_offset": "0x0046E2",
+            "file_target": "0x0048F6"
+          },
+          {
+            "file_offset": "0x004742",
+            "file_target": "0x0046EC"
+          },
+          {
+            "file_offset": "0x004746",
+            "file_target": "0x00470E"
+          },
+          {
+            "file_offset": "0x00483A",
+            "file_target": "0x004732"
+          },
+          {
+            "file_offset": "0x00484E",
+            "file_target": "0x0055A6"
+          },
+          {
+            "file_offset": "0x004888",
+            "file_target": "0x004732"
+          },
+          {
+            "file_offset": "0x00489E",
+            "file_target": "0x0056CE"
+          },
+          {
+            "file_offset": "0x0048AC",
+            "file_target": "0x00560E"
+          },
+          {
+            "file_offset": "0x0048BE",
+            "file_target": "0x004720"
+          },
+          {
+            "file_offset": "0x0048D4",
+            "file_target": "0x004720"
+          },
+          {
+            "file_offset": "0x0048EC",
+            "file_target": "0x004720"
+          },
+          {
+            "file_offset": "0x004924",
+            "file_target": "0x0046EC"
+          },
+          {
+            "file_offset": "0x004928",
+            "file_target": "0x00470E"
+          },
+          {
+            "file_offset": "0x00492C",
+            "file_target": "0x005ACA"
+          },
+          {
+            "file_offset": "0x004930",
+            "file_target": "0x005A1C"
+          },
+          {
+            "file_offset": "0x004944",
+            "file_target": "0x004720"
+          },
+          {
+            "file_offset": "0x004962",
+            "file_target": "0x00496C"
+          },
+          {
+            "file_offset": "0x004966",
+            "file_target": "0x00473C"
+          },
+          {
+            "file_offset": "0x004AD2",
+            "file_target": "0x004C32"
+          },
+          {
+            "file_offset": "0x004AF0",
+            "file_target": "0x004A24"
+          },
+          {
+            "file_offset": "0x004BA2",
+            "file_target": "0x004A70"
+          },
+          {
+            "file_offset": "0x004BBE",
+            "file_target": "0x004A34"
+          },
+          {
+            "file_offset": "0x004BDE",
+            "file_target": "0x004A24"
+          },
+          {
+            "file_offset": "0x004C0C",
+            "file_target": "0x004A70"
+          },
+          {
+            "file_offset": "0x004C22",
+            "file_target": "0x004A24"
+          },
+          {
+            "file_offset": "0x004C28",
+            "file_target": "0x004A24"
+          },
+          {
+            "file_offset": "0x004D54",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004D60",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004D6C",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004D78",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004D84",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004D90",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004D9C",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004DA8",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004E6C",
+            "file_target": "0x004A34"
+          },
+          {
+            "file_offset": "0x004E72",
+            "file_target": "0x004A34"
+          },
+          {
+            "file_offset": "0x005052",
+            "file_target": "0x005A8E"
+          },
+          {
+            "file_offset": "0x00506C",
+            "file_target": "0x005A62"
+          },
+          {
+            "file_offset": "0x005074",
+            "file_target": "0x004732"
+          },
+          {
+            "file_offset": "0x0050B0",
+            "file_target": "0x004E80"
+          },
+          {
+            "file_offset": "0x0050C6",
+            "file_target": "0x004E80"
+          },
+          {
+            "file_offset": "0x0050DC",
+            "file_target": "0x004E80"
+          },
+          {
+            "file_offset": "0x0050F4",
+            "file_target": "0x004E80"
+          },
+          {
+            "file_offset": "0x0051F4",
+            "file_target": "0x004732"
+          },
+          {
+            "file_offset": "0x005222",
+            "file_target": "0x004732"
+          },
+          {
+            "file_offset": "0x005226",
+            "file_target": "0x004E80"
+          },
+          {
+            "file_offset": "0x005288",
+            "file_target": "0x005ADE"
+          },
+          {
+            "file_offset": "0x00529A",
+            "file_target": "0x005ADE"
+          },
+          {
+            "file_offset": "0x0052AA",
+            "file_target": "0x005B4C"
+          },
+          {
+            "file_offset": "0x0052C6",
+            "file_target": "0x005ADE"
+          },
+          {
+            "file_offset": "0x0052D6",
+            "file_target": "0x005BCC"
+          },
+          {
+            "file_offset": "0x00534A",
+            "file_target": "0x005A62"
+          },
+          {
+            "file_offset": "0x005392",
+            "file_target": "0x005A62"
+          },
+          {
+            "file_offset": "0x005422",
+            "file_target": "0x004A24"
+          },
+          {
+            "file_offset": "0x005428",
+            "file_target": "0x004A34"
+          },
+          {
+            "file_offset": "0x005450",
+            "file_target": "0x004720"
+          },
+          {
+            "file_offset": "0x00545C",
+            "file_target": "0x004A60"
+          },
+          {
+            "file_offset": "0x005474",
+            "file_target": "0x004A60"
+          },
+          {
+            "file_offset": "0x0054C8",
+            "file_target": "0x004A24"
+          },
+          {
+            "file_offset": "0x0054D4",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x0054DE",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x0054E8",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x0054F4",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x005500",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x00550C",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x005518",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x005552",
+            "file_target": "0x004E86"
+          },
+          {
+            "file_offset": "0x005558",
+            "file_target": "0x004DB0"
+          },
+          {
+            "file_offset": "0x00555E",
+            "file_target": "0x004C32"
+          },
+          {
+            "file_offset": "0x005564",
+            "file_target": "0x005438"
+          },
+          {
+            "file_offset": "0x00556A",
+            "file_target": "0x004D28"
+          },
+          {
+            "file_offset": "0x005588",
+            "file_target": "0x004A84"
+          },
+          {
+            "file_offset": "0x00559A",
+            "file_target": "0x004A60"
+          },
+          {
+            "file_offset": "0x0055A0",
+            "file_target": "0x004A44"
+          },
+          {
+            "file_offset": "0x0055C8",
+            "file_target": "0x00552E"
+          },
+          {
+            "file_offset": "0x0055D0",
+            "file_target": "0x0056A2"
+          },
+          {
+            "file_offset": "0x0055EE",
+            "file_target": "0x00552E"
+          },
+          {
+            "file_offset": "0x005656",
+            "file_target": "0x00496C"
+          },
+          {
+            "file_offset": "0x00568A",
+            "file_target": "0x00496C"
+          },
+          {
+            "file_offset": "0x005690",
+            "file_target": "0x00496C"
+          },
+          {
+            "file_offset": "0x005696",
+            "file_target": "0x00496C"
+          },
+          {
+            "file_offset": "0x0056B0",
+            "file_target": "0x0049FA"
+          },
+          {
+            "file_offset": "0x0056DA",
+            "file_target": "0x00496C"
+          },
+          {
+            "file_offset": "0x005732",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005738",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x00573E",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00574E",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x005754",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00576C",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005786",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00578C",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00579C",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0057A2",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0057B8",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x0057BE",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x0057C6",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x0057CE",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x0057D4",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0057E8",
+            "file_target": "0x005718"
+          },
+          {
+            "file_offset": "0x005806",
+            "file_target": "0x0057B4"
+          },
+          {
+            "file_offset": "0x005814",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00581C",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005822",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x00582A",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00586C",
+            "file_target": "0x004732"
+          },
+          {
+            "file_offset": "0x005872",
+            "file_target": "0x0057F0"
+          },
+          {
+            "file_offset": "0x005882",
+            "file_target": "0x005718"
+          },
+          {
+            "file_offset": "0x00588A",
+            "file_target": "0x005718"
+          },
+          {
+            "file_offset": "0x0058A0",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0058A8",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0058AE",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x0058B6",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0058EC",
+            "file_target": "0x0057F0"
+          },
+          {
+            "file_offset": "0x005908",
+            "file_target": "0x005718"
+          },
+          {
+            "file_offset": "0x005912",
+            "file_target": "0x0057B4"
+          },
+          {
+            "file_offset": "0x005916",
+            "file_target": "0x005778"
+          },
+          {
+            "file_offset": "0x005956",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00595E",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005964",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x005970",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005978",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00597E",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x00598A",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005992",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005998",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x0059A0",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0059C6",
+            "file_target": "0x00584A"
+          },
+          {
+            "file_offset": "0x0059D2",
+            "file_target": "0x0058C8"
+          },
+          {
+            "file_offset": "0x005A88",
+            "file_target": "0x0059B0"
+          },
+          {
+            "file_offset": "0x005A98",
+            "file_target": "0x005ADE"
+          },
+          {
+            "file_offset": "0x005AA6",
+            "file_target": "0x005ADE"
+          },
+          {
+            "file_offset": "0x005AB4",
+            "file_target": "0x005ADE"
+          },
+          {
+            "file_offset": "0x005AC4",
+            "file_target": "0x0059B0"
+          },
+          {
+            "file_offset": "0x005AD8",
+            "file_target": "0x0058C8"
+          },
+          {
+            "file_offset": "0x005BD8",
+            "file_target": "0x005B4C"
+          },
+          {
+            "file_offset": "0x006100",
+            "file_target": "0x004430"
+          },
+          {
+            "file_offset": "0x006104",
+            "file_target": "0x006104"
+          },
+          {
+            "file_offset": "0x006108",
+            "file_target": "0x03B02A"
+          },
+          {
+            "file_offset": "0x00610C",
+            "file_target": "0x00610C"
+          },
+          {
+            "file_offset": "0x006110",
+            "file_target": "0x03B300"
+          },
+          {
+            "file_offset": "0x006114",
+            "file_target": "0x006114"
+          },
+          {
+            "file_offset": "0x006118",
+            "file_target": "0x03B31A"
+          },
+          {
+            "file_offset": "0x00611C",
+            "file_target": "0x00611C"
+          },
+          {
+            "file_offset": "0x006120",
+            "file_target": "0x006120"
+          },
+          {
+            "file_offset": "0x006124",
+            "file_target": "0x006124"
+          },
+          {
+            "file_offset": "0x006128",
+            "file_target": "0x02BFDC"
+          },
+          {
+            "file_offset": "0x00612C",
+            "file_target": "0x00612C"
+          },
+          {
+            "file_offset": "0x006130",
+            "file_target": "0x006130"
+          },
+          {
+            "file_offset": "0x006134",
+            "file_target": "0x006134"
+          },
+          {
+            "file_offset": "0x006138",
+            "file_target": "0x006138"
+          },
+          {
+            "file_offset": "0x00613C",
+            "file_target": "0x00613C"
+          },
+          {
+            "file_offset": "0x006140",
+            "file_target": "0x03B342"
+          },
+          {
+            "file_offset": "0x006144",
+            "file_target": "0x03B34E"
+          },
+          {
+            "file_offset": "0x006148",
+            "file_target": "0x03B35A"
+          },
+          {
+            "file_offset": "0x00614C",
+            "file_target": "0x03B366"
+          },
+          {
+            "file_offset": "0x006150",
+            "file_target": "0x03B372"
+          },
+          {
+            "file_offset": "0x006154",
+            "file_target": "0x03B37E"
+          },
+          {
+            "file_offset": "0x006158",
+            "file_target": "0x03B43E"
+          },
+          {
+            "file_offset": "0x00615C",
+            "file_target": "0x03B4FA"
+          },
+          {
+            "file_offset": "0x006160",
+            "file_target": "0x006160"
+          },
+          {
+            "file_offset": "0x006164",
+            "file_target": "0x006164"
+          },
+          {
+            "file_offset": "0x006168",
+            "file_target": "0x03B3EC"
+          },
+          {
+            "file_offset": "0x00616C",
+            "file_target": "0x02BFF6"
+          },
+          {
+            "file_offset": "0x006170",
+            "file_target": "0x006170"
+          },
+          {
+            "file_offset": "0x006174",
+            "file_target": "0x03A7B6"
+          },
+          {
+            "file_offset": "0x006178",
+            "file_target": "0x03AAF8"
+          },
+          {
+            "file_offset": "0x006180",
+            "file_target": "0x03AFAC"
+          },
+          {
+            "file_offset": "0x006184",
+            "file_target": "0x03B334"
+          },
+          {
+            "file_offset": "0x006188",
+            "file_target": "0x006188"
+          },
+          {
+            "file_offset": "0x00618C",
+            "file_target": "0x03A630"
+          },
+          {
+            "file_offset": "0x006194",
+            "file_target": "0x03B38A"
+          },
+          {
+            "file_offset": "0x00619C",
+            "file_target": "0x00619C"
+          },
+          {
+            "file_offset": "0x0061A0",
+            "file_target": "0x03A5EA"
+          },
+          {
+            "file_offset": "0x0061A4",
+            "file_target": "0x03A5A4"
+          },
+          {
+            "file_offset": "0x0061A8",
+            "file_target": "0x03AEB0"
+          },
+          {
+            "file_offset": "0x0061AC",
+            "file_target": "0x03AB0C"
+          },
+          {
+            "file_offset": "0x0061B0",
+            "file_target": "0x03AF50"
+          },
+          {
+            "file_offset": "0x0061B4",
+            "file_target": "0x03B2F0"
+          },
+          {
+            "file_offset": "0x0061B8",
+            "file_target": "0x03B2B2"
+          },
+          {
+            "file_offset": "0x0061BC",
+            "file_target": "0x03B068"
+          },
+          {
+            "file_offset": "0x0061C0",
+            "file_target": "0x02BFC2"
+          },
+          {
+            "file_offset": "0x0061C4",
+            "file_target": "0x0061C4"
+          },
+          {
+            "file_offset": "0x0061C8",
+            "file_target": "0x0061C8"
+          },
+          {
+            "file_offset": "0x0061CC",
+            "file_target": "0x0061CC"
+          },
+          {
+            "file_offset": "0x0061D0",
+            "file_target": "0x0061D0"
+          },
+          {
+            "file_offset": "0x0061D4",
+            "file_target": "0x0061D4"
+          },
+          {
+            "file_offset": "0x0061D8",
+            "file_target": "0x0061D8"
+          },
+          {
+            "file_offset": "0x0061DC",
+            "file_target": "0x0061DC"
+          },
+          {
+            "file_offset": "0x0061E0",
+            "file_target": "0x0061E0"
+          },
+          {
+            "file_offset": "0x0061E4",
+            "file_target": "0x0061E4"
+          },
+          {
+            "file_offset": "0x0061E8",
+            "file_target": "0x0061E8"
+          },
+          {
+            "file_offset": "0x0061EC",
+            "file_target": "0x0061EC"
+          },
+          {
+            "file_offset": "0x0061F0",
+            "file_target": "0x0061F0"
+          },
+          {
+            "file_offset": "0x0061F4",
+            "file_target": "0x0061F4"
+          },
+          {
+            "file_offset": "0x0061F8",
+            "file_target": "0x0061F8"
+          },
+          {
+            "file_offset": "0x0061FC",
+            "file_target": "0x0061FC"
+          },
+          {
+            "file_offset": "0x006200",
+            "file_target": "0x006200"
+          },
+          {
+            "file_offset": "0x006204",
+            "file_target": "0x006204"
+          },
+          {
+            "file_offset": "0x006208",
+            "file_target": "0x006208"
+          },
+          {
+            "file_offset": "0x00620C",
+            "file_target": "0x00620C"
+          },
+          {
+            "file_offset": "0x006210",
+            "file_target": "0x006210"
+          },
+          {
+            "file_offset": "0x006214",
+            "file_target": "0x006214"
+          },
+          {
+            "file_offset": "0x006218",
+            "file_target": "0x006218"
+          },
+          {
+            "file_offset": "0x00621C",
+            "file_target": "0x00621C"
+          },
+          {
+            "file_offset": "0x006220",
+            "file_target": "0x006220"
+          },
+          {
+            "file_offset": "0x006224",
+            "file_target": "0x006224"
+          },
+          {
+            "file_offset": "0x006228",
+            "file_target": "0x006228"
+          },
+          {
+            "file_offset": "0x00622C",
+            "file_target": "0x00622C"
+          },
+          {
+            "file_offset": "0x006230",
+            "file_target": "0x006230"
+          },
+          {
+            "file_offset": "0x006234",
+            "file_target": "0x006234"
+          },
+          {
+            "file_offset": "0x006238",
+            "file_target": "0x006238"
+          },
+          {
+            "file_offset": "0x00623C",
+            "file_target": "0x00623C"
+          },
+          {
+            "file_offset": "0x006240",
+            "file_target": "0x006240"
+          },
+          {
+            "file_offset": "0x006244",
+            "file_target": "0x006244"
+          },
+          {
+            "file_offset": "0x006248",
+            "file_target": "0x006248"
+          },
+          {
+            "file_offset": "0x00624C",
+            "file_target": "0x00624C"
+          },
+          {
+            "file_offset": "0x006250",
+            "file_target": "0x006250"
+          },
+          {
+            "file_offset": "0x006254",
+            "file_target": "0x006254"
+          },
+          {
+            "file_offset": "0x006258",
+            "file_target": "0x006258"
+          },
+          {
+            "file_offset": "0x00625C",
+            "file_target": "0x00625C"
+          },
+          {
+            "file_offset": "0x006260",
+            "file_target": "0x006260"
+          },
+          {
+            "file_offset": "0x006264",
+            "file_target": "0x006264"
+          },
+          {
+            "file_offset": "0x006268",
+            "file_target": "0x006268"
+          },
+          {
+            "file_offset": "0x00626C",
+            "file_target": "0x00626C"
+          },
+          {
+            "file_offset": "0x006270",
+            "file_target": "0x006270"
+          },
+          {
+            "file_offset": "0x006274",
+            "file_target": "0x006274"
+          },
+          {
+            "file_offset": "0x006278",
+            "file_target": "0x006278"
+          },
+          {
+            "file_offset": "0x00627C",
+            "file_target": "0x00627C"
+          },
+          {
+            "file_offset": "0x006280",
+            "file_target": "0x006280"
+          },
+          {
+            "file_offset": "0x006284",
+            "file_target": "0x006284"
+          },
+          {
+            "file_offset": "0x006288",
+            "file_target": "0x006288"
+          },
+          {
+            "file_offset": "0x00628C",
+            "file_target": "0x00628C"
+          },
+          {
+            "file_offset": "0x006290",
+            "file_target": "0x006290"
+          },
+          {
+            "file_offset": "0x006294",
+            "file_target": "0x006294"
+          },
+          {
+            "file_offset": "0x006298",
+            "file_target": "0x006298"
+          },
+          {
+            "file_offset": "0x00629C",
+            "file_target": "0x00629C"
+          },
+          {
+            "file_offset": "0x0062A0",
+            "file_target": "0x0062A0"
+          },
+          {
+            "file_offset": "0x0062A4",
+            "file_target": "0x0062A4"
+          },
+          {
+            "file_offset": "0x0062A8",
+            "file_target": "0x0062A8"
+          },
+          {
+            "file_offset": "0x0062AC",
+            "file_target": "0x0062AC"
+          },
+          {
+            "file_offset": "0x0062B0",
+            "file_target": "0x0062B0"
+          },
+          {
+            "file_offset": "0x0062B4",
+            "file_target": "0x0062B4"
+          },
+          {
+            "file_offset": "0x0062B8",
+            "file_target": "0x0062B8"
+          },
+          {
+            "file_offset": "0x0062BC",
+            "file_target": "0x0062BC"
+          },
+          {
+            "file_offset": "0x0062C0",
+            "file_target": "0x0062C0"
+          },
+          {
+            "file_offset": "0x0062C4",
+            "file_target": "0x0062C4"
+          },
+          {
+            "file_offset": "0x0062C8",
+            "file_target": "0x0062C8"
+          },
+          {
+            "file_offset": "0x0062CC",
+            "file_target": "0x0062CC"
+          },
+          {
+            "file_offset": "0x0062D0",
+            "file_target": "0x0062D0"
+          },
+          {
+            "file_offset": "0x0062D4",
+            "file_target": "0x0062D4"
+          },
+          {
+            "file_offset": "0x0062D8",
+            "file_target": "0x0062D8"
+          },
+          {
+            "file_offset": "0x0062DC",
+            "file_target": "0x0062DC"
+          },
+          {
+            "file_offset": "0x0062E0",
+            "file_target": "0x0062E0"
+          },
+          {
+            "file_offset": "0x0062E4",
+            "file_target": "0x0062E4"
+          },
+          {
+            "file_offset": "0x0062E8",
+            "file_target": "0x0062E8"
+          },
+          {
+            "file_offset": "0x0062EC",
+            "file_target": "0x03B584"
+          },
+          {
+            "file_offset": "0x0062F0",
+            "file_target": "0x0062F0"
+          },
+          {
+            "file_offset": "0x0062F4",
+            "file_target": "0x001F02"
+          },
+          {
+            "file_offset": "0x0062FC",
+            "file_target": "0x005C14"
+          },
+          {
+            "file_offset": "0x0068AC",
+            "file_target": "0x004000"
+          },
+          {
+            "file_offset": "0x0071B2",
+            "file_target": "0x036CD6"
+          },
+          {
+            "file_offset": "0x0071B6",
+            "file_target": "0x023128"
+          },
+          {
+            "file_offset": "0x0071C0",
+            "file_target": "0x03FCF2"
+          },
+          {
+            "file_offset": "0x0071CA",
+            "file_target": "0x02CD4C"
+          },
+          {
+            "file_offset": "0x00721C",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x007232",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x007350",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x0073A6",
+            "file_target": "0x027E74"
+          },
+          {
+            "file_offset": "0x00753A",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x00756A",
+            "file_target": "0x03165C"
+          },
+          {
+            "file_offset": "0x00760A",
+            "file_target": "0x03165C"
+          },
+          {
+            "file_offset": "0x007630",
+            "file_target": "0x031632"
+          },
+          {
+            "file_offset": "0x00765A",
+            "file_target": "0x03165C"
+          },
+          {
+            "file_offset": "0x00769E",
+            "file_target": "0x03165C"
+          },
+          {
+            "file_offset": "0x00770A",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x00772C",
+            "file_target": "0x02C0B0"
+          },
+          {
+            "file_offset": "0x0077F6",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x00783A",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x00786C",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x0078D6",
+            "file_target": "0x024488"
+          },
+          {
+            "file_offset": "0x0078DA",
+            "file_target": "0x02544E"
+          },
+          {
+            "file_offset": "0x0078DE",
+            "file_target": "0x025630"
+          },
+          {
+            "file_offset": "0x0078E2",
+            "file_target": "0x02BEC8"
+          },
+          {
+            "file_offset": "0x0078E6",
+            "file_target": "0x02BA32"
+          },
+          {
+            "file_offset": "0x0078EC",
+            "file_target": "0x03FB2C"
+          },
+          {
+            "file_offset": "0x0078F0",
+            "file_target": "0x03168C"
+          },
+          {
+            "file_offset": "0x0078F4",
+            "file_target": "0x024674"
+          },
+          {
+            "file_offset": "0x0078F8",
+            "file_target": "0x0254EC"
+          },
+          {
+            "file_offset": "0x0078FC",
+            "file_target": "0x024000"
+          },
+          {
+            "file_offset": "0x007900",
+            "file_target": "0x02B642"
+          },
+          {
+            "file_offset": "0x007904",
+            "file_target": "0x02B044"
+          },
+          {
+            "file_offset": "0x007908",
+            "file_target": "0x02FAA4"
+          },
+          {
+            "file_offset": "0x00790C",
+            "file_target": "0x0294D0"
+          },
+          {
+            "file_offset": "0x007912",
+            "file_target": "0x0270D4"
+          },
+          {
+            "file_offset": "0x007916",
+            "file_target": "0x02B658"
+          },
+          {
+            "file_offset": "0x00791A",
+            "file_target": "0x02B6F8"
+          },
+          {
+            "file_offset": "0x00791E",
+            "file_target": "0x035D50"
+          },
+          {
+            "file_offset": "0x007922",
+            "file_target": "0x033DB6"
+          },
+          {
+            "file_offset": "0x007926",
+            "file_target": "0x02DBDE"
+          },
+          {
+            "file_offset": "0x00792A",
+            "file_target": "0x02AFE2"
+          },
+          {
+            "file_offset": "0x00792E",
+            "file_target": "0x02F288"
+          },
+          {
+            "file_offset": "0x007932",
+            "file_target": "0x02902A"
+          },
+          {
+            "file_offset": "0x007936",
+            "file_target": "0x02FD46"
+          },
+          {
+            "file_offset": "0x00797C",
+            "file_target": "0x02CD4C"
+          },
+          {
+            "file_offset": "0x007BAE",
+            "file_target": "0x02A402"
+          },
+          {
+            "file_offset": "0x007CA8",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x007CD8",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x007CE0",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x007CE8",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x007D78",
+            "file_target": "0x032394"
+          },
+          {
+            "file_offset": "0x007DA4",
+            "file_target": "0x032394"
+          },
+          {
+            "file_offset": "0x007E2A",
+            "file_target": "0x032422"
+          },
+          {
+            "file_offset": "0x007E32",
+            "file_target": "0x0325C6"
+          },
+          {
+            "file_offset": "0x007EE0",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x007EF2",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x007EFA",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x007F06",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x007F86",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x007F8E",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x007F96",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x007F9E",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x007FB4",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x007FBC",
+            "file_target": "0x024966"
+          },
+          {
+            "file_offset": "0x014194",
+            "file_target": "0x035356"
+          },
+          {
+            "file_offset": "0x0141B4",
+            "file_target": "0x004B22"
+          },
+          {
+            "file_offset": "0x0159F0",
+            "file_target": "0x0242BC"
+          },
+          {
+            "file_offset": "0x01657C",
+            "file_target": "0x0041F4"
+          },
+          {
+            "file_offset": "0x0171DE",
+            "file_target": "0x0040C8"
+          },
+          {
+            "file_offset": "0x02062E",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x02063C",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x020E54",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x020EE2",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x020F64",
+            "file_target": "0x00000E"
+          },
+          {
+            "file_offset": "0x02101E",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x021070",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x0212AC",
+            "file_target": "0x0043DA"
+          },
+          {
+            "file_offset": "0x022B60",
+            "file_target": "0x000044"
+          },
+          {
+            "file_offset": "0x024E18",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x024E4C",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x024E80",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x026CA8",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x026CC2",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x027378",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x027416",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x0277EE",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x02830E",
+            "file_target": "0x0043DA"
+          },
+          {
+            "file_offset": "0x028A50",
+            "file_target": "0x0043DA"
+          },
+          {
+            "file_offset": "0x0292AA",
+            "file_target": "0x0043DA"
+          },
+          {
+            "file_offset": "0x0298A8",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x0298C2",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x02AAE4",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x02AAEE",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x02B028",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x031112",
+            "file_target": "0x000054"
+          },
+          {
+            "file_offset": "0x03C6DA",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x03E4A0",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x03F800",
+            "file_target": "0x00006A"
+          }
+        ],
+        "computed_entries": 485,
+        "computed_tables": 28,
+        "missing_computed_targets": [],
+        "reachable_instructions": 9502,
+        "root_policy": "Reset, startup, interrupt vectors, and exact-image CALLS/JMPS patterns whose decoded targets exist in the exact listing are roots. Direct control flow and the immutable tables close the graph.",
+        "status": "proven",
+        "unknown_reachable_control_transfers": []
+      },
+      "dpp3_invariant": {
+        "status": "proven unchanged at reset page 3",
+        "stock_live_writes": []
+      },
+      "ecu_id": "1437806",
+      "indirect_closure": {
+        "exact_source_proof_transfers": 292,
+        "manual_rules": [
+          {
+            "effective_address_envelopes": [
+              "0x0000-0x01FE",
+              "0x2DB6-0x2FB4"
+            ],
+            "evidence": "FC50 is written only with 0x2DB6 (or reset zero); the masked FA9E index contributes at most 0x1FE.",
+            "name": "FC50 bounded lookup",
+            "pc_range": "0x3A67A-0x3A67A",
+            "stock_live_sites": 1
+          },
+          {
+            "effective_address_envelopes": [
+              "0xE885-0xE984"
+            ],
+            "evidence": "The index is zero-extended from one byte.",
+            "name": "byte-indexed E885 writer",
+            "pc_range": "0x2A500-0x2A5FF",
+            "stock_live_sites": 1
+          },
+          {
+            "effective_address_envelopes": [
+              "0x0000-0xC002",
+              "0xFB24-0xFB24"
+            ],
+            "evidence": "Parser descriptors and lookup axes stay at or below 0xC002.",
+            "name": "calibration parser and lookup",
+            "pc_range": "0x32400-0x327FF",
+            "stock_live_sites": 23
+          },
+          {
+            "effective_address_envelopes": [
+              "0xA000-0xBFFF",
+              "0xE862-0xE864",
+              "0xEA00-0xEEFF",
+              "0xF692-0xF6D1",
+              "0xFC3C-0xFC3C",
+              "0xFC82-0xFC99"
+            ],
+            "evidence": "Immutable descriptors and exact call arguments close the relocated record updater and timer tables.",
+            "name": "descriptor and record bridges",
+            "pc_range": "0x2BE00-0x2C1FF",
+            "stock_live_sites": 20
+          },
+          {
+            "effective_address_envelopes": [
+              "0xA000-0xBFFF",
+              "0xE421-0xE51F",
+              "0xE520-0xE620"
+            ],
+            "evidence": "The E650/E65A pointer slots are closed by exact initialization and byte-sized lengths.",
+            "name": "diagnostic pointer profiles",
+            "pc_range": "0x3AB00-0x3ADFF",
+            "stock_live_sites": 4
+          },
+          {
+            "effective_address_envelopes": [
+              "0x0000-0x0000",
+              "0x2200-0x2200",
+              "0xE320-0xE528"
+            ],
+            "evidence": "E656 is written only with zero, 0x2200, or the bounded stock flash buffer pointer.",
+            "name": "flash-protocol pointer",
+            "pc_range": "0x43F0-0x43FF",
+            "stock_live_sites": 2
+          },
+          {
+            "effective_address_envelopes": [
+              "0xF2DA-0xF4A0"
+            ],
+            "evidence": "Every call passes an exact F2DA-F49C buffer and byte count.",
+            "name": "high serial helpers",
+            "pc_range": "0x21700-0x218FF",
+            "stock_live_sites": 2
+          },
+          {
+            "effective_address_envelopes": [
+              "0xA000-0xBFFF",
+              "0xF692-0xF6EF",
+              "0xFA62-0xFA73",
+              "0xFC82-0xFC99"
+            ],
+            "evidence": "FA5F is 0..5; both interrupt rings and the B18C destination table are independently bounded.",
+            "name": "high serial interrupt block",
+            "pc_range": "0x3B200-0x3B5FF",
+            "stock_live_sites": 3
+          },
+          {
+            "effective_address_envelopes": [
+              "0xA400-0xA40F"
+            ],
+            "evidence": "The masked index selects one of eight immutable A400 words.",
+            "name": "immutable dispatch table",
+            "pc_range": "0x24400-0x244FF",
+            "stock_live_sites": 1
+          },
+          {
+            "effective_address_envelopes": [
+              "0xA000-0xAD20"
+            ],
+            "evidence": "The A5CD/AC35 metadata indexes remain in calibration space.",
+            "name": "immutable metadata lookup",
+            "pc_range": "0x35F00-0x35FFF",
+            "stock_live_sites": 1
+          },
+          {
+            "effective_address_envelopes": [
+              "0xA000-0xCFFF",
+              "0xEEA0-0xF7FF"
+            ],
+            "evidence": "All indexes are byte-sized or loop-bounded; fixed bases run from EEAA through F656.",
+            "name": "indexed record tables",
+            "pc_range": "0x22600-0x230FF",
+            "stock_live_sites": 76
+          },
+          {
+            "effective_address_envelopes": [
+              "0xF030-0xF1A7"
+            ],
+            "evidence": "The object base is selected only as F030 or F0EC.",
+            "name": "paired native objects",
+            "pc_range": "0x2FB00-0x2FEFF",
+            "stock_live_sites": 43
+          },
+          {
+            "effective_address_envelopes": [
+              "0xFA00-0xFA45"
+            ],
+            "evidence": "Startup fixes r0 at FA46; all normal saves/restores and local frames remain in the proven FA00-FA45 software-stack arena.",
+            "name": "r0 software-stack frame",
+            "pc_range": "0x3FCF4-0x3FCF4",
+            "stock_live_sites": 121
+          },
+          {
+            "effective_address_envelopes": [
+              "0xA000-0xBFFF",
+              "0xE862-0xE864",
+              "0xE8D0-0xF7FF",
+              "0xFC3C-0xFC3C",
+              "0xFC82-0xFC9D"
+            ],
+            "evidence": "Every direct call supplies an exact EAxx-EE0A record and A6xx-A8xx descriptor; referenced target words were enumerated.",
+            "name": "record updater family",
+            "pc_range": "0x23C00-0x23FFF",
+            "stock_live_sites": 51
+          },
+          {
+            "effective_address_envelopes": [
+              "0xF59E-0xF5BC"
+            ],
+            "evidence": "The helper result is checked below six before scaling.",
+            "name": "six-result lookup",
+            "pc_range": "0x37500-0x375FF",
+            "stock_live_sites": 1
+          },
+          {
+            "effective_address_envelopes": [
+              "0x0000-0x0000",
+              "0xD000-0xD00A",
+              "0xF700-0xF7FF"
+            ],
+            "evidence": "All mutable status pointers have exact zero/D00x/F7xx values.",
+            "name": "status pointer helpers",
+            "pc_range": "0x24F00-0x254FF",
+            "stock_live_sites": 8
+          },
+          {
+            "effective_address_envelopes": [
+              "0xA000-0xBFFF",
+              "0xFC82-0xFC99"
+            ],
+            "evidence": "AE1A contains the six FC82-FC96 timer destinations.",
+            "name": "timer destination table",
+            "pc_range": "0x3A700-0x3A7FF",
+            "stock_live_sites": 2
+          }
+        ],
+        "manual_target_specific_sites": 360,
+        "status": "proven for the exact image",
+        "stock_live_sites": 652,
+        "transfer_methods": {
+          "same-PC exact 24-byte context": 204,
+          "unique relocated exact 24-byte context": 88
+        },
+        "unclosed_sites": 0
+      },
+      "inputs": {
+        "functions": {
+          "path": "C:\\Users\\crist\\MS41 Projects\\Flasher-Dev\\experiments\\ram_ownership\\evidence\\family_raw\\ms41_1_functions.tsv",
+          "sha256": "c1881e2c9a711b48e996439b35b0496465001053d44bf6ce92d48af31517c7f9"
+        },
+        "listing": {
+          "path": "C:\\Users\\crist\\MS41 Projects\\Decompilation\\MS41.1\\ms41_1_disasm.asm",
+          "sha256": "294d54bcb5094e94e9c1c4174f21ba20ae42457279b2982e36147c1731f54cd4"
+        },
+        "supplemental": [
+          {
+            "path": "C:\\Users\\crist\\MS41 Projects\\Flasher-Dev\\experiments\\ram_ownership\\evidence\\family_raw\\ms41_1_recovered.asm",
+            "sha256": "875f6f35addf0499ca51e1752d775be7c257de3ecf635e77ea6d53f0d967f302"
+          }
+        ],
+        "supporting": [
+          {
+            "path": "C:\\Users\\crist\\MS41 Projects\\Flasher-Dev\\experiments\\ram_ownership\\evidence\\family_raw\\ms41_1_callgraph.tsv",
+            "sha256": "c7ea290af7d954ff8ccffb2936dfd7f47655d2b27b7766a60e83979ed45f4380"
+          },
+          {
+            "path": "C:\\Users\\crist\\MS41 Projects\\Flasher-Dev\\experiments\\ram_ownership\\evidence\\family_raw\\ms41_1_indirect_pcode.tsv",
+            "sha256": "c5787f4a72653ead7fd4582e3d5076a25a184451061d5c2429ec687be35bc16a"
+          }
+        ]
+      },
+      "loader_lifetimes": {
+        "hardware_bsl": {
+          "range": "0xFA00-0xFA5F",
+          "status": "reserved during built-in bootstrap execution"
+        },
+        "soft_bsl": {
+          "status": "not supported by the current repository; memory non-collision alone is not a port certificate"
+        },
+        "stock_ds2_download_target": "0xDC20-0xE31F",
+        "stock_flash_protocol_state": "0xE420-0xE528",
+        "stock_ram_flash_driver": "0xE320-0xE41F"
+      },
+      "pec3_6_invariant": {
+        "status": "proven inactive for the exact image",
+        "stock_live_control_or_pointer_writes": []
+      },
+      "reference": "C:\\Users\\crist\\MS41 Projects\\_shared\\REF_MS41.1\\1437806_WBACD4321TAV42533_fullread.bin",
+      "reference_sha256": "6129b8e8884cd8321c94546e2beba4c8b4afcfca0d7749a341a82cea37f99aa3",
+      "startup_ram_test": {
+        "iram_range": "0xFA00-0xFDFF",
+        "lifetime": "reset/startup before the main firmware handoff",
+        "table": {
+          "0xA300": "0xFDFE",
+          "0xA302": "0xD800",
+          "0xA304": "0xDBFE",
+          "0xA306": "0xE420",
+          "0xA308": "0xF7FE",
+          "0xA30A": "0xDC00",
+          "0xA30C": "0xE41E",
+          "0xA30E": "0xD080",
+          "0xA310": "0xD0FF",
+          "0xA312": "0xF7EE",
+          "0xA314": "0xFA00"
+        },
+        "xram_range": "0xD800-0xF7EF"
+      },
+      "system_stack_invariant": {
+        "normal_runtime_envelope": "0xFB64-0xFBFF",
+        "r0_software_stack": "0xFA00-0xFA45",
+        "status": "proven for the exact image"
+      },
+      "variant": "MS41.1"
+    },
+    "MS41.2": {
+      "certification": {
+        "conditions": [
+          "Use only with the exact image hash shown above.",
+          "Initialize only after the startup RAM self-test and main handoff.",
+          "Do not expect contents to survive reset.",
+          "Do not change DPP3, CP banks, stack bounds, or PEC configuration.",
+          "Re-run the analyzer after native control-flow or pointer changes."
+        ],
+        "iram": {
+          "certified_bytes": 95,
+          "complete_byte_class_map": [
+            {
+              "bytes": 575,
+              "range": "0xFA00-0xFC3E",
+              "status": "owned/reserved; no allocation certificate"
+            },
+            {
+              "bytes": 3,
+              "range": "0xFC3F-0xFC41",
+              "status": "conditionally available after startup"
+            },
+            {
+              "bytes": 318,
+              "range": "0xFC42-0xFD7F",
+              "status": "owned/reserved; no allocation certificate"
+            },
+            {
+              "bytes": 92,
+              "range": "0xFD80-0xFDDB",
+              "status": "conditionally available after startup"
+            },
+            {
+              "bytes": 36,
+              "range": "0xFDDC-0xFDFF",
+              "status": "owned/reserved; no allocation certificate"
+            }
+          ],
+          "ranges": [
+            {
+              "bytes": 3,
+              "range": "0xFC3F-0xFC41",
+              "word_aligned_subrange": "0xFC40-0xFC41"
+            },
+            {
+              "bytes": 92,
+              "range": "0xFD80-0xFDDB",
+              "word_aligned_subrange": "0xFD80-0xFDDB"
+            }
+          ],
+          "word_aligned_certified_bytes": 94
+        },
+        "status": "conditionally certified for exact-image post-startup use",
+        "xram": {
+          "certified_bytes": 234,
+          "complete_byte_class_map": [
+            {
+              "bytes": 64,
+              "range": "0xD800-0xD83F",
+              "status": "conditionally available after startup"
+            },
+            {
+              "bytes": 847,
+              "range": "0xD840-0xDB8E",
+              "status": "owned/reserved; no allocation certificate"
+            },
+            {
+              "bytes": 145,
+              "range": "0xDB8F-0xDC1F",
+              "status": "conditionally available after startup"
+            },
+            {
+              "bytes": 3111,
+              "range": "0xDC20-0xE846",
+              "status": "owned/reserved; no allocation certificate"
+            },
+            {
+              "bytes": 25,
+              "range": "0xE847-0xE85F",
+              "status": "conditionally available after startup"
+            },
+            {
+              "bytes": 4000,
+              "range": "0xE860-0xF7FF",
+              "status": "owned/reserved; no allocation certificate"
+            }
+          ],
+          "ranges": [
+            {
+              "bytes": 64,
+              "range": "0xD800-0xD83F",
+              "word_aligned_subrange": "0xD800-0xD83F"
+            },
+            {
+              "bytes": 145,
+              "range": "0xDB8F-0xDC1F",
+              "word_aligned_subrange": "0xDB90-0xDC1F"
+            },
+            {
+              "bytes": 25,
+              "range": "0xE847-0xE85F",
+              "word_aligned_subrange": "0xE848-0xE85F"
+            }
+          ],
+          "word_aligned_certified_bytes": 232
+        }
+      },
+      "context_bank_invariant": {
+        "known_cp_bases": [
+          "0xFA00",
+          "0xFA16",
+          "0xFAE4",
+          "0xFAE6",
+          "0xFAE8",
+          "0xFAF2",
+          "0xFAF8",
+          "0xFB00",
+          "0xFB06",
+          "0xFB20",
+          "0xFB28",
+          "0xFB48",
+          "0xFB4C",
+          "0xFB50",
+          "0xFB52",
+          "0xFB56",
+          "0xFB5C",
+          "0xFC00",
+          "0xFC42",
+          "0xFCAE",
+          "0xFCCE"
+        ],
+        "reserved_ranges": [
+          "0xFA00-0xFA1F",
+          "0xFA16-0xFA35",
+          "0xFAE4-0xFB03",
+          "0xFAE6-0xFB05",
+          "0xFAE8-0xFB07",
+          "0xFAF2-0xFB11",
+          "0xFAF8-0xFB17",
+          "0xFB00-0xFB1F",
+          "0xFB06-0xFB25",
+          "0xFB20-0xFB3F",
+          "0xFB28-0xFB47",
+          "0xFB48-0xFB67",
+          "0xFB4C-0xFB6B",
+          "0xFB50-0xFB6F",
+          "0xFB52-0xFB71",
+          "0xFB56-0xFB75",
+          "0xFB5C-0xFB7B",
+          "0xFC00-0xFC1F",
+          "0xFC42-0xFC61",
+          "0xFCAE-0xFCCD",
+          "0xFCCE-0xFCED"
+        ],
+        "status": "proven for the exact image"
+      },
+      "control_flow_gate": {
+        "absolute_pattern_roots": [
+          {
+            "file_offset": "0x004000",
+            "file_target": "0x004430"
+          },
+          {
+            "file_offset": "0x004004",
+            "file_target": "0x006104"
+          },
+          {
+            "file_offset": "0x004008",
+            "file_target": "0x006108"
+          },
+          {
+            "file_offset": "0x00400C",
+            "file_target": "0x00610C"
+          },
+          {
+            "file_offset": "0x004010",
+            "file_target": "0x006110"
+          },
+          {
+            "file_offset": "0x004014",
+            "file_target": "0x006114"
+          },
+          {
+            "file_offset": "0x004018",
+            "file_target": "0x006118"
+          },
+          {
+            "file_offset": "0x00401C",
+            "file_target": "0x00611C"
+          },
+          {
+            "file_offset": "0x004020",
+            "file_target": "0x006120"
+          },
+          {
+            "file_offset": "0x004024",
+            "file_target": "0x006124"
+          },
+          {
+            "file_offset": "0x004028",
+            "file_target": "0x006128"
+          },
+          {
+            "file_offset": "0x00402C",
+            "file_target": "0x00612C"
+          },
+          {
+            "file_offset": "0x004030",
+            "file_target": "0x006130"
+          },
+          {
+            "file_offset": "0x004034",
+            "file_target": "0x006134"
+          },
+          {
+            "file_offset": "0x004038",
+            "file_target": "0x006138"
+          },
+          {
+            "file_offset": "0x00403C",
+            "file_target": "0x00613C"
+          },
+          {
+            "file_offset": "0x004040",
+            "file_target": "0x006140"
+          },
+          {
+            "file_offset": "0x004044",
+            "file_target": "0x006144"
+          },
+          {
+            "file_offset": "0x004048",
+            "file_target": "0x006148"
+          },
+          {
+            "file_offset": "0x00404C",
+            "file_target": "0x00614C"
+          },
+          {
+            "file_offset": "0x004050",
+            "file_target": "0x006150"
+          },
+          {
+            "file_offset": "0x004054",
+            "file_target": "0x006154"
+          },
+          {
+            "file_offset": "0x004058",
+            "file_target": "0x006158"
+          },
+          {
+            "file_offset": "0x00405C",
+            "file_target": "0x00615C"
+          },
+          {
+            "file_offset": "0x004060",
+            "file_target": "0x006160"
+          },
+          {
+            "file_offset": "0x004064",
+            "file_target": "0x006164"
+          },
+          {
+            "file_offset": "0x004068",
+            "file_target": "0x006168"
+          },
+          {
+            "file_offset": "0x00406C",
+            "file_target": "0x00616C"
+          },
+          {
+            "file_offset": "0x004070",
+            "file_target": "0x006170"
+          },
+          {
+            "file_offset": "0x004074",
+            "file_target": "0x006174"
+          },
+          {
+            "file_offset": "0x004078",
+            "file_target": "0x006178"
+          },
+          {
+            "file_offset": "0x00407C",
+            "file_target": "0x00617C"
+          },
+          {
+            "file_offset": "0x004080",
+            "file_target": "0x006180"
+          },
+          {
+            "file_offset": "0x004084",
+            "file_target": "0x006184"
+          },
+          {
+            "file_offset": "0x004088",
+            "file_target": "0x006188"
+          },
+          {
+            "file_offset": "0x00408C",
+            "file_target": "0x00618C"
+          },
+          {
+            "file_offset": "0x004090",
+            "file_target": "0x006190"
+          },
+          {
+            "file_offset": "0x004094",
+            "file_target": "0x006194"
+          },
+          {
+            "file_offset": "0x004098",
+            "file_target": "0x006198"
+          },
+          {
+            "file_offset": "0x00409C",
+            "file_target": "0x00619C"
+          },
+          {
+            "file_offset": "0x0040A0",
+            "file_target": "0x0061A0"
+          },
+          {
+            "file_offset": "0x0040A4",
+            "file_target": "0x0061A4"
+          },
+          {
+            "file_offset": "0x0040A8",
+            "file_target": "0x0061A8"
+          },
+          {
+            "file_offset": "0x0040AC",
+            "file_target": "0x0061AC"
+          },
+          {
+            "file_offset": "0x0040B0",
+            "file_target": "0x0061B0"
+          },
+          {
+            "file_offset": "0x0040B4",
+            "file_target": "0x0061B4"
+          },
+          {
+            "file_offset": "0x0040B8",
+            "file_target": "0x0061B8"
+          },
+          {
+            "file_offset": "0x0040BC",
+            "file_target": "0x0061BC"
+          },
+          {
+            "file_offset": "0x0040C0",
+            "file_target": "0x0061C0"
+          },
+          {
+            "file_offset": "0x0040C4",
+            "file_target": "0x0061C4"
+          },
+          {
+            "file_offset": "0x0040C8",
+            "file_target": "0x0061C8"
+          },
+          {
+            "file_offset": "0x0040CC",
+            "file_target": "0x0061CC"
+          },
+          {
+            "file_offset": "0x0040D0",
+            "file_target": "0x0061D0"
+          },
+          {
+            "file_offset": "0x0040D4",
+            "file_target": "0x0061D4"
+          },
+          {
+            "file_offset": "0x0040D8",
+            "file_target": "0x0061D8"
+          },
+          {
+            "file_offset": "0x0040DC",
+            "file_target": "0x0061DC"
+          },
+          {
+            "file_offset": "0x0040E0",
+            "file_target": "0x0061E0"
+          },
+          {
+            "file_offset": "0x0040E4",
+            "file_target": "0x0061E4"
+          },
+          {
+            "file_offset": "0x0040E8",
+            "file_target": "0x0061E8"
+          },
+          {
+            "file_offset": "0x0040EC",
+            "file_target": "0x0061EC"
+          },
+          {
+            "file_offset": "0x0040F0",
+            "file_target": "0x0061F0"
+          },
+          {
+            "file_offset": "0x0040F4",
+            "file_target": "0x0061F4"
+          },
+          {
+            "file_offset": "0x0040F8",
+            "file_target": "0x0061F8"
+          },
+          {
+            "file_offset": "0x0040FC",
+            "file_target": "0x0061FC"
+          },
+          {
+            "file_offset": "0x004100",
+            "file_target": "0x006200"
+          },
+          {
+            "file_offset": "0x004104",
+            "file_target": "0x006204"
+          },
+          {
+            "file_offset": "0x004108",
+            "file_target": "0x006208"
+          },
+          {
+            "file_offset": "0x00410C",
+            "file_target": "0x00620C"
+          },
+          {
+            "file_offset": "0x004110",
+            "file_target": "0x006210"
+          },
+          {
+            "file_offset": "0x004114",
+            "file_target": "0x006214"
+          },
+          {
+            "file_offset": "0x004118",
+            "file_target": "0x006218"
+          },
+          {
+            "file_offset": "0x00411C",
+            "file_target": "0x00621C"
+          },
+          {
+            "file_offset": "0x004120",
+            "file_target": "0x006220"
+          },
+          {
+            "file_offset": "0x004124",
+            "file_target": "0x006224"
+          },
+          {
+            "file_offset": "0x004128",
+            "file_target": "0x006228"
+          },
+          {
+            "file_offset": "0x00412C",
+            "file_target": "0x00622C"
+          },
+          {
+            "file_offset": "0x004130",
+            "file_target": "0x006230"
+          },
+          {
+            "file_offset": "0x004134",
+            "file_target": "0x006234"
+          },
+          {
+            "file_offset": "0x004138",
+            "file_target": "0x006238"
+          },
+          {
+            "file_offset": "0x00413C",
+            "file_target": "0x00623C"
+          },
+          {
+            "file_offset": "0x004140",
+            "file_target": "0x006240"
+          },
+          {
+            "file_offset": "0x004144",
+            "file_target": "0x006244"
+          },
+          {
+            "file_offset": "0x004148",
+            "file_target": "0x006248"
+          },
+          {
+            "file_offset": "0x00414C",
+            "file_target": "0x00624C"
+          },
+          {
+            "file_offset": "0x004150",
+            "file_target": "0x006250"
+          },
+          {
+            "file_offset": "0x004154",
+            "file_target": "0x006254"
+          },
+          {
+            "file_offset": "0x004158",
+            "file_target": "0x006258"
+          },
+          {
+            "file_offset": "0x00415C",
+            "file_target": "0x00625C"
+          },
+          {
+            "file_offset": "0x004160",
+            "file_target": "0x006260"
+          },
+          {
+            "file_offset": "0x004164",
+            "file_target": "0x006264"
+          },
+          {
+            "file_offset": "0x004168",
+            "file_target": "0x006268"
+          },
+          {
+            "file_offset": "0x00416C",
+            "file_target": "0x00626C"
+          },
+          {
+            "file_offset": "0x004170",
+            "file_target": "0x006270"
+          },
+          {
+            "file_offset": "0x004174",
+            "file_target": "0x006274"
+          },
+          {
+            "file_offset": "0x004178",
+            "file_target": "0x006278"
+          },
+          {
+            "file_offset": "0x00417C",
+            "file_target": "0x00627C"
+          },
+          {
+            "file_offset": "0x004180",
+            "file_target": "0x006280"
+          },
+          {
+            "file_offset": "0x004184",
+            "file_target": "0x006284"
+          },
+          {
+            "file_offset": "0x004188",
+            "file_target": "0x006288"
+          },
+          {
+            "file_offset": "0x00418C",
+            "file_target": "0x00628C"
+          },
+          {
+            "file_offset": "0x004190",
+            "file_target": "0x006290"
+          },
+          {
+            "file_offset": "0x004194",
+            "file_target": "0x006294"
+          },
+          {
+            "file_offset": "0x004198",
+            "file_target": "0x006298"
+          },
+          {
+            "file_offset": "0x00419C",
+            "file_target": "0x00629C"
+          },
+          {
+            "file_offset": "0x0041A0",
+            "file_target": "0x0062A0"
+          },
+          {
+            "file_offset": "0x0041A4",
+            "file_target": "0x0062A4"
+          },
+          {
+            "file_offset": "0x0041A8",
+            "file_target": "0x0062A8"
+          },
+          {
+            "file_offset": "0x0041AC",
+            "file_target": "0x0062AC"
+          },
+          {
+            "file_offset": "0x0041B0",
+            "file_target": "0x0062B0"
+          },
+          {
+            "file_offset": "0x0041B4",
+            "file_target": "0x0062B4"
+          },
+          {
+            "file_offset": "0x0041B8",
+            "file_target": "0x0062B8"
+          },
+          {
+            "file_offset": "0x0041BC",
+            "file_target": "0x0062BC"
+          },
+          {
+            "file_offset": "0x0041C0",
+            "file_target": "0x0062C0"
+          },
+          {
+            "file_offset": "0x0041C4",
+            "file_target": "0x0062C4"
+          },
+          {
+            "file_offset": "0x0041C8",
+            "file_target": "0x0062C8"
+          },
+          {
+            "file_offset": "0x0041CC",
+            "file_target": "0x0062CC"
+          },
+          {
+            "file_offset": "0x0041D0",
+            "file_target": "0x0062D0"
+          },
+          {
+            "file_offset": "0x0041D4",
+            "file_target": "0x0062D4"
+          },
+          {
+            "file_offset": "0x0041D8",
+            "file_target": "0x0062D8"
+          },
+          {
+            "file_offset": "0x0041DC",
+            "file_target": "0x0062DC"
+          },
+          {
+            "file_offset": "0x0041E0",
+            "file_target": "0x0062E0"
+          },
+          {
+            "file_offset": "0x0041E4",
+            "file_target": "0x0062E4"
+          },
+          {
+            "file_offset": "0x0041E8",
+            "file_target": "0x0062E8"
+          },
+          {
+            "file_offset": "0x0041EC",
+            "file_target": "0x0062EC"
+          },
+          {
+            "file_offset": "0x0041F0",
+            "file_target": "0x0062F0"
+          },
+          {
+            "file_offset": "0x0041F4",
+            "file_target": "0x0062F4"
+          },
+          {
+            "file_offset": "0x0041F8",
+            "file_target": "0x0062F8"
+          },
+          {
+            "file_offset": "0x0041FC",
+            "file_target": "0x0062FC"
+          },
+          {
+            "file_offset": "0x0046E2",
+            "file_target": "0x0048F6"
+          },
+          {
+            "file_offset": "0x004742",
+            "file_target": "0x0046EC"
+          },
+          {
+            "file_offset": "0x004746",
+            "file_target": "0x00470E"
+          },
+          {
+            "file_offset": "0x00483A",
+            "file_target": "0x004732"
+          },
+          {
+            "file_offset": "0x00484E",
+            "file_target": "0x0055A6"
+          },
+          {
+            "file_offset": "0x004888",
+            "file_target": "0x004732"
+          },
+          {
+            "file_offset": "0x00489E",
+            "file_target": "0x0056CE"
+          },
+          {
+            "file_offset": "0x0048AC",
+            "file_target": "0x00560E"
+          },
+          {
+            "file_offset": "0x0048BE",
+            "file_target": "0x004720"
+          },
+          {
+            "file_offset": "0x0048D4",
+            "file_target": "0x004720"
+          },
+          {
+            "file_offset": "0x0048EC",
+            "file_target": "0x004720"
+          },
+          {
+            "file_offset": "0x004924",
+            "file_target": "0x0046EC"
+          },
+          {
+            "file_offset": "0x004928",
+            "file_target": "0x00470E"
+          },
+          {
+            "file_offset": "0x00492C",
+            "file_target": "0x005ACA"
+          },
+          {
+            "file_offset": "0x004930",
+            "file_target": "0x005A1C"
+          },
+          {
+            "file_offset": "0x004944",
+            "file_target": "0x004720"
+          },
+          {
+            "file_offset": "0x004962",
+            "file_target": "0x00496C"
+          },
+          {
+            "file_offset": "0x004966",
+            "file_target": "0x00473C"
+          },
+          {
+            "file_offset": "0x004AD2",
+            "file_target": "0x004C32"
+          },
+          {
+            "file_offset": "0x004AF0",
+            "file_target": "0x004A24"
+          },
+          {
+            "file_offset": "0x004BA2",
+            "file_target": "0x004A70"
+          },
+          {
+            "file_offset": "0x004BBE",
+            "file_target": "0x004A34"
+          },
+          {
+            "file_offset": "0x004BDE",
+            "file_target": "0x004A24"
+          },
+          {
+            "file_offset": "0x004C0C",
+            "file_target": "0x004A70"
+          },
+          {
+            "file_offset": "0x004C22",
+            "file_target": "0x004A24"
+          },
+          {
+            "file_offset": "0x004C28",
+            "file_target": "0x004A24"
+          },
+          {
+            "file_offset": "0x004D54",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004D60",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004D6C",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004D78",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004D84",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004D90",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004D9C",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004DA8",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x004E6C",
+            "file_target": "0x004A34"
+          },
+          {
+            "file_offset": "0x004E72",
+            "file_target": "0x004A34"
+          },
+          {
+            "file_offset": "0x005052",
+            "file_target": "0x005A8E"
+          },
+          {
+            "file_offset": "0x00506C",
+            "file_target": "0x005A62"
+          },
+          {
+            "file_offset": "0x005074",
+            "file_target": "0x004732"
+          },
+          {
+            "file_offset": "0x0050B0",
+            "file_target": "0x004E80"
+          },
+          {
+            "file_offset": "0x0050C6",
+            "file_target": "0x004E80"
+          },
+          {
+            "file_offset": "0x0050DC",
+            "file_target": "0x004E80"
+          },
+          {
+            "file_offset": "0x0050F4",
+            "file_target": "0x004E80"
+          },
+          {
+            "file_offset": "0x0051F4",
+            "file_target": "0x004732"
+          },
+          {
+            "file_offset": "0x005222",
+            "file_target": "0x004732"
+          },
+          {
+            "file_offset": "0x005226",
+            "file_target": "0x004E80"
+          },
+          {
+            "file_offset": "0x005288",
+            "file_target": "0x005ADE"
+          },
+          {
+            "file_offset": "0x00529A",
+            "file_target": "0x005ADE"
+          },
+          {
+            "file_offset": "0x0052AA",
+            "file_target": "0x005B4C"
+          },
+          {
+            "file_offset": "0x0052C6",
+            "file_target": "0x005ADE"
+          },
+          {
+            "file_offset": "0x0052D6",
+            "file_target": "0x005BCC"
+          },
+          {
+            "file_offset": "0x00534A",
+            "file_target": "0x005A62"
+          },
+          {
+            "file_offset": "0x005392",
+            "file_target": "0x005A62"
+          },
+          {
+            "file_offset": "0x005422",
+            "file_target": "0x004A24"
+          },
+          {
+            "file_offset": "0x005428",
+            "file_target": "0x004A34"
+          },
+          {
+            "file_offset": "0x005450",
+            "file_target": "0x004720"
+          },
+          {
+            "file_offset": "0x00545C",
+            "file_target": "0x004A60"
+          },
+          {
+            "file_offset": "0x005474",
+            "file_target": "0x004A60"
+          },
+          {
+            "file_offset": "0x0054C8",
+            "file_target": "0x004A24"
+          },
+          {
+            "file_offset": "0x0054D4",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x0054DE",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x0054E8",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x0054F4",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x005500",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x00550C",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x005518",
+            "file_target": "0x00498A"
+          },
+          {
+            "file_offset": "0x005552",
+            "file_target": "0x004E86"
+          },
+          {
+            "file_offset": "0x005558",
+            "file_target": "0x004DB0"
+          },
+          {
+            "file_offset": "0x00555E",
+            "file_target": "0x004C32"
+          },
+          {
+            "file_offset": "0x005564",
+            "file_target": "0x005438"
+          },
+          {
+            "file_offset": "0x00556A",
+            "file_target": "0x004D28"
+          },
+          {
+            "file_offset": "0x005588",
+            "file_target": "0x004A84"
+          },
+          {
+            "file_offset": "0x00559A",
+            "file_target": "0x004A60"
+          },
+          {
+            "file_offset": "0x0055A0",
+            "file_target": "0x004A44"
+          },
+          {
+            "file_offset": "0x0055C8",
+            "file_target": "0x00552E"
+          },
+          {
+            "file_offset": "0x0055D0",
+            "file_target": "0x0056A2"
+          },
+          {
+            "file_offset": "0x0055EE",
+            "file_target": "0x00552E"
+          },
+          {
+            "file_offset": "0x005656",
+            "file_target": "0x00496C"
+          },
+          {
+            "file_offset": "0x00568A",
+            "file_target": "0x00496C"
+          },
+          {
+            "file_offset": "0x005690",
+            "file_target": "0x00496C"
+          },
+          {
+            "file_offset": "0x005696",
+            "file_target": "0x00496C"
+          },
+          {
+            "file_offset": "0x0056B0",
+            "file_target": "0x0049FA"
+          },
+          {
+            "file_offset": "0x0056DA",
+            "file_target": "0x00496C"
+          },
+          {
+            "file_offset": "0x005732",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005738",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x00573E",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00574E",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x005754",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00576C",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005786",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00578C",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00579C",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0057A2",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0057B8",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x0057BE",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x0057C6",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x0057CE",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x0057D4",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0057E8",
+            "file_target": "0x005718"
+          },
+          {
+            "file_offset": "0x005806",
+            "file_target": "0x0057B4"
+          },
+          {
+            "file_offset": "0x005814",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00581C",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005822",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x00582A",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00586C",
+            "file_target": "0x004732"
+          },
+          {
+            "file_offset": "0x005872",
+            "file_target": "0x0057F0"
+          },
+          {
+            "file_offset": "0x005882",
+            "file_target": "0x005718"
+          },
+          {
+            "file_offset": "0x00588A",
+            "file_target": "0x005718"
+          },
+          {
+            "file_offset": "0x0058A0",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0058A8",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0058AE",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x0058B6",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0058EC",
+            "file_target": "0x0057F0"
+          },
+          {
+            "file_offset": "0x005908",
+            "file_target": "0x005718"
+          },
+          {
+            "file_offset": "0x005912",
+            "file_target": "0x0057B4"
+          },
+          {
+            "file_offset": "0x005916",
+            "file_target": "0x005778"
+          },
+          {
+            "file_offset": "0x005956",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00595E",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005964",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x005970",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005978",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x00597E",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x00598A",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005992",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x005998",
+            "file_target": "0x005700"
+          },
+          {
+            "file_offset": "0x0059A0",
+            "file_target": "0x0056FA"
+          },
+          {
+            "file_offset": "0x0059C6",
+            "file_target": "0x00584A"
+          },
+          {
+            "file_offset": "0x0059D2",
+            "file_target": "0x0058C8"
+          },
+          {
+            "file_offset": "0x005A88",
+            "file_target": "0x0059B0"
+          },
+          {
+            "file_offset": "0x005A98",
+            "file_target": "0x005ADE"
+          },
+          {
+            "file_offset": "0x005AA6",
+            "file_target": "0x005ADE"
+          },
+          {
+            "file_offset": "0x005AB4",
+            "file_target": "0x005ADE"
+          },
+          {
+            "file_offset": "0x005AC4",
+            "file_target": "0x0059B0"
+          },
+          {
+            "file_offset": "0x005AD8",
+            "file_target": "0x0058C8"
+          },
+          {
+            "file_offset": "0x005BD8",
+            "file_target": "0x005B4C"
+          },
+          {
+            "file_offset": "0x006100",
+            "file_target": "0x004430"
+          },
+          {
+            "file_offset": "0x006104",
+            "file_target": "0x006104"
+          },
+          {
+            "file_offset": "0x006108",
+            "file_target": "0x0394F0"
+          },
+          {
+            "file_offset": "0x00610C",
+            "file_target": "0x00610C"
+          },
+          {
+            "file_offset": "0x006110",
+            "file_target": "0x0397C6"
+          },
+          {
+            "file_offset": "0x006114",
+            "file_target": "0x006114"
+          },
+          {
+            "file_offset": "0x006118",
+            "file_target": "0x0397E0"
+          },
+          {
+            "file_offset": "0x00611C",
+            "file_target": "0x00611C"
+          },
+          {
+            "file_offset": "0x006120",
+            "file_target": "0x006120"
+          },
+          {
+            "file_offset": "0x006124",
+            "file_target": "0x006124"
+          },
+          {
+            "file_offset": "0x006128",
+            "file_target": "0x038F96"
+          },
+          {
+            "file_offset": "0x00612C",
+            "file_target": "0x00612C"
+          },
+          {
+            "file_offset": "0x006130",
+            "file_target": "0x006130"
+          },
+          {
+            "file_offset": "0x006134",
+            "file_target": "0x006134"
+          },
+          {
+            "file_offset": "0x006138",
+            "file_target": "0x006138"
+          },
+          {
+            "file_offset": "0x00613C",
+            "file_target": "0x00613C"
+          },
+          {
+            "file_offset": "0x006140",
+            "file_target": "0x02BFF4"
+          },
+          {
+            "file_offset": "0x006144",
+            "file_target": "0x039808"
+          },
+          {
+            "file_offset": "0x006148",
+            "file_target": "0x039814"
+          },
+          {
+            "file_offset": "0x00614C",
+            "file_target": "0x039820"
+          },
+          {
+            "file_offset": "0x006150",
+            "file_target": "0x03982C"
+          },
+          {
+            "file_offset": "0x006154",
+            "file_target": "0x039838"
+          },
+          {
+            "file_offset": "0x006158",
+            "file_target": "0x039902"
+          },
+          {
+            "file_offset": "0x00615C",
+            "file_target": "0x0399BE"
+          },
+          {
+            "file_offset": "0x006160",
+            "file_target": "0x006160"
+          },
+          {
+            "file_offset": "0x006164",
+            "file_target": "0x006164"
+          },
+          {
+            "file_offset": "0x006168",
+            "file_target": "0x0398B0"
+          },
+          {
+            "file_offset": "0x00616C",
+            "file_target": "0x0398A6"
+          },
+          {
+            "file_offset": "0x006170",
+            "file_target": "0x006170"
+          },
+          {
+            "file_offset": "0x006174",
+            "file_target": "0x038C54"
+          },
+          {
+            "file_offset": "0x006178",
+            "file_target": "0x038FB0"
+          },
+          {
+            "file_offset": "0x00617C",
+            "file_target": "0x0000DC"
+          },
+          {
+            "file_offset": "0x006180",
+            "file_target": "0x039464"
+          },
+          {
+            "file_offset": "0x006184",
+            "file_target": "0x0397FA"
+          },
+          {
+            "file_offset": "0x006188",
+            "file_target": "0x006188"
+          },
+          {
+            "file_offset": "0x00618C",
+            "file_target": "0x038ACE"
+          },
+          {
+            "file_offset": "0x006190",
+            "file_target": "0x001592"
+          },
+          {
+            "file_offset": "0x006194",
+            "file_target": "0x039844"
+          },
+          {
+            "file_offset": "0x006198",
+            "file_target": "0x000EFA"
+          },
+          {
+            "file_offset": "0x00619C",
+            "file_target": "0x00619C"
+          },
+          {
+            "file_offset": "0x0061A0",
+            "file_target": "0x038A88"
+          },
+          {
+            "file_offset": "0x0061A4",
+            "file_target": "0x038A42"
+          },
+          {
+            "file_offset": "0x0061A8",
+            "file_target": "0x039368"
+          },
+          {
+            "file_offset": "0x0061AC",
+            "file_target": "0x038FC4"
+          },
+          {
+            "file_offset": "0x0061B0",
+            "file_target": "0x039408"
+          },
+          {
+            "file_offset": "0x0061B4",
+            "file_target": "0x0397B6"
+          },
+          {
+            "file_offset": "0x0061B8",
+            "file_target": "0x039778"
+          },
+          {
+            "file_offset": "0x0061BC",
+            "file_target": "0x03952E"
+          },
+          {
+            "file_offset": "0x0061C0",
+            "file_target": "0x02BFDA"
+          },
+          {
+            "file_offset": "0x0061C4",
+            "file_target": "0x0061C4"
+          },
+          {
+            "file_offset": "0x0061C8",
+            "file_target": "0x0061C8"
+          },
+          {
+            "file_offset": "0x0061CC",
+            "file_target": "0x0061CC"
+          },
+          {
+            "file_offset": "0x0061D0",
+            "file_target": "0x0061D0"
+          },
+          {
+            "file_offset": "0x0061D4",
+            "file_target": "0x0061D4"
+          },
+          {
+            "file_offset": "0x0061D8",
+            "file_target": "0x0061D8"
+          },
+          {
+            "file_offset": "0x0061DC",
+            "file_target": "0x0061DC"
+          },
+          {
+            "file_offset": "0x0061E0",
+            "file_target": "0x0061E0"
+          },
+          {
+            "file_offset": "0x0061E4",
+            "file_target": "0x0061E4"
+          },
+          {
+            "file_offset": "0x0061E8",
+            "file_target": "0x0061E8"
+          },
+          {
+            "file_offset": "0x0061EC",
+            "file_target": "0x0061EC"
+          },
+          {
+            "file_offset": "0x0061F0",
+            "file_target": "0x0061F0"
+          },
+          {
+            "file_offset": "0x0061F4",
+            "file_target": "0x0061F4"
+          },
+          {
+            "file_offset": "0x0061F8",
+            "file_target": "0x0061F8"
+          },
+          {
+            "file_offset": "0x0061FC",
+            "file_target": "0x0061FC"
+          },
+          {
+            "file_offset": "0x006200",
+            "file_target": "0x006200"
+          },
+          {
+            "file_offset": "0x006204",
+            "file_target": "0x006204"
+          },
+          {
+            "file_offset": "0x006208",
+            "file_target": "0x006208"
+          },
+          {
+            "file_offset": "0x00620C",
+            "file_target": "0x00620C"
+          },
+          {
+            "file_offset": "0x006210",
+            "file_target": "0x006210"
+          },
+          {
+            "file_offset": "0x006214",
+            "file_target": "0x006214"
+          },
+          {
+            "file_offset": "0x006218",
+            "file_target": "0x006218"
+          },
+          {
+            "file_offset": "0x00621C",
+            "file_target": "0x00621C"
+          },
+          {
+            "file_offset": "0x006220",
+            "file_target": "0x006220"
+          },
+          {
+            "file_offset": "0x006224",
+            "file_target": "0x006224"
+          },
+          {
+            "file_offset": "0x006228",
+            "file_target": "0x006228"
+          },
+          {
+            "file_offset": "0x00622C",
+            "file_target": "0x00622C"
+          },
+          {
+            "file_offset": "0x006230",
+            "file_target": "0x006230"
+          },
+          {
+            "file_offset": "0x006234",
+            "file_target": "0x006234"
+          },
+          {
+            "file_offset": "0x006238",
+            "file_target": "0x006238"
+          },
+          {
+            "file_offset": "0x00623C",
+            "file_target": "0x00623C"
+          },
+          {
+            "file_offset": "0x006240",
+            "file_target": "0x006240"
+          },
+          {
+            "file_offset": "0x006244",
+            "file_target": "0x006244"
+          },
+          {
+            "file_offset": "0x006248",
+            "file_target": "0x006248"
+          },
+          {
+            "file_offset": "0x00624C",
+            "file_target": "0x00624C"
+          },
+          {
+            "file_offset": "0x006250",
+            "file_target": "0x006250"
+          },
+          {
+            "file_offset": "0x006254",
+            "file_target": "0x006254"
+          },
+          {
+            "file_offset": "0x006258",
+            "file_target": "0x006258"
+          },
+          {
+            "file_offset": "0x00625C",
+            "file_target": "0x00625C"
+          },
+          {
+            "file_offset": "0x006260",
+            "file_target": "0x006260"
+          },
+          {
+            "file_offset": "0x006264",
+            "file_target": "0x006264"
+          },
+          {
+            "file_offset": "0x006268",
+            "file_target": "0x006268"
+          },
+          {
+            "file_offset": "0x00626C",
+            "file_target": "0x00626C"
+          },
+          {
+            "file_offset": "0x006270",
+            "file_target": "0x006270"
+          },
+          {
+            "file_offset": "0x006274",
+            "file_target": "0x006274"
+          },
+          {
+            "file_offset": "0x006278",
+            "file_target": "0x006278"
+          },
+          {
+            "file_offset": "0x00627C",
+            "file_target": "0x00627C"
+          },
+          {
+            "file_offset": "0x006280",
+            "file_target": "0x006280"
+          },
+          {
+            "file_offset": "0x006284",
+            "file_target": "0x006284"
+          },
+          {
+            "file_offset": "0x006288",
+            "file_target": "0x006288"
+          },
+          {
+            "file_offset": "0x00628C",
+            "file_target": "0x00628C"
+          },
+          {
+            "file_offset": "0x006290",
+            "file_target": "0x006290"
+          },
+          {
+            "file_offset": "0x006294",
+            "file_target": "0x006294"
+          },
+          {
+            "file_offset": "0x006298",
+            "file_target": "0x006298"
+          },
+          {
+            "file_offset": "0x00629C",
+            "file_target": "0x00629C"
+          },
+          {
+            "file_offset": "0x0062A0",
+            "file_target": "0x0062A0"
+          },
+          {
+            "file_offset": "0x0062A4",
+            "file_target": "0x0062A4"
+          },
+          {
+            "file_offset": "0x0062A8",
+            "file_target": "0x0062A8"
+          },
+          {
+            "file_offset": "0x0062AC",
+            "file_target": "0x0062AC"
+          },
+          {
+            "file_offset": "0x0062B0",
+            "file_target": "0x0062B0"
+          },
+          {
+            "file_offset": "0x0062B4",
+            "file_target": "0x0062B4"
+          },
+          {
+            "file_offset": "0x0062B8",
+            "file_target": "0x0062B8"
+          },
+          {
+            "file_offset": "0x0062BC",
+            "file_target": "0x0062BC"
+          },
+          {
+            "file_offset": "0x0062C0",
+            "file_target": "0x0062C0"
+          },
+          {
+            "file_offset": "0x0062C4",
+            "file_target": "0x0062C4"
+          },
+          {
+            "file_offset": "0x0062C8",
+            "file_target": "0x0062C8"
+          },
+          {
+            "file_offset": "0x0062CC",
+            "file_target": "0x0062CC"
+          },
+          {
+            "file_offset": "0x0062D0",
+            "file_target": "0x0062D0"
+          },
+          {
+            "file_offset": "0x0062D4",
+            "file_target": "0x0062D4"
+          },
+          {
+            "file_offset": "0x0062D8",
+            "file_target": "0x0062D8"
+          },
+          {
+            "file_offset": "0x0062DC",
+            "file_target": "0x0062DC"
+          },
+          {
+            "file_offset": "0x0062E0",
+            "file_target": "0x0062E0"
+          },
+          {
+            "file_offset": "0x0062E4",
+            "file_target": "0x0062E4"
+          },
+          {
+            "file_offset": "0x0062E8",
+            "file_target": "0x0062E8"
+          },
+          {
+            "file_offset": "0x0062EC",
+            "file_target": "0x039A48"
+          },
+          {
+            "file_offset": "0x0062F0",
+            "file_target": "0x0062F0"
+          },
+          {
+            "file_offset": "0x0062F4",
+            "file_target": "0x001F02"
+          },
+          {
+            "file_offset": "0x0062FC",
+            "file_target": "0x005C14"
+          },
+          {
+            "file_offset": "0x0068AC",
+            "file_target": "0x004000"
+          },
+          {
+            "file_offset": "0x00718C",
+            "file_target": "0x035B7E"
+          },
+          {
+            "file_offset": "0x007190",
+            "file_target": "0x022C20"
+          },
+          {
+            "file_offset": "0x00719A",
+            "file_target": "0x03E1F8"
+          },
+          {
+            "file_offset": "0x0071A4",
+            "file_target": "0x02CADC"
+          },
+          {
+            "file_offset": "0x0071F4",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x00720A",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x007328",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x00737E",
+            "file_target": "0x027FB2"
+          },
+          {
+            "file_offset": "0x007512",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x007542",
+            "file_target": "0x037B24"
+          },
+          {
+            "file_offset": "0x00759C",
+            "file_target": "0x037B24"
+          },
+          {
+            "file_offset": "0x0075C2",
+            "file_target": "0x037AFA"
+          },
+          {
+            "file_offset": "0x0075EC",
+            "file_target": "0x037B24"
+          },
+          {
+            "file_offset": "0x007630",
+            "file_target": "0x037B24"
+          },
+          {
+            "file_offset": "0x00769C",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x0076BE",
+            "file_target": "0x023D20"
+          },
+          {
+            "file_offset": "0x007780",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x0077C4",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x0077F6",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x0078A2",
+            "file_target": "0x024484"
+          },
+          {
+            "file_offset": "0x0078A6",
+            "file_target": "0x02552C"
+          },
+          {
+            "file_offset": "0x0078AA",
+            "file_target": "0x02570E"
+          },
+          {
+            "file_offset": "0x0078AE",
+            "file_target": "0x030C36"
+          },
+          {
+            "file_offset": "0x0078B2",
+            "file_target": "0x02B7F2"
+          },
+          {
+            "file_offset": "0x0078B8",
+            "file_target": "0x03E056"
+          },
+          {
+            "file_offset": "0x0078BC",
+            "file_target": "0x037B54"
+          },
+          {
+            "file_offset": "0x0078C0",
+            "file_target": "0x024670"
+          },
+          {
+            "file_offset": "0x0078C4",
+            "file_target": "0x0255CA"
+          },
+          {
+            "file_offset": "0x0078C8",
+            "file_target": "0x024000"
+          },
+          {
+            "file_offset": "0x0078CC",
+            "file_target": "0x02AA44"
+          },
+          {
+            "file_offset": "0x0078D0",
+            "file_target": "0x02A446"
+          },
+          {
+            "file_offset": "0x0078D4",
+            "file_target": "0x024986"
+          },
+          {
+            "file_offset": "0x0078DA",
+            "file_target": "0x0271B2"
+          },
+          {
+            "file_offset": "0x0078DE",
+            "file_target": "0x02AA5A"
+          },
+          {
+            "file_offset": "0x0078E2",
+            "file_target": "0x02AB0A"
+          },
+          {
+            "file_offset": "0x0078E6",
+            "file_target": "0x0350E4"
+          },
+          {
+            "file_offset": "0x0078EA",
+            "file_target": "0x0322AE"
+          },
+          {
+            "file_offset": "0x0078EE",
+            "file_target": "0x02D898"
+          },
+          {
+            "file_offset": "0x0078F2",
+            "file_target": "0x02A3E4"
+          },
+          {
+            "file_offset": "0x0078F6",
+            "file_target": "0x02EEB8"
+          },
+          {
+            "file_offset": "0x0078FA",
+            "file_target": "0x0284FE"
+          },
+          {
+            "file_offset": "0x007940",
+            "file_target": "0x02CADC"
+          },
+          {
+            "file_offset": "0x007B72",
+            "file_target": "0x029804"
+          },
+          {
+            "file_offset": "0x007C6C",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x007C9C",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x007CA4",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x007CAC",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x007D3C",
+            "file_target": "0x03081E"
+          },
+          {
+            "file_offset": "0x007D68",
+            "file_target": "0x03081E"
+          },
+          {
+            "file_offset": "0x007DEE",
+            "file_target": "0x0308AC"
+          },
+          {
+            "file_offset": "0x007DF6",
+            "file_target": "0x030A50"
+          },
+          {
+            "file_offset": "0x007EA4",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x007EB6",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x007EBE",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x007ECA",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x007F4A",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x007F52",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x007F5A",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x007F62",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x007F78",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x007F80",
+            "file_target": "0x024A26"
+          },
+          {
+            "file_offset": "0x01417E",
+            "file_target": "0x035356"
+          },
+          {
+            "file_offset": "0x01419E",
+            "file_target": "0x004B22"
+          },
+          {
+            "file_offset": "0x016300",
+            "file_target": "0x0041F4"
+          },
+          {
+            "file_offset": "0x016ED8",
+            "file_target": "0x0040C8"
+          },
+          {
+            "file_offset": "0x016FB6",
+            "file_target": "0x004024"
+          },
+          {
+            "file_offset": "0x02076C",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x02077A",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x020F92",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x021020",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x0210A2",
+            "file_target": "0x00000E"
+          },
+          {
+            "file_offset": "0x02115C",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x0211AE",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x022884",
+            "file_target": "0x000044"
+          },
+          {
+            "file_offset": "0x024ED8",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x024F0C",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x024F40",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x026D86",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x026DA0",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x027456",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x0274F4",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x0278E0",
+            "file_target": "0x00004E"
+          },
+          {
+            "file_offset": "0x028CAA",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x028CC4",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x029EE6",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x029EF0",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x02A42A",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x032BD2",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x0375DA",
+            "file_target": "0x000054"
+          },
+          {
+            "file_offset": "0x03C996",
+            "file_target": "0x000000"
+          },
+          {
+            "file_offset": "0x03DD2A",
+            "file_target": "0x00006A"
+          }
+        ],
+        "computed_entries": 526,
+        "computed_tables": 29,
+        "missing_computed_targets": [],
+        "reachable_instructions": 16436,
+        "root_policy": "Reset, startup, interrupt vectors, and exact-image CALLS/JMPS patterns whose decoded targets exist in the exact listing are roots. Direct control flow and the immutable tables close the graph.",
+        "status": "proven",
+        "unknown_reachable_control_transfers": []
+      },
+      "dpp3_invariant": {
+        "status": "proven unchanged at reset page 3",
+        "stock_live_writes": []
+      },
+      "ecu_id": "1406464",
+      "indirect_closure": {
+        "exact_source_proof_transfers": 654,
+        "manual_rules": [
+          {
+            "effective_address_envelopes": [
+              "0x0000-0x01FE",
+              "0x2AD6-0x2CD4"
+            ],
+            "evidence": "FC50 is written only with 0x2AD6 (or reset zero); the masked FA9E index contributes at most 0x1FE.",
+            "name": "FC50 bounded lookup",
+            "pc_range": "0x38B18-0x38B18",
+            "stock_live_sites": 1
+          },
+          {
+            "effective_address_envelopes": [
+              "0xE8EB-0xE8EB"
+            ],
+            "evidence": "The only non-null output argument is the exact E8EB byte.",
+            "name": "fixed optional result byte",
+            "pc_range": "0x2A588-0x2A588",
+            "stock_live_sites": 1
+          },
+          {
+            "effective_address_envelopes": [
+              "0xA400-0xA40F"
+            ],
+            "evidence": "The masked index selects one of eight immutable A400 words.",
+            "name": "immutable dispatch table",
+            "pc_range": "0x244C6-0x244C6",
+            "stock_live_sites": 1
+          },
+          {
+            "effective_address_envelopes": [
+              "0xFA00-0xFA45"
+            ],
+            "evidence": "Startup fixes r0 at FA46; all normal saves/restores and local frames remain in the proven FA00-FA45 software-stack arena.",
+            "name": "r0 software-stack frame",
+            "pc_range": "0x2A568-0x2A568",
+            "stock_live_sites": 1
+          }
+        ],
+        "manual_target_specific_sites": 4,
+        "status": "proven for the exact image",
+        "stock_live_sites": 658,
+        "transfer_methods": {
+          "same-PC exact 24-byte context": 654
+        },
+        "unclosed_sites": 0
+      },
+      "inputs": {
+        "functions": {
+          "path": "C:\\Users\\crist\\MS41 Projects\\Flasher-Dev\\experiments\\ram_ownership\\evidence\\family_raw\\ms41_2_functions.tsv",
+          "sha256": "8e4c8bbb85e39a828c674d986e1aa25035bcc7a5c37ed01ad7c48a6b235023b9"
+        },
+        "listing": {
+          "path": "C:\\Users\\crist\\MS41 Projects\\Decompilation\\MS41.2\\ms41_2_disasm.asm",
+          "sha256": "5f1cff56dccd09c3dfd01665ab08ce39afde4537a443a81e00200caa798347ae"
+        },
+        "supplemental": [
+          {
+            "path": "C:\\Users\\crist\\MS41 Projects\\Flasher-Dev\\experiments\\ram_ownership\\evidence\\family_raw\\ms41_2_recovered.asm",
+            "sha256": "f264a68030722a1714c624b3fe72d81dce56a6fd02cd76e09ce3368f270166a1"
+          }
+        ],
+        "supporting": [
+          {
+            "path": "C:\\Users\\crist\\MS41 Projects\\Decompilation\\MS41.2\\fn_records.tsv",
+            "sha256": "e98d950fa658eabb1f4d5faa922cdb25494b533c0e01f5e53b1bb090d2a0cf70"
+          }
+        ]
+      },
+      "loader_lifetimes": {
+        "hardware_bsl": {
+          "range": "0xFA00-0xFA5F",
+          "status": "reserved during built-in bootstrap execution"
+        },
+        "soft_bsl": {
+          "chunk_buffer": "0xE000-0xE3FF",
+          "cp": "0xFA00",
+          "crc_table": "0xFD60-0xFD7F",
+          "stack": "0xFB64-0xFBFF",
+          "status": "supported by the current repository"
+        },
+        "stock_ds2_download_target": "0xDC20-0xE31F",
+        "stock_flash_protocol_state": "0xE420-0xE528",
+        "stock_ram_flash_driver": "0xE320-0xE41F"
+      },
+      "pec3_6_invariant": {
+        "status": "proven inactive for the exact image",
+        "stock_live_control_or_pointer_writes": []
+      },
+      "reference": "C:\\Users\\crist\\MS41 Projects\\_shared\\REF_MS41.2\\E36 M3 Stock Full Read.bin",
+      "reference_sha256": "2d3ab7db6fe0f9a1f4680339f416aeeef43871730cd468cfd990f6dc80c03208",
+      "startup_ram_test": {
+        "iram_range": "0xFA00-0xFDFF",
+        "lifetime": "reset/startup before the main firmware handoff",
+        "table": {
+          "0xA300": "0xFDFE",
+          "0xA302": "0xD800",
+          "0xA304": "0xDBFE",
+          "0xA306": "0xE420",
+          "0xA308": "0xF7FE",
+          "0xA30A": "0xDC00",
+          "0xA30C": "0xE41E",
+          "0xA30E": "0xD080",
+          "0xA310": "0xD0FF",
+          "0xA312": "0xF7F2",
+          "0xA314": "0xFA00"
+        },
+        "xram_range": "0xD800-0xF7F3"
+      },
+      "system_stack_invariant": {
+        "normal_runtime_envelope": "0xFB64-0xFBFF",
+        "r0_software_stack": "0xFA00-0xFA45",
+        "status": "proven for the exact image"
+      },
+      "variant": "MS41.2"
+    },
+    "MS41.3": {
+      "certification": {
+        "iram": {
+          "certified_bytes": 95,
+          "complete_byte_class_map": [
+            {
+              "bytes": 575,
+              "range": "0xFA00-0xFC3E",
+              "status": "owned/reserved; no allocation certificate"
+            },
+            {
+              "bytes": 3,
+              "range": "0xFC3F-0xFC41",
+              "status": "conditionally available after startup"
+            },
+            {
+              "bytes": 318,
+              "range": "0xFC42-0xFD7F",
+              "status": "owned/reserved; no allocation certificate"
+            },
+            {
+              "bytes": 92,
+              "range": "0xFD80-0xFDDB",
+              "status": "conditionally available after startup"
+            },
+            {
+              "bytes": 36,
+              "range": "0xFDDC-0xFDFF",
+              "status": "owned/reserved; no allocation certificate"
+            }
+          ],
+          "ranges": [
+            {
+              "bytes": 3,
+              "range": "0xFC3F-0xFC41",
+              "word_aligned_subrange": "0xFC40-0xFC41"
+            },
+            {
+              "bytes": 92,
+              "range": "0xFD80-0xFDDB",
+              "word_aligned_subrange": "0xFD80-0xFDDB"
+            }
+          ],
+          "word_aligned_certified_bytes": 94
+        },
+        "status": "conditionally certified for post-startup patch planning",
+        "xram": {
+          "certified_bytes": 234,
+          "complete_byte_class_map": [
+            {
+              "bytes": 64,
+              "range": "0xD800-0xD83F",
+              "status": "conditionally available after startup"
+            },
+            {
+              "bytes": 847,
+              "range": "0xD840-0xDB8E",
+              "status": "owned/reserved; no allocation certificate"
+            },
+            {
+              "bytes": 145,
+              "range": "0xDB8F-0xDC1F",
+              "status": "conditionally available after startup"
+            },
+            {
+              "bytes": 3111,
+              "range": "0xDC20-0xE846",
+              "status": "owned/reserved; no allocation certificate"
+            },
+            {
+              "bytes": 25,
+              "range": "0xE847-0xE85F",
+              "status": "conditionally available after startup"
+            },
+            {
+              "bytes": 4000,
+              "range": "0xE860-0xF7FF",
+              "status": "owned/reserved; no allocation certificate"
+            }
+          ],
+          "ranges": [
+            {
+              "bytes": 64,
+              "range": "0xD800-0xD83F",
+              "word_aligned_subrange": "0xD800-0xD83F"
+            },
+            {
+              "bytes": 145,
+              "range": "0xDB8F-0xDC1F",
+              "word_aligned_subrange": "0xDB90-0xDC1F"
+            },
+            {
+              "bytes": 25,
+              "range": "0xE847-0xE85F",
+              "word_aligned_subrange": "0xE848-0xE85F"
+            }
+          ],
+          "word_aligned_certified_bytes": 232
+        }
+      },
+      "ecu_id": "12/41/42/59/60/85 family reference",
+      "loader_lifetimes": {
+        "soft_bsl": {
+          "chunk_buffer": "0xE000-0xE3FF",
+          "crc_table": "0xFD60-0xFD7F",
+          "status": "supported by the current repository"
+        }
+      },
+      "reference": "C:\\Users\\crist\\MS41 Projects\\_shared\\REF_MS41.3\\MS41.3_s52_stock_fullread.bin",
+      "reference_sha256": "89f31cbb70466ad39b23571e3c1c533251275182e8e2502c214a208e83f64487",
+      "source_report": "C:\\Users\\crist\\MS41 Projects\\Flasher-Dev\\experiments\\ram_ownership\\evidence\\static_ram_ownership.json",
+      "source_report_sha256": "38b61c9ba781b2922c6dbc3b094736bd43a65ca6560261197bcd561eaa3ceca4",
+      "variant": "MS41.3"
+    }
+  }
+}
