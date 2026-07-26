@@ -32,7 +32,12 @@ from PyQt5.QtGui import (
     QGuiApplication,
 )
 
-from ms41 import MS41ECU, SS1V2_PROG_SIG, SS1V2_PROG_SIG_ADDR
+from ms41 import (
+    FIRMWARE_COMPAT_PROGRAM_ADDRS,
+    MS41ECU,
+    SS1V2_PROG_SIG,
+    SS1V2_PROG_SIG_ADDR,
+)
 from ds2 import DS2Interface, DS2Error
 from checksum import verify_checksum, correct_checksums
 from dtc import format_dtc_table, parse_ds2_dtc_response, DS2DTCRecord
@@ -529,12 +534,14 @@ def _populate_ecu_info(ident: bytes, labels: dict) -> tuple:
     return ecu_id, variant
 
 
-def _is_firmware_conversion(file_variant, ecu_variant, file_calid, ecu_calid):
-    """True when either the broad variant or exact CAL family changes."""
+def _is_firmware_conversion(
+    file_variant, ecu_variant, file_program_id, ecu_program_id
+):
+    """True when either the broad or exact program version changes."""
     return bool(
         file_variant and ecu_variant and file_variant != ecu_variant
     ) or bool(
-        file_calid and ecu_calid and file_calid[:2] != ecu_calid[:2]
+        file_program_id and ecu_program_id and file_program_id != ecu_program_id
     )
 
 
@@ -567,6 +574,7 @@ class MS41FlashGUI(QMainWindow):
         self._softbsl_last_version = None      # consistent MS41 target retained across port handoff
         self._ecu_id              = None
         self._ecu_cal_id          = None
+        self._ecu_program_compatibility_id = None
         self._ecu_vin             = None
         self._session_backup_read = False
         self._last_full_read      = None   # bytes of the last full ROM read THIS connection;
@@ -602,6 +610,7 @@ class MS41FlashGUI(QMainWindow):
         self._last_full_read_key = None
         self._ecu_softbsl_marker = None
         self._ecu_softbsl_hook_present = False
+        self._ecu_calguard_recovery_ready = False
         self._softbsl_image = None
         self._softbsl_xbank_base = None
         self._softbsl_xbank_base_source = ""
@@ -1182,6 +1191,17 @@ class MS41FlashGUI(QMainWindow):
                 cal_id = "".join(chr(b) if 32 <= b < 127 else "?" for b in raw).strip()
             except Exception:
                 pass
+            program_compatibility_id = ""
+            try:
+                program_ids = [
+                    bytes(self._ds2.read_mem(address ^ 0x4000, 4))
+                    for address in FIRMWARE_COMPAT_PROGRAM_ADDRS
+                ]
+                if (all(len(value) == 4 and value.isdigit() for value in program_ids)
+                        and len(set(program_ids)) == 1):
+                    program_compatibility_id = program_ids[0].decode("ascii")
+            except Exception:
+                pass
             vin = ""
             try:
                 vin = self._ds2.read_vin()
@@ -1217,6 +1237,11 @@ class MS41FlashGUI(QMainWindow):
                     log_fn(
                         "Soft-BSL loader marker is present without the complete 0x2A "
                         "program hook. Automatic transfers will use DS2.", "warn")
+            calguard_recovery_ready = False
+            if not (ecu_info.decode_bank_marker(softbsl_marker_raw)
+                    and softbsl_hook_present):
+                calguard_recovery_ready = softbsl_service.calguard_recovery_ready(
+                    self._ds2, log_fn)
             chip_sig_for_fast = b""
             try:
                 chip_sig_for_fast = self._ds2.read_mem(ecu_info.DRV_SIG_ADDR, ecu_info.DRV_SIG_LEN)
@@ -1226,7 +1251,8 @@ class MS41FlashGUI(QMainWindow):
             identity_source = self._read_live_identity_source(self._ds2, log_fn)
             return (ident, cal_id, vin, prog_is_ms41_3, new_fields,
                     softbsl_marker_raw, chip_sig_for_fast, identity_source,
-                    softbsl_hook_present)
+                    softbsl_hook_present, program_compatibility_id,
+                    calguard_recovery_ready)
 
         self._run_task(
             task,
@@ -1249,9 +1275,11 @@ class MS41FlashGUI(QMainWindow):
         self._ecu_program_variant = None
         self._ecu_id              = None
         self._ecu_cal_id          = None
+        self._ecu_program_compatibility_id = None
         self._ecu_vin             = None
         self._ecu_softbsl_marker  = None
         self._ecu_softbsl_hook_present = False
+        self._ecu_calguard_recovery_ready = False
         self._ecu_chip_sig        = b""
         self._flash_chip_note.setText(self._flash_chip_label_text(b""))
         self._update_transfer_mode()
@@ -1344,7 +1372,8 @@ class MS41FlashGUI(QMainWindow):
 
     def _on_connected(self, ident=b"", cal_id="", vin="", prog_is_ms41_3=False, new_fields=None,
                      softbsl_marker_raw=b"", chip_sig=b"", identity_source=None,
-                     softbsl_hook_present=False):
+                     softbsl_hook_present=False, program_compatibility_id="",
+                     calguard_recovery_ready=False):
         self._reset_live_config_state()
         self._d2xx_checked = True
         self._d2xx_ok = bool(self._ds2 and getattr(self._ds2, "uses_d2xx", False))
@@ -1352,6 +1381,7 @@ class MS41FlashGUI(QMainWindow):
         self._ecu_identity_source = bytes(identity_source) if identity_source else None
         self._ecu_softbsl_marker = ecu_info.decode_bank_marker(softbsl_marker_raw)
         self._ecu_softbsl_hook_present = bool(softbsl_hook_present)
+        self._ecu_calguard_recovery_ready = bool(calguard_recovery_ready)
         self._ecu_chip_sig = chip_sig
         self._flash_chip_note.setText(self._flash_chip_label_text(chip_sig))
         self._update_transfer_mode()
@@ -1361,6 +1391,10 @@ class MS41FlashGUI(QMainWindow):
         self.btn_connect.setText("Disconnect")
         self._set_ds2_buttons_enabled()
         self._log("Connected via DS2 — identify OK.", "ok")
+        if self._ecu_calguard_recovery_ready:
+            self._log(
+                "CalGuard recovery listener detected; Automatic will use direct "
+                "Soft-BSL 0x5A entry.", "ok")
         try:
             parsed_id, parsed_variant = _populate_ecu_info(ident, self._info_labels)
             if parsed_id:
@@ -1369,6 +1403,7 @@ class MS41FlashGUI(QMainWindow):
             if cal_id:
                 self._ecu_cal_id = cal_id
                 self._info_labels["CAL ID"].setText(cal_id)
+            self._ecu_program_compatibility_id = program_compatibility_id or None
             # MS41.3 program marker — resolves the MS41.2 / MS41.3 ambiguity that
             # ECU ID alone can't handle (some MS41.3 ECUs still report "1406464").
             if prog_is_ms41_3:
@@ -1463,12 +1498,22 @@ class MS41FlashGUI(QMainWindow):
         """The stock-ECU native fast path requires the selected adapter to be D2XX."""
         return bool(getattr(self, "_d2xx_ok", False))
 
+    def _calguard_recovery_available(self):
+        """Whether Automatic can safely try the read-only-confirmed direct recovery path."""
+        return bool(
+            getattr(self, "_ecu_calguard_recovery_ready", False)
+            and getattr(self, "_d2xx_ok", False)
+            and self._fast_chip_family() in ("amd", "intel")
+        )
+
     def _auto_transfer_route(self):
         """Return the preferred route without conflating Soft-BSL and native DS2."""
         if (getattr(self, "chk_force_slow_ds2", None) is not None
                 and self.chk_force_slow_ds2.isChecked()):
             return "legacy_ds2"
         if self._force_softbsl_recovery():
+            return "softbsl"
+        if self._calguard_recovery_available():
             return "softbsl"
         if self._fast_read_available():
             return "softbsl"
@@ -1506,6 +1551,14 @@ class MS41FlashGUI(QMainWindow):
             self.lbl_transfer_mode.setToolTip(
                 "Forced recovery bypasses CalGuard/door detection and sends staged 0x5A "
                 "directly. It never sends 0x2A or falls back to DS2.")
+        elif self._calguard_recovery_available():
+            self.lbl_transfer_mode.setText(
+                "Transfer: Direct Soft-BSL 0x5A (CalGuard recovery, auto)")
+            self.lbl_transfer_mode.setStyleSheet("color:#9ece6a; padding:4px;")
+            self.lbl_transfer_mode.setToolTip(
+                "A read-only probe confirmed the CalGuard mismatch listener. Automatic "
+                "will revalidate it, then enter the installed Soft-BSL loader directly "
+                "without sending 0x2A.")
         elif self._fast_read_available():
             self.lbl_transfer_mode.setText("Transfer: Soft-BSL RAM agent, high baud (fast, auto)")
             self.lbl_transfer_mode.setStyleSheet("color:#9ece6a; padding:4px;")
@@ -2085,18 +2138,18 @@ class MS41FlashGUI(QMainWindow):
                 self._log("DS2 write cancelled — checksum not valid.", "warn")
                 return
 
-        # ── Variant / CAL-ID guard ───────────────────────────────────────────
-        # A partial cal from the WRONG MS41 variant can brick the ECU. This guard
-        # was missing before and an MS41.1 cal written to an MS41.2 ECU bricked it.
+        # ── Program / calibration compatibility guard ────────────────────────
+        # A partial calibration that does not match the live program can brick the ECU.
         from ms41 import MS41ECU
         file_variant = MS41ECU.detect_variant(image)      # cal-region identity of the tune file
-        file_calid   = MS41ECU.read_calid(image)
+        file_compatibility_id = MS41ECU.read_calibration_compatibility_id(image)
         # Prefer the program-confirmed variant (set after a full ROM read); fall back
         # to the connect-time identify response, which can't distinguish MS41.2 from
         # MS41.3 on ECUs that report ECU ID "1406464" instead of "SHINDE1".
         ecu_variant  = (getattr(self, "_ecu_program_variant", None)
                         or getattr(self, "_ecu_variant", None))
-        ecu_calid    = getattr(self, "_ecu_cal_id", None)
+        ecu_program_compatibility_id = getattr(
+            self, "_ecu_program_compatibility_id", None)
 
         confirmed_mismatch = None
         uncertain_warn     = None
@@ -2120,11 +2173,19 @@ class MS41FlashGUI(QMainWindow):
                         f"Connected ECU: {ecu_variant}  —  Tune file: {file_variant}.\n\n"
                         f"Writing a {file_variant} calibration to a {ecu_variant} ECU "
                         f"will brick it.")
-        if (not confirmed_mismatch and file_calid and ecu_calid
-                and file_calid[:2] != ecu_calid[:2]):
-            confirmed_mismatch = (
-                f"CAL ID family mismatch — ECU CAL ID '{ecu_calid}' vs tune '{file_calid}'.\n\n"
-                "Writing a calibration from the wrong ID family will brick the ECU.")
+        if not confirmed_mismatch:
+            if not file_compatibility_id:
+                confirmed_mismatch = (
+                    "The tune Firmware Compatibility ID is missing or invalid.")
+            elif not ecu_program_compatibility_id:
+                confirmed_mismatch = (
+                    "The connected ECU program Firmware Compatibility ID could not "
+                    "be read consistently.")
+            elif file_compatibility_id != ecu_program_compatibility_id:
+                confirmed_mismatch = (
+                    "Firmware compatibility mismatch — ECU program "
+                    f"'{ecu_program_compatibility_id}' vs tune calibration "
+                    f"'{file_compatibility_id}'.")
         if not confirmed_mismatch and not ecu_variant:
             uncertain_warn = ("Connected ECU variant could not be determined — "
                               "cannot confirm this tune belongs to the connected ECU.")
@@ -2134,7 +2195,7 @@ class MS41FlashGUI(QMainWindow):
                 f"{confirmed_mismatch}\n\n"
                 "A calibration from the wrong MS41 variant can leave the ECU unbootable "
                 "and require recovery.\n\n"
-                "Flash blocked. Load a tune file that matches the connected ECU.")
+                "Flash blocked. Load a tune file that matches the connected ECU program.")
             self._log(f"Tune write BLOCKED — {confirmed_mismatch.splitlines()[0]}", "error")
             return
 
@@ -2150,12 +2211,15 @@ class MS41FlashGUI(QMainWindow):
         fast_route = transfer_route == "softbsl"
         native_route = transfer_route == "native_ds2"
         entry_mode = self._softbsl_entry_mode()
+        automatic_recovery = self._calguard_recovery_available()
         verify_write = self.chk_verify.isChecked()
         backup_before_write = self.chk_backup_before_write.isChecked()
         if fast_route:
             transport = (
                 "Direct Soft-BSL 0x5A (forced recovery; no 0x2A/DS2 fallback)"
                 if entry_mode == "direct" else
+                "Direct Soft-BSL 0x5A (automatic CalGuard recovery)"
+                if automatic_recovery else
                 "Soft-BSL RAM agent (fast baud with automatic fallback)"
             )
         elif native_route:
@@ -2207,6 +2271,9 @@ class MS41FlashGUI(QMainWindow):
             if backup_entry_box[0] is not None:
                 self._session_backup_read = True
                 self._refresh_backup_table()
+            if automatic_recovery:
+                self._ecu_calguard_recovery_ready = False
+                self._update_transfer_mode()
             self._finish_flash_success("Calibration Write Complete", msg)
 
         def on_failure(error_msg):
@@ -2276,6 +2343,8 @@ class MS41FlashGUI(QMainWindow):
         native_route = transfer_route == "native_ds2"
         entry_mode = self._softbsl_entry_mode()
         force_direct = entry_mode == "direct"
+        automatic_recovery = self._calguard_recovery_available()
+        recovery_direct = force_direct or automatic_recovery
         verify_write = self.chk_verify.isChecked()
         backup_before_write = self.chk_backup_before_write.isChecked()
         if archived_prewrite_image is not None:
@@ -2287,7 +2356,7 @@ class MS41FlashGUI(QMainWindow):
         boot_checkbox_requested = bool(
             getattr(self, "chk_bootloader_write", None) is not None
             and self.chk_bootloader_write.isChecked())
-        if require_boot_write and (not fast_route or force_direct):
+        if require_boot_write and (not fast_route or recovery_direct):
             QMessageBox.critical(
                 self, "Soft-BSL Boot Write Required",
                 "This operation changes bytes inside the ECU's boot/parameter region "
@@ -2299,7 +2368,7 @@ class MS41FlashGUI(QMainWindow):
                       "Soft-BSL boot-region write.", "error")
             return
         will_write_boot = (
-            fast_route and not force_direct
+            fast_route and not recovery_direct
             and (require_boot_write or boot_checkbox_requested)
         )
         target_half = softbsl_service.marker(image) or "B"
@@ -2338,16 +2407,17 @@ class MS41FlashGUI(QMainWindow):
         file_variant = MS41ECU.detect_variant(image)
         ecu_variant = (getattr(self, "_ecu_program_variant", None)
                        or getattr(self, "_ecu_variant", None))
-        file_calid = MS41ECU.read_calid(image)
-        ecu_calid = getattr(self, "_ecu_cal_id", None)
-        if not ecu_calid and archived_prewrite_image is not None:
-            ecu_calid = MS41ECU.read_calid(archived_prewrite_image)
-        if not ecu_calid and getattr(self, "_last_full_read", None) is not None:
-            ecu_calid = MS41ECU.read_calid(self._last_full_read)
-        file_family = file_calid[:2] if file_calid else None
-        ecu_family = ecu_calid[:2] if ecu_calid else None
+        file_program_id = MS41ECU.read_program_compatibility_id(image)
+        ecu_program_id = getattr(
+            self, "_ecu_program_compatibility_id", None)
+        if not ecu_program_id and archived_prewrite_image is not None:
+            ecu_program_id = MS41ECU.read_program_compatibility_id(
+                archived_prewrite_image)
+        if not ecu_program_id and getattr(self, "_last_full_read", None) is not None:
+            ecu_program_id = MS41ECU.read_program_compatibility_id(
+                self._last_full_read)
         is_variant_conversion = _is_firmware_conversion(
-            file_variant, ecu_variant, file_calid, ecu_calid
+            file_variant, ecu_variant, file_program_id, ecu_program_id
         )
         if file_variant is None:
             ans = QMessageBox.warning(self, "Unrecognised ROM",
@@ -2377,9 +2447,9 @@ class MS41FlashGUI(QMainWindow):
             title, risk_note = self._conversion_warning_policy()
             ans = QMessageBox.warning(self, title,
                 f"Connected ECU : {ecu_variant}"
-                f"{f' (ID{ecu_family})' if ecu_family else ''}\n"
+                f"{f' (program {ecu_program_id})' if ecu_program_id else ''}\n"
                 f"ROM file      : {file_variant}"
-                f"{f' (ID{file_family})' if file_family else ''}\n\n"
+                f"{f' (program {file_program_id})' if file_program_id else ''}\n\n"
                 f"This will convert the ECU from {ecu_variant} to {file_variant}. "
                 "A full ROM flash rewrites both the program code and the calibration, "
                 "so the ECU will boot as a different variant after the write.\n\n"
@@ -2543,6 +2613,8 @@ class MS41FlashGUI(QMainWindow):
             transport = (
                 "Direct Soft-BSL 0x5A (forced recovery; no 0x2A/DS2 fallback)"
                 if force_direct else
+                "Direct Soft-BSL 0x5A (automatic CalGuard recovery)"
+                if automatic_recovery else
                 "Soft-BSL RAM agent (fast baud with automatic fallback)"
             )
         elif native_route:
@@ -2660,6 +2732,9 @@ class MS41FlashGUI(QMainWindow):
                 self._log("Full write blocked — required boot-region bytes are absent (confirmed by "
                           "a live sparse read); nothing was erased or written.", "error")
                 return
+            if automatic_recovery:
+                self._ecu_calguard_recovery_ready = False
+                self._update_transfer_mode()
             self._finish_flash_success("Full ROM Write Complete", msg)
             if on_write_success is not None:
                 on_write_success()
@@ -8443,6 +8518,8 @@ class MS41FlashGUI(QMainWindow):
             label = (
                 "Direct Soft-BSL 0x5A recovery read"
                 if entry_mode == "direct" else
+                "Direct Soft-BSL 0x5A CalGuard recovery read (auto)"
+                if self._calguard_recovery_available() else
                 "Fast (Soft-BSL) read — RAM agent, high baud (auto)"
             )
             log_fn(label + ".", "ok")
@@ -8492,6 +8569,8 @@ class MS41FlashGUI(QMainWindow):
             label = (
                 "Direct Soft-BSL 0x5A recovery write"
                 if entry_mode == "direct" else
+                "Direct Soft-BSL 0x5A CalGuard recovery write (auto)"
+                if self._calguard_recovery_available() else
                 "Fast (Soft-BSL) write — RAM agent, high baud (auto)"
             )
             log_fn(label + ".", "ok")
