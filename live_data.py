@@ -77,14 +77,13 @@ MS41_PARAMETERS: List[MS41Parameter] = [
 
     # LID 0x02 — Air / fuel
     MS41Parameter("Mass Air Flow",      "kg/h", 0x02, 0, 2, 0.01,       0.0,   "{:.2f}"),
-    MS41Parameter("Lambda Upstream",    "V",    0x02, 2, 2, 0.004883,   0.0,   "{:.3f}"),
     MS41Parameter("Fuel Trim ST",       "%",    0x02, 4, 1, 0.390625, -50.0,   "{:.1f}"),
     MS41Parameter("Fuel Trim LT",       "%",    0x02, 5, 1, 0.390625, -50.0,   "{:.1f}"),
 
     # LID 0x03 — Ignition / VANOS
     MS41Parameter("Ignition Advance",   "°",    0x03, 0, 1, 0.75,      -48.0,  "{:.1f}"),
     MS41Parameter("Knock Retard",       "°",    0x03, 1, 1, 0.75,        0.0,  "{:.1f}"),
-    MS41Parameter("VANOS Advance",      "°",    0x03, 2, 1, 0.75,        0.0,  "{:.1f}"),
+    MS41Parameter("VANOS Measured Angle", "°",  0x03, 2, 1, 0.75,        0.0,  "{:.1f}"),
 
     # LID 0x04 — Speed / injectors / idle
     MS41Parameter("Vehicle Speed",      "km/h", 0x04, 0, 1, 1.0,        0.0,  "{:.0f}"),
@@ -203,7 +202,7 @@ _PARAM_META = {
     "Ignition Advance":      ("°",    1, False, lambda x: 0.373 * x - 23.6, "{:.1f}"),
     "Knock Retard":          ("°",    1, False, lambda x: (x - 128) * 0.375,"{:.1f}"),
     "Knock Retard (Global)": ("°",    1, False, lambda x: (x - 128) * 0.375,"{:.1f}"),
-    "VANOS Advance":         ("°",    1, False, lambda x: x * 0.3745,       "{:.1f}"),
+    "VANOS Measured Angle":  ("°",    1, False, lambda x: x * 0.3745,       "{:.1f}"),
     "Injector PW":           ("ms",   2, False, lambda x: x * 0.00534,      "{:.2f}"),
     "Fuel Trim ST":          ("%",    2, False, _FT, "{:.1f}"),
     "Fuel Trim ST B2":       ("%",    2, False, _FT, "{:.1f}"),
@@ -218,7 +217,7 @@ _PARAM_META = {
 _TELEGRAM_ORDER = [
     "Engine RPM", "Mass Air Flow", "Idle Valve Pos", "Intake Air Temp", "Coolant Temp",
     "Vehicle Speed", "Throttle Position", "Ignition Advance", "Knock Retard",
-    "Knock Retard (Global)", "VANOS Advance", "Injector PW",
+    "Knock Retard (Global)", "VANOS Measured Angle", "Injector PW",
     "Fuel Trim ST", "Fuel Trim ST B2", "Fuel Trim LT", "Fuel Trim LT B2", "Engine Load",
     "Battery Voltage",
 ]
@@ -229,21 +228,23 @@ _SHARED_ADDR = {
     "Engine RPM": 0xDA2A, "Mass Air Flow": 0xDA34, "Idle Valve Pos": 0xDA36,
     "Intake Air Temp": 0xDA50, "Coolant Temp": 0xDA5A, "Vehicle Speed": 0xDA63,
     "Ignition Advance": 0xE989, "Knock Retard": 0xE98D, "Knock Retard (Global)": 0xE9D9,
-    "VANOS Advance": 0xE9E6,
-    "Battery Voltage": 0xFC9D,   # V_IGK, shared across all MS41 variants
+    "VANOS Measured Angle": 0xE9E6,
 }
 
-# Per-ECU-ID address families for the parameters that differ (fuel + TPS).
+# Per-ECU-ID addresses that drift or require exact firmware proof.
 _FAMILY_ADDR = {
-    "1437806": {"Throttle Position": 0xE8D7, "Engine Load": 0xFC52, "Injector PW": 0xEF96,
+    "1437806": {"Throttle Position": 0xE8D0, "Battery Voltage": 0xFC9D,
+                "Engine Load": 0xFC52, "Injector PW": 0xEF96,
                 "Fuel Trim ST": 0xF036, "Fuel Trim ST B2": 0xF0F2,
                 "Fuel Trim Additive": 0xF040, "Fuel Trim Additive B2": 0xF0FC,
                 "Fuel Trim LT": 0xF048, "Fuel Trim LT B2": 0xF104},
-    "1429861": {"Throttle Position": 0xE8D7, "Engine Load": 0xFAFC, "Injector PW": 0xECBC,
+    "1429861": {"Throttle Position": 0xE8D0, "Battery Voltage": 0xFB47,
+                "Engine Load": 0xFAFC, "Injector PW": 0xECBC,
                 "Fuel Trim ST": 0xED5C, "Fuel Trim ST B2": 0xED96,
                 "Fuel Trim Additive": 0xED66, "Fuel Trim Additive B2": 0xEDA0,
                 "Fuel Trim LT": 0xED6E, "Fuel Trim LT B2": 0xEDA8},
-    "1406464": {"Throttle Position": 0xE8D0, "Engine Load": 0xFC52, "Injector PW": 0xEF7E,
+    "1406464": {"Throttle Position": 0xE8D0, "Battery Voltage": 0xFC9D,
+                "Engine Load": 0xFC52, "Injector PW": 0xEF7E,
                 "Fuel Trim ST": 0xF01E, "Fuel Trim ST B2": 0xF0CA,
                 "Fuel Trim Additive": 0xF028, "Fuel Trim Additive B2": 0xF0D4,
                 "Fuel Trim LT": 0xF030, "Fuel Trim LT B2": 0xF0DC},
@@ -260,12 +261,6 @@ _LIVE_SHARED_IDS = frozenset({
     "1405854", "1406464", "SHINDE1", "1429373", "1429861", "1432401",
     "1437806", "1440176",
 })
-_TPS_BY_ECU_ID = {
-    "1405854": 0xE8D7, "1429373": 0xE8D7, "1429861": 0xE8D7,
-    "1432401": 0xE8D7, "1437806": 0xE8D7, "1440176": 0xE8D7,
-    "1406464": 0xE8D0, "SHINDE1": 0xE8D0,
-}
-
 # Definition-derived axis locations converted to live DS2 CPU addresses.
 # Only variants with proven Knock Tables X/Y definitions are listed.
 _ADAPTATION_AXES = {
@@ -337,8 +332,6 @@ def telegram_params_for(ecu_id, profile: str = PROFILE_STANDARD,
         unit, length, signed, convert, fmt = _PARAM_META[name]
         if name in _SHARED_ADDR:
             addr = _SHARED_ADDR[name]
-        elif name == "Throttle Position":
-            addr = _TPS_BY_ECU_ID[ecu_id]
         elif name in fam_map:
             addr = fam_map[name]
         else:
@@ -460,14 +453,14 @@ DS2_BATCH_LAYOUT = [
     ("Ignition Advance",     0xE989, 1, False, lambda x: 0.373*x - 23.6,      "°",     "{:.1f}"),
     ("Knock Retard",         0xE98D, 1, False, lambda x: (x-128)*0.375,        "°",     "{:.1f}"),
     ("Vehicle Speed",        0xDA63, 1, False, lambda x: x,                    "km/h",  "{:.0f}"),
-    ("Throttle Position",    0xE8D7, 1, False, lambda x: x*100/255,            "%",     "{:.1f}"),
+    ("Throttle Position",    0xE8D0, 1, False, lambda x: x*100/255,            "%",     "{:.1f}"),
     ("Engine RPM",           0xDA2A, 2, False, lambda x: x,                    "RPM",   "{:.0f}"),
     ("Mass Air Flow",        0xDA34, 2, False, lambda x: x*0.25,               "kg/h",  "{:.1f}"),
     ("Coolant Temp",         0xDA5A, 1, False, lambda x: x*0.747 - 48,         "°C",    "{:.0f}"),
     ("Intake Air Temp",      0xDA50, 1, False, lambda x: x*0.747 - 48,         "°C",    "{:.0f}"),
     ("Battery Voltage",      0xFC9D, 1, False, lambda x: x * 0.10196,          "V",     "{:.2f}"),
     ("Knock Retard (Global)",0xE9D9, 1, False, lambda x: (x-128)*0.375,        "°",     "{:.1f}"),
-    ("VANOS Advance",        0xE9E6, 1, False, lambda x: x*0.3745,             "°",     "{:.1f}"),
+    ("VANOS Measured Angle", 0xE9E6, 1, False, lambda x: x*0.3745,             "°",     "{:.1f}"),
     ("EVAP Purge Duty",     0xDA56, 1, False, lambda x: x*100/255,             "%",     "{:.1f}"),
     ("Fuel Trim LT",         0xF048, 2, False, _FT_BATCH,                      "%",     "{:.1f}"),
     ("Fuel Trim LT B2",      0xF104, 2, False, _FT_BATCH,                      "%",     "{:.1f}"),
@@ -505,6 +498,7 @@ def batch_layout_for(ecu_id, profile: str = PROFILE_STANDARD,
     layout = list(DS2_BATCH_LAYOUT)
     layout[1] = (layout[1][0], addrs["Injector PW"], *layout[1][2:])
     layout[5] = (layout[5][0], addrs["Throttle Position"], *layout[5][2:])
+    layout[10] = (layout[10][0], addrs["Battery Voltage"], *layout[10][2:])
     layout[14] = (layout[14][0], addrs["Fuel Trim LT"], *layout[14][2:])
     layout[15] = (layout[15][0], addrs["Fuel Trim LT B2"], *layout[15][2:])
     layout[16] = (layout[16][0], addrs["Fuel Trim ST"] + 1, *layout[16][2:])
