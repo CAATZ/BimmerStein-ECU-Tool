@@ -1123,6 +1123,7 @@ def test_gui_has_free_port_owner_that_works():
 def test_direct_tap_disables_echo_and_locks_connection_controls(monkeypatch):
     app, w = _gui()
     created = {}
+    recovery_probes = []
 
     class FakeDS2:
         def __init__(self, port, baud, verbose, echo):
@@ -1137,6 +1138,8 @@ def test_direct_tap_disables_echo_and_locks_connection_controls(monkeypatch):
         def read_mem(self, addr, length):
             import identity
             if addr == 0x1000E: return b"12"
+            if addr in (0x2007, 0x2013, 0x201F):
+                return b"0960"
             if addr == 0x2025: return b"1437806"
             if addr == 0x1CE0 and length == 15:
                 return b"1585\x00" + TEST_SERIAL.encode("ascii") + b"\x00"
@@ -1153,11 +1156,19 @@ def test_direct_tap_disables_echo_and_locks_connection_controls(monkeypatch):
 
     try:
         monkeypatch.setattr(gui, "DS2Interface", FakeDS2)
+        monkeypatch.setattr(
+            gui.softbsl_service,
+            "calguard_recovery_ready",
+            lambda ds2, _log: recovery_probes.append(ds2) or True,
+        )
         monkeypatch.setattr(w, "_run_task", run_now)
         w.cb_port.clear(); w.cb_port.addItem("COM_TEST")
         w.chk_direct_tap.setChecked(True)
         w._connect()
         assert created == {"port": "COM_TEST", "baud": 9600, "echo": False}
+        assert w._ecu_program_compatibility_id == "0960"
+        assert recovery_probes == [w._ds2]
+        assert w._ecu_calguard_recovery_ready is True
         w._set_all_buttons_enabled(True)
         assert not w.cb_port.isEnabled()
         assert not w.chk_direct_tap.isEnabled()
@@ -1165,6 +1176,50 @@ def test_direct_tap_disables_echo_and_locks_connection_controls(monkeypatch):
         w._set_all_buttons_enabled(True)
         assert w.cb_port.isEnabled()
         assert w.chk_direct_tap.isEnabled()
+        assert w._ecu_calguard_recovery_ready is False
+    finally:
+        w.close()
+
+
+def test_tune_guard_uses_program_compatibility_not_live_cal_id(monkeypatch):
+    app, w = _gui()
+    try:
+        tune = bytearray(b"\xFF" * MS41ECU.TUNE_SIZE)
+        tune[0x0C:0x16] = b"0641011110"
+        w.chk_correct_cksum.setChecked(False)
+        w._ecu_variant = "MS41.0"
+        w._ecu_program_variant = "MS41.0"
+        w._ecu_cal_id = "60"
+        w._ecu_program_compatibility_id = "0641"
+        monkeypatch.setattr(gui, "verify_checksum", lambda _data: (True, []))
+
+        questions = []
+        monkeypatch.setattr(
+            QMessageBox, "question",
+            staticmethod(lambda *args, **kwargs:
+                         questions.append(args) or QMessageBox.No))
+        monkeypatch.setattr(
+            QMessageBox, "critical",
+            staticmethod(lambda *args, **kwargs:
+                         pytest.fail(f"compatible recovery tune was blocked: {args}")))
+
+        w._ds2_write_tune(tune, "recovery.bin")
+        assert questions
+
+        w._ecu_program_compatibility_id = "0659"
+        blocked = []
+        monkeypatch.setattr(
+            QMessageBox, "question",
+            staticmethod(lambda *args, **kwargs:
+                         pytest.fail("mismatched tune reached confirmation")))
+        monkeypatch.setattr(
+            QMessageBox, "critical",
+            staticmethod(lambda *args, **kwargs:
+                         blocked.append(args) or QMessageBox.Ok))
+
+        w._ds2_write_tune(tune, "wrong-family.bin")
+        assert blocked
+        assert "ECU program '0659' vs tune calibration '0641'" in blocked[0][2]
     finally:
         w.close()
 
@@ -2897,6 +2952,26 @@ def test_recovery_override_group_can_force_direct_softbsl_without_detection():
         assert w._softbsl_entry_mode() == "direct"
         assert "Direct Soft-BSL 0x5A" in w.lbl_transfer_mode.text()
         assert w.chk_bootloader_write.isChecked() is False
+        assert w.chk_bootloader_write.isEnabled() is False
+    finally:
+        w.close()
+
+
+def test_automatic_calguard_recovery_routes_without_normal_softbsl_detection():
+    app, w = _gui()
+    try:
+        w._d2xx_ok = True
+        w._ecu_chip_sig = bytes.fromhex("e6f45000b84c6fe0")
+        w._ecu_softbsl_marker = None
+        w._ecu_softbsl_hook_present = False
+        w._ecu_calguard_recovery_ready = True
+        w._update_transfer_mode()
+
+        assert w.rb_recovery_auto.isChecked() is True
+        assert w._fast_read_available() is False
+        assert w._auto_transfer_route() == "softbsl"
+        assert w._softbsl_entry_mode() == "auto"
+        assert "CalGuard recovery, auto" in w.lbl_transfer_mode.text()
         assert w.chk_bootloader_write.isEnabled() is False
     finally:
         w.close()
