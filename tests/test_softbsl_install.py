@@ -694,9 +694,15 @@ def test_reinstall_displaces_shared_alpha_n_cave_only_in_bootstrap():
 
     stock = ref("MS41.3")
     current, _ = patch_ms41.build(
-        stock, ["softbsl_loader_legacy", "door_magic", "cal_guard", "alphan_failsafe"])
+        stock, [
+            "softbsl_loader_legacy",
+            "door_magic",
+            "cal_guard_v1",
+            "alphan_failsafe",
+        ])
     args = softbsl_install._sb.InstallRequest(
         port="COM_TEST", prompt=lambda _message: None, base=current, chip="29f400",
+        with_calguard=True,
         confirm_reinstall=lambda _message: True)
     try:
         softbsl_install._sb._install_resolve_images(args)

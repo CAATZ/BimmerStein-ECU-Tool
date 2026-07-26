@@ -5,7 +5,7 @@
   "version": "V2",
   "status": "DEPRECATED",
   "title": "CalGuard compatibility guard",
-  "user_description": "Unsafe CalGuard revision retained only so recovered V2 images can be identified, removed, or upgraded to CalGuard V3. Never install V2 on an ECU.",
+  "user_description": "Unsafe CalGuard revision retained only so recovered V2 images can be identified, removed, or upgraded to CalGuard V4. Never install V2 on an ECU.",
   "description": "Deprecated CalGuard V2 exact-ID gate. Its odd-address C166 word access can raise the ILLOPA trap during boot. Retained only for exact installed-state detection, safe removal, and direct migration to V3.",
   "target": "MS41.3",
   "targets": ["MS41.0", "MS41.1", "MS41.2", "MS41.3"],

@@ -1206,10 +1206,16 @@ def test_patches_tab_lists_the_ms41_3_patches():
             for label in w._patch_rows["cal_guard"].findChildren(gui.QLabel)
         }
         assert "BOOT · SOFT-BSL" in calguard_badges
+        assert "V4" in calguard_badges
+        assert "UNTESTED" in calguard_badges
+        assert "REQUIRES SOFT-BSL" in calguard_badges
         assert all("BOOT REGION" not in badge for badge in calguard_badges)
-        assert "Fast compatibility guard." in (
+        assert "Fast compatibility guard" in (
             w._patch_checkboxes["cal_guard"].toolTip()
         )
+        assert not w._patch_checkboxes["softbsl_loader"].isChecked()
+        w._patch_checkboxes["cal_guard"].setChecked(True)
+        assert w._patch_checkboxes["softbsl_loader"].isChecked()
         assert "0x3992A" not in w._patch_checkboxes["ignition_cut_v7"].toolTip()
         assert "configurable ignition-cut rev limiter" in (
             w._patch_checkboxes["ignition_cut_v7"].toolTip())
@@ -4437,7 +4443,8 @@ def test_patches_builds_and_flashes_boot_patch_removal_only(monkeypatch):
     try:
         import patch_service
 
-        installed, _ = patch_service.build_image(ref("MS41.3"), ["cal_guard"])
+        installed, _ = patch_service.build_image(
+            ref("MS41.3"), ["softbsl_loader", "cal_guard"])
         w._set_patch_base(installed, "cal-guard-installed")
         monkeypatch.setattr(
             QMessageBox, "question",

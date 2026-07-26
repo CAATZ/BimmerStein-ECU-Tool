@@ -4,6 +4,8 @@ CAVE_CPU = 0x1E10
 CAVE_SIZE = 0x5FC4 - 0x5E10
 BOOT_EXIT = 0x0942
 RECOVER_EXIT = 0x094A
+POLL_COUNT = 0x3000
+RECOVERY_TOKEN = (0x5A, 0x9C, 0x9C)
 
 CC_UC, CC_EQ, CC_NE = 0, 2, 3
 
@@ -15,6 +17,7 @@ class _Assembler:
         self.code = bytearray()
         self.labels = {}
         self.fixups = []
+        self.bit_fixups = []
 
     @property
     def pc(self):
@@ -35,6 +38,22 @@ class _Assembler:
     def movb_mem(self, byte_reg, address):
         self.emit(0xF3, 0xF0 + byte_reg, address, address >> 8)
 
+    def mov_mem_reg(self, address, reg):
+        self.emit(0xF6, 0xF0 + reg, address, address >> 8)
+
+    def mov_reg_imm(self, reg, value):
+        self.emit(0xE6, 0xF0 + reg, value, value >> 8)
+
+    def movb_reg_imm(self, byte_reg, value):
+        if not 0 <= value <= 0xF:
+            raise ValueError("compact MOVB immediate must fit four bits")
+        self.emit(0xE1, (value << 4) | byte_reg)
+
+    def mov_sfr_imm(self, address, value):
+        if address & 1 or not 0xFE00 <= address <= 0xFFFE:
+            raise ValueError(f"not a word-addressable SFR: 0x{address:04X}")
+        self.emit(0xE6, (address - 0xFE00) // 2, value, value >> 8)
+
     def mov_dpp(self, dpp, value):
         self.emit(0xE6, dpp, value, value >> 8)
 
@@ -54,6 +73,29 @@ class _Assembler:
         self.emit((cc << 4) | 0x0D, 0)
         self.fixups.append((len(self.code) - 1, label))
 
+    def jb(self, address, bit, label):
+        if address & 1 or not 0xFE00 <= address <= 0xFFFE:
+            raise ValueError(f"not a bit-addressable SFR: 0x{address:04X}")
+        start = len(self.code)
+        self.emit(0x8A, (address - 0xFE00) // 2, 0, bit << 4)
+        self.bit_fixups.append((start, label))
+
+    def bclr(self, address, bit):
+        if address & 1 or not 0xFE00 <= address <= 0xFFFE:
+            raise ValueError(f"not a bit-addressable SFR: 0x{address:04X}")
+        self.emit((bit << 4) | 0x0E, (address - 0xFE00) // 2)
+
+    def sub_small(self, reg, value):
+        if not 0 <= value <= 7:
+            raise ValueError("compact SUB immediate must fit three bits")
+        self.emit(0x28, (reg << 4) | value)
+
+    def calls(self, address):
+        self.emit(0xDA, address >> 16, address, address >> 8)
+
+    def srvwdt(self):
+        self.emit(0xA7, 0x58, 0xA7, 0xA7)
+
     def jmpa(self, cc, address):
         self.emit(0xEA, cc << 4, address, address >> 8)
 
@@ -65,6 +107,12 @@ class _Assembler:
             if delta & 1 or not -256 <= delta <= 254:
                 raise ValueError(f"relative branch out of range: {label}")
             self.code[position] = (delta // 2) & 0xFF
+        for start, label in self.bit_fixups:
+            target = self.labels[label]
+            delta = target - (CAVE_CPU + start + 4)
+            if delta & 1 or not -256 <= delta <= 254:
+                raise ValueError(f"relative bit branch out of range: {label}")
+            self.code[start + 2] = (delta // 2) & 0xFF
         if len(self.code) > CAVE_SIZE:
             raise ValueError(f"CalGuard is {len(self.code)} B, cave holds {CAVE_SIZE} B")
         return bytes(self.code).ljust(CAVE_SIZE, b"\xFF")
@@ -127,9 +175,67 @@ def assemble():
         a.movb_mem(rl5, program_address)
         a.cmpb_rr(rl4, rl5)
         a.jmpr(CC_NE, "compatibility_fail")
-    a.jmpa(CC_UC, BOOT_EXIT)
+    a.jmpr(CC_UC, "poll_recovery")
 
     a.label("compatibility_fail")
+    a.jmpa(CC_UC, RECOVER_EXIT)
+
+    # The exact IDs matched, but corruption elsewhere could still stop the
+    # application. Briefly open ASC0 and accept the staged-loader magic before
+    # continuing normal boot. Restore every touched UART register on timeout.
+    a.label("poll_recovery")
+    a.mov_mem(7, 0xFEB4)       # S0BG
+    a.mov_mem(8, 0xFFB0)       # S0CON
+    a.mov_mem(9, 0xFF6E)       # S0RIC
+    a.mov_sfr_imm(0xFEB4, 0x0026)
+    a.mov_sfr_imm(0xFFB0, 0x80F7)
+    a.bclr(0xFF6E, 7)
+    a.movb_reg_imm(12, 0)
+    a.mov_reg_imm(12, POLL_COUNT)
+
+    a.label("poll_loop")
+    a.srvwdt()
+    a.sub_small(12, 1)
+    a.jmpr(CC_EQ, "poll_timeout")
+    a.jb(0xFF6E, 7, "poll_byte")
+    a.jmpr(CC_UC, "poll_loop")
+
+    a.label("poll_timeout")
+    a.mov_mem_reg(0xFFB0, 8)
+    a.mov_mem_reg(0xFEB4, 7)
+    a.mov_mem_reg(0xFF6E, 9)
+    a.jmpa(CC_UC, BOOT_EXIT)
+
+    a.label("poll_byte")
+    a.movb_mem(8, 0xFEB2)      # RL4 = S0RBUF
+    a.bclr(0xFF6E, 7)
+    a.cmpb(12, 0)
+    a.jmpr(CC_EQ, "want_5a")
+    a.cmpb(12, 1)
+    a.jmpr(CC_EQ, "want_9c_1")
+    a.cmpb(8, RECOVERY_TOKEN[2])
+    a.jmpr(CC_EQ, "poll_match")
+    a.jmpr(CC_UC, "poll_reset")
+
+    a.label("want_5a")
+    a.cmpb(8, RECOVERY_TOKEN[0])
+    a.jmpr(CC_NE, "poll_loop")
+    a.movb_reg_imm(12, 1)
+    a.jmpr(CC_UC, "poll_loop")
+
+    a.label("want_9c_1")
+    a.cmpb(8, RECOVERY_TOKEN[1])
+    a.jmpr(CC_NE, "poll_reset")
+    a.movb_reg_imm(12, 2)
+    a.jmpr(CC_UC, "poll_loop")
+
+    a.label("poll_reset")
+    a.movb_reg_imm(12, 0)
+    a.jmpr(CC_UC, "poll_loop")
+
+    a.label("poll_match")
+    a.movb_reg_imm(8, 6)
+    a.calls(0x1FD8)            # Soft-BSL polled TX helper: ACK the pre-arm token.
     a.jmpa(CC_UC, RECOVER_EXIT)
     return a.finish()
 
