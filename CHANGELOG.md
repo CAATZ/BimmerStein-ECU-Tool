@@ -10,10 +10,28 @@ shared by BimmerStein applications.
 
 ## [0.1.0b12] - 2026-07-26
 
+### Added
+
+- Added the bench-test-required CalGuard V4 boot-recovery guard, including a
+  bounded key-on recovery window and a retained Soft-BSL session for recovery
+  reads and writes.
+- Added automatic and explicit CalGuard recovery routing without reopening the
+  port or falling back to DS2 after the recovery agent owns the session.
+
 ### Fixed
 
 - Corrected MS41.0 transmission control-bit decoding and limited transmission
   edits to Byte 5 bits 0-5, preserving unrelated bit 6 and knock-detection bit 7.
+- Corrected firmware-specific live-data addresses for throttle position and
+  battery voltage, removed an unsupported lambda display, and identified the
+  VANOS channel as measured angle.
+- Tightened CalGuard recovery handoff, firmware evidence, and retained-session
+  cleanup behavior.
+
+### Changed
+
+- Simplified transfer and recovery labels, patch test-status wording, and the
+  matching user manual without weakening the underlying safety prompts.
 
 ## [0.1.0b11] - 2026-07-25
 
