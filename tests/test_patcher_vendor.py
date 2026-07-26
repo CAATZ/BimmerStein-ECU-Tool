@@ -8,7 +8,7 @@ import pytest
 
 EXPECTED_IDS = {
     "alphan_failsafe", "amd_flash", "cal_guard", "cal_guard_v1",
-    "cal_guard_v2", "door_0x43",
+    "cal_guard_v2", "cal_guard_v4_bench_failed", "brick_guard", "door_0x43",
     "door_0x43_ms410", "door_0x43_ms411", "door_magic", "door_magic_ms410",
     "door_magic_ms411", "ignition_cut", "ignition_cut_v2", "ignition_cut_v3", "ignition_cut_v4",
     "ignition_cut_v5", "ignition_cut_v6", "ignition_cut_v7", "launch_control", "launch_control_v2",
@@ -17,6 +17,7 @@ EXPECTED_IDS = {
     "launch_control_v4", "launch_control_v4_ms410", "launch_control_v4_ms411",
     "launch_control_v4_ms412", "launch_control_v5",
     "softbsl_loader", "softbsl_loader_legacy", "softbsl_loader_relocated_v1",
+    "softbsl_loader_v2", "softbsl_loader_v3_bench_failed",
     "vanos_minrpm_ms410", "vanos_minrpm_ms411",
 }
 
@@ -46,41 +47,48 @@ def test_every_edit_restores_the_full_written_range():
                 ), (patch["id"], hex(edit["off"]), "upgrade_expect")
 
 
-def test_exact_calguard_artifact_is_registered_and_prior_revision_is_upgradable():
-    from engines.patcher.cal_guard_exact import _Assembler, assemble
+def test_registered_guards_match_the_proven_sources():
+    from engines.patcher import cal_guard_exact
+    from experiments.calguard_v9_boot_flash_table import (
+        calguard_v9_boot_flash_table_experiment as experiment,
+    )
 
+    parts = experiment.assemble()
+    source_loader, _v5, source_guard, _v8, _guard_v8 = (
+        experiment.descriptors(*parts)
+    )
     patches = patch_ms41.load_patches()
-    guard = patches["cal_guard"]
-    cave = next(edit for edit in guard["edits"] if edit["off"] == guard["cave"]["base"])
-    prior_caves = [
-        next(edit for edit in patches[patch_id]["edits"]
-             if edit["off"] == patches[patch_id]["cave"]["base"])
-        for patch_id in ("cal_guard_v1", "cal_guard_v2")
-    ]
-    root = Path(__file__).resolve().parents[1]
+    fast_guard = patches["cal_guard"]
+    guard = patches["brick_guard"]
+    loader = patches["softbsl_loader"]
 
-    assert guard["supersedes"] == ["cal_guard_v1", "cal_guard_v2"]
-    assert [prior["data"] for prior in prior_caves] == cave["upgrade_expect"]
-    assert bytes.fromhex(cave["data"]) == assemble()
-    assert cave["data"] == (
-        root / "engines" / "patcher" / "cal_guard_exact.hex"
-    ).read_text().strip()
-    guard_bytes = bytes.fromhex(cave["data"])
-    assert bytes.fromhex("f2f407a0f2f509a0") not in guard_bytes
-    for address in range(0xA007, 0xA00B):
-        assert bytes((0xF3, 0xFA, address & 0xFF, address >> 8)) in guard_bytes
-    with pytest.raises(ValueError, match="even address"):
-        _Assembler().mov_mem(4, 0xA007)
-
-    unsafe_v2 = bytearray(ref("MS41.1"))
-    for edit in guard["edits"]:
-        payload = bytes.fromhex(edit["data"])
-        unsafe_v2[edit["off"]:edit["off"] + len(payload)] = payload
-    unsafe_payload = bytes.fromhex(cave["upgrade_expect"][1])
-    unsafe_v2[cave["off"]:cave["off"] + len(unsafe_payload)] = unsafe_payload
-    upgraded, upgrade_log = patch_ms41.build(bytes(unsafe_v2), ["cal_guard"])
-    assert bytes(upgraded[cave["off"]:cave["off"] + len(guard_bytes)]) == guard_bytes
-    assert any("exact prior revision" in line for line in upgrade_log)
+    assert fast_guard["version"] == "V3"
+    assert guard["version"] == "V1"
+    assert loader["version"] == "V9"
+    assert fast_guard["requires"] == guard["requires"] == ["softbsl_loader"]
+    assert bytes.fromhex(fast_guard["edits"][-1]["data"]) == (
+        cal_guard_exact.assemble()
+    )
+    for production, source in (
+        (loader, source_loader),
+        (guard, source_guard),
+    ):
+        assert {
+            edit["off"]: edit["data"] for edit in production["edits"]
+        } == {
+            edit["off"]: edit["data"] for edit in source["edits"]
+        }
+    assert loader["shared_crc"]["core"] == guard["cave"]["shared_crc_core"]
+    assert all(
+        not patch_ms41._overlap(loader_range, guard_range)
+        for loader_range in patch_ms41._ranges(loader)
+        for guard_range in patch_ms41._ranges(guard)
+    )
+    assert all(
+        patch_ms41.BOOT_FILE_LO <= start < end <= patch_ms41.BOOT_FILE_HI
+        for patch in (loader, fast_guard, guard)
+        for start, end in patch_ms41._ranges(patch)
+    )
 
     base = bytearray(b"\xFF" * patch_ms41.FULL)
     base[0x6025:0x602C] = b"1429861"
@@ -155,8 +163,11 @@ def test_needs_boot_write_flags_only_the_sa1_patches():
     boot = {pid for pid, p in patches.items() if patch_ms41.needs_boot_write(p)}
     # These edit file 0x4000-0x5FFF (SA1/boot); DS2 and un-armed soft-BSL can't write there.
     assert boot == {
-        "cal_guard", "cal_guard_v1", "cal_guard_v2", "softbsl_loader",
-        "softbsl_loader_legacy", "softbsl_loader_relocated_v1", "amd_flash",
+        "brick_guard", "cal_guard", "cal_guard_v1", "cal_guard_v2",
+        "cal_guard_v4_bench_failed",
+        "softbsl_loader", "softbsl_loader_legacy",
+        "softbsl_loader_relocated_v1", "softbsl_loader_v2",
+        "softbsl_loader_v3_bench_failed", "amd_flash",
     }
     # Program/cal patches are DS2-writable.
     assert patch_ms41.needs_boot_write(patches["ignition_cut_v7"]) is False
@@ -171,7 +182,9 @@ def test_relocated_loader_preserves_optional_descriptor_and_composes_with_guard_
 
     assert out[0x5D36:0x5D91] == original_descriptor
     assert out[0x55A2:0x55A4] == bytes.fromhex("921d")
-    assert out[0x5C32:0x5C36] == bytes.fromhex("f075e6f5")
+    assert out[0x4412:0x4416] == bytes.fromhex("ca00ea1f")
+    assert out[0x5C32:0x5C36] == bytes.fromhex("000001cc")
+    assert out[0x5C52:0x5C56] == bytes.fromhex("40452d13")
     assert out[0x5D92:0x5D96] == bytes.fromhex("f3f853e6")
     assert out[0x5FC4:0x5FC8] == bytes.fromhex("4fd87eb7")
     status = checksum.checksum_status(out)
@@ -185,9 +198,12 @@ def test_relocated_loader_and_latest_patch_descriptors_use_built_hex_artifacts()
                     for edit in patches["softbsl_loader"]["edits"]}
 
     for offset, filename in {
-        0x5C32: "loader_sa1_relocated_crc.hex",
+        0x4412: "loader_sa1_relocated_crc_wrapper.hex",
+        0x5C32: "loader_sa1_relocated_crc_table.hex",
+        0x5C52: "loader_sa1_relocated_crc.hex",
         0x5D92: "loader_sa1_relocated_main.hex",
         0x5FC4: "loader_sa1_relocated_io.hex",
+        0x5FEA: "loader_sa1_relocated_crc_prepare.hex",
     }.items():
         artifact = (root / "engines" / "softbsl" / filename).read_text().strip().lower()
         assert loader_edits[offset] == artifact

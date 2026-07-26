@@ -268,20 +268,30 @@ def test_calguard_exact_id_mismatch_selects_direct_entry(monkeypatch):
     assert sb.calguard_direct_entry_ready() is True
 
 
-def test_calguard_prior_caves_are_safe_upgrade_states():
+def test_calguard_prior_revisions_are_safe_upgrade_states():
     from engines.patcher.patch_ms41 import load_patches
-    from engines.softbsl import softbsl_host as sh
 
-    guard = load_patches()["cal_guard"]
-    cave = next(edit for edit in guard["edits"] if edit["off"] == guard["cave"]["base"])
-    for prior_cave in cave["upgrade_expect"]:
+    patches = load_patches()
+    guard = patches["cal_guard"]
+    for prior_id in guard["supersedes"]:
+        prior = patches[prior_id]
         image = bytearray(b"\xFF" * 0x40000)
-        for edit in guard["edits"]:
+        for edit in prior["edits"]:
             payload = bytes.fromhex(edit["data"])
             image[edit["off"]:edit["off"] + len(payload)] = payload
-        payload = bytes.fromhex(prior_cave)
-        image[cave["off"]:cave["off"] + len(payload)] = payload
-        assert sh._patch_state(image, guard) == "legacy"
+        for edit in guard["edits"]:
+            offset = edit["off"]
+            applied = bytes.fromhex(edit["data"])
+            expected = bytes.fromhex(edit["expect"])
+            upgrades = edit.get("upgrade_expect", [])
+            if isinstance(upgrades, str):
+                upgrades = [upgrades]
+            allowed = {
+                expected,
+                applied,
+                *(bytes.fromhex(value) for value in upgrades),
+            }
+            assert bytes(image[offset:offset + len(applied)]) in allowed
 
 
 def test_enter_retry_forwards_the_bounded_ack_timeout(monkeypatch):

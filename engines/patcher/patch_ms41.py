@@ -34,6 +34,7 @@ import checksum  # noqa: E402  (boot-CRC + cal recompute)
 
 PATCH_DIR = os.path.join(HERE, "patches")
 FULL = 262144
+BANK_MARKER_OFF = 0x5FFC
 
 # base fingerprints: coarse "is this the right version" gate (edits' `expect` do the fine check)
 FINGERPRINTS = {
@@ -164,6 +165,30 @@ def is_applied(data, patch):
     for e in patch["edits"]:
         off = e["off"]; dat = bytes.fromhex(e["data"])
         if bytes(data[off:off + len(dat)]) != dat:
+            return False
+    return True
+
+
+def is_applied_for_marker(data, patch, marker):
+    """Like ``is_applied``, with the requested B/T bank marker substituted."""
+    if marker not in ("B", "T"):
+        return False
+    marker_bytes = bytes([
+        0xA5, 0x5A, ord(marker), ord(marker) ^ 0xFF,
+    ])
+    for edit in patch["edits"]:
+        off = int(edit["off"])
+        expected = bytearray(bytes.fromhex(edit["data"]))
+        lo = max(off, BANK_MARKER_OFF)
+        hi = min(
+            off + len(expected),
+            BANK_MARKER_OFF + len(marker_bytes),
+        )
+        if lo < hi:
+            expected[lo - off:hi - off] = marker_bytes[
+                lo - BANK_MARKER_OFF:hi - BANK_MARKER_OFF
+            ]
+        if bytes(data[off:off + len(expected)]) != bytes(expected):
             return False
     return True
 
@@ -335,10 +360,10 @@ def build(base_data, patch_ids, patches=None, marker=None):
         raise PatchError(
             f"BASE REJECTED: {target} is not supported by patch(es): {', '.join(unsupported)}")
     if (target == "MS41.3"
-            and any(p["id"] == "cal_guard" for p in chosen)
+            and any(p["id"] in {"cal_guard", "brick_guard"} for p in chosen)
             and bytes(data[0x173BB:0x173C0]) != b"SS1v2"):
         raise PatchError(
-            "BASE REJECTED: CalGuard requires the strict SS1v2 calibration "
+            "BASE REJECTED: CalGuard/BrickGuard requires the strict SS1v2 calibration "
             "marker used by its runtime decision")
 
     err = check_base(data, target)
@@ -351,7 +376,11 @@ def build(base_data, patch_ids, patches=None, marker=None):
         for req in p.get("requires", []):
             # satisfied if the dependency is in this selection OR already applied on the base
             reqp = _all.get(req)
-            if req not in patch_ids and not (reqp and is_applied(data, reqp)):
+            already_applied = reqp and (
+                is_applied(data, reqp)
+                or is_applied_for_marker(data, reqp, marker)
+            )
+            if req not in patch_ids and not already_applied:
                 raise PatchError(f"'{p['id']}' requires '{req}' (add it to the selection, or install it first)")
         for con in p.get("conflicts", []):
             if con in patch_ids:

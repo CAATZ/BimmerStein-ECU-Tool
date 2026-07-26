@@ -7462,6 +7462,16 @@ class MS41FlashGUI(QMainWindow):
                     "\n\nRequired patch: " + ", ".join(required_names)
                     + ". Selecting this patch automatically selects available requirements."
                 )
+            replacement_names = [
+                definitions.get(replaced_id, {}).get(
+                    "title", replaced_id).split(" - ", 1)[0]
+                for replaced_id in p.get("replaces", [])
+            ]
+            if replacement_names:
+                user_tip += (
+                    "\n\nReplaces: " + ", ".join(replacement_names)
+                    + ". The replacement is composed in memory and flashed as one image."
+                )
             cb.setToolTip(user_tip)
             cb.setChecked(p["installed"])
             rlay.addWidget(cb)
@@ -7486,6 +7496,14 @@ class MS41FlashGUI(QMainWindow):
                     "are never removed automatically."
                 )
                 rlay.addWidget(requirement)
+            for replacement_name in replacement_names:
+                replacement = self._badge(
+                    f"REPLACES {replacement_name.upper()}",
+                    "#4d3524", "#ffc07a")
+                replacement.setToolTip(
+                    f"Selecting {p['title']} replaces an installed "
+                    f"{replacement_name} in the built image.")
+                rlay.addWidget(replacement)
             if p.get("needs_boot"):
                 bb = self._badge("BOOT REGION · Soft-BSL", "#3a2a55", "#c9a6ff")
                 bb.setToolTip("Writes the boot/parameter region (file 0x4000–0x5FFF). Enable "
