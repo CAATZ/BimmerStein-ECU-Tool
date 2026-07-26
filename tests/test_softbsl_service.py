@@ -687,7 +687,10 @@ def test_calguard_boot_mode_prearms_before_staged_5a(monkeypatch):
         for call in sb.calls if isinstance(call, tuple))
 
 
-def test_calguard_boot_prearm_repeats_raw_token_until_ack():
+def test_calguard_boot_prearm_repeats_raw_token_until_ack(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(softbsl_host.time, "sleep", sleeps.append)
+
     class FakeSerial:
         def __init__(self):
             self.writes = []
@@ -711,6 +714,7 @@ def test_calguard_boot_prearm_repeats_raw_token_until_ack():
     softbsl_host.SoftBSL(ds2, log=lambda *_args: None).prearm_calguard_boot()
 
     assert ds2._ser.writes == [b"\x5A\x9C\x9C", b"\x5A\x9C\x9C"]
+    assert sleeps == [0.05]
 
 
 def test_forced_direct_requires_a_known_flash_family(monkeypatch):
