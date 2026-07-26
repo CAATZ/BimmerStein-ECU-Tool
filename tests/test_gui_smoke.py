@@ -3114,7 +3114,7 @@ def test_transfer_mode_uses_native_ds2_without_softbsl_marker():
         w._update_transfer_mode()
         assert w._fast_read_available() is False
         assert w._auto_transfer_route() == "native_ds2"
-        assert "Native DS2 187,500" in w.lbl_transfer_mode.text()
+        assert w.lbl_transfer_mode.text() == "Transfer: Native DS2 (fast)"
     finally:
         w.close()
 
@@ -3420,7 +3420,7 @@ def test_finalizer_failure_hides_unsafe_retry_and_points_to_slow_recovery(
         assert w.btn_native_recovery.isHidden() is True
         assert w.btn_native_recovery.isEnabled() is False
         assert "entered finalization" in shown["args"][2]
-        assert "Force Slow DS2" in shown["args"][2]
+        assert "Force DS2 (slow)" in shown["args"][2]
         assert "hardware BSL recovery" in shown["args"][2]
     finally:
         w._native_write_recovery = None

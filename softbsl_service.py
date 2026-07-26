@@ -85,7 +85,7 @@ class SoftBSLFallbackExhausted(SoftBSLError):
         super().__init__(
             f"{label} exhausted the Soft-BSL baud fallback "
             f"({', '.join(tiers)}): {error}. For a tune or boot-preserving full-ROM "
-            "recovery, select 'Force Slow DS2 (ECU Recovery)' and retry. "
+            "recovery, select 'Force DS2 (slow)' and retry. "
             "Boot/identity/TOP operations still require Soft-BSL."
         )
 

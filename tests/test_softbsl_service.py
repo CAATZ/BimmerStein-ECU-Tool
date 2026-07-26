@@ -935,7 +935,7 @@ def test_read_image_reraises_when_even_low_baud_fails(monkeypatch):
         softbsl_service.read_image("COM1", "full", "high", lambda d, t: None, log=lambda *a: None)
         assert False, "expected SoftBSLError to propagate after the low-baud attempt"
     except softbsl_service.SoftBSLFallbackExhausted as error:
-        assert "Force Slow DS2 (ECU Recovery)" in str(error)
+        assert "Force DS2 (slow)" in str(error)
     # tried all three tiers: two set_baud (high, mid); low skips set_baud
     assert ("set_baud", "high") in sb.calls and ("set_baud", "mid") in sb.calls
 

@@ -3,7 +3,6 @@
   "status": "DEPRECATED",
   "superseded_by": "ignition_cut_v7",
   "tested": false,
-  "verification": "DEPRECATED: V2 compared CUTRPM with vehicle speed 0xF19A and also assumed P3.14 was a coil-charge output; later hardware-path tracing and on-car V6 testing disproved that actuator assumption. Retained only for detection/removal; superseded by ignition_cut_v7 at P1L.0..5 using actual RPM 0xFC3C.",
   "version": "V2",
   "title": "Ignition Cut",
   "description": "DEPRECATED and remove-only. This revision gated on vehicle speed at 0xF19A and skipped P3.14, which is not the six-cylinder ignition final stage. Retained only so an installed V2 can be detected and reverted before installing Ignition Cut V7.",

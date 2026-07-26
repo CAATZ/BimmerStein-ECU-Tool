@@ -5,7 +5,7 @@
   "title": "CalGuard compatibility + recovery guard",
   "user_description": "Fast compatibility guard with a short K-Line boot-recovery window.",
   "description": "E740-first exact-ID gate plus a bounded 0x5A/0x9C/0x9C recovery poll.",
-  "status": "EMULATOR VERIFIED - BENCH TEST REQUIRED",
+  "status": "BENCH TEST REQUIRED",
   "tested": false,
   "target": "MS41.3",
   "targets": [

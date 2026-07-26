@@ -4,7 +4,6 @@
   "deprecated": true,
   "superseded_by": "ignition_cut_v7",
   "tested": false,
-  "verification": "DEPRECATED after on-car failure: the downstream firmware rewrites the dwell values before output. Retained only for detection/removal; superseded by ignition_cut_v7.",
   "version": "V1",
   "title": "Ignition Cut",
   "description": "DEPRECATED and remove-only. Confirmed broken on-car because the live dwell values are rewritten after this splice. Retained only so an installed V1 can be detected and reverted before installing Ignition Cut V7.",

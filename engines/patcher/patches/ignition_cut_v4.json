@@ -4,7 +4,6 @@
   "tested": false,
   "deprecated": true,
   "superseded_by": "ignition_cut_v7",
-  "verification": "DEPRECATED. V4 corrected the RPM source but still used the non-live dwell/CAN path later proven unreachable on-car. Retained only for detection and removal; superseded by ignition_cut_v7.",
   "version": "V4",
   "title": "Ignition Cut",
   "description": "DEPRECATED and remove-only. V4 reads actual RPM but its dwell hook is not in the recurring ignition final-stage path. Retained only so an installed V4 can be detected and reverted before installing Ignition Cut V7.",
