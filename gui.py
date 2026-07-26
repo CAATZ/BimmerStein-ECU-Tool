@@ -650,7 +650,7 @@ class MS41FlashGUI(QMainWindow):
         self.setCentralWidget(self._main_scroll)
 
         # ── Connection bar ──────────────────────────────────────────────
-        conn_group = QGroupBox("ECU Connection  (BMW DS2 — 9600 8E2, K-Line or direct tap)")
+        conn_group = QGroupBox("ECU Connection")
         conn_lay = QVBoxLayout(conn_group)
         conn_controls = QHBoxLayout()
 
@@ -671,7 +671,7 @@ class MS41FlashGUI(QMainWindow):
         self.btn_connect.clicked.connect(self._on_connect_toggle)
         conn_controls.addWidget(self.btn_connect)
 
-        self.chk_direct_tap = QCheckBox("Direct tap (no echo)")
+        self.chk_direct_tap = QCheckBox("Direct tap")
         self.chk_direct_tap.setToolTip(
             "Full-duplex direct tap on the CPU's ASC0 pins (TxD0=P3.10, RxD0=P3.11) instead of the\n"
             "single-wire K-Line.  The K-Line echoes our TX back; a direct tap does not — so check\n"
@@ -709,10 +709,7 @@ class MS41FlashGUI(QMainWindow):
         self.log_view.setStyleSheet(
             "background:#1a1a1a; color:#d4d4d4; border:1px solid #444;"
         )
-        # FIXED (not just max) height: with only a max-height, Qt's layout would shrink this
-        # box below its natural size to satisfy whichever tab's page currently needs more room
-        # (tabs have differing minimum content height) — that's what made the log box (and
-        # everything below it, including the tab bar) visibly jump between tabs.
+        # A fixed height prevents tab-dependent layout jumps.
         self.log_view.setFixedHeight(120)
         btn_clear_log = QPushButton("Clear Log")
         btn_clear_log.setFixedHeight(22)
@@ -762,8 +759,7 @@ class MS41FlashGUI(QMainWindow):
         root.addWidget(self.tabs, 1)
 
         self._d2xx_ok = False   # resolved against the selected COM port after the UI is built
-        # Tab order is workflow-grouped: core read/write → diagnostics → advanced read/write &
-        # storage → editing → offline analysis → advanced/recovery last. (Display order = call order.)
+        # Build tabs in display order.
         self._build_flash_tab()        # Flash
         self._build_info_tab()         # ECU Info
         self._build_dtc_tab()          # DTC Codes
@@ -812,8 +808,7 @@ class MS41FlashGUI(QMainWindow):
         lay.addWidget(note)
         self._flash_chip_note = note
 
-        # Transfer-path indicator (auto: soft-BSL agent when installed + D2XX, else DS2). Sits at the
-        # top of the tab next to the chip note — it's read-only status, not an option.
+        # Read-only status for the automatically selected transfer path.
         self.lbl_transfer_mode = QLabel("Transfer: —")
         self.lbl_transfer_mode.setStyleSheet("color:#aaa; padding:0 4px 4px 4px;")
         lay.addWidget(self.lbl_transfer_mode)
@@ -857,7 +852,7 @@ class MS41FlashGUI(QMainWindow):
 
         # ── Checksum + verify row ─────────────────────────────────────────
         opt_row = QHBoxLayout()
-        self.chk_correct_cksum = QCheckBox("Correct checksums before write")
+        self.chk_correct_cksum = QCheckBox("Correct checksums")
         self.chk_correct_cksum.setChecked(True)
         self.chk_correct_cksum.setStyleSheet("color:#aaa; padding:4px;")
         self.chk_correct_cksum.setToolTip(
@@ -873,9 +868,9 @@ class MS41FlashGUI(QMainWindow):
         recovery_row = QHBoxLayout(self.grp_recovery_override)
         self.rb_recovery_auto = QRadioButton("Automatic")
         self.rb_recovery_auto.setChecked(True)
-        self.chk_force_slow_ds2 = QRadioButton("Force Slow DS2")
-        self.chk_force_softbsl = QRadioButton("Force Direct Soft-BSL (0x5A)")
-        self.rb_recovery_boot = QRadioButton("CalGuard boot recovery (OFF → ON)")
+        self.chk_force_slow_ds2 = QRadioButton("Force DS2 (slow)")
+        self.chk_force_softbsl = QRadioButton("Force Soft-BSL recovery")
+        self.rb_recovery_boot = QRadioButton("CalGuard boot recovery")
         self.rb_recovery_auto.setStyleSheet("color:#aaa; padding:4px;")
         for button in (
                 self.chk_force_slow_ds2, self.chk_force_softbsl,
@@ -905,14 +900,14 @@ class MS41FlashGUI(QMainWindow):
         # ── Boot-region write row (requires Soft-BSL) ──────────────────────
         boot_row = QHBoxLayout()
         self.chk_bootloader_write = QCheckBox(
-            "Allow boot/parameter-region writes (Full ROM only; brick-class)")
+            "Allow high-risk boot/parameter writes (Full ROM)")
         self.chk_bootloader_write.setStyleSheet("color:#e8c46a; padding:4px;")
         self.chk_bootloader_write.setEnabled(False)
         self.chk_bootloader_write.toggled.connect(self._update_boot_identity_checkbox_state)
         boot_row.addWidget(self.chk_bootloader_write)
 
         self.chk_boot_preserve_identity = QCheckBox(
-            "Preserve ECU VIN / ISN when writing boot region")
+            "Preserve ECU identity during boot writes")
         self.chk_boot_preserve_identity.setChecked(True)
         self.chk_boot_preserve_identity.setEnabled(False)
         self.chk_boot_preserve_identity.setStyleSheet("color:#aaa; padding:4px;")
@@ -926,14 +921,15 @@ class MS41FlashGUI(QMainWindow):
 
         # ── Verify + Calibration row ──────────────────────────────────────
         extra_row = QHBoxLayout()
-        self.chk_backup_before_write = QCheckBox("Back up before write (single read)")
+        self.chk_backup_before_write = QCheckBox("Back up before write")
         self.chk_backup_before_write.setStyleSheet("color:#aaa; padding:4px;")
         self.chk_backup_before_write.setToolTip(
             "Optional. Read the selected tune or full ROM once and save it in Bins "
             "before writing. The flash does not require a backup.")
         extra_row.addWidget(self.chk_backup_before_write, alignment=Qt.AlignTop)
-        self.chk_verify = QCheckBox("Verify flash after write  (reads back and compares byte-for-byte)")
+        self.chk_verify = QCheckBox("Verify after write")
         self.chk_verify.setStyleSheet("color:#aaa; padding:4px;")
+        self.chk_verify.setToolTip("Read back and compare the written bytes.")
         extra_row.addWidget(self.chk_verify, alignment=Qt.AlignTop)
         extra_row.addStretch()
         self.btn_native_recovery = self._op_btn(
@@ -1353,7 +1349,7 @@ class MS41FlashGUI(QMainWindow):
         self._start_session_log()
         self.lbl_status.setText("● Connected (CalGuard Recovery)")
         self.lbl_status.setStyleSheet("color:#5f5; font-weight:bold;")
-        self.lbl_variant.setText("Soft-BSL RAM agent")
+        self.lbl_variant.setText("Soft-BSL recovery")
         self.btn_connect.setText("Disconnect")
         self._update_transfer_mode()
         self._set_calguard_boot_buttons_enabled()
@@ -1715,41 +1711,41 @@ class MS41FlashGUI(QMainWindow):
         )
         if self._calguard_boot_session_active():
             self.lbl_transfer_mode.setText(
-                "Transfer: Retained CalGuard / Soft-BSL recovery session")
+                "Transfer: CalGuard recovery")
             self.lbl_transfer_mode.setStyleSheet("color:#9ece6a; padding:4px;")
             self.lbl_transfer_mode.setToolTip(
                 "The acknowledged key-on recovery session owns the port. Flash reads "
                 "and writes reuse this RAM agent without DS2 fallback or reopening COM.")
         elif self._calguard_boot_requested():
             self.lbl_transfer_mode.setText(
-                "Transfer: CalGuard boot recovery (connect with ignition OFF)")
+                "Transfer: CalGuard recovery (ignition OFF)")
             self.lbl_transfer_mode.setStyleSheet("color:#e8c46a; padding:4px;")
             self.lbl_transfer_mode.setToolTip(
                 "Connect will arm the raw CalGuard token, prompt for ignition ON, "
                 "and retain the Soft-BSL RAM agent after acknowledgement.")
         elif force_slow:
-            self.lbl_transfer_mode.setText("Transfer: DS2 9600 (forced ECU recovery)")
+            self.lbl_transfer_mode.setText("Transfer: DS2 (slow, forced)")
             self.lbl_transfer_mode.setStyleSheet("color:#e8c46a; padding:4px;")
             self.lbl_transfer_mode.setToolTip(
-                "Force Slow DS2 is selected. Automatic tune/full reads and "
+                "Slow DS2 is forced. Automatic tune/full reads and "
                 "boot-preserving writes bypass Soft-BSL and native-fast DS2.")
         elif self._force_softbsl_recovery():
             self.lbl_transfer_mode.setText(
-                "Transfer: Direct Soft-BSL 0x5A (forced recovery)")
+                "Transfer: Soft-BSL recovery (forced)")
             self.lbl_transfer_mode.setStyleSheet("color:#e8c46a; padding:4px;")
             self.lbl_transfer_mode.setToolTip(
                 "Forced recovery bypasses CalGuard/door detection and sends staged 0x5A "
                 "directly. It never sends 0x2A or falls back to DS2.")
         elif self._calguard_recovery_available():
             self.lbl_transfer_mode.setText(
-                "Transfer: Direct Soft-BSL 0x5A (CalGuard recovery, auto)")
+                "Transfer: Soft-BSL recovery")
             self.lbl_transfer_mode.setStyleSheet("color:#9ece6a; padding:4px;")
             self.lbl_transfer_mode.setToolTip(
                 "A read-only probe confirmed the CalGuard mismatch listener. Automatic "
                 "will revalidate it, then enter the installed Soft-BSL loader directly "
                 "without sending 0x2A.")
         elif self._fast_read_available():
-            self.lbl_transfer_mode.setText("Transfer: Soft-BSL RAM agent, high baud (fast, auto)")
+            self.lbl_transfer_mode.setText("Transfer: Soft-BSL (fast)")
             self.lbl_transfer_mode.setStyleSheet("color:#9ece6a; padding:4px;")
             self.lbl_transfer_mode.setToolTip(
                 "This ECU has the Soft-BSL loader and complete normal-mode 0x2A hook, "
@@ -1758,7 +1754,7 @@ class MS41FlashGUI(QMainWindow):
                 "link is noisy.")
         elif marker and not hook_present and self._native_fast_ds2_available():
             self.lbl_transfer_mode.setText(
-                "Transfer: Native DS2 187,500 — Soft-BSL hook not detected")
+                "Transfer: Native DS2 (Soft-BSL unavailable)")
             self.lbl_transfer_mode.setStyleSheet("color:#e8c46a; padding:4px;")
             self.lbl_transfer_mode.setToolTip(
                 "The Soft-BSL loader marker exists, but the complete normal-mode 0x2A "
@@ -1766,7 +1762,7 @@ class MS41FlashGUI(QMainWindow):
                 "reads and writes use native-fast DS2 with normal 9600 fallback.")
         elif self._native_fast_ds2_available():
             self.lbl_transfer_mode.setText(
-                "Transfer: Native DS2 187,500 (fast, direct; 9600 fallback)")
+                "Transfer: Native DS2 (fast)")
             self.lbl_transfer_mode.setStyleSheet("color:#9ece6a; padding:4px;")
             self.lbl_transfer_mode.setToolTip(
                 "The stock ECU is entered directly from normal DS2 using selector 0x01. "
@@ -1774,20 +1770,20 @@ class MS41FlashGUI(QMainWindow):
                 "communication before transfer. No 19,200 tier is used.")
         elif marker and not hook_present:
             self.lbl_transfer_mode.setText(
-                "Transfer: DS2 9600 — Soft-BSL hook not detected")
+                "Transfer: DS2 (Soft-BSL unavailable)")
             self.lbl_transfer_mode.setStyleSheet("color:#e8c46a; padding:4px;")
             self.lbl_transfer_mode.setToolTip(
                 "The Soft-BSL loader marker exists, but the complete normal-mode 0x2A "
                 "program hook was not confirmed. Soft-BSL entry is unavailable, and "
                 "D2XX native-fast DS2 is unavailable, so transfers use DS2 at 9600 baud.")
         elif marker:
-            self.lbl_transfer_mode.setText("Transfer: DS2 9600 (slow) — D2XX unavailable")
+            self.lbl_transfer_mode.setText("Transfer: DS2 (slow)")
             self.lbl_transfer_mode.setStyleSheet("color:#e8c46a; padding:4px;")
             self.lbl_transfer_mode.setToolTip(
                 "The Soft-BSL loader is present, but D2XX could not open the selected adapter. "
                 "High baud requires D2XX, so this connection uses DS2 at 9600 baud.")
         else:
-            self.lbl_transfer_mode.setText("Transfer: DS2 9600 (slow) — D2XX unavailable")
+            self.lbl_transfer_mode.setText("Transfer: DS2 (slow)")
             self.lbl_transfer_mode.setStyleSheet("color:#aaa; padding:4px;")
             self.lbl_transfer_mode.setToolTip(
                 "The selected adapter did not open through D2XX, so native fast DS2 is unavailable.")
@@ -6239,8 +6235,8 @@ class MS41FlashGUI(QMainWindow):
                 "through this retained session.\n\n"
                 "The adapter remains open for safety. When you are ready to abandon "
                 "this session, close the application, turn ignition OFF for at least "
-                "10 seconds, turn it ON, and reconnect with Force Slow DS2 (ECU "
-                "Recovery). If slow DS2 is unavailable, use hardware BSL recovery.",
+                "10 seconds, turn it ON, and reconnect with Force DS2 (slow). "
+                "If DS2 is unavailable, use hardware BSL recovery.",
             )
             return True
         self.btn_native_recovery.setVisible(True)
@@ -6788,7 +6784,7 @@ class MS41FlashGUI(QMainWindow):
                     f"Recovery failed during or after finalization:\n{error_msg}\n\n"
                     "The retained ECU handler is no longer qualified for another "
                     "erase/write replay. Close only when ready to cycle ignition and "
-                    "attempt Force Slow DS2 (ECU Recovery), or hardware BSL recovery.",
+                    "attempt Force DS2 (slow), or hardware BSL recovery.",
                 )
 
         self._run_task(task, on_success=on_success, on_failure=on_failure)
@@ -7299,7 +7295,7 @@ class MS41FlashGUI(QMainWindow):
         lay.addLayout(top)
 
         # ── non-destructive reads ──
-        rg = QGroupBox("Read flash  (non-destructive hardware-BSL dump)")
+        rg = QGroupBox("Read Flash")
         rg.setStyleSheet(_SECTION_GB)
         rg.setMaximumHeight(96)
         rl = QHBoxLayout(rg)
@@ -7326,7 +7322,7 @@ class MS41FlashGUI(QMainWindow):
         lay.addWidget(rg)
 
         # ── flash (preview -> frozen plan -> execute) ──
-        fg = QGroupBox("Flash  (erase + program + verify a region from a reference)")
+        fg = QGroupBox("Flash Region")
         fg.setStyleSheet(_SECTION_GB)
         fl = QVBoxLayout(fg)
         r1 = QHBoxLayout()
@@ -8110,7 +8106,7 @@ class MS41FlashGUI(QMainWindow):
                     + "\n".join(f"  • {name}" for name in untested_names)
                     + ignition_cut_warning
                     + "\n\n"
-                    "Emulator verification does not replace vehicle testing. Continue?",
+                    "These patches have not completed vehicle testing. Continue?",
                     QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
                 return
         if selected:

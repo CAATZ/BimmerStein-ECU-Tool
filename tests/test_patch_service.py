@@ -69,7 +69,7 @@ def test_available_patches_filters_by_version():
     assert "@0x" not in cg["user_description"]
     assert next(p for p in avail if p["id"] == "alphan_failsafe")["tested"] is False
     ic = next(p for p in avail if p["id"] == "ignition_cut_v7")
-    assert ic["status"] == "EMULATOR VERIFIED - ON-CAR TEST REQUIRED"
+    assert ic["status"] == "VEHICLE TEST REQUIRED"
     assert ic["tested"] is False
     assert ic["legacy"] == []                          # clean ref base has no predecessor installed
 
@@ -154,7 +154,7 @@ def test_ms410_vanos_patch_is_selectable_and_hardware_tested():
     assert patch["status"] == "TESTED"
     assert patch["tested"] is True
     assert definition["tested"] is True
-    assert "proven working on-car" in definition["verification"]
+    assert "tested on a vehicle" in patch["user_description"]
     assert "UNTESTED" not in patch["title"]
 
 
@@ -407,8 +407,7 @@ def test_deprecated_calguard_is_detected_removed_and_replaced_by_v4(
     assert available[legacy_id]["removable"] is True
     assert available["cal_guard"]["installed"] is False
     assert available["cal_guard"]["version"] == "V4"
-    assert available["cal_guard"]["status"] == (
-        "EMULATOR VERIFIED - BENCH TEST REQUIRED")
+    assert available["cal_guard"]["status"] == "BENCH TEST REQUIRED"
     assert available["cal_guard"]["legacy"] == [{
         "id": legacy_id,
         "label": legacy_label,

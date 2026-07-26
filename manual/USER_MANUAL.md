@@ -129,7 +129,7 @@ The shared log and progress controls remain visible below it.
 
 ### Normal K-Line versus direct tap
 
-- Leave **Direct tap (no echo)** clear for a normal single-wire K-Line or OBD-II adapter.
+- Leave **Direct tap** clear for a normal single-wire K-Line or OBD-II adapter.
 - Select it only for a full-duplex ASC0 connection that does not echo transmitted bytes.
 - Choose the wiring mode before connecting. It is locked while a session owns the port.
 - Hardware BSL has its own COM selector because it normally uses a separate adapter and wiring.
@@ -181,11 +181,11 @@ active session for recovery instead of changing transports.
 
 ### Write options
 
-- **Correct checksums before write** is enabled by default. MS41.3 boot and calibration checksums
+- **Correct checksums** is enabled by default. MS41.3 boot and calibration checksums
   are corrected; its program checksum remains unchanged because stock program verification is
   disabled.
 - **Back up before write** is optional and follows the operator's selection.
-- **Verify flash after write** controls host-side byte-for-byte read-back verification.
+- **Verify after write** controls host-side byte-for-byte read-back verification.
 - ECU-side flash finalization is independent of the optional host Verify checkbox.
 - Boot/parameter writes remain separately armed because they carry a larger recovery risk.
 
@@ -323,7 +323,7 @@ checksums, and archives the composed image into Bins.
 - **Installed** means the patch signature is present in the loaded image.
 - **Deprecated - remove only** identifies a historical revision retained for safe detection and
   removal. Deprecated descriptors are not offered for a new installation.
-- **Untested** means emulator validation exists but physical vehicle testing has not been completed.
+- **Untested** means physical vehicle testing has not been completed.
 - Boot-region patches require a transfer path that can actually deliver their bytes.
 
 Ignition Cut V7, Launch Control ignition mode, and AlphaN MAF-failsafe intentionally remain
@@ -332,8 +332,8 @@ Launch Control V4 fuel mode held its configured 4000 RPM setpoint during
 vehicle testing before the MS41.3 V5 calibration relocation; V5 requires an
 on-car retest. Field-failed Ignition Cut V6 remains visible only when installed
 so it can be removed before V7 is applied.
-Applying one requires an explicit confirmation. Do not treat emulator verification as proof of
-safe behavior on an engine.
+Applying one requires an explicit confirmation. Do not treat offline validation as proof of safe
+behavior on an engine.
 
 > [!DANGER]
 > **IGNITION CUT HAZARD.** Ignition Cut V7 is in a very early stage. It will cause fuel-related,

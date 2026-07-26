@@ -44,7 +44,7 @@ shared by BimmerStein applications.
 - Ported persistent Soft-BSL installation and its firmware-specific normal-mode
   entry hooks to MS41.0 and MS41.1.
 - Ported Ignition Cut V7 and Launch Control V4 to MS41.0 and MS41.1, with
-  firmware-specific splice sites, collision checks, and emulator gates.
+  firmware-specific splice sites, collision checks, and offline verification gates.
 - Added the closed-throttle VANOS minimum-RPM retrofit to MS41.1 and expanded
   the bundled RomRaider patch definitions for MS41.0 and MS41.1 partial and
   full-ROM images.

@@ -148,7 +148,7 @@ and prepared target are retained for same-session recovery instead of reopening 
 transports.
 
 The Flash tab does not enforce a backup or host read-back verification. **Back up before write** and
-**Verify flash after write** follow the operator's selections. ECU-side finalization remains part of
+**Verify after write** follow the operator's selections. ECU-side finalization remains part of
 every successful DS2 write and is separate from optional host byte-for-byte verification.
 
 ## Firmware patches

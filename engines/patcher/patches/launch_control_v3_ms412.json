@@ -6,7 +6,6 @@
   "superseded_by": "launch_control_v4_ms412",
   "status": "DEPRECATED - REMOVE BEFORE V4",
   "tested": false,
-  "verification": "MS41.2 shares both DB87 compare sites with MS41.3, but V3 remained coupled to the later field-failed Ignition Cut V6 P3.14 actuator assumption and derived its hard threshold from the stock redline gap. Retained only for detection/removal before Launch Control V4 plus Ignition Cut V7.",
   "version": "V3",
   "title": "Launch Control / 2-step",
   "description": "DEPRECATED and remove-only. MS41.2 V3 retained the launch latch and stock fuel-limiter state machine but derived its hard boundary from the stock DB87-DB86 gap. Its ignition mode requires the now field-failed Ignition Cut V6 descriptor. Remove V3 and V6 before installing Launch Control V4 with Ignition Cut V7.",

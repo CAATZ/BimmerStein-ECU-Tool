@@ -2,7 +2,6 @@
   "id": "ignition_cut_v6",
   "status": "DEPRECATED - FIELD FAILED",
   "tested": false,
-  "verification": "DEPRECATED after on-car testing: ignition cut produced no effect. The prior emulator gate proved that file 0x2B518 executes and that the cave skips P3.14, but the hardware trace was wrong: P3.14 is not one of the six ignition final-stage outputs. Superseded by ignition_cut_v7 at the proven active-low P1L.0..5 coil-charge commands.",
   "version": "V6",
   "title": "Ignition Cut",
   "user_description": "DEPRECATED and remove-only. On-car testing confirmed that this revision does not interrupt spark. Remove it before installing Ignition Cut V7.",
