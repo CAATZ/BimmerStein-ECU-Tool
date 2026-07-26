@@ -1201,6 +1201,15 @@ def test_patches_tab_lists_the_ms41_3_patches():
         }
         assert "V7" in pending_badges
         assert "UNTESTED" in pending_badges
+        calguard_badges = {
+            label.text()
+            for label in w._patch_rows["cal_guard"].findChildren(gui.QLabel)
+        }
+        assert "BOOT · SOFT-BSL" in calguard_badges
+        assert all("BOOT REGION" not in badge for badge in calguard_badges)
+        assert "Fast compatibility guard." in (
+            w._patch_checkboxes["cal_guard"].toolTip()
+        )
         assert "0x3992A" not in w._patch_checkboxes["ignition_cut_v7"].toolTip()
         assert "configurable ignition-cut rev limiter" in (
             w._patch_checkboxes["ignition_cut_v7"].toolTip())

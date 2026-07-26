@@ -59,7 +59,10 @@ def test_available_patches_filters_by_version():
     assert len(avail) == 7                            # the 7 user-facing MS41.3 patches
     cg = next(p for p in avail if p["id"] == "cal_guard")
     assert cg["ok"] is True and cg["title"] and cg["target"] == "MS41.3"
-    assert "recoverable flash-listen mode" in cg["user_description"]
+    assert cg["user_description"] == (
+        "Fast compatibility guard. Keeps incompatible program/calibration "
+        "combinations in recoverable DS2 flash-listen mode."
+    )
     assert "@0x" not in cg["user_description"]
     assert next(p for p in avail if p["id"] == "alphan_failsafe")["tested"] is False
     ic = next(p for p in avail if p["id"] == "ignition_cut_v7")

@@ -74,7 +74,7 @@ def recompute_flags(patch, target):
 def load_patches():
     out = {}
     for p in sorted(glob.glob(os.path.join(PATCH_DIR, "*.json"))):
-        d = json.load(open(p))
+        d = json.load(open(p, encoding="utf-8"))
         out[d["id"]] = d
     return out
 

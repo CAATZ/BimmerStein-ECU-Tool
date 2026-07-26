@@ -7454,6 +7454,10 @@ class MS41FlashGUI(QMainWindow):
         self._patch_placeholder.setVisible(False)
         self._patch_entries = {patch["id"]: patch for patch in avail}
         definitions = patch_service.definitions()
+        short_names = {
+            "softbsl_loader": "Soft-BSL",
+            "cal_guard": "CalGuard",
+        }
         for p in avail:
             row = QWidget()
             rlay = QHBoxLayout(row)
@@ -7487,11 +7491,21 @@ class MS41FlashGUI(QMainWindow):
                     p["status"] or "This patch has not been validated on a vehicle.")
                 rlay.addWidget(untested_badge)
             elif p["status"]:
-                rlay.addWidget(self._badge(p["status"], "#2a2a2a", "#aaa"))
+                status_badge = self._badge(
+                    p["status"].split(" · ", 1)[0], "#2a2a2a", "#aaa")
+                status_badge.setToolTip(p["status"])
+                rlay.addWidget(status_badge)
             for required_id, required_name in zip(
                     p.get("requires", []), required_names):
+                required_short = required_name
+                if required_id in short_names:
+                    required_short = (
+                        f"{short_names[required_id]} "
+                        f"{definitions.get(required_id, {}).get('version', '')}"
+                    ).strip()
                 requirement = self._badge(
-                    f"REQUIRES {required_name.upper()}", "#24384d", "#8fc7ff")
+                    f"REQUIRES {required_short.upper()}",
+                    "#24384d", "#8fc7ff")
                 requirement.setToolTip(
                     f"{p['title']} requires {required_name}. Selecting this patch also "
                     "selects that requirement when it is available. Conflicting selections "
@@ -7499,7 +7513,7 @@ class MS41FlashGUI(QMainWindow):
                 )
                 rlay.addWidget(requirement)
             if p.get("needs_boot"):
-                bb = self._badge("BOOT REGION · Soft-BSL", "#3a2a55", "#c9a6ff")
+                bb = self._badge("BOOT · SOFT-BSL", "#3a2a55", "#c9a6ff")
                 bb.setToolTip("Writes the boot/parameter region (file 0x4000–0x5FFF). Enable "
                               "boot-region writes on the Flash tab, or use hardware BSL recovery; "
                               "plain DS2 cannot deliver these bytes.")
@@ -7517,8 +7531,9 @@ class MS41FlashGUI(QMainWindow):
                     dependent_names = []
                     for pid in required_by:
                         dependent = definitions.get(pid, {})
-                        dependent_title = dependent.get("title", pid).split(
-                            " - ", 1)[0].split(" / ", 1)[0]
+                        dependent_title = short_names.get(
+                            pid, dependent.get("title", pid).split(
+                                " - ", 1)[0].split(" / ", 1)[0])
                         dependent_names.append(
                             f"{dependent_title} {dependent.get('version', '')}".strip())
                     joined = ", ".join(dependent_names)
