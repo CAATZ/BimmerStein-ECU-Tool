@@ -593,6 +593,7 @@ class SoftBSL:
             if ack == bytes((ACK,)):
                 self.log(
                     f"CalGuard boot recovery caught after {attempts} token attempts.")
+                time.sleep(0.05)  # let the stock listener initialize before its first DS2 frame
                 return
         raise SoftBSLError(
             "CalGuard boot recovery was not acknowledged. Confirm CalGuard V4 and "
