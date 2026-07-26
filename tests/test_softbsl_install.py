@@ -590,12 +590,7 @@ def test_persistent_composer_builds_ms412_and_migrates_deprecated_loaders():
     }
 
     patches = patch_ms41.load_patches()
-    for old_id in (
-        "softbsl_loader_legacy",
-        "softbsl_loader_relocated_v1",
-        "softbsl_loader_v2",
-        "softbsl_loader_v3_bench_failed",
-    ):
+    for old_id in ("softbsl_loader_legacy", "softbsl_loader_relocated_v1"):
         old, _ = patch_ms41.build(ref("MS41.3"), [old_id])
         migrated, _ids, _ = softbsl_install.compose_persistent_target(
             old, with_calguard=False, marker="B", chip="29f400")
@@ -624,27 +619,22 @@ def test_persistent_composer_builds_older_softbsl_ports(version, door_id):
     }
 
 
-def test_repaired_loader_uses_the_generated_flag_independent_crc_bytes():
+def test_fixed_relocated_loader_restores_the_hardware_proven_crc_bytes():
     from engines.patcher import patch_ms41
     from tests.conftest import ref
 
     patches = patch_ms41.load_patches()
     current, _ = patch_ms41.build(ref("MS41.3"), ["softbsl_loader"])
-    failed, _ = patch_ms41.build(
-        ref("MS41.3"), ["softbsl_loader_v3_bench_failed"]
-    )
-    repaired = bytes.fromhex(
-        Path(
-            "engines/softbsl/loader_sa1_relocated_crc.hex"
-        ).read_text().strip()
-    )
+    broken, _ = patch_ms41.build(ref("MS41.3"), ["softbsl_loader_relocated_v1"])
+    proven = bytes.fromhex(
+        "f075e6f500d8e6f6ffff40572d0fa985c0845064e08df04668417c1648402d02"
+        "56f601a028d13df708510defc2f427e45c84c2f528e4704540643d02e108db00"
+        "e118db00")
 
-    assert current[0x5C52:0x5C52 + len(repaired)] == repaired
+    assert current[0x5C32:0x5C32 + len(proven)] == proven
     assert patch_ms41.is_applied(current, patches["softbsl_loader"])
-    assert patch_ms41.is_applied(
-        failed, patches["softbsl_loader_v3_bench_failed"]
-    )
-    assert failed[0x5C52:0x5C52 + len(repaired)] != repaired
+    assert patch_ms41.is_applied(broken, patches["softbsl_loader_relocated_v1"])
+    assert broken[0x5C32:0x5C32 + len(proven)] != proven
 
 
 @pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
@@ -669,9 +659,7 @@ def test_installer_composes_relocated_loader_for_both_flash_families(
             assert patch_ms41.is_applied(image, patches["softbsl_loader"])
             assert image[0x55A0:0x55A4] == bytes.fromhex("da00921d")
             assert image[0x5D36:0x5D92] == stock[0x5D36:0x5D92]
-            assert image[0x4412:0x4416] == bytes.fromhex("ca00ea1f")
-            assert image[0x5C32:0x5C36] == bytes.fromhex("000001cc")
-            assert image[0x5C52:0x5C56] == bytes.fromhex("40452d13")
+            assert image[0x5C32:0x5C36] == bytes.fromhex("f075e6f5")
             assert image[0x5D92:0x5D96] == bytes.fromhex("f3f853e6")
             assert image[0x5FC4:0x5FC8] == bytes.fromhex("4fd87eb7")
 
@@ -687,12 +675,12 @@ def test_installer_composes_relocated_loader_for_both_flash_families(
 
         amd_tail = patches["amd_flash"]["edits"][-1]
         amd_end = amd_tail["off"] + len(bytes.fromhex(amd_tail["data"]))
-        loader_table = next(edit for edit in patches["softbsl_loader"]["edits"]
-                            if edit["off"] == 0x5C32)
+        loader_crc = next(edit for edit in patches["softbsl_loader"]["edits"]
+                          if edit["off"] == 0x5C32)
         guard = patches["cal_guard"]
         guard_body = next(edit for edit in guard["edits"]
                           if edit["off"] == guard["cave"]["base"])
-        assert amd_end == loader_table["off"] == 0x5C32
+        assert amd_end == loader_crc["off"] == 0x5C32
         assert guard_body["off"] + len(bytes.fromhex(guard_body["data"])) == 0x5FC4
     finally:
         if args.target:
@@ -706,17 +694,10 @@ def test_reinstall_displaces_shared_alpha_n_cave_only_in_bootstrap():
 
     stock = ref("MS41.3")
     current, _ = patch_ms41.build(
-        stock,
-        [
-            "softbsl_loader_v3_bench_failed",
-            "cal_guard_v4_bench_failed",
-            "door_magic",
-            "alphan_failsafe",
-        ],
-    )
+        stock, ["softbsl_loader_legacy", "door_magic", "cal_guard", "alphan_failsafe"])
     args = softbsl_install._sb.InstallRequest(
         port="COM_TEST", prompt=lambda _message: None, base=current, chip="29f400",
-        with_calguard=True, confirm_reinstall=lambda _message: True)
+        confirm_reinstall=lambda _message: True)
     try:
         softbsl_install._sb._install_resolve_images(args)
         bootstrap = Path(args.bootstrap).read_bytes()
@@ -759,8 +740,7 @@ def test_final_install_verifier_reads_every_relocated_loader_component(
 
     assert {(address ^ softbsl_install._sb.DESCR, length)
             for address, length in reads} >= {
-        (0x4412, 4), (0x55A0, 4), (0x5C32, 4),
-        (0x5C52, 4), (0x5D92, 4), (0x5FC4, 4),
+        (0x55A0, 4), (0x5C32, 4), (0x5D92, 4), (0x5FC4, 4),
     }
     bootstrap_door_id, persistent_door_id = softbsl_install._sb._door_patch_ids(
         version)

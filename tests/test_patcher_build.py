@@ -6,10 +6,8 @@ from tests.conftest import ref
 import pytest
 
 
-def test_build_applies_integrity_pair_and_recomputes_bootcrc():
-    out, log = patch_ms41.build(
-        ref("MS41.3"), ["softbsl_loader", "cal_guard"]
-    )
+def test_build_applies_cal_guard_and_recomputes_bootcrc():
+    out, log = patch_ms41.build(ref("MS41.3"), ["cal_guard"])
     assert len(out) == patch_ms41.FULL
     patches = patch_ms41.load_patches()
     for e in patches["cal_guard"]["edits"]:
@@ -17,18 +15,6 @@ def test_build_applies_integrity_pair_and_recomputes_bootcrc():
         assert out[off:off + len(d)] == d, f"edit @0x{off:05X} not applied"
     assert checksum.bootloader_checksum_ok(bytearray(out)) is True
     assert isinstance(log, list) and any("cal_guard" in line for line in log)
-
-
-def test_build_applies_optional_brickguard_pair():
-    out, log = patch_ms41.build(
-        ref("MS41.3"), ["softbsl_loader", "brick_guard"]
-    )
-    patches = patch_ms41.load_patches()
-
-    assert patch_ms41.is_applied(out, patches["softbsl_loader"])
-    assert patch_ms41.is_applied(out, patches["brick_guard"])
-    assert checksum.bootloader_checksum_ok(bytearray(out)) is True
-    assert any("brick_guard" in line for line in log)
 
 
 def test_build_rejects_wrong_base():
@@ -46,16 +32,11 @@ def test_build_rejects_unknown_and_mixed_target():
     with pytest.raises(patch_ms41.PatchError):
         patch_ms41.build(ref("MS41.3"), ["not_a_patch"])
     with pytest.raises(patch_ms41.PatchError):
-        patch_ms41.build(
-            ref("MS41.3"),
-            ["softbsl_loader", "cal_guard", "vanos_minrpm_ms410"],
-        )  # .3 + .0 targets
+        patch_ms41.build(ref("MS41.3"), ["cal_guard", "vanos_minrpm_ms410"])  # .3 + .0 targets
 
 
 def test_build_does_not_write_files(tmp_path):
     # build() is pure — returns bytes, touches no disk
     before = set(os.listdir(tmp_path))
-    patch_ms41.build(
-        ref("MS41.3"), ["softbsl_loader", "cal_guard"]
-    )
+    patch_ms41.build(ref("MS41.3"), ["cal_guard"])
     assert set(os.listdir(tmp_path)) == before
