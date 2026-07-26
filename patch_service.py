@@ -106,6 +106,7 @@ def available_patches(data):
                 "status": p.get("status", "DEPRECATED"),
                 "tested": p.get("tested"),
                 "requires": [], "conflicts": p.get("conflicts", []),
+                "replaces": [],
                 "ok": False, "badge": "DEPRECATED - installed; remove recommended",
                 "installed": True, "needs_boot": patch_ms41.needs_boot_write(p),
                 "deprecated": True, "removable": not required_by,
@@ -126,6 +127,7 @@ def available_patches(data):
             "tested": p.get("tested"),
             "requires": p.get("requires", []),
             "conflicts": p.get("conflicts", []),
+            "replaces": p.get("replaces", []),
             "ok": len(errs) == 0,
             "badge": "OK" if not errs else "; ".join(errs),
             "installed": installed,
@@ -184,7 +186,23 @@ def revert_patch(base_data, patch_id):
 def build_image(base_data, selected_ids, marker=None):
     """Compose the selected patches onto base_data. Returns (bytes, log_lines).
     Raises patch_ms41.PatchError on any rejection (bad base, collision, expect mismatch...)."""
-    return patch_ms41.build(bytes(base_data), list(selected_ids), marker=marker)
+    selected_ids = list(selected_ids)
+    patches = patch_ms41.load_patches()
+    data = bytes(base_data)
+    log = []
+    for patch_id in selected_ids:
+        patch = patches.get(patch_id, {})
+        for replaced_id in patch.get("replaces", []):
+            if replaced_id in selected_ids:
+                continue
+            replaced = patches.get(replaced_id)
+            if replaced and patch_ms41.is_applied(data, replaced):
+                data = patch_ms41.revert(data, replaced)
+                log.append(
+                    f"replaced installed '{replaced_id}' with '{patch_id}'")
+    out, build_log = patch_ms41.build(
+        data, selected_ids, patches=patches, marker=marker)
+    return out, log + build_log
 
 
 # SA1 / boot window (file offsets) — the region DS2 and un-armed soft-BSL never write.
@@ -197,8 +215,14 @@ def boot_write_patches_in(image):
     """IDs of patches present in `image` that write the boot/SA1 region (file 0x4000-0x5FFF).
     Those bytes are not written by DS2 or an un-armed soft-BSL flash."""
     patches = patch_ms41.load_patches()
-    return sorted(pid for pid, p in patches.items()
-                  if patch_ms41.needs_boot_write(p) and patch_ms41.is_applied(image, p))
+    _version, installed_ids, shadowed_ids = _installed_patch_state(
+        image, patches
+    )
+    return sorted(
+        patch_id
+        for patch_id in installed_ids - shadowed_ids
+        if patch_ms41.needs_boot_write(patches[patch_id])
+    )
 
 
 def boot_patch_read_ranges(image):

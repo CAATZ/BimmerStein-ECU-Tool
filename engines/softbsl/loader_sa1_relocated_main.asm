@@ -8,7 +8,7 @@
 ; Helper entry points:
 ;   s_rx        CPU 0x1FC4 / file 0x5FC4
 ;   s_tx        CPU 0x1FD8 / file 0x5FD8
-;   crc16_check CPU 0x1C32 / file 0x5C32
+;   crc16_check CPU 0x0412 / file 0x4412
 base 0x1D92
 
 ldr:    movb RL4,0xE653
@@ -35,7 +35,7 @@ sr_lp:  cmp r12,#0
         add r5,#1
         sub r12,#1
         jmpr cc_UC,sr_lp
-sr_crc: calls 0x1C32
+sr_crc: calls 0x0412
         cmpb RL4,#0
         jmpr cc_NE,sr_bad
         movb RL4,#0x06

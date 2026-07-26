@@ -94,7 +94,10 @@ HALF_NAME = {"T": "top/golden", "B": "bottom/working"}
 _DEPRECATED_LOADER_IDS = (
     "softbsl_loader_legacy",
     "softbsl_loader_relocated_v1",
+    "softbsl_loader_v2",
+    "softbsl_loader_v3_bench_failed",
 )
+_DEPRECATED_GUARD_IDS = ("cal_guard_v4_bench_failed",)
 _DOOR_PATCH_IDS = {
     "MS41.0": ("door_0x43_ms410", "door_magic_ms410"),
     "MS41.1": ("door_0x43_ms411", "door_magic_ms411"),
@@ -2392,9 +2395,12 @@ def _verify_install(args, target):
     spots = [
         ("boot/param1 bank-ID marker @0x5FFC", 0x5FFC, 4),
         ("boot/param1 0x5A hook @0x55A0", 0x55A0, 4),
-        ("boot/param1 loader CRC helper @0x5C32", 0x5C32, 4),
+        ("boot/param1 loader CRC wrapper @0x4412", 0x4412, 4),
+        ("boot/param1 loader CRC table @0x5C32", 0x5C32, 4),
+        ("boot/param1 shared CRC core @0x5C52", 0x5C52, 4),
         ("boot/param1 loader main @0x5D92", 0x5D92, 4),
         ("boot/param1 loader I/O helper @0x5FC4", 0x5FC4, 4),
+        ("boot/param1 CRC prepare @0x5FEA", 0x5FEA, 4),
         (f"program door        @0x{persistent_off:05X}", persistent_off, 4),
         (f"program 0x43 slot   @0x{bootstrap_off:05X}", bootstrap_off, 4),
     ]
@@ -2602,32 +2608,18 @@ def _compose_image(base_bytes, patch_ids, *, marker=None, return_log=False):
     """
     try:
         from engines.patcher.patch_ms41 import (
-            PatchError, build, is_applied, load_patches,
+            PatchError, build, is_applied, is_applied_for_marker,
+            load_patches,
         )
     except ImportError as e:
         raise SoftBSLError(f"patch module could not be loaded: {e}") from e
     try:
         patches = load_patches()
         def applied_for_target(patch):
-            if is_applied(base_bytes, patch):
-                return True
-            if marker not in ("B", "T"):
-                return False
-            # softbsl_loader owns the default B marker as one of its edits. A golden-TOP image
-            # intentionally overrides only those four bytes to T after applying the loader, so
-            # ordinary is_applied() reports a false partial. Compare every edit with the requested
-            # marker substituted at the overlap instead.
-            marker_bytes = bytes([0xA5, 0x5A, ord(marker), ord(marker) ^ 0xFF])
-            for edit in patch["edits"]:
-                off = int(edit["off"])
-                expected = bytearray(bytes.fromhex(edit["data"]))
-                lo = max(off, MARKER_OFF)
-                hi = min(off + len(expected), MARKER_OFF + len(marker_bytes))
-                if lo < hi:
-                    expected[lo - off:hi - off] = marker_bytes[lo - MARKER_OFF:hi - MARKER_OFF]
-                if bytes(base_bytes[off:off + len(expected)]) != bytes(expected):
-                    return False
-            return True
+            return (
+                is_applied(base_bytes, patch)
+                or is_applied_for_marker(base_bytes, patch, marker)
+            )
 
         missing = [patch_id for patch_id in patch_ids
                    if not applied_for_target(patches[patch_id])]
@@ -2893,6 +2885,10 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
             # legacy loader and the non-triggering first relocation. Restore each revision's
             # declared pre-patch bytes before composing the current CRC loader.
             clean_base = bytes(revert(clean_base, old_loader))
+    for old_guard_id in _DEPRECATED_GUARD_IDS:
+        old_guard = patch_defs.get(old_guard_id)
+        if old_guard and is_applied(clean_base, old_guard):
+            clean_base = bytes(revert(clean_base, old_guard))
     if is_applied(clean_base, patch_defs[bootstrap_door_id]):
         clean_base = bytes(revert(clean_base, patch_defs[bootstrap_door_id]))
     patch_ids = (["softbsl_loader", persistent_door_id]
@@ -3058,6 +3054,11 @@ def _install_resolve_images(args):
         patch_id for patch_id in _DEPRECATED_LOADER_IDS
         if patch_id in patch_defs and _patch_state(base, patch_defs[patch_id]) == "applied"
     ]
+    old_guards_installed = [
+        patch_id for patch_id in _DEPRECATED_GUARD_IDS
+        if patch_id in patch_defs
+        and _patch_state(base, patch_defs[patch_id]) == "applied"
+    ]
     confirm_patches = list(relevant_patches)
     if old_loaders_installed:
         confirm_patches = [pid for pid in confirm_patches if pid != "softbsl_loader"]
@@ -3066,6 +3067,17 @@ def _install_resolve_images(args):
             _emit("  non-triggering relocated loader v1 detected: migrating to the current CRC implementation")
         if "softbsl_loader_legacy" in old_loaders_installed:
             _emit("  legacy loader @0x5D36 detected: migrating to the descriptor-safe relocated layout")
+        if "softbsl_loader_v2" in old_loaders_installed:
+            _emit("  Soft-BSL V2 detected: migrating to the V9 loader")
+        if "softbsl_loader_v3_bench_failed" in old_loaders_installed:
+            _emit("  bench-failed Soft-BSL V3 detected: migrating to V9")
+    if old_guards_installed:
+        confirm_patches = [
+            pid for pid in confirm_patches if pid != "cal_guard"
+        ]
+        confirm_patches.extend(old_guards_installed)
+        _emit("  bench-failed CalGuard V4 detected: restoring its exact "
+              "pre-patch bytes before composition")
     _confirm_reinstall(
         args, base, patch_defs, confirm_patches,
         bootstrap_door_id=bootstrap_door_id)

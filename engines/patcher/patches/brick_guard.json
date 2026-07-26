@@ -1,0 +1,146 @@
+{
+  "id": "brick_guard",
+  "label": "Full boot integrity guard",
+  "version": "V1",
+  "title": "BrickGuard full integrity",
+  "user_description": "CalGuard compatibility checks plus boot, program, and calibration CRC verification. Adds approximately 0.95 seconds to ECU startup (measured on an MS41.1 bench ECU).",
+  "description": "Optional E740-first full integrity guard using the shared Soft-BSL V9 CRC engine.",
+  "status": "EMULATOR-VERIFIED · BENCH TEST REQUIRED",
+  "tested": false,
+  "target": "MS41.3",
+  "targets": [
+    "MS41.0",
+    "MS41.1",
+    "MS41.2",
+    "MS41.3"
+  ],
+  "recompute": [
+    "boot_crc",
+    "program"
+  ],
+  "requires": [
+    "softbsl_loader"
+  ],
+  "conflicts": [
+    "cal_guard"
+  ],
+  "replaces": [
+    "cal_guard"
+  ],
+  "supersedes": [],
+  "cave": {
+    "region": "boot-only-fragmented-softbsl-compatible",
+    "base": 24080,
+    "splice_off": 18746,
+    "splice_op": "jmpa",
+    "relocatable": false,
+    "main_base": 24080,
+    "main_cpu": 7696,
+    "main_limit": 436,
+    "main_used": 436,
+    "helpers": {
+      "compatibility_loop": {
+        "file_base": 23691,
+        "cpu_base": 7307,
+        "used": 16
+      },
+      "compatibility_entry": {
+        "file_base": 24064,
+        "cpu_base": 7680,
+        "used": 16
+      },
+      "find_end": {
+        "file_base": 23711,
+        "cpu_base": 7327,
+        "used": 18
+      },
+      "cal_ids": {
+        "file_base": 24504,
+        "cpu_base": 8120,
+        "used": 12
+      }
+    },
+    "shared_crc_core": 7250,
+    "symbols": {
+      "cal_chain": 8028,
+      "cal_id_loop": 7830,
+      "cal_ids": 8120,
+      "cal_legacy": 7804,
+      "check_legacy_suffix": 7816,
+      "class_fail": 7842,
+      "classified": 7862,
+      "cleanup": 8084,
+      "compare_compatibility": 7848,
+      "compatibility_done": 7319,
+      "compatibility_loop": 7307,
+      "compatibility_match": 7680,
+      "crc_byte": 7250,
+      "crc_done": 7292,
+      "crc_range": 7250,
+      "fail": 8082,
+      "find_end": 7327,
+      "find_end_done": 7343,
+      "legacy_supported": 7844,
+      "pass": 8078,
+      "program_compare": 7998,
+      "softbsl_crc16_check": 1042,
+      "softbsl_crc_bad": 1066,
+      "softbsl_crc_prepare": 8170,
+      "upper_crc_call": 7986,
+      "upper_crc_page": 7966,
+      "upper_find_page": 7930,
+      "upper_found": 7960,
+      "upper_full_page": 7982
+    },
+    "find_end": 7327,
+    "crc_table_file": 23602,
+    "crc_table_size": 32
+  },
+  "edits": [
+    {
+      "off": 18746,
+      "expect": "f3fa40e749a12d04",
+      "data": "ea00101ecc00cc00",
+      "upgrade_expect": [
+        "ea00101ecc00cc00"
+      ]
+    },
+    {
+      "off": 23691,
+      "expect": "ffffffffffffffffffffffffffffffff",
+      "data": "9964994541643d0228713dfacb00cc00",
+      "upgrade_expect": [
+        "ff313236303431343235393835ffffff"
+      ]
+    },
+    {
+      "off": 24064,
+      "expect": "ffffffffffffffffffffffffffffffff",
+      "data": "e6f40c00e6f507a0e047ca008b1ccb00",
+      "upgrade_expect": [
+        "e6f40c00e6f507a0e047ca00a01ccb00"
+      ]
+    },
+    {
+      "off": 23711,
+      "expect": "ffffffffffffffffffffffffffffffffffff",
+      "data": "40452d062851a96547f6ff002df90851cb00",
+      "upgrade_expect": [
+        "ff9964994541643d0228713dfacb00ffffff",
+        "ff9964994541643d0228713dfacb00cc00ff"
+      ]
+    },
+    {
+      "off": 24080,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "f3fa40e747fa0100ea204a09ecf2ecf3ecf6ecf7ecf8ecf9e6000400e6020f00f2f69a9af2f79c9ae6020000f3f8bb3347f853003d1bf3f8bc3347f853003d16f3f8bd3347f831003d11f3f8be3347f876003d0cf3f8bf3347f832003d0746f69a113d1746f763903d140d1646f69a113d0346f763902d0df2f60e00e6000000e6f4b81fe065987440672d0428513dfb0d000d77e6000400e6020000ca00001e3df8e6000000e004e6f5141ce6f61147ca00521cf2f3801c40633d63f3fd6620f3fc6720e6f40021e6f50040ca009f1cca00521ce6010100e6f40040e6f50080ca009f1cca00521ce0f7ecf7fc02e6f40080e6f500c0ca009f1c40453d05287146f708009df20d13f087f095e087ecf7fc02e6f4008040783d02f0590d02e6f500c0ca00521c40782d0208710df0f2f3502040633d26e6010400f2f4004046f44e003d1fe6f40040e6f71400a85446f5ffff2d1546f500409d1456f500404054fd10f3fd0e40f3fc0f40ca00521ca83540633d07f045084228713de80d02e0150d01e005e6000400e6010500e6020000fcf9fcf8fcf7fcf6fcf3fcf246f50100ea204209ea004a09313236303431343235393835",
+      "upgrade_expect": [
+        "f3fa40e749a1ea204a09e6000400e6f4bb33a9a447fa53003d260841a9a447fa53003d210841a9a447fa31003d1c0841a9a447fa76003d170841a9a447fa32003d12e6020f00f2f59a9af2f49c9ae602000046f59a11ea304a0946f46390ea304a09ea004209e0e4a9a447fa31003d240841a9a447fa32003d1fe6020f00f2f59a9ae602000046f59a11ea204a09e6f427a0a9a447fa3000ea304a090841a9a447fa3600ea304a090841a9a447fa3400ea304a09ea004209e0e4a9a447fa36003d250841a9a447fa30003d20e6f427a0a9a447fa3300ea304a090841a9a447fa37002d0c47fa3800ea304a090841a9a447fa3000ea204209ea004a090841a9a447fa3800ea204209ea004a09e0e4a9a40841a9b447fa34003d0847fb31002d1547fb32002d12ea004a0947fa35003d0547fb39002d0aea004a0947fa3800ea304a0947fb3500ea304a09e6f427a0a9a447fa32002d1d47fa3300ea304a090841a9a447fa32002d0c47fa3800ea304a090841a9a447fa3100ea204209ea004a090841a9a447fa3400ea204209ea004a090841a9a447fa3900ea304a090841a9a447fa3800ea20420947fa3300ea204209ea004a09",
+        "f3fa40e747fa0100ea204a09e6000400f3fabb3347fa53003d25f3fabc3347fa53003d20f3fabd3347fa31003d1bf3fabe3347fa76003d16f3fabf3347fa32003d11e6020f00f2f49a9af2f59c9ae602000046f49a11ea304a0946f56390ea304a090d25e6020f00f2f49a9af2f59c9ae602000046f49a113d0446f56390ea204a09f2f40e0046f431322d1146f436302d0e46f434312d0b46f434322d0846f435392d0546f438352d02ea004a09ecf2ecf3f2f20c00f2f30e00f2f407a0f2f509a040243d0640353d04fcf3fcf2ea004209fcf3fcf2ea004a09ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "f3fa40e747fa0100ea204a09e6000400f3fabb3347fa53003d25f3fabc3347fa53003d20f3fabd3347fa31003d1bf3fabe3347fa76003d16f3fabf3347fa32003d11e6020f00f2f49a9af2f59c9ae602000046f49a11ea304a0946f56390ea304a090d25e6020f00f2f49a9af2f59c9ae602000046f49a113d0446f56390ea204a09f2f40e0046f431322d1146f436302d0e46f434312d0b46f434322d0846f435392d0546f438352d02ea004a09f3f80c00f3fa07a0418a3d14f3f80d00f3fa08a0418a3d0ef3f80e00f3fa09a0418a3d08f3f80f00f3fa0aa0418a3d02ea004209ea004a09ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "f3fa40e747fa0100ea204a09ecf2ecf3ecf6ecf7ecf8ecf9e6000400f3f8bb3347f853003d23f3f8bc3347f853003d1ef3f8bd3347f831003d19f3f8be3347f876003d14f3f8bf3347f832003d0fe6020f00f2f69a9af2f79c9ae602000046f69a113d1f46f763903d1c0d1fe6020f00f2f69a9af2f79c9ae602000046f69a113d0346f763902d0df2f60e00e6000000e6f48c1ce065987440672d0528513dfb0d00ea009e1fe6000400e6020000ca00001e3df7e6000000e004e6f5141ce6f61147ca005a1cf2f3801c40633d60f3fd6620f3fc6720e6f40021e6f50040ca00ea1fca005a1ce6010100e6f40040e6f50080ca00ea1fca005a1ce0f7ecf7fc02e6f40080e6f500c0ca00ea1f40453d05287146f708009df20d13f087f095e087ecf7fc02e6f4008040783d02f0590d02e6f500c0ca005a1c40782d0208710df0f2f3502040633d23e6000400f2f4000046f44e003d1ce004e6f71400a85446f5ffff2d1346f500409d124054fd10f3fd0e00f3fc0f00ca005a1ca83540633d07f045084228713dea0d02e0150d01e005e6000400e6010500e6020000fcf9fcf8fcf7fcf6fcf3fcf246f50100ea204209ea004a09",
+        "f3fa40e747fa0100ea204a09ecf2ecf3ecf6ecf7ecf8ecf9e6000400e6020f00f2f69a9af2f79c9ae6020000f3f8bb3347f853003d1bf3f8bc3347f853003d16f3f8bd3347f831003d11f3f8be3347f876003d0cf3f8bf3347f832003d0746f69a113d1746f763903d140d1646f69a113d0346f763902d0df2f60e00e6000000e6f48c1ce065987440672d0428513dfb0d000d74e6000400e6020000ca00001e3df8e6000000e004e6f5141ce6f61147ca004e1cf2f3801c40633d60f3fd6620f3fc6720e6f40021e6f50040ca00b21fca004e1ce6010100e6f40040e6f50080ca00b21fca004e1ce0f7ecf7fc02e6f40080e6f500c0ca00b21f40453d05287146f708009df20d13f087f095e087ecf7fc02e6f4008040783d02f0590d02e6f500c0ca004e1c40782d0208710df0f2f3502040633d23e6000400f2f4000046f44e003d1ce004e6f71400a85446f5ffff2d1346f500409d124054fd10f3fd0e00f3fc0f00ca004e1ca83540633d07f045084228713dea0d02e0150d01e005e6000400e6010500e6020000fcf9fcf8fcf7fcf6fcf3fcf246f50100ea204209ea004a0940452d062851a96547f6ff002df90851cb00"
+      ]
+    }
+  ]
+}

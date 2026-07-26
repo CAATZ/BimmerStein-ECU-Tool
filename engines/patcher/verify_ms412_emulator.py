@@ -54,7 +54,11 @@ sys.path.insert(0, str(EMU_ROOT))
 
 import checksum  # noqa: E402
 from engines.patcher import patch_ms41  # noqa: E402
-from engines.patcher.cal_guard_exact import assemble as assemble_cal_guard  # noqa: E402
+from engines.patcher.cal_guard_exact import (  # noqa: E402
+    BOOT_EXIT,
+    RECOVER_EXIT,
+    assemble as assemble_cal_guard,
+)
 from ms41emu import Emulator  # noqa: E402
 from ms41emu.gate import verify_cal_guard  # noqa: E402
 
@@ -127,7 +131,7 @@ FULL_413_IMAGE = _build_413()
 
 
 def verify_calguard_compatibility():
-    """Execute the registered gate on every canonical stock family and failures."""
+    """Execute the registered fast compatibility gate on every stock family."""
     guard = PATCHES["cal_guard"]
     guard_bytes = bytes.fromhex(next(
         edit["data"] for edit in guard["edits"]
@@ -142,24 +146,74 @@ def verify_calguard_compatibility():
         "MS41.3": STOCK_413_PATH,
     }
     for version, path in references.items():
-        assert verify_cal_guard(path.read_bytes(), cave=guard_bytes) == "BOOT", version
+        assert verify_cal_guard(
+            path.read_bytes(), cave=guard_bytes) == "BOOT", version
 
     # Same broad generation is insufficient: ID41 calibration with ID59
     # program (or vice versa) must remain in the stock flash listener.
     id41_to_id59 = bytearray(STOCK_410_PATH.read_bytes())
     assert id41_to_id59[0x6007:0x600B] == b"0641"
     id41_to_id59[0x1400C:0x14010] = b"0659"
-    assert verify_cal_guard(id41_to_id59, cave=guard_bytes) == "RECOVER"
+    assert verify_cal_guard(
+        id41_to_id59, cave=guard_bytes) == "RECOVER"
 
     # The strict SS1v2 identity still takes precedence over legacy suffixes.
     strict_mismatch = bytearray(STOCK_413_PATH.read_bytes())
     assert strict_mismatch[0x173BB:0x173C0] == b"SS1v2"
     assert strict_mismatch[0x6007:0x600B] != b"0641"
     strict_mismatch[0x6007:0x600B] = b"0641"
-    assert verify_cal_guard(strict_mismatch, cave=guard_bytes) == "RECOVER"
+    assert verify_cal_guard(
+        strict_mismatch, cave=guard_bytes) == "RECOVER"
 
     # E740=1 is intentionally the existing stock flash-listener branch.
-    assert verify_cal_guard(STOCK_PATH.read_bytes(), e740=1, cave=guard_bytes) == "RECOVER"
+    assert verify_cal_guard(
+        STOCK_PATH.read_bytes(), e740=1, cave=guard_bytes) == "RECOVER"
+
+
+def verify_brickguard_integrity():
+    """Execute the registered full integrity guard and representative faults."""
+    guard = PATCHES["brick_guard"]
+    entry = guard["cave"]["main_cpu"]
+
+    def run(image, e740=3):
+        emu = Emulator.load(bytes(image))
+        emu.reg.dpp[0] = 4
+        emu.reg.dpp[1] = 5
+        emu.reg.dpp[2] = 0
+        emu.write_byte(0xE740, e740)
+        return emu.run_from(
+            entry,
+            stop_at=(BOOT_EXIT, RECOVER_EXIT),
+            max_steps=25_000_000,
+        )
+
+    references = {
+        "MS41.0": STOCK_410_PATH,
+        "MS41.1": STOCK_411_PATH,
+        "MS41.2": STOCK_PATH,
+        "MS41.3": STOCK_413_PATH,
+    }
+    for version, path in references.items():
+        image, _log = patch_ms41.build(
+            path.read_bytes(), ["softbsl_loader", "brick_guard"])
+        assert run(image).final_pc == BOOT_EXIT, version
+
+        listener = run(image, e740=1)
+        assert listener.final_pc == RECOVER_EXIT and listener.steps == 3
+
+        for label, offset in (
+            ("boot", 0x4000),
+            ("program-low", 0x0100),
+            ("program-upper", 0x20000),
+            ("calibration", 0x14100),
+        ):
+            corrupt = bytearray(image)
+            corrupt[offset] ^= 1
+            assert run(corrupt).final_pc == RECOVER_EXIT, (version, label)
+
+        survivor = bytearray(b"\xFF" * len(image))
+        survivor[0x4000:0x6000] = image[0x4000:0x6000]
+        assert run(survivor).final_pc == RECOVER_EXIT, version
 
 
 OLDER_FEATURE_LAYOUTS = {
@@ -304,18 +358,22 @@ def verify_loader_and_doors():
 
         payload = f"{version} relocated loader".encode()
         expected = _crc16(payload)
-        for supplied, want_ip, want_rl4 in (
-            (expected, 0x1C70, 0), (expected ^ 1, 0x1C74, 1),
+        for supplied, want_rl4 in (
+            (expected, 0), (expected ^ 1, 1),
         ):
-            emu = _emu(image)
+            # Test-only CALLS trampoline. The production entry returns with
+            # RETS and the wrapper has no spare trampoline tail.
+            test_image = bytearray(image)
+            test_image[0x4100:0x4104] = bytes.fromhex("da001204")
+            emu = _emu(bytes(test_image))
             for index, value in enumerate(payload):
                 emu.write_byte(0xD800 + index, value)
             emu.reg.r[5] = 0xD800 + len(payload)
             emu.write_byte(0xE427, supplied >> 8)
             emu.write_byte(0xE428, supplied & 0xFF)
             res = emu.run_from(
-                0x1C32, stop_at=(0x1C70, 0x1C74), max_steps=10000)
-            assert res.final_pc == want_ip and (emu.reg.r[4] & 0xFF) == want_rl4, (
+                0x0100, stop_at=(0x0104,), max_steps=10000)
+            assert res.final_pc == 0x0104 and (emu.reg.r[4] & 0xFF) == want_rl4, (
                 version, supplied, res, emu.reg.r[4])
 
         # Persistent 0x2A door: stock NAK passthrough and matched commit paths.
@@ -902,6 +960,7 @@ def main():
         raise SystemExit(f"MS41.3 reference image not found: {STOCK_413_PATH}")
 
     verify_calguard_compatibility()
+    verify_brickguard_integrity()
 
     checks = [
         ("relocated loader + command doors", verify_loader_and_doors),
@@ -912,10 +971,11 @@ def main():
         ("launch V4 + ignition V7 composition", verify_composed_launch_and_ignition),
     ]
     print("[PASS] cal_guard: exact IDs, strict SS1v2, mismatch and E740 recovery")
+    print("[PASS] brick_guard: boot/program/cal faults and E740 recovery")
     for label, check in checks:
         check()
         print(f"[PASS] {label}")
-    print(f"\nMS41.2 EMULATOR GATE PASS ({len(checks) + 1} groups)")
+    print(f"\nMS41.2 EMULATOR GATE PASS ({len(checks) + 2} groups)")
 
     checks_413 = [
         ("ignition cut V7 native CC6 final-stage reachability",

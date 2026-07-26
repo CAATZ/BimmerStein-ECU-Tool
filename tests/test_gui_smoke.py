@@ -1261,6 +1261,61 @@ def test_patch_dependency_is_labeled_and_selected_automatically():
         w.close()
 
 
+def test_calguard_dependency_selects_and_locks_softbsl():
+    app, w = _gui()
+    try:
+        w._set_patch_base(ref("MS41.3"), "test")
+        guard = w._patch_checkboxes["cal_guard"]
+        loader = w._patch_checkboxes["softbsl_loader"]
+        labels = {
+            label.text()
+            for label in w._patch_rows["cal_guard"].findChildren(gui.QLabel)
+        }
+
+        assert "V3" in labels
+        assert "HARDWARE-PROVEN" in labels
+        assert "REQUIRES SOFT-BSL 0X5A LOADER V9" in labels
+        assert "Required patch: Soft-BSL 0x5A loader V9" in guard.toolTip()
+
+        guard.setChecked(True)
+        assert guard.isChecked()
+        assert loader.isChecked()
+        assert w.btn_patches_build.isEnabled()
+
+        loader.setChecked(False)
+        assert loader.isChecked()
+    finally:
+        w.close()
+
+
+def test_brickguard_is_disclosed_and_can_replace_installed_calguard():
+    import patch_service
+
+    app, w = _gui()
+    try:
+        current, _ = patch_service.build_image(
+            ref("MS41.3"), ["softbsl_loader", "cal_guard"]
+        )
+        w._set_patch_base(current, "test")
+        guard = w._patch_checkboxes["brick_guard"]
+        labels = {
+            label.text()
+            for label in w._patch_rows["brick_guard"].findChildren(gui.QLabel)
+        }
+
+        assert "V1" in labels
+        assert "UNTESTED" in labels
+        assert "REPLACES CALGUARD COMPATIBILITY GUARD" in labels
+        assert "0.95 seconds" in guard.toolTip()
+        assert "Replaces: CalGuard compatibility guard" in guard.toolTip()
+
+        guard.setChecked(True)
+        assert guard.isChecked()
+        assert w.btn_patches_build.isEnabled()
+    finally:
+        w.close()
+
+
 def test_patch_dependency_never_removes_a_conflicting_selection(monkeypatch):
     app, w = _gui()
     try:
@@ -4428,7 +4483,9 @@ def test_patches_builds_and_flashes_boot_patch_removal_only(monkeypatch):
     try:
         import patch_service
 
-        installed, _ = patch_service.build_image(ref("MS41.3"), ["cal_guard"])
+        installed, _ = patch_service.build_image(
+            ref("MS41.3"), ["softbsl_loader", "cal_guard"]
+        )
         w._set_patch_base(installed, "cal-guard-installed")
         monkeypatch.setattr(
             QMessageBox, "question",
