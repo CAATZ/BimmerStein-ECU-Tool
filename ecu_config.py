@@ -16,8 +16,7 @@ only that field, preserving the other bits in the byte (several features share a
 byte).  After editing, the calibration checksum (#1, which covers offsets 0..0x4E
 including these bytes) must be recomputed — callers do that via checksum.correct_checksums.
 
-Transmission selection updates Byte 5 bits 0..6 while preserving the independent
-knock-detection setting in bit 7.
+Transmission selection updates Byte 5 bits 0..5 while preserving bits 6 and 7.
 
 A/C type selection updates Byte 4 bits 1, 2, and 4 while preserving the
 independent VANOS setting in bit 5 and every unrelated bit in the byte.
@@ -187,9 +186,9 @@ FEATURES: List[ConfigFeature] = [
     ConfigFeature("EWS (Immobilizer)", 8, 0x80,
                   [("Enabled", 0x00), ("Disabled", 0x80)],
                   "Byte 8 bit 7 (1 = EWS delete) — inverted polarity."),
-    ConfigFeature("Transmission", 5, 0x7F,
-                  [("AT/MT (auto)", 0x6C), ("MT Only", 0x40), ("AT Only", 0x6B)],
-                  "Byte 5 bits 0-6 select the transmission mode. Bit 7 (Knock) is preserved."),
+    ConfigFeature("Transmission", 5, 0x3F,
+                  [("AT/MT (auto)", 0x2C), ("MT Only", 0x00), ("AT Only", 0x2B)],
+                  "Byte 5 bits 0-5 select the transmission mode. Bits 6 and 7 are preserved."),
     ConfigFeature("Calibration CRC Check", 7, 0x10,
                   [("Enabled", 0x00), ("Disabled", 0x10)],
                   "Byte 7 bit 4 (1 = disable CRC check for the 24 KB calibration "
