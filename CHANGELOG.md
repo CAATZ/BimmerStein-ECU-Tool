@@ -12,7 +12,7 @@ shared by BimmerStein applications.
 
 ### Added
 
-- Added the bench-test-required CalGuard V4 boot-recovery guard, including a
+- Added the bench-proven CalGuard V4 boot-recovery guard, including a
   bounded key-on recovery window and a retained Soft-BSL session for recovery
   reads and writes.
 - Added automatic and explicit CalGuard recovery routing without reopening the
