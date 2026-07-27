@@ -407,7 +407,8 @@ def test_deprecated_calguard_is_detected_removed_and_replaced_by_v4(
     assert available[legacy_id]["removable"] is True
     assert available["cal_guard"]["installed"] is False
     assert available["cal_guard"]["version"] == "V4"
-    assert available["cal_guard"]["status"] == "BENCH TEST REQUIRED"
+    assert available["cal_guard"]["status"] == "BENCH PROVEN"
+    assert available["cal_guard"]["tested"] is True
     assert available["cal_guard"]["legacy"] == [{
         "id": legacy_id,
         "label": legacy_label,

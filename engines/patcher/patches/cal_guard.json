@@ -3,10 +3,10 @@
   "label": "V4 boot recovery guard",
   "version": "V4",
   "title": "CalGuard compatibility + recovery guard",
-  "user_description": "Fast compatibility guard with a short K-Line boot-recovery window.",
+  "user_description": "Fast compatibility guard with a short K-Line boot-recovery window, proven on a physical bench ECU.",
   "description": "E740-first exact-ID gate plus a bounded 0x5A/0x9C/0x9C recovery poll.",
-  "status": "BENCH TEST REQUIRED",
-  "tested": false,
+  "status": "BENCH PROVEN",
+  "tested": true,
   "target": "MS41.3",
   "targets": [
     "MS41.0",

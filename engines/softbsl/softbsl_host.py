@@ -3686,7 +3686,7 @@ def main():
                          "5a=SA1 bootloader (flash-mode), 9c=legacy param1 stub")
     ap.add_argument(
         "--boot-recovery", action="store_true",
-        help="CalGuard V4 experiment: start with ignition OFF, pre-arm raw 5A/9C/9C, "
+        help="CalGuard V4 boot recovery: start with ignition OFF, pre-arm raw 5A/9C/9C, "
              "then turn ignition ON; requires --trigger 5a")
     ap.add_argument("--no-echo", action="store_true", help="adapter suppresses the half-duplex echo")
     ap.add_argument("-v", "--verbose", action="store_true")

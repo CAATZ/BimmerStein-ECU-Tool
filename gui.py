@@ -1284,7 +1284,7 @@ class MS41FlashGUI(QMainWindow):
             QMessageBox.warning(
                 self,
                 "K-Line Required",
-                "This experimental CalGuard boot-recovery entry currently uses the "
+                "CalGuard boot recovery currently uses the "
                 "echoing K-Line Soft-BSL transport. Uncheck Direct tap and retry.",
             )
             self.btn_connect.setChecked(False)

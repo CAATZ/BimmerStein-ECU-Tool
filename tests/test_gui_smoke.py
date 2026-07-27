@@ -1262,7 +1262,8 @@ def test_patches_tab_lists_the_ms41_3_patches():
         }
         assert "BOOT · SOFT-BSL" in calguard_badges
         assert "V4" in calguard_badges
-        assert "UNTESTED" in calguard_badges
+        assert "BENCH PROVEN" in calguard_badges
+        assert "UNTESTED" not in calguard_badges
         assert "REQUIRES SOFT-BSL" in calguard_badges
         assert all("BOOT REGION" not in badge for badge in calguard_badges)
         assert "Fast compatibility guard" in (

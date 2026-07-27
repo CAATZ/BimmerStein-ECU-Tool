@@ -31,8 +31,7 @@ compliance with applicable emissions, safety, registration, and other laws.
 - Expanded regression coverage for boot-recovery ownership, route selection,
   live-data address families, and every Byte 5 transmission value.
 
-CalGuard V4 remains marked **BENCH TEST REQUIRED**. Offline tests do not prove
-its behavior on physical ECU hardware.
+CalGuard V4 is **BENCH PROVEN** on physical ECU hardware.
 
 **IGNITION CUT HAZARD:** Ignition Cut V7 is in a very early stage. It will cause
 fuel-related, misfire, and coil-related DTCs and fuel-trim issues, and the cut is
