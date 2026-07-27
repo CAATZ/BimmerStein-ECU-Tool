@@ -11,9 +11,10 @@ compliance with applicable emissions, safety, registration, and other laws.
 
 ### Changes
 
-- Added the bench-test-required CalGuard V4 compatibility and boot-recovery
-  guard. Its bounded key-on listener can establish and retain a Soft-BSL
-  recovery session for subsequent reads or writes.
+- CalGuard V4 now checks that the program and calibration are compatible before
+  normal startup. It also briefly listens for a recovery request when the ECU
+  is switched on. If detected, the tool opens a Soft-BSL recovery session and
+  keeps it connected for a later read or flash.
 - Added automatic and explicit CalGuard recovery routing. Once the recovery
   agent owns the port, operations reuse that session without reopening the
   adapter or falling back to DS2.
