@@ -1,15 +1,20 @@
 {
   "id": "alphan_failsafe",
+  "version": "V2",
+  "status": "UNTESTED",
   "title": "AlphaN MAF failsafe",
   "tested": false,
   "user_description": "Restores the MS41.2-style AlphaN load fallback removed by SS1v2, allowing AlphaN operation when selected or when a MAF fault is detected.",
-  "description": "Restore the native MS41.2 MAF->AlphaN load failover that SS1v2 deleted, with the extended 16x20 ITB tables. Splice @0x2A9A8 -> program-high cave. Trigger: fd22.10 (AlphaN selector) OR fd30.1 (MAF fault). Engine runs with the MAF unplugged.",
+  "description": "V2 corrects the historical A14-XOR transfer bug and restores the native MS41.2 MAF-to-AlphaN load fallback removed by SS1v2, with the extended 16x20 ITB tables. Trigger: fd22.A (AlphaN selector) OR fd30.1 (MAF fault). Exact-image verified; physical/on-car behavior remains untested.",
   "target": "MS41.3",
   "recompute": [
     "cal"
   ],
   "requires": [],
   "conflicts": [],
+  "supersedes": [
+    "alphan_failsafe_v1"
+  ],
   "cave": {
     "region": "proghigh",
     "base": 236394,
@@ -21,11 +26,13 @@
     {
       "off": 174504,
       "expect": "f6f4e4e8",
+      "upgrade_expect": "fa036a9b",
       "data": "fa036adb"
     },
     {
       "off": 236394,
       "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "upgrade_expect": "8a1106a08a180410f6f4e4e8fa02aea9e6fc8a04c2fd3cfcda03ac48e6fc0005f2fd02e9da039e49e6fc8841da036a4af1c8e6fc8804c2fdd0e8da03fc48e6fcc842da036a4ac08dc0ccda03b846f7f8ebe88a180600e6fc4840da036a4af1c80d05e6fcbe04da03344af1c8c0ccc2fdebe8da030c44c08c5c7cc2fd00e95c8dda034447f6f4e4e8f0c4f2fd3afcda03ce46f6f454fcfa02aea9",
       "data": "8a1106a08a180410f6f4e4e8fa02aee9e6fc8a04c2fd3cfcda03ac48e6fc0005f2fd02e9da039e49e6fc8841da036a4af1c8e6fc8804c2fdd0e8da03fc48e6fcc842da036a4ac08dc0ccda03b846f7f8ebe88a180600e6fc4840da036a4af1c80d05e6fcbe04da03344af1c8c0ccc2fdebe8da030c44c08c5c7cc2fd00e95c8dda034447f6f4e4e8f0c4f2fd3afcda03ce46f6f454fcfa02aee9"
     }
   ]

@@ -8,6 +8,7 @@ storing metadata: date, variant, checksum status, file type, and user notes.
 import os
 import json
 import datetime
+import hashlib
 from dataclasses import dataclass, asdict
 from typing import List
 
@@ -23,7 +24,7 @@ INDEX_FILE = os.path.join(BACKUP_DIR, "index.json")
 @dataclass
 class BackupEntry:
     filename:  str
-    file_type: str    # "Full ROM" | "Tune" | "Unknown"
+    file_type: str    # "Full ROM" | "Tune" | "EEPROM" | "Unknown"
     variant:   str    # "MS41.1" | "MS41.2" | "Unknown" | "N/A"  (cal-side; kept for display)
     cs_ok:     bool
     size:      int
@@ -37,6 +38,7 @@ class BackupEntry:
     cal_variant:     str = ""    # cal-side variant (same detector as `variant`, kept separately
                                   # so a hybrid ROM's two sides are both on record)
     hybrid:          str = ""    # human-readable program/cal mismatch description, or ""
+    sha256:          str = ""    # immutable catalogue identity; blank for legacy entries
 
     @property
     def path(self) -> str:
@@ -72,7 +74,7 @@ class BackupManager:
 
     def add_data(self, data, filename: str, notes: str = "",
                  source: str = "imported", ecu_id: str = "",
-                 vin: str = "") -> BackupEntry:
+                 vin: str = "", variant: str = "") -> BackupEntry:
         """Register an in-memory image (e.g. a live ECU read) as a backup.
 
         Writes `data` into backups/ under a unique `filename` and indexes it with
@@ -84,13 +86,23 @@ class BackupManager:
 
         data = bytearray(data)
         size = len(data)
-        file_type, variant = self._classify(data, size)
-        cal_id = MS41ECU.read_calid(data) or ""
-        if not ecu_id:
-            ecu_id = MS41ECU.read_ecu_id(data) or ""
-        if not vin:
-            vin = MS41ECU.vin_from_image(data) or ""   # full ROMs carry the VIN at 0x5D07
-        cs_ok, _ = verify_checksum(data)
+        file_type, detected_variant = self._classify(data, size)
+        variant = variant or detected_variant
+        cal_id = ""
+        if file_type == "EEPROM":
+            if variant in ("MS41.0", "MS41.1", "MS41.2", "MS41.3"):
+                from engines.softbsl import eeprom_ram
+                rows = eeprom_ram.field_report(data, variant)
+                cs_ok = all(not row["checked"] or row["check_ok"] for row in rows)
+            else:
+                cs_ok = False
+        else:
+            cal_id = MS41ECU.read_calid(data) or ""
+            if not ecu_id:
+                ecu_id = MS41ECU.read_ecu_id(data) or ""
+            if not vin:
+                vin = MS41ECU.vin_from_image(data) or ""   # full ROMs carry the VIN at 0x5D07
+            cs_ok, _ = verify_checksum(data)
         date     = datetime.datetime.now().isoformat(timespec="seconds")
 
         program_variant = cal_variant = hybrid = ""
@@ -109,6 +121,7 @@ class BackupManager:
             size=size, date=date, notes=notes, ecu_id=ecu_id, vin=vin,
             cal_id=cal_id, source=source,
             program_variant=program_variant, cal_variant=cal_variant, hybrid=hybrid,
+            sha256=hashlib.sha256(data).hexdigest(),
         )
         self._entries.append(entry)
         self._save()
@@ -121,6 +134,8 @@ class BackupManager:
             return "Full ROM", (MS41ECU.detect_variant(data) or "Unknown")
         if size == 24 * 1024:
             return "Tune", (MS41ECU.detect_variant(data) or "N/A")
+        if size == 512:
+            return "EEPROM", "Unknown"
         return "Unknown", "Unknown"
 
     @staticmethod

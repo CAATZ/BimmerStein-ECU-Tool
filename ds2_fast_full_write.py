@@ -294,7 +294,7 @@ class NativeFastFullWriteSession(NativeFastPartialWriteSession):
         self._record("full_finalize_completed", final_poll_status="0x01")
 
     def _cleanup_pre_erase_to_low(self) -> bool:
-        """Use only the proven selector/BMW exit before any destructive request."""
+        """Confirm low identity; use the selector/BMW exit only when still high."""
         if self.destructive_started:
             return False
         if self.authorization_state_requires_cycle or (
@@ -328,8 +328,8 @@ class NativeFastFullWriteSession(NativeFastPartialWriteSession):
             )
             return True
         if self.token is None:
-            self.safe_legacy_fallback = self.link is LinkRate.LOW
-            return self.safe_legacy_fallback
+            self.safe_legacy_fallback = False
+            return False
         found = None
         for candidate in (LinkRate.HIGH, LinkRate.LOW):
             self.transport.set_baud(
@@ -352,39 +352,45 @@ class NativeFastFullWriteSession(NativeFastPartialWriteSession):
             self.link = LinkRate.UNKNOWN
             return False
 
-        self.state = SessionState.HIGH_FULL_PROGRAM
-        self.cleanup_attempted = True
-        self._request(
-            SEED_KEY_COMMAND,
-            bytes((SELECTOR_LOW,)) + self._require_token(),
-            StatusResponseContract(
-                "pre-erase selector 0x26",
-                frozenset((ResponseStatus.ACK,)),
-                exact_payload_length=0,
-            ),
-            "full_pre_erase_selector_0x26",
-        )
-        guard = max(0.001, 2 * BITS_PER_CHARACTER_8E2 / self.rates.for_link(found))
-        self._sleep(guard)
-        self.transport.set_baud(self.rates.low, reason="pre-erase selector 0x26 ACKed")
-        self.link = LinkRate.LOW
-        cleanup = self._request(
-            SEED_KEY_COMMAND,
-            b"BMW",
-            StatusResponseContract(
-                "pre-erase full-write cleanup",
-                frozenset((ResponseStatus.CONTEXT_B0,)),
-                exact_payload_length=0,
-            ),
-            "full_pre_erase_bare_BMW_expected_B0",
-        )
-        if cleanup.status != ResponseStatus.CONTEXT_B0:
-            return False
+        if found is LinkRate.HIGH:
+            self.state = SessionState.HIGH_FULL_PROGRAM
+            self.cleanup_attempted = True
+            self._request(
+                SEED_KEY_COMMAND,
+                bytes((SELECTOR_LOW,)) + self._require_token(),
+                StatusResponseContract(
+                    "pre-erase selector 0x26",
+                    frozenset((ResponseStatus.ACK,)),
+                    exact_payload_length=0,
+                ),
+                "full_pre_erase_selector_0x26",
+            )
+            guard = max(0.001, 2 * BITS_PER_CHARACTER_8E2 / self.rates.for_link(found))
+            self._sleep(guard)
+            self.transport.set_baud(
+                self.rates.low,
+                reason="pre-erase selector 0x26 ACKed",
+            )
+            self.link = LinkRate.LOW
+            cleanup = self._request(
+                SEED_KEY_COMMAND,
+                b"BMW",
+                StatusResponseContract(
+                    "pre-erase full-write cleanup",
+                    frozenset((ResponseStatus.CONTEXT_B0,)),
+                    exact_payload_length=0,
+                ),
+                "full_pre_erase_bare_BMW_expected_B0",
+            )
+            if cleanup.status != ResponseStatus.CONTEXT_B0:
+                return False
         self._wait_for_low_identity(
             contract_name="full pre-erase low readiness",
             label="full_pre_erase_low_readiness",
             timeout_event="full_pre_erase_low_readiness_timeout",
         )
+        if self.state is SessionState.ARMED_LOW:
+            self.fast_write_armed = False
         self._set_state(
             state=SessionState.LOW_READY,
             link=LinkRate.LOW,

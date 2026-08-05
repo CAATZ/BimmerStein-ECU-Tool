@@ -64,7 +64,7 @@ DTD = """<!DOCTYPE roms [
 VANOS_TABLE_MS410 = """<table type="2D" name="VANOS Retrofit - Minimum RPM (Closed Throttle)" category="VANOS Retrofit" storagetype="uint8" sizey="1" storageaddress="0x3000">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Engage Above" sizey="1"><data>RPM</data></table>
-  <description>Minimum RPM for closed-throttle VANOS engagement added by the tested MS41.0 VANOSRT1 retrofit. Raw 0xFF preserves stock behavior; use only after that patch is installed.</description>
+  <description>Minimum RPM for closed-throttle VANOS engagement added by the tested, checksum-correct MS41.0 VANOSRT3 retrofit. Raw 0xFF preserves stock behavior; use only after that patch is installed.</description>
 </table>"""
 
 VANOS_TABLE_MS411 = """<table type="2D" name="VANOS Retrofit - Minimum RPM (Closed Throttle)" category="VANOS Retrofit" storagetype="uint8" sizey="1" storageaddress="0x3720">
@@ -97,8 +97,8 @@ IGNITION_LAUNCH_VARIANTS = (
 )
 
 VANOS_VARIANTS = (
-    ("BIMMERSTEIN_MS410_VANOSRT1_24K", "3008", "VANOSRT1", "1429861", "MS41.0 1429861 + VANOSRT1 (24KB)", "24kb", False, MS410_ADDRESS_MAP, VANOS_TABLE_MS410),
-    ("BIMMERSTEIN_MS410_VANOSRT1_256K", "17008", "VANOSRT1", "1429861", "MS41.0 1429861 + VANOSRT1 (256KB)", "256kb", True, MS410_ADDRESS_MAP, VANOS_TABLE_MS410),
+    ("BIMMERSTEIN_MS410_VANOSRT3_24K", "3008", "VANOSRT3", "1429861", "MS41.0 1429861 + VANOSRT3 (24KB)", "24kb", False, MS410_ADDRESS_MAP, VANOS_TABLE_MS410),
+    ("BIMMERSTEIN_MS410_VANOSRT3_256K", "17008", "VANOSRT3", "1429861", "MS41.0 1429861 + VANOSRT3 (256KB)", "256kb", True, MS410_ADDRESS_MAP, VANOS_TABLE_MS410),
     ("BIMMERSTEIN_MS411_VANOSRT2_24K", "3728", "VANOSRT2", "1437806", "MS41.1 1437806 + VANOSRT2 (24KB)", "24kb", False, MS411_ADDRESS_MAP, VANOS_TABLE_MS411),
     ("BIMMERSTEIN_MS411_VANOSRT2_256K", "17728", "VANOSRT2", "1437806", "MS41.1 1437806 + VANOSRT2 (256KB)", "256kb", True, MS411_ADDRESS_MAP, VANOS_TABLE_MS411),
 )

@@ -150,7 +150,7 @@ _WRITE_LINK_PROBE_BASE = 0x20000
 _WRITE_LINK_PROBE_SIZE = 128
 
 _AGENT_DETAIL_PREFIXES = (
-    "ds2: prepare", "e740=", "in flash mode", "staged ",
+    "ds2: prepare", "staged ",
     "streaming agent", "agent running", "entered on attempt", "baud ->",
     "erase ", "erase done", "programmed up to", "verify (read-back)",
     "verify ok", "marker-0 finalize",
@@ -286,18 +286,20 @@ def crossbank_plan(image):
 
 
 def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=None,
-                  entry_mode="auto", boot_timeout=8.0):
+                  entry_mode="auto", boot_timeout=8.0, agent_payload=None):
     """Open the port and enter the RAM agent through the persistent 0x5A loader.
 
-    Automatic normal entry uses 0x2A door_magic first. An exact CalGuard mismatch, or
-    ``entry_mode='direct'` recovery override, skips 0x2A and sends staged 0x5A directly.
+    Automatic normal entry uses 0x2A door_magic first. Built-in flash agents may
+    auto-detect an exact CalGuard mismatch and skip 0x2A; custom agents use the
+    normal door unless recovery is explicitly requested with ``direct`` or ``boot``.
     ``entry_mode='boot'`` first catches CalGuard V4's key-on token poll. The disposable
     0x43 install door is never used here.
 
     `chip_family` ('amd'/'intel'/None) selects the flash agent: an Intel 28F200 needs
     agent_28f.hex (Intel command set + 12 V VPP); AMD/None default to agent.hex. Boot
     recovery instead reads the preserved boot driver's signature after acknowledgement
-    and selects the agent from that evidence.
+    and selects the agent from that evidence. ``agent_payload`` lets another narrowly
+    scoped RAM service reuse this entry owner without inheriting either flash agent.
 
     On ANY entry failure: ensure_flash_mode() may have already fired the 0x2A door, committing
     E740=1 (flash-listen, non-drivable, persistent across key-cycles). Walk it back to marker 0 +
@@ -305,7 +307,15 @@ def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=Non
     re-raising — otherwise a missed 5a window strands a previously-drivable ECU in flash mode."""
     if entry_mode not in ("auto", "direct", "boot"):
         raise ValueError(f"unknown Soft-BSL entry mode {entry_mode!r}")
-    if entry_mode == "direct" and chip_family not in ("amd", "intel"):
+    custom_agent = bytes(agent_payload) if agent_payload is not None else None
+    if custom_agent is not None and not (0 < len(custom_agent) <= 0x800):
+        raise SoftBSLError(
+            f"agent {len(custom_agent)} B out of range (expected 1..2048)")
+    if (
+        custom_agent is None
+        and entry_mode == "direct"
+        and chip_family not in ("amd", "intel")
+    ):
         raise SoftBSLError(
             "Soft-BSL recovery requires a known Intel/AMD flash-driver family; "
             "no port was opened and nothing was erased.")
@@ -320,34 +330,56 @@ def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=Non
     sb = _sb.SoftBSL(d, log=_agent_log(log))
     staged = baud_tier is not None and hasattr(sb, "enter_staged")
     try:
-        direct = entry_mode in ("direct", "boot") or bool(
-            getattr(sb, "calguard_direct_entry_ready", lambda: False)())
+        direct = entry_mode in ("direct", "boot") or (
+            custom_agent is None
+            and bool(getattr(
+                sb, "calguard_direct_entry_ready", lambda: False)())
+        )
         resolved_chip_family = chip_family
         if entry_mode == "boot":
             sb.prearm_calguard_boot(timeout=boot_timeout)
-            signature = bytes(d.read_mem(ecu_info.DRV_SIG_ADDR, ecu_info.DRV_SIG_LEN))
-            resolved_chip_family = ecu_info.chip_family(signature)
-            if resolved_chip_family not in ("amd", "intel"):
-                raise SoftBSLError(
-                    "CalGuard recovery acknowledged, but the preserved boot flash-driver "
-                    f"signature was not recognized ({signature.hex() or 'no data'}). "
-                    "No RAM agent was loaded and nothing was erased.")
-            sb.boot_chip_family = resolved_chip_family
-            sb.boot_driver_signature = signature
-            log(
-                "CalGuard recovery detected "
-                + (
-                    "Intel 28F200"
-                    if resolved_chip_family == "intel" else
-                    "AMD 29F200/29F400"
+            if custom_agent is not None:
+                resolved_chip_family = None
+                log(
+                    "CalGuard recovery acknowledged for custom RAM service; "
+                    "flash-family detection is not required."
                 )
-                + " from the preserved boot flash driver."
-            )
-        if direct and resolved_chip_family not in ("amd", "intel"):
+            else:
+                signature = bytes(
+                    d.read_mem(ecu_info.DRV_SIG_ADDR, ecu_info.DRV_SIG_LEN)
+                )
+                resolved_chip_family = ecu_info.chip_family(signature)
+                if resolved_chip_family not in ("amd", "intel"):
+                    raise SoftBSLError(
+                        "CalGuard recovery acknowledged, but the preserved boot "
+                        "flash-driver signature was not recognized "
+                        f"({signature.hex() or 'no data'}). No RAM agent was "
+                        "loaded and nothing was erased."
+                    )
+                sb.boot_chip_family = resolved_chip_family
+                sb.boot_driver_signature = signature
+                log(
+                    "CalGuard recovery detected "
+                    + (
+                        "Intel 28F200"
+                        if resolved_chip_family == "intel" else
+                        "AMD 29F200/29F400"
+                    )
+                    + " from the preserved boot flash driver."
+                )
+        if (
+            custom_agent is None
+            and direct
+            and resolved_chip_family not in ("amd", "intel")
+        ):
             raise SoftBSLError(
                 "Direct Soft-BSL recovery requires a known Intel/AMD flash-driver family; "
                 "no agent was loaded and nothing was erased.")
-        agent = _sb.load_agent(_sb.agent_path_for_family(resolved_chip_family))
+        agent = (
+            custom_agent
+            if custom_agent is not None
+            else _sb.load_agent(_sb.agent_path_for_family(resolved_chip_family))
+        )
         if direct:
             if entry_mode == "direct":
                 log("Forced direct Soft-BSL recovery: sending staged 0x5A without 0x2A.")
@@ -357,7 +389,7 @@ def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=Non
             sb.enter_staged(agent, baud_tier, trigger="5a")
         else:
             sb.enter_retry(agent, trigger="5a")
-    except Exception as error:
+    except (Exception, KeyboardInterrupt) as error:
         if staged:
             # Stage-one owns its pre-erase failure/reset path.  Do not send the production-agent
             # recovery command to a stage that has not emitted the A5 handoff banner.

@@ -20,6 +20,8 @@ def test_windows_spec_uses_gui_entry_and_excludes_private_material():
     assert '"BimmerStein MS41 Patch Definitions.xml"' in text
     assert 'ROOT / "THIRD_PARTY_LICENSES"' in text
     assert '"agent.hex"' in text and '"agent_28f.hex"' in text
+    assert '"eeprom_agent.hex"' in text
+    assert 'collect_dynamic_libs("usb1")' in text
     assert '"stage1_payload.hex"' in text and '"stage1_manifest.json"' in text
     assert "_private" not in text
     assert "backups" not in text
@@ -67,7 +69,9 @@ def test_distribution_verifier_rejects_runtime_data_from_release_package():
     assert 'app_dir / "BimmerStein-ECU-Tool-User-Manual.pdf"' in text
     assert "source-only README links leaked" in text
     assert "MSVC_RUNTIME_FILES" in text
+    assert 'content / "usb1" / "libusb-1.0.dll"' in text
     assert "does not match its unmodified build dependency" in text
+    assert 'content / "engines" / "softbsl" / "eeprom_agent.hex"' in text
     assert "vc_runtime_files_unmodified" in text
     assert "bundled patch definition does not match tracked source" in text
     assert "ET.parse(patch_definition)" in text
@@ -171,8 +175,15 @@ def test_release_packaging_requires_explicit_license_gates():
     assert "b[1-9]\\d*" in text
     assert '"BimmerStein-ECU-Tool-$Version-Windows-x64"' in text
     assert '"BimmerStein-ECU-Tool-$Version-Windows-x64-Nuitka"' in text
+    assert 'developer = "CAATZ"' in text
+    assert 'repository = "https://github.com/CAATZ/BimmerStein-ECU-Tool"' in text
     assert "version = $Version" in text
     assert "build_backend = $Backend" in text
+    assert "built_at_utc = $buildStartedAtUtc" in text
+    assert "source_commit = $sourceCommit" in text
+    assert "source_dirty = $sourceDirty" in text
+    assert "git -C $root rev-parse HEAD" in text
+    assert "git -C $root status --porcelain --untracked-files=normal" in text
     assert "experimental =" not in text
     assert 'vc_runtime_deployment = "application-local"' in text
     assert "vc_runtime_files_unmodified = $true" in text
@@ -182,13 +193,16 @@ def test_release_packaging_requires_explicit_license_gates():
     assert "IsccPath" in text
     assert "IncludeNuitka" in text
     assert "build_windows_nuitka.ps1" in text
+    admission = '"engines\\patcher\\verify_ms412_emulator.py"'
+    assert admission in text
+    assert text.index(admission) < text.index("& $standardBuildScript")
 
     build_text = (ROOT / "build_windows.ps1").read_text(encoding="utf-8")
     assert "b[1-9]\\d*" in build_text
 
     building = (ROOT / "BUILDING.md").read_text(encoding="utf-8")
-    assert "-Version 0.1.0b12" in building
-    assert "v0.1.0b12" in building
+    assert "-Version 0.1.0b13" in building
+    assert "v0.1.0b13" in building
     assert "BimmerStein ECU Tool Nuitka" in building
 
 
@@ -198,6 +212,7 @@ def test_inno_installer_uses_bimmerstein_identity_and_per_user_install():
     )
     assert "AppName={#SetupAppName}" in installer
     assert '#define SetupAppName "BimmerStein ECU Tool"' in installer
+    assert '#define AppNumericVersion "0.1.0.13"' in installer
     assert 'SetupAppName "BimmerStein ECU Tool (' not in installer
     assert "AppPublisher=CAATZ" in installer
     assert "PrivilegesRequired=lowest" in installer
@@ -235,6 +250,8 @@ def test_nuitka_build_is_explicit_and_separate():
     assert '"--msvc=latest"' in build
     assert '"--enable-plugin=pyqt5"' in build
     assert '"--include-windows-runtime-dlls=yes"' in build
+    assert "Path(usb1.__file__).with_name('libusb-1.0.dll')" in build
+    assert "Copy-Item -LiteralPath $usb1Dll -Destination $usb1Target" in build
     assert '"--backend", "nuitka"' not in build  # PowerShell invokes these as separate tokens.
     assert '"packaging\\verify_dist.py" --backend nuitka' in build
     assert "BimmerStein ECU Tool Nuitka" in build
@@ -251,6 +268,16 @@ def test_nuitka_build_is_explicit_and_separate():
     assert "nuitka==4.1.3" in requirements
     assert "ordered-set==4.1.0" in requirements
     assert "zstandard==0.25.0" in requirements
+
+
+def test_ch341a_usb_runtime_dependencies_are_pinned_and_licensed():
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+
+    assert "PyUSB==1.3.1" in requirements
+    assert 'libusb1==3.4.0; sys_platform == "win32"' in requirements
+    assert "THIRD_PARTY_LICENSES/PyUSB-1.3.1-BSD-3-Clause.txt" in notices
+    assert "THIRD_PARTY_LICENSES/libusb1-3.4.0-COPYING.LESSER.txt" in notices
 
 def test_public_project_license_and_docs_are_gplv3():
     license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
@@ -275,7 +302,7 @@ def test_readme_uses_canonical_product_logo_and_resource_links():
     text = (ROOT / "README.md").read_text(encoding="utf-8")
     assert '<img src="assets/bimmerstein_ecu_tool.png"' in text
     assert 'alt="BimmerStein ECU Tool"' in text
-    assert 'href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b12"' in text
+    assert 'href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b13"' in text
     assert 'href="manual/USER_MANUAL.md">User Manual</a>' in text
     assert 'href="https://github.com/CAATZ/BimmerStein-ECU-Tool/issues"' in text
     assert "## Documentation and support" in text
@@ -302,9 +329,10 @@ def test_public_docs_state_patch_tuning_definition_is_bundled():
         normalized = " ".join(text.split())
         lowered = normalized.lower()
         assert "ignition cut" in lowered and "launch control" in lowered, path
-        assert "very early stage" in lowered, path
-        assert "misfire" in lowered and "fuel-trim issues" in lowered, path
-        assert "extremely aggressive" in lowered, path
+        assert (
+            "very early stage" in lowered or "experimental" in lowered
+        ), path
+        assert "unburned fuel" in lowered, path
         assert "catalytic converters" in lowered, path
         assert "BimmerStein MS41 Patch Definitions.xml" in normalized, path
         assert "beside the executable" in lowered, path

@@ -10,6 +10,7 @@
 //     mov S0TBUF,#0xA5    ; instructions; ';' or '#' begins a comment
 //     jnb S0TIC.7,LOOP    ; label names in operands -> replaced by 0x<addr>
 //     jmpr LOOP
+//@category MS41
 import ghidra.app.script.GhidraScript;
 import ghidra.app.plugin.assembler.Assembler;
 import ghidra.app.plugin.assembler.Assemblers;

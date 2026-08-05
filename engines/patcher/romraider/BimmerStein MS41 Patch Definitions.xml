@@ -33,15 +33,15 @@
 
 <rom>
   <romid>
-    <xmlid>BIMMERSTEIN_MS410_VANOSRT1_24K</xmlid>
+    <xmlid>BIMMERSTEIN_MS410_VANOSRT3_24K</xmlid>
     <internalidaddress>3008</internalidaddress>
-    <internalidstring>VANOSRT1</internalidstring>
+    <internalidstring>VANOSRT3</internalidstring>
     <ecuid>1429861</ecuid>
     <year>1996-1999</year>
     <market>All</market>
     <make>BMW</make>
     <model>E36/E39/Z3</model>
-    <submodel>MS41.0 1429861 + VANOSRT1 (24KB)</submodel>
+    <submodel>MS41.0 1429861 + VANOSRT3 (24KB)</submodel>
     <transmission>MT/AT</transmission>
     <memmodel>80C166W-M-T3</memmodel>
     <filesize>24kb</filesize>
@@ -115,21 +115,21 @@
 <table type="2D" name="VANOS Retrofit - Minimum RPM (Closed Throttle)" category="VANOS Retrofit" storagetype="uint8" sizey="1" storageaddress="0x3000">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Engage Above" sizey="1"><data>RPM</data></table>
-  <description>Minimum RPM for closed-throttle VANOS engagement added by the tested MS41.0 VANOSRT1 retrofit. Raw 0xFF preserves stock behavior; use only after that patch is installed.</description>
+  <description>Minimum RPM for closed-throttle VANOS engagement added by the tested, checksum-correct MS41.0 VANOSRT3 retrofit. Raw 0xFF preserves stock behavior; use only after that patch is installed.</description>
 </table>
 </rom>
 
 <rom>
   <romid>
-    <xmlid>BIMMERSTEIN_MS410_VANOSRT1_256K</xmlid>
+    <xmlid>BIMMERSTEIN_MS410_VANOSRT3_256K</xmlid>
     <internalidaddress>17008</internalidaddress>
-    <internalidstring>VANOSRT1</internalidstring>
+    <internalidstring>VANOSRT3</internalidstring>
     <ecuid>1429861</ecuid>
     <year>1996-1999</year>
     <market>All</market>
     <make>BMW</make>
     <model>E36/E39/Z3</model>
-    <submodel>MS41.0 1429861 + VANOSRT1 (256KB)</submodel>
+    <submodel>MS41.0 1429861 + VANOSRT3 (256KB)</submodel>
     <transmission>MT/AT</transmission>
     <memmodel>80C166W-M-T3</memmodel>
     <filesize>256kb</filesize>
@@ -203,7 +203,7 @@
 <table type="2D" name="VANOS Retrofit - Minimum RPM (Closed Throttle)" category="VANOS Retrofit" storagetype="uint8" sizey="1" storageaddress="0x17000">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Engage Above" sizey="1"><data>RPM</data></table>
-  <description>Minimum RPM for closed-throttle VANOS engagement added by the tested MS41.0 VANOSRT1 retrofit. Raw 0xFF preserves stock behavior; use only after that patch is installed.</description>
+  <description>Minimum RPM for closed-throttle VANOS engagement added by the tested, checksum-correct MS41.0 VANOSRT3 retrofit. Raw 0xFF preserves stock behavior; use only after that patch is installed.</description>
 </table>
 </rom>
 

@@ -11,11 +11,17 @@ Connection bar is shared across all tabs.
 
 import sys
 import os
+import json
 import tempfile
 import threading
 import datetime
 import time
 import traceback
+import glob
+import zipfile
+import uuid
+from dataclasses import replace
+from pathlib import Path
 
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -46,6 +52,7 @@ from live_data import (LiveDataPoller, PROFILE_DISPLAY_NAMES,
                        TELEGRAM_PARAM_NAMES, display_rows, read_adaptations)
 from rom_analyzer import analyze as analyze_rom
 from backup_manager import BackupManager, BACKUP_DIR
+import bin_compare
 from port_owner import PortOwner, PortBusyError
 import patch_service
 import identity
@@ -55,7 +62,9 @@ from ds2_write_authorization import AUTHORIZATION_STATE_ADDRESS
 import softbsl_service
 import softbsl_install
 import bsl_service
-from app_paths import mutable_path
+import ch341a_eeprom_service
+from engines.softbsl import eeprom_ram
+from app_paths import install_root, mutable_path
 from definition_registry import (
     DefinitionConflictError,
     DefinitionRegistry,
@@ -66,6 +75,7 @@ APP_ICON_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "assets", "bimmerstein_ecu_tool.png")
 IDENTITY_BACKUP_SOURCE = "Identity / EWS"
 IDENTITY_RECOVERY_DIR = os.path.join(BACKUP_DIR, "recovery")
+EEPROM_BACKUP_DIR = os.path.join(BACKUP_DIR, "eeprom")
 LOG_DIR = str(mutable_path("logs"))
 VERIFY_OFF_MESSAGE = (
     "Read-back verification skipped (Verify off). ECU-side finalization completed."
@@ -74,6 +84,150 @@ MAIN_WINDOW_WIDTH = 980
 MAIN_WINDOW_PREFERRED_HEIGHT = 960
 MAIN_CANVAS_MIN_HEIGHT = 700
 _SOFTBSL_PATCH_VERSIONS = ("MS41.0", "MS41.1", "MS41.2", "MS41.3")
+_SOFTBSL_DOOR_PATCH = {
+    "MS41.0": "door_magic_ms410",
+    "MS41.1": "door_magic_ms411",
+    "MS41.2": "door_magic",
+    "MS41.3": "door_magic",
+}
+
+
+def _release_build_info():
+    """Return compact label, log summary, and About text from packaged metadata."""
+    metadata = {}
+    try:
+        with open(
+                os.path.join(install_root(), "RELEASE-METADATA.json"),
+                "r", encoding="utf-8-sig") as stream:
+            loaded = json.load(stream)
+        if isinstance(loaded, dict):
+            metadata = loaded
+    except (OSError, ValueError):
+        pass
+
+    product = str(metadata.get("product") or "BimmerStein ECU Tool").strip()
+    developer = str(metadata.get("developer") or "CAATZ").strip()
+    repository = str(
+        metadata.get("repository")
+        or "https://github.com/CAATZ/BimmerStein-ECU-Tool"
+    ).strip()
+    version = str(
+        metadata.get("version")
+        or os.environ.get("BIMMERSTEIN_VERSION")
+        or "Development"
+    ).strip()
+    backend = str(metadata.get("build_backend") or "source").strip()
+    commit = str(metadata.get("source_commit") or "").strip()
+    dirty = metadata.get("source_dirty")
+    built_at = str(metadata.get("built_at_utc") or "").strip()
+
+    version_parts = version.rsplit("b", 1)
+    display_version = (
+        f"Beta {version_parts[1]}"
+        if len(version_parts) == 2 and version_parts[1].isdigit()
+        else version
+    )
+    source_label = commit[:7]
+    if source_label and dirty is True:
+        source_label += "+dirty"
+    label = " · ".join(filter(None, (display_version, source_label))) + "  ⓘ"
+
+    summary_parts = [version, backend]
+    if commit:
+        summary_parts.append(commit + ("+dirty" if dirty is True else ""))
+    if built_at:
+        summary_parts.append(built_at)
+
+    details = [
+        product,
+        f"Developer: {developer}",
+        f"Repository: {repository}",
+        f"Version: {version}",
+        f"Build backend: {backend}",
+    ]
+    if commit:
+        source = commit
+        if dirty is True:
+            source += " (dirty source tree)"
+        elif dirty is False:
+            source += " (clean source tree)"
+        details.append(f"Source commit: {source}")
+    if built_at:
+        details.append(f"Built (UTC): {built_at}")
+    if metadata.get("platform"):
+        details.append(f"Platform: {metadata['platform']}")
+    if metadata.get("project_license"):
+        details.append(f"License: {metadata['project_license']}")
+    if not metadata:
+        details.append("Release metadata: not available")
+    return label, " / ".join(summary_parts), "\n".join(details)
+
+
+def _latest_file(directory, patterns):
+    paths = []
+    for pattern in patterns:
+        paths.extend(glob.glob(os.path.join(str(directory), pattern)))
+    files = [path for path in paths if os.path.isfile(path)]
+    try:
+        return max(files, key=os.path.getmtime) if files else ""
+    except OSError:
+        return ""
+
+
+def _create_support_bundle(
+        destination, build_info, *, bin_metadata=None, live_csv="",
+        native_journal="", session_log=""):
+    """Write a privacy-scoped support ZIP atomically and return its member names."""
+    destination = os.path.abspath(destination)
+    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    temp = tempfile.NamedTemporaryFile(
+        prefix=".bimmerstein-support-", suffix=".tmp",
+        dir=os.path.dirname(destination), delete=False)
+    temp_path = temp.name
+    temp.close()
+    members = ["build-info.txt"]
+    try:
+        with zipfile.ZipFile(
+                temp_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("build-info.txt", build_info.rstrip() + "\n")
+            if bin_metadata is not None:
+                archive.writestr(
+                    "selected-bin.json",
+                    json.dumps(bin_metadata, indent=2, sort_keys=True) + "\n")
+                members.append("selected-bin.json")
+            for source, member in (
+                    (live_csv, "live-data.csv"),
+                    (native_journal, "native-fast-journal.jsonl"),
+                    (session_log, "session-log.txt")):
+                if source and os.path.isfile(source):
+                    archive.write(source, member)
+                    members.append(member)
+            manifest = {
+                "schema": 1,
+                "created_utc": (
+                    datetime.datetime.now(datetime.timezone.utc)
+                    .replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                ),
+                "contents": members + ["manifest.json"],
+                "raw_rom_included": False,
+                "session_log_included": "session-log.txt" in members,
+                "privacy": (
+                    "Raw ROMs, Bin filenames, VIN, ISN, notes, and ECU identifiers "
+                    "are excluded. Session logs are included only by explicit opt-in."
+                ),
+            }
+            archive.writestr(
+                "manifest.json",
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+            members.append("manifest.json")
+        os.replace(temp_path, destination)
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+    return members
 
 
 def configure_high_dpi():
@@ -434,23 +588,34 @@ class _GuiPrompt(QObject):
 
 
 class _GuiConfirm(QObject):
-    """Blocking Yes/No confirmation callable from a worker thread."""
+    """Blocking confirmation callable from a worker thread."""
     _ask = pyqtSignal(str)
 
-    def __init__(self, parent):
+    def __init__(self, parent, title="Reinstall Soft-BSL?", typed_phrase=None):
         super().__init__(parent)
         self._widget = parent
+        self._title = str(title)
+        self._typed_phrase = str(typed_phrase) if typed_phrase else None
         self._evt = threading.Event()
         self._accepted = False
         self._ask.connect(self._show)
 
     def _show(self, msg):
-        self._accepted = (
-            QMessageBox.question(
-                self._widget, "Reinstall Soft-BSL?", str(msg),
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            == QMessageBox.Yes
-        )
+        if self._typed_phrase:
+            entered, accepted = QInputDialog.getText(
+                self._widget,
+                self._title,
+                f"{str(msg).strip()}\n\nType {self._typed_phrase} to continue:",
+            )
+            self._accepted = bool(
+                accepted and entered.strip() == self._typed_phrase)
+        else:
+            self._accepted = (
+                QMessageBox.question(
+                    self._widget, self._title, str(msg),
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                == QMessageBox.Yes
+            )
         self._evt.set()
 
     def __call__(self, msg=""):
@@ -459,6 +624,262 @@ class _GuiConfirm(QObject):
         self._ask.emit(str(msg))
         self._evt.wait()
         return self._accepted
+
+
+class EepromManagerDialog(QDialog):
+    """Shared exact-image editor for RAM-agent and CH341A captures."""
+
+    def __init__(self, owner):
+        super().__init__(owner)
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.owner = owner
+        self._updating = False
+        self._baseline = None
+        self._variant = None
+        self.setModal(True)
+        self.setWindowTitle("EEPROM Manager")
+        self.resize(1120, 760)
+        layout = QVBoxLayout(self)
+
+        top = QHBoxLayout()
+        self.layout_label = QLabel()
+        top.addWidget(self.layout_label)
+        self.expert = QCheckBox("Enable raw byte editing")
+        self.expert.toggled.connect(self._set_editable)
+        top.addWidget(self.expert)
+        top.addStretch()
+        layout.addLayout(top)
+
+        self.source = QLabel("No EEPROM image loaded.")
+        self.source.setWordWrap(True)
+        self.source.setStyleSheet("color:#aaa;")
+        layout.addWidget(self.source)
+        self.summary = QLabel()
+        self.summary.setWordWrap(True)
+        layout.addWidget(self.summary)
+
+        self.hex_table = QTableWidget(32, 18)
+        self.hex_table.setHorizontalHeaderLabels(
+            ["Offset"] + [f"{index:X}" for index in range(16)] + ["ASCII"])
+        self.hex_table.verticalHeader().setVisible(False)
+        self.hex_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.hex_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeToContents)
+        for column in range(1, 17):
+            self.hex_table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeToContents)
+        self.hex_table.horizontalHeader().setSectionResizeMode(
+            17, QHeaderView.Stretch)
+        self.hex_table.itemChanged.connect(self._byte_changed)
+        layout.addWidget(self.hex_table, 2)
+
+        shortcut = QHBoxLayout()
+        shortcut.addWidget(QLabel("Transmission shortcut:"))
+        self.transmission = QComboBox()
+        self.transmission.addItem("Automatic transmission", "at")
+        self.transmission.addItem("Manual transmission", "mt")
+        shortcut.addWidget(self.transmission)
+        apply_transmission = QPushButton("Apply")
+        apply_transmission.clicked.connect(self._apply_transmission)
+        shortcut.addWidget(apply_transmission)
+        shortcut.addStretch()
+        layout.addLayout(shortcut)
+
+        self.fields = QTableWidget(0, 6)
+        self.fields.setHorizontalHeaderLabels(
+            ["Offset", "Length", "Check", "Category", "Meaning", "Raw bytes"])
+        self.fields.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.fields.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.fields.verticalHeader().setVisible(False)
+        header = self.fields.horizontalHeader()
+        for column in (0, 1, 2, 3):
+            header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.Stretch)
+        header.setSectionResizeMode(5, QHeaderView.Stretch)
+        layout.addWidget(self.fields, 1)
+
+        buttons = QHBoxLayout()
+        self.update_checks_button = QPushButton("Update Checks for Edited Records")
+        self.update_checks_button.setToolTip(
+            "Recalculate checks only for known records whose payload bytes "
+            "were edited. Existing invalid records that were not edited stay unchanged.")
+        self.update_checks_button.clicked.connect(self._update_changed_checks)
+        apply_button = QPushButton("Apply Changes")
+        apply_button.clicked.connect(self._apply_to_owner)
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.reject)
+        buttons.addStretch()
+        buttons.addWidget(self.update_checks_button)
+        buttons.addWidget(apply_button)
+        buttons.addWidget(close_button)
+        layout.addLayout(buttons)
+
+    def set_image(self, image, source, variant):
+        image = eeprom_ram.validate_image(image)
+        eeprom_ram.fields_for_variant(variant)
+        self._baseline = image
+        self._variant = variant
+        self._updating = True
+        try:
+            self.layout_label.setText(f"EEPROM layout: {variant}")
+            self.source.setText(f"Source: {source}")
+            for row in range(32):
+                offset = row * 16
+                offset_item = QTableWidgetItem(f"0x{offset:03X}")
+                offset_item.setFlags(offset_item.flags() & ~Qt.ItemIsEditable)
+                self.hex_table.setItem(row, 0, offset_item)
+                for column, value in enumerate(image[offset:offset + 16], 1):
+                    self.hex_table.setItem(row, column, QTableWidgetItem(f"{value:02X}"))
+                ascii_item = QTableWidgetItem(
+                    "".join(chr(value) if 32 <= value < 127 else "."
+                            for value in image[offset:offset + 16]))
+                ascii_item.setFlags(ascii_item.flags() & ~Qt.ItemIsEditable)
+                self.hex_table.setItem(row, 17, ascii_item)
+        finally:
+            self._updating = False
+        self._set_editable(self.expert.isChecked())
+        self._refresh_details()
+
+    def image(self):
+        values = []
+        for row in range(32):
+            for column in range(1, 17):
+                text = self.hex_table.item(row, column).text().strip()
+                if len(text) != 2:
+                    raise ValueError(
+                        f"invalid byte at 0x{row * 16 + column - 1:03X}")
+                values.append(int(text, 16))
+        return bytes(values)
+
+    def _set_editable(self, enabled):
+        triggers = (
+            QAbstractItemView.DoubleClicked
+            | QAbstractItemView.EditKeyPressed
+            | QAbstractItemView.AnyKeyPressed
+            if enabled else QAbstractItemView.NoEditTriggers
+        )
+        self.hex_table.setEditTriggers(triggers)
+
+    def _byte_changed(self, item):
+        if self._updating or not 1 <= item.column() <= 16:
+            return
+        try:
+            value = int(item.text().strip(), 16)
+            if not 0 <= value <= 0xFF or len(item.text().strip()) > 2:
+                raise ValueError
+        except ValueError:
+            item.setBackground(QBrush(QColor("#7a2f2f")))
+            return
+        self._updating = True
+        item.setText(f"{value:02X}")
+        self._updating = False
+        self._refresh_details()
+
+    def _refresh_details(self):
+        if self._baseline is None:
+            return
+        try:
+            image = self.image()
+            inspection = eeprom_ram.inspect_image(image, self._variant)
+        except (ValueError, eeprom_ram.EepromError) as error:
+            self.summary.setText(f"Invalid edited image: {error}")
+            return
+        changed = set(eeprom_ram.changed_offsets(self._baseline, image))
+        self._updating = True
+        try:
+            for row in range(32):
+                offset = row * 16
+                for column in range(1, 17):
+                    address = offset + column - 1
+                    self.hex_table.item(row, column).setBackground(
+                        QBrush(QColor("#4a3a00")) if address in changed else QBrush())
+                self.hex_table.item(row, 17).setText(
+                    "".join(chr(value) if 32 <= value < 127 else "."
+                            for value in image[offset:offset + 16]))
+        finally:
+            self._updating = False
+        rows = inspection["fields"]
+        valid = sum(row.get("check_ok", False) for row in rows if row["checked"])
+        checked = sum(row["checked"] for row in rows)
+        transmission = inspection["decoded"]["transmission"]
+        self.summary.setText(
+            f"SHA-256: {inspection['sha256']}  |  Checked records: "
+            f"{valid}/{checked} valid  |  Transmission at "
+            f"0x{eeprom_ram.transmission_offset(self._variant):03X}: "
+            f"{transmission['mode']}  |  Changed bytes: {len(changed)}")
+        mode = {"automatic": 0, "manual": 1}.get(transmission["mode"])
+        if mode is not None:
+            self.transmission.setCurrentIndex(mode)
+        self.fields.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            check = (
+                "Valid" if row.get("check_ok") else "Invalid"
+                if row["checked"] else "None")
+            for column, value in enumerate((
+                f"0x{row['offset']:03X}", str(row["length"]), check,
+                row["category"].replace("_", " ").title(),
+                row["label"], row["raw"],
+            )):
+                cell = QTableWidgetItem(value)
+                if column == 2:
+                    cell.setForeground(QBrush(
+                        QColor("#72d572") if check == "Valid" else
+                        QColor("#f47171") if check == "Invalid" else
+                        QColor("#999999")))
+                self.fields.setItem(row_index, column, cell)
+
+    def _set_edited_image(self, image):
+        baseline = self._baseline
+        self.set_image(image, self.source.text().removeprefix("Source: "),
+                       self._variant)
+        self._baseline = baseline
+        self._refresh_details()
+
+    def _update_changed_checks(self):
+        try:
+            current = self.image()
+            updated = eeprom_ram.update_checks_for_changed_records(
+                self._baseline, current, self._variant)
+        except Exception as error:
+            QMessageBox.critical(self, "Check Update Failed", str(error))
+            return
+        if updated == current:
+            QMessageBox.information(
+                self, "No Checks Updated",
+                "No edited checked record needs a check update.")
+            return
+        self._set_edited_image(updated)
+
+    def _apply_transmission(self):
+        try:
+            image = eeprom_ram.set_transmission_mode(
+                self.image(), self.transmission.currentData(),
+                self._variant)
+        except Exception as error:
+            QMessageBox.critical(self, "Transmission Edit Failed", str(error))
+            return
+        self._set_edited_image(image)
+
+    def _apply_to_owner(self):
+        try:
+            image = self.image()
+            eeprom_ram.build_write_plan(
+                self._baseline, image, self._variant)
+        except Exception as error:
+            QMessageBox.critical(self, "Invalid EEPROM Edit", str(error))
+            return
+        modified = self.owner._eeprom_modified or image != self._baseline
+        self.owner._show_eeprom_image(
+            image,
+            self.source.text().removeprefix("Source: "),
+            variant=self._variant,
+            modified=modified,
+        )
+        QMessageBox.information(
+            self, "EEPROM Image Ready",
+            "The loaded EEPROM image now contains these edits. Use Write Loaded "
+            "Image in the EEPROM tab to send it.")
+        self.accept()
 
 
 # ---------------------------------------------------------------------------
@@ -561,6 +982,9 @@ class MS41FlashGUI(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("BimmerStein ECU Tool")
+        (self._build_label_text,
+         self._build_info_summary,
+         self._build_info_text) = _release_build_info()
         if os.path.exists(APP_ICON_PATH):
             self.setWindowIcon(QIcon(APP_ICON_PATH))
         self.resize(MAIN_WINDOW_WIDTH, MAIN_WINDOW_PREFERRED_HEIGHT)
@@ -580,6 +1004,7 @@ class MS41FlashGUI(QMainWindow):
                                             # reused for boot gates and identity grafting
         self._ecu_identity_source = None   # small live DS2 snapshot: serial/ISN + packed VIN
         self._task_busy           = False
+        self._connect_attempt     = None   # token while a provisional DS2 handle is worker-owned
         self._connection_echo     = True
         self._connection_port     = None   # plain-string snapshot; safe for worker-thread handoffs
         self._d2xx_checked        = False
@@ -593,6 +1018,8 @@ class MS41FlashGUI(QMainWindow):
         self._port_owner           = PortOwner()   # single-owner mutex for the one serial port
         self._native_write_recovery = None  # retained D2XX/session after a post-erase failure
         self._softbsl_write_recovery = None # retained Soft-BSL RAM agent after a post-erase failure
+        self._eeprom_write_recovery = None # retained EEPROM agent after an uncertain byte write
+        self._eeprom_task_busy = False    # closes are vetoed across the handoff race window
         self._softbsl_install_recovery = None # retained Phase-1/2 installer transport
         self._softbsl_boot_session = None   # CalGuard key-on entry retained until read/write
         # A completed stock write leaves volatile authorization active until a
@@ -622,6 +1049,18 @@ class MS41FlashGUI(QMainWindow):
         self._analyzer_loaded_data = None
         self._analyzer_loaded_path = ""
         self._analyzer_parameters_window = None
+        self._eeprom_image = None
+        self._eeprom_source = ""
+        self._eeprom_variant = None
+        self._eeprom_auto_variant = None
+        self._eeprom_layout_candidates = ()
+        self._eeprom_layout_from_source = False
+        self._eeprom_modified = False
+        self._eeprom_manager_dialog = None
+        self._ch341a_status = None
+        self._ch341a_capture = None
+        self._ch341a_preseed_capture = None
+        self._ch341a_write_uncertain = False
         self._build_ui()
         self._refresh_ports()
 
@@ -632,6 +1071,93 @@ class MS41FlashGUI(QMainWindow):
             self.showMaximized()
         else:
             self.show()
+
+    def _show_about(self):
+        box = QMessageBox(self)
+        box.setWindowTitle("About BimmerStein ECU Tool")
+        box.setIcon(QMessageBox.Information)
+        box.setTextFormat(Qt.PlainText)
+        box.setText(self._build_info_text)
+        copy_button = box.addButton("Copy Build Info", QMessageBox.ActionRole)
+        copy_button.clicked.connect(
+            lambda: QGuiApplication.clipboard().setText(self._build_info_text))
+        export_button = box.addButton(
+            "Export Support Bundle…", QMessageBox.ActionRole)
+        export_button.clicked.connect(self._on_export_support_bundle)
+        box.addButton(QMessageBox.Close)
+        box.exec_()
+
+    def _on_export_support_bundle(self):
+        if getattr(self, "_task_busy", False):
+            QMessageBox.information(
+                self, "Operation In Progress",
+                "Wait for the current ECU operation to finish before exporting "
+                "a support bundle.")
+            return
+        if len(self._selected_backup_rows()) > 1:
+            QMessageBox.information(
+                self, "Select One Bin",
+                "Select exactly one Bin to include its metadata, or clear the "
+                "selection to export without Bin metadata.")
+            return
+
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        destination, _ = QFileDialog.getSaveFileName(
+            self, "Export Support/Test Bundle",
+            f"BimmerStein-support-{stamp}.zip", "ZIP Files (*.zip)")
+        if not destination:
+            return
+        if not destination.lower().endswith(".zip"):
+            destination += ".zip"
+
+        entry = self._selected_backup()
+        try:
+            bin_metadata = bin_compare.support_metadata(entry) if entry else None
+        except Exception as error:
+            bin_metadata = {
+                "available": False,
+                "error": "The selected Bin could not be read.",
+            }
+            QMessageBox.warning(
+                self, "Selected Bin Metadata Omitted",
+                f"The support bundle will still be created, but the selected "
+                f"Bin could not be inspected:\n{error}")
+
+        live_csv = _latest_file(LOG_DIR, ("ds2_*.csv", "live_*.csv", "telegram_*.csv"))
+        native_journal = _latest_file(
+            ds2_native_fast_service.NATIVE_JOURNAL_DIR, ("*.jsonl",))
+        if self._log_file:
+            try:
+                self._log_file.flush()
+                session_log = self._log_file.name
+            except Exception:
+                session_log = ""
+        else:
+            session_log = _latest_file(LOG_DIR, ("session_*.txt",))
+
+        if session_log:
+            answer = QMessageBox.warning(
+                self, "Include Session Log?",
+                "Session logs may contain VIN, ISN, ECU identifiers, local file "
+                "paths, and detailed errors.\n\nInclude the latest session log?",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.No)
+            if answer == QMessageBox.Cancel:
+                return
+            if answer != QMessageBox.Yes:
+                session_log = ""
+
+        try:
+            members = _create_support_bundle(
+                destination, self._build_info_text,
+                bin_metadata=bin_metadata, live_csv=live_csv,
+                native_journal=native_journal, session_log=session_log)
+        except Exception as error:
+            QMessageBox.critical(self, "Support Bundle Failed", str(error))
+            return
+        QMessageBox.information(
+            self, "Support Bundle Saved",
+            f"Saved:\n{destination}\n\nIncluded: {', '.join(members)}")
 
     # -------------------------------------------------------------------
     # UI Construction
@@ -765,6 +1291,7 @@ class MS41FlashGUI(QMainWindow):
         self._build_dtc_tab()          # DTC Codes
         self._build_live_data_tab()    # Live Data
         self._build_adaptations_tab()  # Adaptations
+        self._build_eeprom_tab()       # EEPROM
         self._build_partial_tab()      # Partial / Full
         self._build_backups_tab()      # Bins
         self._build_patches_tab()      # Patches
@@ -779,8 +1306,22 @@ class MS41FlashGUI(QMainWindow):
         self.progress_label = QLabel("")
         self.progress_bar.setVisible(False)
         self.progress_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.btn_about = QPushButton(self._build_label_text)
+        self.btn_about.setFlat(True)
+        self.btn_about.setToolTip(
+            "About this build, copy build information, or export a support bundle")
+        self.btn_about.setStyleSheet(
+            "QPushButton { border:none; color:#999; padding:0 4px; text-align:right; }"
+            "QPushButton:hover { color:#ddd; text-decoration:underline; }"
+            "QPushButton:focus { border:1px dotted #bbb; }"
+        )
+        self.btn_about.clicked.connect(self._show_about)
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.addWidget(self.progress_label, 1)
+        status_row.addWidget(self.btn_about)
         root.addWidget(self.progress_bar)
-        root.addWidget(self.progress_label)
+        root.addLayout(status_row)
 
         self._set_ecu_buttons_enabled(False)
         self._update_transfer_mode()   # sets the initial disabled-tooltip before any connect
@@ -1190,7 +1731,10 @@ class MS41FlashGUI(QMainWindow):
                                 f"Finish that operation before connecting.")
             self.btn_connect.setChecked(False)
             return
+        self._start_session_log()
         self._log(f"Opening {port} for BMW DS2 (9600 8E2, no init)…")
+        connect_attempt = object()
+        self._connect_attempt = connect_attempt
         direct_tap = self.chk_direct_tap.isChecked()
         self._connection_echo = not direct_tap
         self._connection_port = port
@@ -1198,86 +1742,148 @@ class MS41FlashGUI(QMainWindow):
             self._log("Direct-tap mode: full-duplex, no K-Line echo expected.")
 
         def task(log_fn, progress_fn):
-            self._ds2 = DS2Interface(port=port, baud=9600, verbose=False, echo=not direct_tap)
-            self._ds2.open()
-            transport = getattr(self._ds2, "transport_name", None) or "serial"
-            log_fn(f"Port {port} open via {transport} (DS2 9600 8E2)")
-            log_fn("Identifying ECU (DS2 0x00)…")
-            ident = self._ds2.identify()
-            cal_id = ""
+            ds2 = None
             try:
-                raw = self._ds2.read_mem(0x1000E, 2)  # cal_base+0x0E per RomRaider defs
-                cal_id = "".join(chr(b) if 32 <= b < 127 else "?" for b in raw).strip()
-            except Exception:
-                pass
-            program_compatibility_id = ""
-            try:
-                program_ids = [
-                    bytes(self._ds2.read_mem(address ^ 0x4000, 4))
-                    for address in FIRMWARE_COMPAT_PROGRAM_ADDRS
-                ]
-                if (all(len(value) == 4 and value.isdigit() for value in program_ids)
-                        and len(set(program_ids)) == 1):
-                    program_compatibility_id = program_ids[0].decode("ascii")
-            except Exception:
-                pass
-            vin = ""
-            try:
-                vin = self._ds2.read_vin()
-            except Exception:
-                pass
-            # Detect MS41.3 from the PROGRAM-region SS1v2 signature (survives a tune/cal
-            # reflash), NOT the cal-resident ABHISHEK marker a custom tune wipes.
-            prog_is_ms41_3 = self._program_is_ms41_3(self._ds2)
-            # Soft-BSL bank marker + flash chip signature — read-only, no agent, safe on a
-            # normally-running ECU. Used to decide whether the Fast checkbox can be offered
-            # and to render an accurate chip label.
-            softbsl_marker_raw = b""
-            try:
-                softbsl_marker_raw = self._ds2.read_mem(ecu_info.BANK_MARKER_ADDR, ecu_info.BANK_MARKER_LEN)
-            except Exception:
-                pass
-            softbsl_hook_present = False
-            softbsl_hook_check_failed = False
-            if ecu_info.decode_bank_marker(softbsl_marker_raw):
+                ds2 = DS2Interface(
+                    port=port, baud=9600, verbose=False, echo=not direct_tap)
+                progress_fn(0, 1, f"Opening {port}")
+                ds2.open()
+                transport = getattr(ds2, "transport_name", None) or "serial"
+                log_fn(f"Port {port} open via {transport} (DS2 9600 8E2)")
+                log_fn("Identifying ECU (DS2 0x00)…")
+                progress_fn(0, 1, "Identifying ECU")
+                ident = ds2.identify()
+                cal_id = ""
                 try:
-                    softbsl_hook_present = any(
-                        self._live_patch_present(self._ds2, patch_id)
-                        for patch_id in (
-                            "door_magic_ms410", "door_magic_ms411", "door_magic")
-                    )
-                except Exception as error:
-                    softbsl_hook_check_failed = True
-                    log_fn(
-                        "Soft-BSL loader marker is present, but the normal-mode 0x2A "
-                        f"hook could not be confirmed ({error}). Automatic transfers "
-                        "will use DS2.", "warn")
-                if not softbsl_hook_present and not softbsl_hook_check_failed:
-                    log_fn(
-                        "Soft-BSL loader marker is present without the complete 0x2A "
-                        "program hook. Automatic transfers will use DS2.", "warn")
-            calguard_recovery_ready = False
-            if not (ecu_info.decode_bank_marker(softbsl_marker_raw)
-                    and softbsl_hook_present):
-                calguard_recovery_ready = softbsl_service.calguard_recovery_ready(
-                    self._ds2, log_fn)
-            chip_sig_for_fast = b""
-            try:
-                chip_sig_for_fast = self._ds2.read_mem(ecu_info.DRV_SIG_ADDR, ecu_info.DRV_SIG_LEN)
+                    raw = ds2.read_mem(0x1000E, 2)  # cal_base+0x0E per RomRaider defs
+                    cal_id = "".join(
+                        chr(b) if 32 <= b < 127 else "?" for b in raw).strip()
+                except Exception:
+                    pass
+                program_compatibility_id = ""
+                try:
+                    program_ids = [
+                        bytes(ds2.read_mem(address ^ 0x4000, 4))
+                        for address in FIRMWARE_COMPAT_PROGRAM_ADDRS
+                    ]
+                    if (all(len(value) == 4 and value.isdigit() for value in program_ids)
+                            and len(set(program_ids)) == 1):
+                        program_compatibility_id = program_ids[0].decode("ascii")
+                except Exception:
+                    pass
+                vin = ""
+                try:
+                    vin = ds2.read_vin()
+                except Exception:
+                    pass
+                # Detect MS41.3 from the PROGRAM-region SS1v2 signature (survives a tune/cal
+                # reflash), NOT the cal-resident ABHISHEK marker a custom tune wipes.
+                prog_is_ms41_3 = self._program_is_ms41_3(ds2)
+                ecu_id = bytes(ident[:7]).decode("ascii", errors="ignore")
+                program_variant = (
+                    "MS41.3" if prog_is_ms41_3 else
+                    _ECU_VARIANT_MAP.get(ecu_id, (None, None))[0]
+                )
+                # Soft-BSL bank marker + flash chip signature — read-only, no agent, safe on a
+                # normally-running ECU. Used to decide whether the Fast checkbox can be offered
+                # and to render an accurate chip label.
+                progress_fn(0, 1, "Reading ECU connection details")
+                softbsl_marker_raw = b""
+                try:
+                    softbsl_marker_raw = ds2.read_mem(
+                        ecu_info.BANK_MARKER_ADDR, ecu_info.BANK_MARKER_LEN)
+                except Exception:
+                    pass
+                softbsl_hook_present = False
+                softbsl_hook_check_failed = False
+                if ecu_info.decode_bank_marker(softbsl_marker_raw):
+                    try:
+                        softbsl_hook_present = self._live_softbsl_door_present(
+                            ds2, program_variant)
+                    except Exception as error:
+                        softbsl_hook_check_failed = True
+                        log_fn(
+                            "Soft-BSL loader marker is present, but the normal-mode 0x2A "
+                            f"hook could not be confirmed ({error}). Automatic transfers "
+                            "will use DS2.", "warn")
+                    if not softbsl_hook_present and not softbsl_hook_check_failed:
+                        log_fn(
+                            "Soft-BSL loader marker is present without the complete 0x2A "
+                            "program hook. Automatic transfers will use DS2.", "warn")
+                calguard_recovery_ready = False
+                if not (ecu_info.decode_bank_marker(softbsl_marker_raw)
+                        and softbsl_hook_present):
+                    calguard_recovery_ready = softbsl_service.calguard_recovery_ready(
+                        ds2, log_fn)
+                chip_sig_for_fast = b""
+                try:
+                    chip_sig_for_fast = ds2.read_mem(
+                        ecu_info.DRV_SIG_ADDR, ecu_info.DRV_SIG_LEN)
+                except Exception:
+                    pass
+                new_fields = self._read_new_info_fields(ds2, log_fn)
+                identity_source = self._read_live_identity_source(ds2, log_fn)
+                return (ds2, ident, cal_id, vin, prog_is_ms41_3, new_fields,
+                        softbsl_marker_raw, chip_sig_for_fast, identity_source,
+                        softbsl_hook_present, program_compatibility_id,
+                        calguard_recovery_ready)
             except Exception:
-                pass
-            new_fields = self._read_new_info_fields(self._ds2, log_fn)
-            identity_source = self._read_live_identity_source(self._ds2, log_fn)
-            return (ident, cal_id, vin, prog_is_ms41_3, new_fields,
-                    softbsl_marker_raw, chip_sig_for_fast, identity_source,
-                    softbsl_hook_present, program_compatibility_id,
-                    calguard_recovery_ready)
+                # The provisional transport belongs to this worker until every
+                # connect-time probe succeeds. Keep PortOwner held while close()
+                # runs so no other GUI route can race the same physical handle.
+                if ds2 is not None:
+                    try:
+                        ds2.close()
+                    except Exception as close_error:
+                        log_fn(
+                            f"Failed connection cleanup reported: {close_error}",
+                            "warn",
+                        )
+                raise
 
-        self._run_task(
-            task,
-            on_success=lambda r: self._on_connected(*r),
-            on_failure=lambda e: self._on_connect_failed(e),
+        def on_success(result):
+            if self._connect_attempt is connect_attempt:
+                self._connect_attempt = None
+            self._ds2, *details = result
+            self._on_connected(*details)
+
+        def on_failure(error):
+            if self._connect_attempt is connect_attempt:
+                self._connect_attempt = None
+            self._on_connect_failed(error)
+
+        try:
+            self._run_task(
+                task,
+                on_success=on_success,
+                on_failure=on_failure,
+            )
+        except Exception:
+            if self._connect_attempt is connect_attempt:
+                self._connect_attempt = None
+            raise
+        worker = self._worker
+        if self._connect_attempt is connect_attempt and worker is not None:
+            QTimer.singleShot(
+                10000,
+                lambda: self._on_connect_still_waiting(
+                    connect_attempt, worker, port),
+            )
+
+    def _on_connect_still_waiting(self, connect_attempt, worker, port):
+        """Report a slow driver/ECU without releasing its reserved port."""
+        if (self._connect_attempt is not connect_attempt
+                or self._worker is not worker or not worker.isRunning()):
+            return
+        stage = self.progress_label.text().strip()
+        stage_note = f" Current stage: {stage}." if stage else ""
+        message = (
+            f"Still waiting for {port} / ECU response.{stage_note} "
+            "The port remains reserved; "
+            "wait, or unplug the adapter and let connection cleanup finish."
         )
+        self.progress_label.setText(message)
+        self._log(message, "warn")
 
     def _connect_calguard_boot(self, port):
         if self.chk_direct_tap.isChecked():
@@ -1376,7 +1982,15 @@ class MS41FlashGUI(QMainWindow):
             f"{error}\n\nNothing was erased or written.",
         )
 
-    def _disconnect(self):
+    def _disconnect(self, *, keep_session_log=False):
+        if self._pending_eeprom_recovery() is not None:
+            QMessageBox.critical(
+                self,
+                "EEPROM Recovery Session Still Active",
+                "The EEPROM commit state is unresolved. Keep ignition ON and use "
+                "Resolve Pending Write before disconnecting.",
+            )
+            return False
         boot_session = getattr(self, "_softbsl_boot_session", None)
         if boot_session is not None:
             if boot_session.is_open:
@@ -1446,7 +2060,8 @@ class MS41FlashGUI(QMainWindow):
         if hasattr(self, "id_vin_current"):
             self._clear_identity_tab_state()
         self._on_live_stop()
-        self._end_session_log()
+        if not keep_session_log:
+            self._end_session_log()
         self.lbl_status.setText("● Disconnected")
         self.lbl_status.setStyleSheet("color:#999; font-weight:bold;")
         self.lbl_variant.setText("")
@@ -1494,6 +2109,11 @@ class MS41FlashGUI(QMainWindow):
                 return False
         return True
 
+    @classmethod
+    def _live_softbsl_door_present(cls, ds2, program_variant) -> bool:
+        patch_id = _SOFTBSL_DOOR_PATCH.get(program_variant)
+        return bool(patch_id and cls._live_patch_present(ds2, patch_id))
+
     @staticmethod
     def _read_live_identity_source(ds2, log_fn):
         """Read only the live per-unit identity bytes needed for a base-image graft.
@@ -1532,7 +2152,8 @@ class MS41FlashGUI(QMainWindow):
         self._ecu_chip_sig = chip_sig
         self._flash_chip_note.setText(self._flash_chip_label_text(chip_sig))
         self._update_transfer_mode()
-        self._start_session_log()
+        if not self._log_file:
+            self._start_session_log()
         self.lbl_status.setText("● Connected (DS2)")
         self.lbl_status.setStyleSheet("color:#5f5; font-weight:bold;")
         self.btn_connect.setText("Disconnect")
@@ -1573,6 +2194,7 @@ class MS41FlashGUI(QMainWindow):
             self._info_labels[key].setText(val)
         self._update_softbsl_install_options()
         self._update_config_buttons()
+        self._update_eeprom_buttons()
 
     def _set_ds2_buttons_enabled(self):
         """DS2 mode: reads + partial tune write enabled; full write held off."""
@@ -1627,6 +2249,7 @@ class MS41FlashGUI(QMainWindow):
                 self._identity_isn
                 and self._identity_isn_key == self._identity_connection_key()
                 and not self._task_busy))
+        self._update_eeprom_buttons()
 
     def _set_calguard_boot_buttons_enabled(self):
         """Retained-agent mode exposes only the Flash read/write surface."""
@@ -1994,16 +2617,15 @@ class MS41FlashGUI(QMainWindow):
 
 
     def _on_connect_failed(self, msg):
-        # Clean up any partial state (port may have been opened before the error)
-        if getattr(self, "_ds2", None):
-            try: self._ds2.close()
-            except Exception: pass
-            self._ds2 = None
+        # The Connect worker owns and closes its provisional transport before
+        # this GUI-thread callback releases logical port ownership.
+        self._ds2 = None
         self._port_owner.release("flasher")
         self._connection_port = None
         self.btn_connect.setChecked(False)
         self.btn_connect.setText("Connect")
         self._log(f"Connection failed: {msg}", "error")
+        self._end_session_log()
         QMessageBox.critical(self, "Connection Failed", str(msg))
 
     # -------------------------------------------------------------------
@@ -4963,6 +5585,1062 @@ class MS41FlashGUI(QMainWindow):
                 out.append((feat.name, feat.byte, old, new, ol, nl))
         return out
 
+    # ── EEPROM tab ───────────────────────────────────────────────────────
+
+    def _build_eeprom_tab(self):
+        tab = QWidget()
+        lay = QVBoxLayout(tab)
+
+        note = QLabel(
+            "Load one exact <b>512-byte physical 24C04</b> image, inspect or edit "
+            "it, then write that loaded image through the ECU Agent or CH341A. "
+            "Every write saves an immutable before-image and verifies the complete "
+            "physical readback."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color:#aaa; padding:6px;")
+        lay.addWidget(note)
+
+        image_group = QGroupBox("Loaded EEPROM Image")
+        image_lay = QVBoxLayout(image_group)
+        self.lbl_eeprom_image_status = QLabel("No EEPROM image loaded.")
+        self.lbl_eeprom_image_status.setWordWrap(True)
+        image_lay.addWidget(self.lbl_eeprom_image_status)
+        image_row = QHBoxLayout()
+        self.cb_eeprom_layout = QComboBox()
+        self.cb_eeprom_layout.addItem("Select layout…", None)
+        for variant in _SOFTBSL_PATCH_VERSIONS:
+            self.cb_eeprom_layout.addItem(variant, variant)
+        self.cb_eeprom_layout.currentIndexChanged.connect(
+            self._on_eeprom_layout_changed)
+        self.chk_eeprom_layout_override = QCheckBox("Manual override")
+        self.chk_eeprom_layout_override.toggled.connect(
+            self._on_eeprom_layout_override_changed)
+        self.btn_eeprom_open = self._op_btn(
+            "Open EEPROM File…", "#1e5080", self._on_eeprom_load)
+        self.btn_eeprom_manager = self._op_btn(
+            "View / Edit…", "#3d6b35", self._open_eeprom_manager)
+        self.btn_eeprom_save = self._op_btn(
+            "Save Copy…", "#3d3d3d", self._on_eeprom_save)
+        for button in (
+            self.btn_eeprom_open,
+            self.btn_eeprom_manager,
+            self.btn_eeprom_save,
+        ):
+            image_row.addWidget(button)
+        image_row.addStretch()
+        image_row.addWidget(self.chk_eeprom_layout_override)
+        image_row.addWidget(QLabel("MS41 layout:"))
+        image_row.addWidget(self.cb_eeprom_layout)
+        image_lay.addLayout(image_row)
+        lay.addWidget(image_group)
+
+        agent_group = QGroupBox("ECU Agent")
+        agent_lay = QVBoxLayout(agent_group)
+        self.lbl_eeprom_ram_status = QLabel()
+        self.lbl_eeprom_ram_status.setWordWrap(True)
+        agent_lay.addWidget(self.lbl_eeprom_ram_status)
+        agent_row = QHBoxLayout()
+        self.btn_eeprom_read = self._op_btn(
+            "Read EEPROM…", "#1e5080", self._on_eeprom_read)
+        self.btn_eeprom_write = self._op_btn(
+            "Write Loaded Image…", "#4a3a00", self._on_eeprom_write)
+        self.btn_eeprom_resolve = self._op_btn(
+            "Resolve Pending Write…", "#7a2f2f", self._on_eeprom_resolve)
+        self.btn_eeprom_resolve.setVisible(False)
+        for button in (
+            self.btn_eeprom_read,
+            self.btn_eeprom_write,
+            self.btn_eeprom_resolve,
+        ):
+            agent_row.addWidget(button)
+        agent_row.addStretch()
+        agent_lay.addLayout(agent_row)
+        agent_note = QLabel(
+            "The installed Soft-BSL entry uploads the normal speed-loader stage, "
+            "then the EEPROM agent. It tries the selected fast D2XX path first and "
+            "falls back to a complete 9600-baud entry before any EEPROM byte write."
+        )
+        agent_note.setWordWrap(True)
+        agent_note.setStyleSheet("color:#aaa;")
+        agent_lay.addWidget(agent_note)
+        lay.addWidget(agent_group)
+
+        ch341a_group = QGroupBox("CH341A Programmer")
+        ch341a_lay = QVBoxLayout(ch341a_group)
+        self.lbl_ch341a_status = QLabel(
+            "Not checked. Detect enumerates USB devices without reading the EEPROM.")
+        self.lbl_ch341a_status.setWordWrap(True)
+        self.lbl_ch341a_status.setStyleSheet("color:#e8c46a;")
+        ch341a_lay.addWidget(self.lbl_ch341a_status)
+        ch341a_row = QHBoxLayout()
+        self.btn_ch341a_refresh = self._op_btn(
+            "Detect CH341A", "#1e5080", self._on_ch341a_refresh)
+        self.btn_ch341a_read = self._op_btn(
+            "Read EEPROM…", "#1e5080", self._on_ch341a_read)
+        self.btn_ch341a_write = self._op_btn(
+            "Write Loaded Image…", "#4a3a00", self._on_ch341a_write)
+        self.btn_eeprom_seed = self._op_btn(
+            "Seed ECU Recovery…", "#4a3a00", self._on_ch341a_seed)
+        self.btn_ch341a_restore = self._op_btn(
+            "Restore Pre-Seed State…", "#4a3a00", self._on_ch341a_restore)
+        for button in (
+            self.btn_ch341a_refresh,
+            self.btn_ch341a_read,
+            self.btn_ch341a_write,
+            self.btn_eeprom_seed,
+            self.btn_ch341a_restore,
+        ):
+            ch341a_row.addWidget(button)
+        ch341a_row.addStretch()
+        ch341a_lay.addLayout(ch341a_row)
+        ch341a_note = QLabel(
+            "Keep the ECU unpowered and isolated. Every write requires a saved "
+            "before-image and an exact full-device readback. Restore Pre-Seed State "
+            "uses the captured original bytes; it never guesses between 00 01 02 "
+            "and 03 04 05."
+        )
+        ch341a_note.setWordWrap(True)
+        ch341a_note.setStyleSheet("color:#aaa;")
+        ch341a_lay.addWidget(ch341a_note)
+        lay.addWidget(ch341a_group)
+        lay.addStretch()
+
+        self._eeprom_write_confirm = _GuiConfirm(
+            self, "Write EEPROM Image?", "WRITE EEPROM")
+        self._eeprom_repair_confirm = _GuiConfirm(
+            self, "Resume EEPROM Image Write?", "RESUME EEPROM")
+        self._ch341a_write_confirm = _GuiConfirm(
+            self, "Write EEPROM Image with CH341A?", "WRITE EEPROM")
+        self._ch341a_seed_confirm = _GuiConfirm(
+            self, "Seed EEPROM for Stock DS2 Recovery?", "SEED ECU")
+        self._ch341a_restore_confirm = _GuiConfirm(
+            self, "Restore Pre-Seed EEPROM State?", "RESTORE PRE-SEED")
+        self._eeprom_tab_index = self.tabs.count()
+        self.tabs.addTab(tab, "  EEPROM  ")
+        self._update_eeprom_buttons()
+
+    def _choose_eeprom_path(self, title, prefix):
+        os.makedirs(EEPROM_BACKUP_DIR, exist_ok=True)
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            title,
+            os.path.join(EEPROM_BACKUP_DIR, f"{prefix}_{stamp}.bin"),
+            "EEPROM Images (*.bin);;All Files (*)",
+        )
+        if not path:
+            return None
+        if not path.lower().endswith(".bin"):
+            path += ".bin"
+        if os.path.exists(path):
+            QMessageBox.warning(
+                self,
+                "File Already Exists",
+                "EEPROM captures are never overwritten. Choose a new filename.",
+            )
+            return None
+        return path
+
+    @staticmethod
+    def _automatic_eeprom_path(prefix):
+        """Return a private collision-resistant path; writers still create it exclusively."""
+        os.makedirs(EEPROM_BACKUP_DIR, exist_ok=True)
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        return os.path.join(
+            EEPROM_BACKUP_DIR, f"{prefix}_{stamp}_{uuid.uuid4().hex}.bin")
+
+    def _on_eeprom_layout_changed(self, _index=None):
+        if not self.chk_eeprom_layout_override.isChecked():
+            return
+        self._eeprom_variant = self.cb_eeprom_layout.currentData()
+        self._update_eeprom_buttons()
+
+    def _on_eeprom_layout_override_changed(self, enabled):
+        if enabled:
+            self._eeprom_variant = self.cb_eeprom_layout.currentData()
+        else:
+            self._eeprom_variant = self._eeprom_auto_variant
+            index = self.cb_eeprom_layout.findData(self._eeprom_variant)
+            self.cb_eeprom_layout.blockSignals(True)
+            try:
+                self.cb_eeprom_layout.setCurrentIndex(max(index, 0))
+            finally:
+                self.cb_eeprom_layout.blockSignals(False)
+        self._update_eeprom_buttons()
+
+    def _show_eeprom_image(
+        self, image, source, capture=None, variant=None, *, modified=False
+    ):
+        image = eeprom_ram.validate_image(image)
+        preserve_layout = bool(
+            modified
+            and self._eeprom_image is not None
+            and variant == self._eeprom_variant
+        )
+        if variant is None and capture is not None:
+            variant = (
+                getattr(getattr(capture, "preflight", None), "program_variant", None)
+                or getattr(capture, "variant", None)
+            )
+        if variant not in _SOFTBSL_PATCH_VERSIONS:
+            variant = None
+        if not preserve_layout:
+            self._eeprom_layout_from_source = variant is not None
+            candidates = (
+                (variant,) if variant is not None
+                else eeprom_ram.detect_layouts(image)
+            )
+            program_variant = (
+                getattr(self, "_ecu_program_variant", None)
+                or getattr(self, "_ecu_variant", None)
+            )
+            auto_variant = (
+                candidates[0] if len(candidates) == 1
+                else program_variant if program_variant in candidates
+                else None
+            )
+            self._eeprom_layout_candidates = candidates
+            self._eeprom_auto_variant = auto_variant
+            self._eeprom_variant = auto_variant
+            self.chk_eeprom_layout_override.blockSignals(True)
+            try:
+                self.chk_eeprom_layout_override.setChecked(False)
+            finally:
+                self.chk_eeprom_layout_override.blockSignals(False)
+        self._eeprom_image = image
+        self._eeprom_source = str(source)
+        self._eeprom_modified = bool(modified)
+        index = self.cb_eeprom_layout.findData(self._eeprom_variant)
+        self.cb_eeprom_layout.blockSignals(True)
+        try:
+            self.cb_eeprom_layout.setCurrentIndex(max(index, 0))
+        finally:
+            self.cb_eeprom_layout.blockSignals(False)
+        dialog = self._eeprom_manager_dialog
+        if dialog is not None and self._eeprom_variant is not None:
+            dialog.set_image(image, source, self._eeprom_variant)
+        self._update_eeprom_buttons()
+
+    def _open_eeprom_manager(self):
+        if self._eeprom_image is None or self._eeprom_variant is None:
+            return
+        if self._eeprom_manager_dialog is None:
+            self._eeprom_manager_dialog = EepromManagerDialog(self)
+        self._eeprom_manager_dialog.set_image(
+            self._eeprom_image, self._eeprom_source, self._eeprom_variant)
+        self._eeprom_manager_dialog.show()
+        self._eeprom_manager_dialog.raise_()
+        self._eeprom_manager_dialog.activateWindow()
+
+    def _confirm_eeprom_target_replace(self, action):
+        if not self._eeprom_modified:
+            return True
+        return QMessageBox.question(
+            self,
+            "Replace Modified EEPROM Image?",
+            f"The loaded EEPROM image contains unsaved edits. {action} will "
+            "replace it.\n\nContinue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        ) == QMessageBox.Yes
+
+    def _archive_eeprom(self, image, source, prefix, variant=None):
+        variant = variant or self._eeprom_variant
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        entry = self._backup_mgr.add_data(
+            bytes(image),
+            f"{prefix}_{variant.lower().replace('.', '')}_{stamp}.bin",
+            source=source,
+            variant=variant,
+        )
+        self._refresh_backup_table()
+        return entry
+
+    def _catalogue_eeprom_safety_image(
+        self, image, path, source, prefix, variant
+    ):
+        """Add an EEPROM image to Bins without replacing a durable original."""
+        try:
+            return self._archive_eeprom(image, source, prefix, variant)
+        except Exception as error:
+            fallback = (
+                f"The original durable capture remains at:\n{path}"
+                if path else
+                "No durable copy was created. Retry the read before writing."
+            )
+            self._log(
+                f"EEPROM Bins indexing failed: {error}. {fallback}",
+                "error",
+            )
+            QMessageBox.warning(
+                self,
+                "EEPROM Bins Save Failed",
+                f"Could not add the EEPROM image to Bins:\n{error}\n\n{fallback}",
+            )
+            return None
+
+    def _catalogue_eeprom_safety_file(
+        self, path, source, prefix, variant
+    ):
+        if not path or not os.path.isfile(path):
+            return None
+        try:
+            image = Path(path).read_bytes()
+        except OSError as error:
+            self._log(f"Could not reopen EEPROM safety image {path}: {error}", "error")
+            QMessageBox.warning(
+                self,
+                "EEPROM Safety Image Unavailable",
+                f"Could not reopen the durable EEPROM capture:\n{path}\n\n{error}",
+            )
+            return None
+        return self._catalogue_eeprom_safety_image(
+            image, path, source, prefix, variant)
+
+    def _pending_eeprom_recovery(self):
+        return getattr(self, "_eeprom_write_recovery", None)
+
+    def _active_eeprom_recovery(self):
+        recovery = self._pending_eeprom_recovery()
+        return recovery if recovery is not None and recovery.is_open else None
+
+    def _update_eeprom_buttons(self):
+        if not hasattr(self, "btn_eeprom_read"):
+            return
+        busy = bool(getattr(self, "_task_busy", False))
+        pending_recovery = self._pending_eeprom_recovery()
+        recovery = self._active_eeprom_recovery()
+        _flash_kind, flash_recovery = self._active_write_recovery()
+        idle = not busy and pending_recovery is None and flash_recovery is None
+        connected = bool(self._ds2 is not None and self._connection_port)
+        identity_ready = (
+            len(bytes(getattr(self, "_last_ident_raw", b"") or b""))
+            == ds2_fast_read.IDENTITY_LENGTH)
+        program_variant = (
+            getattr(self, "_ecu_program_variant", None)
+            or getattr(self, "_ecu_variant", None))
+        supported = (
+            connected
+            and identity_ready
+            and program_variant in _SOFTBSL_PATCH_VERSIONS
+            and getattr(self, "_ecu_softbsl_marker", None) in ("B", "T")
+            and bool(getattr(self, "_ecu_softbsl_hook_present", False)))
+        has_image = self._eeprom_image is not None
+        write_target_valid = False
+        write_error = ""
+        if has_image and self._eeprom_variant is not None:
+            try:
+                eeprom_ram.validate_write_image(
+                    self._eeprom_image, self._eeprom_variant)
+                write_target_valid = True
+            except (ValueError, eeprom_ram.EepromError) as error:
+                write_error = str(error)
+        agent_target_ready = bool(
+            write_target_valid and self._eeprom_variant == program_variant)
+
+        self.btn_eeprom_open.setEnabled(idle)
+        layout_editable = idle and not self._eeprom_modified
+        self.chk_eeprom_layout_override.setEnabled(layout_editable)
+        self.cb_eeprom_layout.setEnabled(
+            layout_editable and self.chk_eeprom_layout_override.isChecked())
+        self.btn_eeprom_manager.setEnabled(
+            idle and has_image and self._eeprom_variant is not None)
+        self.btn_eeprom_save.setEnabled(idle and has_image)
+
+        if not has_image:
+            image_status = "No EEPROM image loaded."
+        else:
+            if self.chk_eeprom_layout_override.isChecked():
+                layout = (
+                    f"{self._eeprom_variant} (manual override)"
+                    if self._eeprom_variant else "not selected"
+                )
+            elif self._eeprom_variant is not None:
+                if self._eeprom_layout_from_source:
+                    basis = "source metadata"
+                elif len(self._eeprom_layout_candidates) > 1:
+                    basis = "resolved by connected ECU"
+                else:
+                    basis = "auto-detected"
+                layout = f"{self._eeprom_variant} ({basis})"
+            elif self._eeprom_layout_candidates:
+                layout = " / ".join(self._eeprom_layout_candidates) + " (ambiguous)"
+            else:
+                layout = "not detected"
+            state = "Modified • " if self._eeprom_modified else ""
+            if self._eeprom_variant is None:
+                validation = (
+                    "Enable Manual override and select the exact program version "
+                    "before editing or writing."
+                    if self._eeprom_layout_candidates else
+                    "The layout could not be detected. Enable Manual override "
+                    "and select it before editing or writing."
+                )
+            elif write_target_valid:
+                failed = sum(
+                    row["checked"] and not row.get("check_ok", False)
+                    for row in eeprom_ram.field_report(
+                        self._eeprom_image, self._eeprom_variant))
+                validation = (
+                    "Write-ready; all checked records valid."
+                    if not failed else
+                    f"Write-ready; {failed} existing checked record(s) are invalid "
+                    "and will remain untouched unless edited."
+                )
+            else:
+                validation = f"Inspection only: {write_error}"
+            image_status = (
+                f"{state}Source: {self._eeprom_source} • 512 bytes • "
+                f"Layout: {layout}. {validation}")
+        self.lbl_eeprom_image_status.setText(image_status)
+
+        self.btn_eeprom_read.setEnabled(idle and supported)
+        self.btn_eeprom_write.setEnabled(
+            idle and supported and agent_target_ready)
+        self.btn_eeprom_resolve.setVisible(recovery is not None)
+        self.btn_eeprom_resolve.setEnabled(recovery is not None and not busy)
+
+        ch341a_status = self._ch341a_status
+        ch341a_ready = bool(
+            ch341a_status is not None and ch341a_status.ready)
+        capture = self._ch341a_capture
+        same_programmer = bool(
+            ch341a_ready and capture is not None
+            and ch341a_status.devices[0] == capture.device)
+        capture_is_displayed = bool(
+            same_programmer and has_image
+            and capture.image == self._eeprom_image)
+        ch341a_idle = idle and not connected and ch341a_ready
+        self.btn_ch341a_refresh.setEnabled(idle)
+        self.btn_ch341a_read.setEnabled(ch341a_idle)
+        self.btn_ch341a_write.setEnabled(
+            ch341a_idle and write_target_valid
+            and not self._ch341a_write_uncertain)
+        self.btn_eeprom_seed.setEnabled(
+            ch341a_idle and not self._ch341a_write_uncertain
+            and self._eeprom_variant is not None
+            and capture_is_displayed and capture.seedable)
+        preseed = self._ch341a_preseed_capture
+        restore_ready = bool(
+            ch341a_idle
+            and not self._ch341a_write_uncertain
+            and self._eeprom_variant is not None
+            and capture_is_displayed
+            and preseed is not None
+            and capture.marker == ch341a_eeprom_service.RECOVERY_PROGRESSION
+            and eeprom_ram.changed_offsets(capture.image, preseed.image)
+            == ch341a_eeprom_service.RECOVERY_OFFSETS)
+        self.btn_ch341a_restore.setEnabled(restore_ready)
+
+        if ch341a_status is None:
+            ch341a_text = (
+                "Not checked. Detect enumerates USB devices without reading EEPROM.")
+        else:
+            ch341a_text = ch341a_status.message
+        if connected and ch341a_ready:
+            ch341a_text += (
+                " Disconnect the normal ECU session before using the programmer.")
+        if same_programmer:
+            name = capture.path.name if capture.path is not None else "unsaved capture"
+            ch341a_text += (
+                f" Last verified device read: {name}; marker "
+                f"{capture.marker.hex(' ')}.")
+        if self._ch341a_write_uncertain:
+            ch341a_text += (
+                " EEPROM state is uncertain after a write attempt. Perform and save "
+                "a new full Read EEPROM before any further mutation.")
+        self.lbl_ch341a_status.setText(ch341a_text)
+        self.lbl_ch341a_status.setStyleSheet(
+            "color:#f47171;" if self._ch341a_write_uncertain else
+            "color:#72d572;" if ch341a_ready else "color:#e8c46a;")
+
+        if recovery is not None:
+            status = (
+                "<b style='color:#f47171'>EEPROM write needs resolution. "
+                "KEEP IGNITION ON and use Resolve Pending Write.</b>")
+        elif pending_recovery is not None:
+            status = (
+                "<b style='color:#f47171'>EEPROM recovery cleanup is incomplete. "
+                "Reconnect through installed Soft-BSL before normal ECU use.</b>")
+        elif flash_recovery is not None:
+            status = "Unavailable while flash recovery owns the adapter."
+        elif not connected:
+            status = (
+                "Connect to an ECU with installed Soft-BSL to read or write. "
+                "Image loading and editing remain available offline.")
+        elif not identity_ready:
+            status = "Reconnect to capture the identity required for agent handoff."
+        elif program_variant not in _SOFTBSL_PATCH_VERSIONS:
+            status = "A recognized MS41.0-MS41.3 program identity is required."
+        elif getattr(self, "_ecu_softbsl_marker", None) not in ("B", "T"):
+            status = (
+                "Installed Soft-BSL was not detected; use CH341A for this EEPROM.")
+        elif not getattr(self, "_ecu_softbsl_hook_present", False):
+            status = f"The matching {program_variant} Soft-BSL hook was not detected."
+        else:
+            status = f"Ready for {program_variant} EEPROM access."
+        self.lbl_eeprom_ram_status.setText(status)
+
+        self.btn_eeprom_write.setToolTip(
+            "Open or load a 512-byte image with the matching ECU layout first."
+            if not agent_target_ready else
+            "Writes only changed bytes, writes checked-record checks last, and "
+            "verifies a complete physical readback.")
+        self.btn_ch341a_write.setToolTip(
+            "Loads a stable full-chip before-image, saves it, writes only changed "
+            "bytes, and verifies the exact loaded target."
+            if not self._ch341a_write_uncertain else
+            "A previous mutation has an uncertain result. Read and save the complete "
+            "EEPROM before writing again.")
+        self.btn_ch341a_restore.setToolTip(
+            "Available only after Seed ECU in this session, using its exact saved "
+            "pre-seed image. No progression is inferred.")
+    def _on_eeprom_load(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open EEPROM File",
+            EEPROM_BACKUP_DIR,
+            "EEPROM Images (*.bin);;All Files (*)",
+        )
+        if not path:
+            return
+        try:
+            with open(path, "rb") as stream:
+                image = stream.read()
+            image = eeprom_ram.validate_image(image)
+            if not self._confirm_eeprom_target_replace("Opening this file"):
+                return
+            self._show_eeprom_image(image, path, variant=None)
+        except Exception as error:
+            QMessageBox.critical(
+                self,
+                "Invalid EEPROM Image",
+                f"The selected file cannot be used:\n{error}",
+            )
+
+    def _on_eeprom_save(self):
+        if self._eeprom_image is None:
+            return
+        path = self._choose_eeprom_path("Save EEPROM Copy", "eeprom_copy")
+        if not path:
+            return
+        try:
+            saved = eeprom_ram.save_capture(path, self._eeprom_image)
+        except Exception as error:
+            QMessageBox.critical(
+                self, "EEPROM Save Failed", f"Could not save the image:\n{error}")
+            return
+        self._log(f"EEPROM image saved to {saved}", "ok")
+        self._show_eeprom_image(
+            self._eeprom_image,
+            str(saved),
+            variant=self._eeprom_variant,
+        )
+        QMessageBox.information(
+            self, "EEPROM Image Saved", f"Saved an exact 512-byte copy to:\n{saved}")
+
+    def _run_eeprom_task(self, task, on_success, on_failure=None):
+        self._eeprom_task_busy = True
+
+        def success(result):
+            self._eeprom_task_busy = False
+            on_success(result)
+
+        def failure(error):
+            self._eeprom_task_busy = False
+            (on_failure or self._on_eeprom_failure)(error)
+
+        try:
+            self._run_task(task, on_success=success, on_failure=failure)
+        except Exception:
+            self._eeprom_task_busy = False
+            raise
+
+    def _on_ch341a_refresh(self):
+        if getattr(self, "_task_busy", False):
+            return
+        self._ch341a_capture = None
+        self._ch341a_status = ch341a_eeprom_service.detect_status()
+        preseed = self._ch341a_preseed_capture
+        if (preseed is not None and self._ch341a_status.ready
+                and self._ch341a_status.devices[0] != preseed.device):
+            self._ch341a_preseed_capture = None
+        self._log(self._ch341a_status.message,
+                  "ok" if self._ch341a_status.ready else "warn")
+        self._update_eeprom_buttons()
+
+    def _on_ch341a_read(self):
+        if not self.btn_ch341a_read.isEnabled():
+            return
+        if not self._confirm_eeprom_target_replace("Reading the connected EEPROM"):
+            return
+        self._ch341a_capture = None
+        self._update_eeprom_buttons()
+
+        def task(log_fn, progress_fn):
+            progress_fn(0, 0, "Reading and comparing the complete 24C04")
+            return ch341a_eeprom_service.read_eeprom(variant=None)
+
+        def on_success(capture):
+            layouts = eeprom_ram.detect_layouts(capture.image)
+            archive_variant = (
+                capture.variant
+                or (layouts[0] if len(layouts) == 1 else "Unknown")
+            )
+            entry = self._catalogue_eeprom_safety_image(
+                capture.image,
+                capture.path,
+                "CH341A EEPROM read",
+                "ch341a_eeprom_read",
+                archive_variant,
+            )
+            if entry is None:
+                return
+            capture = replace(capture, path=Path(entry.path))
+            preseed = self._ch341a_preseed_capture
+            if preseed is not None and capture.device != preseed.device:
+                self._ch341a_preseed_capture = None
+            self._ch341a_capture = capture
+            self._ch341a_write_uncertain = False
+            self._show_eeprom_image(
+                capture.image, f"Bins: {entry.filename}",
+                variant=capture.variant)
+            for warning in capture.warnings:
+                self._log(warning, "warn")
+            self._log(f"Stable CH341A EEPROM read archived as {entry.filename}", "ok")
+            self._offer_additional_read_copy(
+                capture.image, entry, "EEPROM", "CH341A EEPROM Read Complete")
+            self._update_eeprom_buttons()
+
+        self._run_eeprom_task(
+            task, on_success, on_failure=self._on_ch341a_failure)
+
+    def _on_ch341a_seed(self):
+        if not self.btn_eeprom_seed.isEnabled():
+            return
+        expected = replace(
+            self._ch341a_capture, variant=self._eeprom_variant)
+        path = self._automatic_eeprom_path("ch341a_before_seed")
+
+        def task(log_fn, progress_fn):
+            progress_fn(0, 0, "Re-reading EEPROM before the guarded marker write")
+            return ch341a_eeprom_service.seed_ecu(
+                expected,
+                path,
+                confirm=self._ch341a_seed_confirm,
+            )
+
+        def on_success(result):
+            self._ch341a_preseed_capture = result.before
+            self._ch341a_capture = result.after
+            self._ch341a_write_uncertain = False
+            self._catalogue_eeprom_safety_image(
+                result.before.image,
+                result.before.path,
+                "CH341A EEPROM before Seed ECU",
+                "ch341a_before_seed",
+                result.before.variant,
+            )
+            entry = self._catalogue_eeprom_safety_image(
+                result.after.image,
+                result.after.path,
+                "CH341A Seed ECU readback",
+                "ch341a_seeded",
+                result.after.variant,
+            )
+            self._show_eeprom_image(
+                result.after.image,
+                (f"Bins: {entry.filename}" if entry is not None else
+                 f"Verified capture: {result.after.path}"),
+                variant=result.after.variant)
+            changed = ", ".join(
+                f"0x{offset:03X}" for offset in result.changed_offsets)
+            self._log(f"CH341A Seed ECU verified; changed only {changed}.", "ok")
+            QMessageBox.information(
+                self,
+                "Seed ECU Verified",
+                f"Changed and verified only {changed}.\n\n"
+                f"Before-image:\n{result.before.path}\n\n"
+                f"Verified after-image:\n{result.after.path}",
+            )
+
+        self._run_eeprom_task(
+            task, on_success, on_failure=self._on_ch341a_failure)
+
+    def _on_ch341a_write(self):
+        if not self.btn_ch341a_write.isEnabled():
+            return
+        target = bytes(self._eeprom_image)
+        variant = self._eeprom_variant
+        source = self._eeprom_source
+        path = self._automatic_eeprom_path("ch341a_before_write")
+
+        def confirm(message):
+            return self._ch341a_write_confirm(
+                f"Loaded source: {source}\nSelected layout: {variant}\n\n{message}")
+
+        def task(log_fn, progress_fn):
+            progress_fn(0, 0, "Re-reading and writing changed EEPROM bytes")
+            return ch341a_eeprom_service.write_eeprom(
+                target, variant, path, confirm=confirm)
+
+        def on_success(result):
+            self._ch341a_capture = result.after
+            self._ch341a_write_uncertain = False
+            changed = len(result.changed_offsets)
+            no_change = changed == 0
+            before_entry = self._catalogue_eeprom_safety_image(
+                result.before.image,
+                result.before.path,
+                "CH341A EEPROM before image write",
+                "ch341a_before_write",
+                result.before.variant,
+            )
+            entry = before_entry if no_change else self._catalogue_eeprom_safety_image(
+                    result.after.image,
+                    result.after.path,
+                    "CH341A EEPROM write readback",
+                    "ch341a_after_write",
+                    result.after.variant,
+                )
+            self._show_eeprom_image(
+                result.after.image,
+                (f"Bins: {entry.filename}" if entry is not None else
+                 f"Verified capture: {result.after.path}"),
+                variant=result.after.variant)
+            self._log(
+                "CH341A EEPROM already matched the loaded image; no bytes were written."
+                if no_change else
+                f"CH341A EEPROM image written and verified; {changed} byte(s) changed.",
+                "ok")
+            QMessageBox.information(
+                self,
+                "EEPROM Already Matches" if no_change
+                else "CH341A EEPROM Write Verified",
+                ("The connected EEPROM already matches the loaded 512-byte image; "
+                 "no write was sent.\n\n"
+                 if no_change else
+                 "Verified the exact 512-byte target.\n\n")
+                + f"Before-image:\n{result.before.path}\n\n"
+                + f"Verified image:\n{result.after.path}")
+
+        self._run_eeprom_task(
+            task, on_success, on_failure=self._on_ch341a_failure)
+
+    def _on_ch341a_restore(self):
+        if not self.btn_ch341a_restore.isEnabled():
+            return
+        expected = self._ch341a_capture
+        original = self._ch341a_preseed_capture
+        path = self._automatic_eeprom_path("ch341a_before_preseed_restore")
+
+        def task(log_fn, progress_fn):
+            progress_fn(0, 0, "Restoring the exact saved pre-seed progression")
+            return ch341a_eeprom_service.restore_pre_seed(
+                expected, original, path,
+                confirm=self._ch341a_restore_confirm)
+
+        def on_success(result):
+            self._ch341a_capture = result.after
+            self._ch341a_preseed_capture = None
+            self._ch341a_write_uncertain = False
+            self._catalogue_eeprom_safety_image(
+                result.before.image,
+                result.before.path,
+                "CH341A EEPROM before pre-seed restore",
+                "ch341a_before_preseed_restore",
+                result.before.variant,
+            )
+            entry = self._catalogue_eeprom_safety_image(
+                result.after.image,
+                result.after.path,
+                "CH341A pre-seed restore readback",
+                "ch341a_preseed_restored",
+                result.after.variant,
+            )
+            self._show_eeprom_image(
+                result.after.image,
+                (f"Bins: {entry.filename}" if entry is not None else
+                 f"Verified capture: {result.after.path}"),
+                variant=result.after.variant)
+            self._log("CH341A pre-seed state restored and verified.", "ok")
+            QMessageBox.information(
+                self, "Pre-Seed State Restored",
+                f"Restored {result.after.marker.hex(' ')} from the exact saved "
+                f"pre-seed image.\n\nVerified after-image:\n{result.after.path}")
+
+        self._run_eeprom_task(
+            task, on_success, on_failure=self._on_ch341a_failure)
+
+    def _on_ch341a_failure(self, error):
+        if isinstance(error, (
+            ch341a_eeprom_service.SeedCancelled,
+            ch341a_eeprom_service.WriteCancelled,
+        )):
+            self._catalogue_eeprom_safety_image(
+                error.before.image,
+                error.before.path,
+                "CH341A EEPROM before cancelled write",
+                "ch341a_before_cancelled_write",
+                error.before.variant,
+            )
+            self._log(str(error), "warn")
+            QMessageBox.information(
+                self,
+                "CH341A EEPROM Write Cancelled",
+                f"{error}\n\nSaved before-image:\n{error.before.path}",
+            )
+            return
+        if isinstance(error, (
+            ch341a_eeprom_service.SeedVerificationError,
+            ch341a_eeprom_service.WriteVerificationError,
+        )):
+            if isinstance(error, ch341a_eeprom_service.SeedVerificationError):
+                self._ch341a_preseed_capture = error.before
+            self._catalogue_eeprom_safety_image(
+                error.before.image,
+                error.before.path,
+                "CH341A EEPROM before uncertain write",
+                "ch341a_before_uncertain_write",
+                error.before.variant,
+            )
+            if error.after is not None:
+                self._catalogue_eeprom_safety_image(
+                    error.after.image,
+                    error.after.path,
+                    "CH341A EEPROM uncertain readback",
+                    "ch341a_uncertain_readback",
+                    error.after.variant,
+                )
+            self._ch341a_write_uncertain = True
+            self._ch341a_capture = error.after
+            self._update_eeprom_buttons()
+            evidence = [f"Before-image: {error.before.path}"]
+            if error.after is not None:
+                evidence.append(f"After-image: {error.after.path}")
+            self._log(f"CH341A EEPROM verification failed: {error}", "error")
+            QMessageBox.critical(
+                self,
+                "CH341A EEPROM VERIFICATION FAILED",
+                f"{error}\n\n" + "\n".join(evidence)
+                + "\n\nDo not assume the EEPROM state. Inspect both captures before "
+                "attempting recovery.",
+            )
+            return
+        self._ch341a_capture = None
+        self._update_eeprom_buttons()
+        self._log(f"CH341A EEPROM operation failed: {error}", "error")
+        QMessageBox.critical(
+            self,
+            "CH341A EEPROM Operation Failed",
+            f"{error}\n\nNo write was sent unless a saved before-image exists.",
+        )
+
+    def _on_eeprom_read(self):
+        if not self.btn_eeprom_read.isEnabled():
+            return
+        if not self._confirm_eeprom_target_replace("Reading the connected EEPROM"):
+            return
+        self._update_eeprom_buttons()
+
+        def task(log_fn, progress_fn):
+            progress_fn(0, 0, "Entering the staged EEPROM RAM agent")
+            return self._run_via_eeprom(
+                lambda port, _pf, lf: eeprom_ram.read_eeprom(
+                    port, baud="auto", log=lf),
+                log_fn,
+                progress_fn,
+            )
+
+        def on_success(capture):
+            entry = self._catalogue_eeprom_safety_image(
+                capture.image,
+                None,
+                "ECU Agent EEPROM read",
+                "eeprom_agent_read",
+                capture.preflight.program_variant,
+            )
+            if entry is None:
+                return
+            self._show_eeprom_image(
+                capture.image, f"Bins: {entry.filename}", capture,
+                capture.preflight.program_variant)
+            self._log(f"Physical EEPROM read archived as {entry.filename}", "ok")
+            self._offer_additional_read_copy(
+                capture.image, entry, "EEPROM", "EEPROM Read Complete")
+
+        self._run_eeprom_task(task, on_success)
+
+    def _on_eeprom_write(self):
+        if not self.btn_eeprom_write.isEnabled():
+            return
+        target = bytes(self._eeprom_image)
+        variant = self._eeprom_variant
+        source = self._eeprom_source
+        path = self._automatic_eeprom_path("eeprom_agent_before_write")
+
+        def confirm(message):
+            return self._eeprom_write_confirm(
+                f"Loaded source: {source}\nSelected layout: {variant}\n\n{message}")
+
+        def task(log_fn, progress_fn):
+            progress_fn(0, 0, "Entering the staged guarded EEPROM writer")
+            return self._run_via_eeprom(
+                lambda port, _pf, lf: eeprom_ram.write_image(
+                    port,
+                    target,
+                    variant=variant,
+                    backup_path=path,
+                    confirm=confirm,
+                    baud="auto",
+                    log=lf,
+                ),
+                log_fn,
+                progress_fn,
+            )
+
+        def on_success(capture):
+            after_path = eeprom_ram._after_capture_path(path)
+            no_change = not capture.write_performed
+            before_entry = self._catalogue_eeprom_safety_file(
+                path,
+                "ECU Agent EEPROM before image write",
+                "eeprom_agent_before_write",
+                capture.preflight.program_variant,
+            )
+            entry = before_entry if no_change else self._catalogue_eeprom_safety_image(
+                    capture.image,
+                    after_path,
+                    "ECU Agent EEPROM write readback",
+                    "eeprom_agent_after_write",
+                    capture.preflight.program_variant,
+                )
+            display_path = path if no_change else after_path
+            self._show_eeprom_image(
+                capture.image,
+                (f"Bins: {entry.filename}" if entry is not None else
+                 f"Verified capture: {display_path}"),
+                capture,
+                capture.preflight.program_variant)
+            self._log(
+                "ECU EEPROM already matched the loaded image; no bytes were written."
+                if no_change else "EEPROM image written and verified.", "ok")
+            QMessageBox.information(
+                self,
+                "EEPROM Already Matches" if no_change else "EEPROM Write Verified",
+                ("The connected EEPROM already matches the loaded 512-byte image; "
+                 "no write was sent.\n\n"
+                 if no_change else
+                 "All changed bytes were written with compare-before-write ordering "
+                 "and the exact 512-byte target was read back.\n\n")
+                + f"Before backup:\n{path}"
+                + ("" if no_change else
+                   f"\n\nVerified after-image:\n{after_path}"),
+            )
+
+        def on_failure(error):
+            self._catalogue_eeprom_safety_file(
+                path,
+                "ECU Agent EEPROM before failed or cancelled write",
+                "eeprom_agent_before_incomplete_write",
+                variant,
+            )
+            self._on_eeprom_failure(error)
+
+        self._run_eeprom_task(task, on_success, on_failure=on_failure)
+
+    def _on_eeprom_resolve(self):
+        recovery = self._active_eeprom_recovery()
+        if recovery is None:
+            return
+        port = self._connection_port
+        if not port:
+            QMessageBox.critical(
+                self,
+                "EEPROM Recovery Port Missing",
+                "The retained EEPROM session has no associated serial port.",
+            )
+            return
+        expected_identity = bytes(self._last_ident_raw)
+
+        def task(log_fn, progress_fn):
+            progress_fn(0, 0, "Querying retained EEPROM transaction state")
+            try:
+                try:
+                    image = eeprom_ram.resolve_write_recovery(recovery)
+                except eeprom_ram.EepromWriteRecoveryRequired:
+                    image = eeprom_ram.repair_write_recovery(
+                        recovery, confirm=self._eeprom_repair_confirm)
+            finally:
+                if not recovery.is_open:
+                    self._eeprom_write_recovery = None
+                    self._port_owner.release("eeprom")
+                    if len(expected_identity) == ds2_fast_read.IDENTITY_LENGTH:
+                        self._port_owner.acquire("flasher")
+                        progress_fn(0, 0, "Reopening normal DS2 at 9600")
+                        self._reopen_ds2_with_retry(
+                            port,
+                            log_fn,
+                            expected_identity=expected_identity,
+                        )
+                    else:
+                        log_fn(
+                            "EEPROM recovery closed, but the original ECU identity "
+                            "snapshot is unavailable. Reconnect manually.",
+                            "error",
+                        )
+                        self._mark_ds2_reconnect_failed()
+            return image
+
+        def on_success(image):
+            self._eeprom_write_recovery = None
+            entry = self._catalogue_eeprom_safety_image(
+                image,
+                recovery.after_path,
+                "ECU Agent EEPROM recovery readback",
+                "eeprom_agent_recovered",
+                recovery.variant,
+            )
+            self._show_eeprom_image(
+                image,
+                (f"Bins: {entry.filename}" if entry is not None else
+                 f"Verified capture: {recovery.after_path}"),
+                variant=recovery.variant)
+            self._log("EEPROM retained-session recovery completed.", "ok")
+            QMessageBox.information(
+                self,
+                "EEPROM Recovery Complete",
+                "The pending image write was resolved and physically verified. "
+                "Read the EEPROM again before making another change.",
+            )
+
+        self._run_eeprom_task(task, on_success)
+
+    def _on_eeprom_failure(self, error):
+        self._update_eeprom_buttons()
+        recovery = self._active_eeprom_recovery()
+        if recovery is not None:
+            self._log(f"EEPROM write needs retained-session recovery: {error}", "error")
+            QMessageBox.critical(
+                self,
+                "EEPROM WRITE UNCERTAIN — KEEP IGNITION ON",
+                f"{error}\n\nDo not disconnect the adapter or cycle ignition. "
+                "Use Resolve Pending Write; it first performs a read-only state query "
+                "and never blindly repeats a byte write.",
+            )
+            return
+        if isinstance(error, eeprom_ram.EepromCancelled):
+            self._log(str(error), "warn")
+            QMessageBox.information(self, "EEPROM Write Cancelled", str(error))
+            return
+        self._log(f"EEPROM operation failed: {error}", "error")
+        QMessageBox.critical(
+            self,
+            "EEPROM Operation Failed",
+            str(error),
+        )
+
     # ── Partial / Full tab ───────────────────────────────────────────────
 
     def _build_partial_tab(self):
@@ -6161,6 +7839,8 @@ class MS41FlashGUI(QMainWindow):
 
     def _prepare_softbsl_phase1_reentry_prompt(self, port):
         """Disconnect and release COM before the install-only ignition prompt."""
+        self.progress_bar.setValue(0)
+        self.progress_label.setText("Phase 1 paused before authorization")
         self._softbsl_handoff_port = None
         try:
             if (
@@ -6170,7 +7850,7 @@ class MS41FlashGUI(QMainWindow):
             ):
                 signals_were_blocked = self.btn_connect.blockSignals(True)
                 try:
-                    self._disconnect()
+                    self._disconnect(keep_session_log=True)
                 finally:
                     self.btn_connect.blockSignals(signals_were_blocked)
         finally:
@@ -6303,7 +7983,60 @@ class MS41FlashGUI(QMainWindow):
                     self._port_owner.acquire("flasher")
                     self._reopen_ds2_with_retry(port, log_fn)
 
-    def _run_via_native_fast_ds2(self, op_fn, log_fn, progress_fn):
+    def _run_via_eeprom(self, op_fn, log_fn, progress_fn):
+        """Hand normal DS2 to the EEPROM agent without losing uncertain commits."""
+        if self._pending_eeprom_recovery() is not None:
+            raise RuntimeError(
+                "An EEPROM write recovery session is already active.")
+        port = self._connection_port
+        if not port:
+            raise RuntimeError(
+                "No connected serial port is available for the EEPROM handoff.")
+        expected_identity = bytes(self._last_ident_raw)
+        if len(expected_identity) != ds2_fast_read.IDENTITY_LENGTH:
+            raise RuntimeError(
+                "EEPROM RAM-agent entry requires the complete "
+                f"{ds2_fast_read.IDENTITY_LENGTH}-byte original ECU identity; "
+                "disconnect and reconnect before retrying."
+            )
+        if self._ds2 is not None:
+            try:
+                self._ds2.close()
+            except Exception:
+                pass
+            self._ds2 = None
+        self._port_owner.release("flasher")
+        self._port_owner.acquire("eeprom")
+        hold_for_recovery = False
+        try:
+            return op_fn(port, progress_fn, log_fn)
+        except (
+            eeprom_ram.EepromCommitUnknown,
+            eeprom_ram.EepromWriteRecoveryRequired,
+        ) as error:
+            if error.recovery.is_open:
+                hold_for_recovery = True
+                self._eeprom_write_recovery = error.recovery
+            raise
+        finally:
+            if not hold_for_recovery:
+                self._port_owner.release("eeprom")
+                self._port_owner.acquire("flasher")
+                progress_fn(0, 0, "Reopening normal DS2 at 9600")
+                self._reopen_ds2_with_retry(
+                    port,
+                    log_fn,
+                    expected_identity=expected_identity,
+                )
+
+    def _run_via_native_fast_ds2(
+        self,
+        op_fn,
+        log_fn,
+        progress_fn,
+        *,
+        expected_identity=None,
+    ):
         """Hand the connected K-Line adapter to the stock native-fast session."""
         port = self._connection_port
         if not port:
@@ -6322,10 +8055,22 @@ class MS41FlashGUI(QMainWindow):
             self._port_owner.release("native_fast_ds2")
             self._port_owner.acquire("flasher")
             progress_fn(0, 0, "Reopening normal DS2 at 9600")
-            self._reopen_ds2_with_retry(port, log_fn)
+            self._reopen_ds2_with_retry(
+                port,
+                log_fn,
+                expected_identity=expected_identity,
+            )
 
     def _native_fast_read_with_fallback(self, which, log_fn, progress_fn):
         """Try direct 187500 native DS2, then restart wholly at normal DS2 if safe."""
+        expected_identity = bytes(self._last_ident_raw)
+        if len(expected_identity) != ds2_fast_read.IDENTITY_LENGTH:
+            raise RuntimeError(
+                "Native fast DS2 requires the complete "
+                f"{ds2_fast_read.IDENTITY_LENGTH}-byte original ECU identity; "
+                "disconnect and reconnect before retrying."
+            )
+
         def event_cb(event, fields):
             # All transport events remain in the durable native-fast journal.
             # Mirror only state changes that help the operator decide what to do.
@@ -6372,13 +8117,9 @@ class MS41FlashGUI(QMainWindow):
                 ),
                 log_fn,
                 progress_fn,
+                expected_identity=expected_identity,
             )
             return bytes(result.file_image if which == "full" else result.data)
-        except ds2_fast_read.NativeFastReadReentryNotReady:
-            # This is an ECU-side stale/rearming state, not a transport
-            # capability failure.  Reopening normal DS2 is safe, but silently
-            # falling back would hide the required ignition cycle.
-            raise
         except Exception as error:
             # The read-only native session performs bounded high/low recovery.
             # Only a successfully reopened normal DS2 session authorizes a
@@ -6406,6 +8147,13 @@ class MS41FlashGUI(QMainWindow):
         port = self._connection_port
         if not port:
             raise RuntimeError("No connected serial port is available for native fast DS2.")
+        expected_identity = bytes(self._last_ident_raw)
+        if len(expected_identity) != ds2_fast_read.IDENTITY_LENGTH:
+            raise RuntimeError(
+                "Native fast DS2 write requires the complete "
+                f"{ds2_fast_read.IDENTITY_LENGTH}-byte original ECU identity; "
+                "disconnect and reconnect before retrying."
+            )
         if self._ds2 is not None:
             try:
                 self._ds2.close()
@@ -6433,7 +8181,11 @@ class MS41FlashGUI(QMainWindow):
                 self._port_owner.acquire("flasher")
                 if not succeeded or reopen_after_success:
                     progress_fn(0, 0, "Reopening normal DS2 at 9600")
-                    self._reopen_ds2_with_retry(port, log_fn)
+                    self._reopen_ds2_with_retry(
+                        port,
+                        log_fn,
+                        expected_identity=expected_identity,
+                    )
 
     def _native_fast_write_with_fallback(
         self,
@@ -6515,7 +8267,11 @@ class MS41FlashGUI(QMainWindow):
             # Transport setup failed before a session could erase anything.  The
             # ownership wrapper has already reopened and identified normal DS2;
             # that confirmed low-rate link is the authority for a full restart.
-            if self._ds2 is None:
+            if (
+                self._ds2 is None
+                or len(bytes(self._last_ident_raw))
+                != ds2_fast_read.IDENTITY_LENGTH
+            ):
                 raise
             log_fn(
                 f"Native fast transport setup failed before erase ({error}). "
@@ -6810,7 +8566,15 @@ class MS41FlashGUI(QMainWindow):
         self._set_ecu_buttons_enabled(False)
         self._update_softbsl_install_options()
 
-    def _reopen_ds2_with_retry(self, port, log_fn, attempts=12, delay=0.3):
+    def _reopen_ds2_with_retry(
+        self,
+        port,
+        log_fn,
+        attempts=12,
+        delay=0.3,
+        *,
+        expected_identity=None,
+    ):
         """Reopen the plain DS2 connection after a Fast op. The soft-BSL recovery WDT-reboots the
         ECU, so for the first ~1-2 s the port may open while the ECU is still booting and not yet
         answering — confirm with an identify() and retry until it responds (these early retries are
@@ -6822,7 +8586,19 @@ class MS41FlashGUI(QMainWindow):
                 self._ds2 = DS2Interface(
                     port=port, baud=9600, verbose=False, echo=self._connection_echo)
                 self._ds2.open()
-                self._ds2.identify()          # confirm the ECU is answering, not just that the port opened
+                reopened_identity = bytes(self._ds2.identify())
+                if expected_identity is not None:
+                    if len(reopened_identity) != ds2_fast_read.IDENTITY_LENGTH:
+                        raise RuntimeError(
+                            "reopened ECU identify returned "
+                            f"{len(reopened_identity)} bytes; expected "
+                            f"{ds2_fast_read.IDENTITY_LENGTH}"
+                        )
+                    if reopened_identity != expected_identity:
+                        raise RuntimeError(
+                            "reopened ECU identity differs from the original "
+                            f"{ds2_fast_read.IDENTITY_LENGTH}-byte identity"
+                        )
                 self._d2xx_checked = True
                 self._d2xx_ok = bool(getattr(self._ds2, "uses_d2xx", False))
                 if attempt > 1:
@@ -6983,6 +8759,7 @@ class MS41FlashGUI(QMainWindow):
         return path
 
     def _on_softbsl_install(self):
+        current_full_read = self._current_full_read_for_connection()
         port = self._acquire_softbsl_port(allow_handoff=True)
         if not port:
             return
@@ -7043,10 +8820,7 @@ class MS41FlashGUI(QMainWindow):
                 and live_version == target_version):
             # Reuse this session's full read when available. It is already tied
             # to the connected ECU and avoids another ~5 minute stock-DS2 read.
-            cached_base = (None if force_base else
-                           bytes(self._last_full_read)
-                           if self._last_full_read
-                           and len(self._last_full_read) == identity.FULL_ROM_SIZE else None)
+            cached_base = None if force_base else current_full_read
             base_note = ("uses the selected base .bin without an ECU full read"
                          if force_base else
                          "reuses this session's cached full read"
@@ -7762,7 +9536,7 @@ class MS41FlashGUI(QMainWindow):
         lay.addWidget(self.patches_log)
         lay.addStretch()
 
-        self.tabs.addTab(tab, "  Patches  ")
+        self._patch_tab_index = self.tabs.addTab(tab, "  Patches  ")
 
     def _set_patch_base(self, data, source, *, reset_changes=True):
         data = bytes(data)
@@ -7810,7 +9584,7 @@ class MS41FlashGUI(QMainWindow):
     def _badge(text, bg, fg):
         b = QLabel(text)
         b.setStyleSheet(f"background:{bg}; color:{fg}; border-radius:8px; "
-                        f"padding:1px 7px; font-size:9px; font-weight:bold;")
+                        f"padding:1px 5px; font-size:9px; font-weight:bold;")
         return b
 
     def _refresh_patch_list(self):
@@ -7908,17 +9682,27 @@ class MS41FlashGUI(QMainWindow):
                 btn_rm.clicked.connect(lambda _=False, pid=p["id"]: self._on_patch_remove(pid))
                 required_by = p.get("required_by", [])
                 if required_by:
+                    dependent_titles = []
                     dependent_names = []
                     for pid in required_by:
                         dependent = definitions.get(pid, {})
                         dependent_title = short_names.get(
                             pid, dependent.get("title", pid).split(
                                 " - ", 1)[0].split(" / ", 1)[0])
+                        dependent_titles.append(dependent_title)
                         dependent_names.append(
                             f"{dependent_title} {dependent.get('version', '')}".strip())
                     joined = ", ".join(dependent_names)
-                    rlay.addWidget(self._badge(
-                        f"REQUIRED BY {joined.upper()}", "#4d3524", "#ffc07a"))
+                    used_by = (
+                        dependent_titles[0]
+                        if len(dependent_titles) == 1
+                        else f"{len(dependent_titles)} PATCHES"
+                    )
+                    dependency_badge = self._badge(
+                        f"USED BY {used_by.upper()}", "#4d3524", "#ffc07a")
+                    dependency_badge.setToolTip(
+                        f"{p['title']} is required by installed patch(es): {joined}.")
+                    rlay.addWidget(dependency_badge)
                     btn_rm.setEnabled(False)
                     btn_rm.setToolTip(
                         f"Cannot remove {p['title']} while installed patch(es) {joined} "
@@ -7933,6 +9717,20 @@ class MS41FlashGUI(QMainWindow):
                     "border-radius:3px;padding:1px 8px;font-size:9px;} "
                     "QPushButton:hover{background:#5a1a1a;}")
                 btn_rm_legacy.clicked.connect(lambda _=False, pid=leg["id"]: self._on_patch_remove(pid))
+                if leg.get("required_by"):
+                    dependent_names = [
+                        (
+                            definitions.get(pid, {}).get("title", pid)
+                            .split(" - ", 1)[0].split(" / ", 1)[0]
+                        )
+                        for pid in leg["required_by"]
+                    ]
+                    btn_rm_legacy.setEnabled(False)
+                    btn_rm_legacy.setToolTip(
+                        f"Cannot remove this loader while installed patch(es) "
+                        f"{', '.join(dependent_names)} still require it. "
+                        "Remove the dependent patch first."
+                    )
                 rlay.addWidget(btn_rm_legacy)
             if not p["ok"]:
                 rlay.addWidget(self._badge(f"⚠ {p['badge']}", "#5a1a1a", "#f47171"))
@@ -8025,24 +9823,30 @@ class MS41FlashGUI(QMainWindow):
                 "Build and archive the selected patches. Available required patches are "
                 "selected automatically.")
 
-    def _on_patches_load_base(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Load Base .bin", "", "BIN files (*.bin);;All files (*)")
-        if not path:
-            return
+    def _load_patch_base_path(self, path):
         try:
-            data = open(path, "rb").read()
+            with open(path, "rb") as stream:
+                data = stream.read()
         except Exception as e:
             QMessageBox.critical(self, "Patch Base Read Failed", str(e))
-            return
-        if len(data) != 262144:
+            return False
+        if len(data) != MS41ECU.FULL_ROM_SIZE:
             QMessageBox.warning(
                 self,
                 "Not a Full ROM",
-                f"Expected a 256 KB (262,144-byte) full ROM; received {len(data):,} bytes.",
+                f"Expected a 256 KB ({MS41ECU.FULL_ROM_SIZE:,}-byte) full ROM; "
+                f"received {len(data):,} bytes.",
             )
-            return
+            return False
         self._set_patch_base(data, os.path.basename(path))
         self.patches_log.append(f"Loaded base: {os.path.basename(path)}")
+        return True
+
+    def _on_patches_load_base(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Base .bin", "", "BIN files (*.bin);;All files (*)")
+        if path:
+            self._load_patch_base_path(path)
 
     def _read_base_from_ecu(self, log_fn, progress_fn):
         """Read a full patch base through the same route used by the Flash tab."""
@@ -8065,7 +9869,12 @@ class MS41FlashGUI(QMainWindow):
 
         def on_done(result):
             data, source = result
+            data = bytes(data)
             self._set_patch_base(data, source)
+            cache_key = self._identity_connection_key()
+            if cache_key is not None:
+                self._last_full_read = data
+                self._last_full_read_key = cache_key
             self.patches_log.append(f"Read {len(data)} bytes from ECU ({source}).")
 
         self._run_task(task, on_success=on_done)
@@ -8198,43 +10007,69 @@ class MS41FlashGUI(QMainWindow):
         lay = QVBoxLayout(tab)
 
         btn_bar = QHBoxLayout()
-        self.btn_backup_ecu = self._op_btn("Back Up From ECU…", "#1e5080", self._on_backup_from_ecu)
-        self.btn_backup_ecu.setMaximumWidth(180)
+        self.btn_backup_ecu = self._op_btn(
+            "ECU Backup…", "#1e5080", self._on_backup_from_ecu)
+        self.btn_backup_ecu.setMaximumWidth(120)
         self.btn_backup_ecu.setEnabled(False)
         self.btn_backup_ecu.setToolTip(
             "Read the connected ECU through the automatic transfer path (Soft-BSL, "
             "native-fast DS2, or normal DS2) and add the full ROM or 24 KB tune to "
             "this catalogue with ECU ID, VIN, and CAL ID metadata.")
-        btn_add = self._op_btn("Add Backup…",       "#3d3d3d",  self._on_backup_add)
-        btn_add.setMaximumWidth(140)
-        self.btn_backup_flash = self._op_btn("Flash to ECU",    "#7a1f1f",  self._on_backup_flash)
-        self.btn_backup_flash.setMaximumWidth(150)
+        self.btn_backup_add = self._op_btn(
+            "Import Bin…", "#3d3d3d", self._on_backup_add)
+        self.btn_backup_add.setMaximumWidth(115)
+        self.btn_backup_compare = self._op_btn(
+            "Compare", "#3d3d3d", self._on_backup_compare)
+        self.btn_backup_compare.setMaximumWidth(90)
+        self.btn_backup_compare.setToolTip(
+            "Compare exactly two selected Bins. This is read-only and does not "
+            "connect to an ECU or modify either file.")
+        self.btn_backup_flash = self._op_btn(
+            "Flash", "#7a1f1f", self._on_backup_flash)
+        self.btn_backup_flash.setMaximumWidth(80)
         self.btn_backup_open_bsl = self._op_btn(
-            "Open in BSL-Unbricker", "#3d3d3d", self._on_backup_open_in_bsl)
-        self.btn_backup_open_bsl.setMaximumWidth(190)
+            "BSL-Unbricker", "#3d3d3d", self._on_backup_open_in_bsl)
+        self.btn_backup_open_bsl.setMaximumWidth(130)
         self.btn_backup_open_bsl.setToolTip(
             "Load the selected Bin as the BSL reference image and open the BSL-Unbricker tab. "
             "This only prepares the tab; it does not open hardware or flash anything.")
-        self.btn_backup_config = self._op_btn("Edit Config",   "#3d3d3d",  self._on_backup_edit_config)
-        self.btn_backup_config.setMaximumWidth(130)
+        self.btn_backup_patches = self._op_btn(
+            "Patches", "#3d3d3d", self._on_backup_open_patches)
+        self.btn_backup_patches.setMaximumWidth(90)
+        self.btn_backup_patches.setToolTip(
+            "Load the selected 256 KB full ROM into the Patches tab. The original Bin "
+            "is unchanged; built images are archived as new Bins.")
+        self.btn_backup_config = self._op_btn(
+            "Config", "#3d3d3d", self._on_backup_edit_config)
+        self.btn_backup_config.setMaximumWidth(80)
         self.btn_backup_config.setToolTip(
             "Open this backup in the ECU Config tab (FILE mode) to view/edit its "
             "feature flags, then Apply & Save.")
-        self.btn_backup_notes = self._op_btn("Edit Notes",      "#3d3d3d",  self._on_backup_notes)
-        self.btn_backup_notes.setMaximumWidth(130)
+        self.btn_backup_eeprom = self._op_btn(
+            "Load EEPROM", "#3d6b35", self._on_backup_open_eeprom)
+        self.btn_backup_eeprom.setMaximumWidth(145)
+        self.btn_backup_eeprom.setToolTip(
+            "Load the selected 512-byte image into the EEPROM tab without writing it.")
+        self.btn_backup_notes = self._op_btn(
+            "Notes", "#3d3d3d", self._on_backup_notes)
+        self.btn_backup_notes.setMaximumWidth(80)
         self.btn_backup_del   = self._op_btn("Delete",          "#5a1a1a",  self._on_backup_delete)
-        self.btn_backup_del.setMaximumWidth(100)
-        btn_open = self._op_btn("Open Folder",      "#3d3d3d",  self._on_backup_open_folder)
-        btn_open.setMaximumWidth(130)
+        self.btn_backup_del.setMaximumWidth(75)
+        self.btn_backup_open_folder = self._op_btn(
+            "Open Folder", "#3d3d3d", self._on_backup_open_folder)
+        self.btn_backup_open_folder.setMaximumWidth(110)
         btn_bar.addWidget(self.btn_backup_ecu)
-        btn_bar.addWidget(btn_add)
+        btn_bar.addWidget(self.btn_backup_add)
+        btn_bar.addWidget(self.btn_backup_compare)
         btn_bar.addWidget(self.btn_backup_flash)
         btn_bar.addWidget(self.btn_backup_open_bsl)
+        btn_bar.addWidget(self.btn_backup_patches)
         btn_bar.addWidget(self.btn_backup_config)
+        btn_bar.addWidget(self.btn_backup_eeprom)
         btn_bar.addWidget(self.btn_backup_notes)
         btn_bar.addWidget(self.btn_backup_del)
         btn_bar.addStretch()
-        btn_bar.addWidget(btn_open)
+        btn_bar.addWidget(self.btn_backup_open_folder)
         lay.addLayout(btn_bar)
 
         # Search bar
@@ -8258,6 +10093,7 @@ class MS41FlashGUI(QMainWindow):
         self.backup_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
         self.backup_table.horizontalHeader().setDefaultSectionSize(120)
         self.backup_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.backup_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.backup_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.backup_table.setAlternatingRowColors(True)
         self.backup_table.setStyleSheet("""
@@ -8284,7 +10120,12 @@ class MS41FlashGUI(QMainWindow):
         for entry in self._backup_mgr.entries:
             row = self.backup_table.rowCount()
             self.backup_table.insertRow(row)
-            cs_text  = "OK"    if entry.cs_ok else "INVALID"
+            if entry.file_type == "EEPROM":
+                cs_text = (
+                    "UNKNOWN" if entry.variant == "Unknown" else
+                    "RECORDS OK" if entry.cs_ok else "RECORDS INVALID")
+            else:
+                cs_text = "OK" if entry.cs_ok else "INVALID"
             cs_color = "#5f5"  if entry.cs_ok else "#f47171"
             # Live ECU pulls green, patched builds amber, imported files grey (the Source column
             # doubles as the bin's "kind").
@@ -8332,18 +10173,59 @@ class MS41FlashGUI(QMainWindow):
                 for col in SEARCH_COLS
             )
             self.backup_table.setRowHidden(row, not match)
+        self._set_backup_buttons_enabled()
+
+    def _selected_backup_rows(self):
+        indexes = self.backup_table.selectionModel().selectedRows()
+        return sorted({
+            index.row() for index in indexes
+            if not self.backup_table.isRowHidden(index.row())
+        })
+
+    def _selected_backups(self):
+        rows = self._selected_backup_rows()
+        entries = self._backup_mgr.entries
+        return [entries[row] for row in rows if 0 <= row < len(entries)]
 
     def _selected_backup(self):
-        rows = self.backup_table.selectedIndexes()
-        row  = rows[0].row() if rows else -1
-        entries = self._backup_mgr.entries
-        if 0 <= row < len(entries):
-            return entries[row]
-        return None
+        entries = self._selected_backups()
+        return entries[0] if len(entries) == 1 else None
+
+    def _on_backup_compare(self):
+        entries = self._selected_backups()
+        if len(entries) != 2:
+            return
+        try:
+            report = bin_compare.compare_entries(*entries)
+        except Exception as error:
+            QMessageBox.critical(self, "Compare Bins Failed", str(error))
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Compare Bins")
+        dialog.resize(780, 620)
+        layout = QVBoxLayout(dialog)
+        report_view = QTextEdit()
+        report_view.setReadOnly(True)
+        report_view.setLineWrapMode(QTextEdit.NoWrap)
+        report_view.setFont(QFont("Courier New", 9))
+        report_view.setPlainText(report)
+        layout.addWidget(report_view, 1)
+        buttons = QHBoxLayout()
+        copy_button = QPushButton("Copy Report")
+        copy_button.clicked.connect(
+            lambda: QGuiApplication.clipboard().setText(report))
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(dialog.accept)
+        buttons.addStretch()
+        buttons.addWidget(copy_button)
+        buttons.addWidget(close_button)
+        layout.addLayout(buttons)
+        dialog.exec_()
 
     def _on_backup_add(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select ROM or Tune File to Back Up",
+            self, "Select ROM, Tune, or EEPROM Bin to Back Up",
             "", "Binary Files (*.bin);;All Files (*)"
         )
         if not path: return
@@ -8397,9 +10279,11 @@ class MS41FlashGUI(QMainWindow):
         """Save an in-memory ECU image to the backup catalogue with a derived name."""
         eid = self._ecu_id or ""
         vin = self._ecu_vin or ""
+        safe_eid = "".join(ch for ch in eid if ch.isalnum()) or "ecu"
+        safe_vin = "".join(ch for ch in vin if ch.isalnum())
         typ = "full" if mode == "full" else "partial"
         ts  = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        parts = ["ms41", eid or "ecu", typ] + ([vin] if vin else []) + [ts]
+        parts = ["ms41", safe_eid, typ] + ([safe_vin] if safe_vin else []) + [ts]
         name = "_".join(parts) + ".bin"
         return self._backup_mgr.add_data(bytes(data), name, source=source,
                                          ecu_id=eid, vin=vin)
@@ -8519,6 +10403,32 @@ class MS41FlashGUI(QMainWindow):
         if self._config_data is not None:
             self.tabs.setCurrentIndex(self._config_tab_index)
 
+    def _on_backup_open_patches(self):
+        """Load the selected full ROM into the Patches tab without changing the Bin."""
+        entry = self._selected_backup()
+        if entry and self._load_patch_base_path(entry.path):
+            self.tabs.setCurrentIndex(self._patch_tab_index)
+
+    def _on_backup_open_eeprom(self):
+        entry = self._selected_backup()
+        if entry is None or entry.file_type != "EEPROM":
+            return
+        try:
+            image = Path(entry.path).read_bytes()
+            variant = (
+                entry.variant if entry.variant in _SOFTBSL_PATCH_VERSIONS
+                else None)
+            if not self._confirm_eeprom_target_replace(
+                    "Loading the selected Bins image"):
+                return
+            self._show_eeprom_image(
+                image, f"Bins: {entry.filename}", variant=variant)
+        except Exception as error:
+            QMessageBox.critical(
+                self, "EEPROM Image Unavailable", str(error))
+            return
+        self.tabs.setCurrentIndex(self._eeprom_tab_index)
+
     def _on_backup_notes(self):
         entry = self._selected_backup()
         if not entry: return
@@ -8543,7 +10453,7 @@ class MS41FlashGUI(QMainWindow):
             self._log(f"Backup deleted: {entry.filename}", "warn")
 
     def _on_backup_open_folder(self):
-        folder = os.path.abspath("backups")
+        folder = os.path.abspath(BACKUP_DIR)
         os.makedirs(folder, exist_ok=True)
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(folder)):
             QMessageBox.warning(self, "Open Folder Failed", f"Could not open:\n{folder}")
@@ -8554,16 +10464,25 @@ class MS41FlashGUI(QMainWindow):
         # must stay available while disconnected.
         busy           = getattr(self, "_task_busy", False)
         connected      = getattr(self, "_ds2", None) is not None
-        has_selection  = len(self.backup_table.selectedIndexes()) > 0
+        selected_count = len(self._selected_backup_rows())
+        single         = selected_count == 1
+        entry          = self._selected_backup() if single else None
+        is_eeprom      = bool(entry and entry.file_type == "EEPROM")
+        is_full        = bool(entry and entry.file_type == "Full ROM")
+        is_rom         = bool(entry and entry.file_type in ("Full ROM", "Tune"))
         idle           = not busy
         # ECU operations — need a live DS2 connection.
         self.btn_backup_ecu.setEnabled(idle and connected)
-        self.btn_backup_flash.setEnabled(idle and connected and has_selection)
+        self.btn_backup_flash.setEnabled(
+            idle and connected and is_rom)
+        self.btn_backup_compare.setEnabled(idle and selected_count == 2)
         # Local file operations — work offline, just need a selected row.
-        self.btn_backup_open_bsl.setEnabled(idle and has_selection)
-        self.btn_backup_config.setEnabled(idle and has_selection)
-        self.btn_backup_notes.setEnabled(idle and has_selection)
-        self.btn_backup_del.setEnabled(idle and has_selection)
+        self.btn_backup_open_bsl.setEnabled(idle and is_rom)
+        self.btn_backup_patches.setEnabled(idle and is_full)
+        self.btn_backup_config.setEnabled(idle and is_rom)
+        self.btn_backup_eeprom.setEnabled(idle and is_eeprom)
+        self.btn_backup_notes.setEnabled(idle and single)
+        self.btn_backup_del.setEnabled(idle and single)
 
     def _on_check_file(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -8962,6 +10881,7 @@ class MS41FlashGUI(QMainWindow):
         self._task_busy = True
         self._set_all_buttons_enabled(False)
         self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
 
         self._worker = WorkerThread(task_fn)
@@ -9001,9 +10921,12 @@ class MS41FlashGUI(QMainWindow):
             # Finalization, baud return, and reconnect are active protocol
             # phases, but they do not transfer another byte range.  Preserve
             # the completed bar and keep the current work visible by label.
+            if self.progress_bar.value() == 0:
+                self.progress_bar.setRange(0, 0)
             self.progress_label.setText(label)
             return
         if total > 0:
+            self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(int(done * 100 / total))
             if done == 0 and total == 1:
                 # Native-fast phase transitions are status-only updates.  They
@@ -9046,6 +10969,8 @@ class MS41FlashGUI(QMainWindow):
         self.log_view.moveCursor(QTextCursor.End)
 
     def _start_session_log(self):
+        if self._log_file:
+            self._end_session_log()
         os.makedirs(LOG_DIR, exist_ok=True)
         ts       = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         path     = os.path.join(LOG_DIR, f"session_{ts}.txt")
@@ -9054,6 +10979,7 @@ class MS41FlashGUI(QMainWindow):
             header = (
                 f"BimmerStein ECU Tool — Session log\n"
                 f"Started : {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"Build   : {self._build_info_summary}\n"
                 f"DEBUG entries are retained here but hidden from the in-app log window.\n"
                 f"{'=' * 60}\n\n"
             )
@@ -9101,6 +11027,7 @@ class MS41FlashGUI(QMainWindow):
         # alone (file editing works offline), so recompute from current state.
         self._update_config_buttons()
         self._update_softbsl_crossbank_button()
+        self._update_eeprom_buttons()
 
     def _set_all_buttons_enabled(self, enabled: bool):
         for button in (
@@ -9145,12 +11072,45 @@ class MS41FlashGUI(QMainWindow):
             self.btn_connect.setEnabled(False)
             self.cb_port.setEnabled(False)
             self.chk_direct_tap.setEnabled(False)
+        eeprom_recovery = self._pending_eeprom_recovery()
+        if eeprom_recovery is not None:
+            self.btn_connect.setEnabled(False)
+            self.cb_port.setEnabled(False)
+            self.chk_direct_tap.setEnabled(False)
+        self._update_eeprom_buttons()
 
     def closeEvent(self, event):
         # Don't silently close over a running read/write/flash — a half-written flash can need
         # re-flashing to recover. Let the user abort the close instead.
+        eeprom_recovery = self._pending_eeprom_recovery()
+        eeprom_owned = self._port_owner.owner == "eeprom"
         recovery_kind, recovery = self._active_write_recovery()
+        if self._connect_attempt is not None:
+            QMessageBox.warning(
+                self,
+                "Serial Connection Still Active",
+                "The initial connection is still waiting for the adapter, ECU, or "
+                "serial-driver cleanup. The port remains reserved so another transport "
+                "cannot open it concurrently.\n\n"
+                "If the adapter is unresponsive, unplug it and wait for the connection "
+                "failure message before closing the application.",
+            )
+            event.ignore()
+            return
         if getattr(self, "_task_busy", False):
+            if (
+                self._eeprom_task_busy
+                or eeprom_owned
+                or eeprom_recovery is not None
+            ):
+                QMessageBox.warning(
+                    self,
+                    "EEPROM Operation In Progress",
+                    "An EEPROM operation still owns hardware. Wait for it or for "
+                    "retained-session recovery to return before closing.",
+                )
+                event.ignore()
+                return
             if recovery is not None:
                 QMessageBox.warning(
                     self,
@@ -9168,6 +11128,51 @@ class MS41FlashGUI(QMainWindow):
                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
                 event.ignore()
                 return
+        if eeprom_recovery is not None:
+            recovery_instruction = (
+                "The EEPROM commit is still unresolved and the RAM-agent session "
+                "is being retained.\n\nIf ignition is still ON, choose Cancel and use "
+                "Resolve Pending Write."
+                if eeprom_recovery.is_open else
+                "The previous EEPROM recovery cleanup did not finish. Retry it only "
+                "after confirming the ECU remains powered OFF."
+            )
+            answer = QMessageBox.warning(
+                self,
+                "EEPROM Recovery Active",
+                f"{recovery_instruction}\n\nChoose Close only after confirming the "
+                "ECU has been powered OFF continuously for at least 10 seconds. "
+                "This only abandons the live session; it does not clear E740=1 or "
+                "resolve the EEPROM contents. Reconnect through installed Soft-BSL "
+                "and read the EEPROM before normal ECU use.",
+                QMessageBox.Close | QMessageBox.Cancel,
+                QMessageBox.Cancel,
+            )
+            if answer != QMessageBox.Close:
+                event.ignore()
+                return
+            try:
+                eeprom_recovery.close_after_confirmed_power_cycle()
+            except Exception as error:
+                self._log(
+                    f"Retained EEPROM session cleanup failed: {error}", "error")
+                QMessageBox.critical(
+                    self,
+                    "EEPROM Recovery Cleanup Failed",
+                    f"{error}\n\nThe application will remain open and retain the "
+                    "recovery/audit state. Correct the adapter or storage problem, "
+                    "then close again to retry cleanup.",
+                )
+                self._update_eeprom_buttons()
+                event.ignore()
+                return
+            self._eeprom_write_recovery = None
+            self._port_owner.release("eeprom")
+            self._log(
+                "Abandoned the retained EEPROM session after explicit power-off "
+                "confirmation; E740/EEPROM state still requires a fresh Soft-BSL read.",
+                "warn",
+            )
         if recovery is not None:
             retry_instruction = (
                 "If ignition is still ON, do not close the application; use Retry Flash "
@@ -9226,6 +11231,10 @@ class MS41FlashGUI(QMainWindow):
         # but a mid-flight close might not have reached that, which would leave the port marked busy.
         try:
             self._port_owner.release("softbsl")
+        except Exception:
+            pass
+        try:
+            self._port_owner.release("eeprom")
         except Exception:
             pass
         self._end_session_log()

@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from collections import Counter
+import json
+import os
 
 import pytest
 
+import ds2_fast_safety as safety
 import ds2_native_fast_reentry as native_reentry
 from ds2_fast_contracts import (
     ContractViolation,
+    FastOperation,
     FrameValidationError,
     LinkRate,
     ResponseStatus,
@@ -27,6 +31,7 @@ from ds2_fast_plans import (
 from ds2_fast_read import (
     CAPTURED_RATE_PROFILE,
     FastReadError,
+    FastReadTimeout,
     NativeFastReadReentryNotReady,
     NativeFastReadSession,
     NativeFastReadTransport,
@@ -37,6 +42,7 @@ from ds2_fast_read import (
     TOKEN_ADDRESS,
     TOKEN_LENGTH,
     UnsafeReadOnlyCommand,
+    read_full_d2xx,
     read_partial_d2xx,
 )
 from ds2_write_authorization import (
@@ -48,7 +54,8 @@ from ds2_write_authorization import (
 
 
 @pytest.fixture(autouse=True)
-def _clean_native_reentry_registry():
+def _clean_native_reentry_registry(monkeypatch, tmp_path):
+    monkeypatch.setattr(safety, "NATIVE_JOURNAL_DIR", tmp_path / "journals")
     native_reentry._reset_for_tests()
     yield
     native_reentry._reset_for_tests()
@@ -70,6 +77,7 @@ class ReadOnlyStockSerial:
         post_cleanup_busy=0,
         corrupt_selector=None,
         bad_echo_command=None,
+        drop_high_token_response=False,
         change_identity_after_cleanup=False,
         reentry_states=None,
     ):
@@ -82,6 +90,7 @@ class ReadOnlyStockSerial:
         self.corrupt_selector_used = False
         self.bad_echo_command = bad_echo_command
         self.bad_echo_used = False
+        self.drop_high_token_response = bool(drop_high_token_response)
         self.change_identity_after_cleanup = bool(change_identity_after_cleanup)
         self.reentry_states = list(
             reentry_states
@@ -188,6 +197,12 @@ class ReadOnlyStockSerial:
             assert len(args) == 5
             address = int.from_bytes(args[:4], "big")
             count = args[4]
+            if (
+                self.drop_high_token_response
+                and self._baud == int(self.ECU_RATES[SELECTOR_HIGH])
+                and address == TOKEN_ADDRESS
+            ):
+                return len(raw)
             marker = self._reentry_state()
             if address == AUTHORIZATION_STATE_ADDRESS and count == 1:
                 data = bytearray((marker["e658"],))
@@ -416,6 +431,147 @@ def test_standalone_read_arms_same_port_and_next_read_consumes_latch(monkeypatch
     read_partial_d2xx("com1")
     assert second_serial.read_hits[NATIVE_FAST_REENTRY_TIMER_ADDRESS] == 1
     assert second_serial.read_hits[NATIVE_FAST_REENTRY_LATCH_ADDRESS] == 1
+    assert native_reentry.reentry_required("COM1")
+
+
+@pytest.mark.parametrize(
+    ("reader", "operation", "result_field", "expected_size"),
+    [
+        (
+            read_partial_d2xx,
+            FastOperation.PARTIAL_READ,
+            "data",
+            TUNE_END - TUNE_START,
+        ),
+        (read_full_d2xx, FastOperation.FULL_READ, "file_image", FULL_IMAGE_SIZE),
+    ],
+)
+def test_standalone_reads_mirror_events_and_seal_success_journal(
+    monkeypatch,
+    reader,
+    operation,
+    result_field,
+    expected_size,
+):
+    serial = ReadOnlyStockSerial()
+    monkeypatch.setattr(
+        NativeFastReadTransport,
+        "open_d2xx",
+        staticmethod(
+            lambda _port, *, echo=True, event_cb=None: NativeFastReadTransport(
+                serial, echo=echo, event_cb=event_cb
+            )
+        ),
+    )
+    observed = []
+
+    result = reader(
+        "COM1",
+        event_cb=lambda event, fields: observed.append((event, dict(fields))),
+    )
+
+    assert len(getattr(result, result_field)) == expected_size
+    path, = safety.NATIVE_JOURNAL_DIR.glob("*.jsonl")
+    inspection = safety.inspect_operation_journal(path)
+    assert inspection.operation == operation.value
+    assert inspection.complete
+    assert inspection.outcome == "success"
+    records = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [event for event, _fields in observed] == [
+        record["event"] for record in records[1:-1]
+    ]
+    assert records[-1]["fields"] == {
+        "destructive_started": False,
+        "outcome": "success",
+    }
+
+
+def test_failed_read_journal_supersedes_stale_write_journal(monkeypatch):
+    stale = safety.new_operation_journal("COM1", FastOperation.FULL_WRITE)
+    stale.finish("success", destructive_started=True)
+    os.utime(stale.path, (1, 1))
+    serial = ReadOnlyStockSerial(drop_high_token_response=True)
+    monkeypatch.setattr(
+        NativeFastReadTransport,
+        "open_d2xx",
+        staticmethod(
+            lambda _port, *, echo=True, event_cb=None: NativeFastReadTransport(
+                serial, echo=echo, event_cb=event_cb
+            )
+        ),
+    )
+
+    with pytest.raises(
+        FastReadTimeout,
+        match="high_token_liveness at 187500 baud",
+    ):
+        read_partial_d2xx("COM1")
+
+    newest = max(
+        safety.NATIVE_JOURNAL_DIR.glob("*.jsonl"),
+        key=lambda path: path.stat().st_mtime_ns,
+    )
+    inspection = safety.inspect_operation_journal(newest)
+    assert newest != stale.path
+    assert inspection.operation == FastOperation.PARTIAL_READ.value
+    assert inspection.complete
+    assert inspection.outcome == "failed"
+    terminal = json.loads(
+        newest.read_text(encoding="utf-8").splitlines()[-1]
+    )
+    assert terminal["fields"]["destructive_started"] is False
+    assert terminal["fields"]["phase"] == FastOperation.PARTIAL_READ.value
+    assert "high_token_liveness at 187500 baud" in terminal["fields"]["error"]
+
+
+def test_selector_ack_arms_reentry_when_high_liveness_recovery_stays_unknown(
+    monkeypatch,
+):
+    serial = ReadOnlyStockSerial(drop_high_token_response=True)
+
+    monkeypatch.setattr(
+        NativeFastReadTransport,
+        "open_d2xx",
+        staticmethod(
+            lambda _port, *, echo=True, event_cb=None: NativeFastReadTransport(
+                serial, echo=echo, event_cb=event_cb
+            )
+        ),
+    )
+
+    with pytest.raises(
+        FastReadTimeout,
+        match="high_token_liveness at 187500 baud",
+    ):
+        read_partial_d2xx("COM1")
+
+    assert serial.selector == SELECTOR_HIGH
+    assert native_reentry.reentry_required("COM1")
+    assert not serial.is_open
+
+
+def test_recovered_selector_attempt_still_arms_reentry_without_valid_ack(
+    monkeypatch,
+):
+    serial = ReadOnlyStockSerial(corrupt_selector=SELECTOR_HIGH)
+
+    monkeypatch.setattr(
+        NativeFastReadTransport,
+        "open_d2xx",
+        staticmethod(
+            lambda _port, *, echo=True, event_cb=None: NativeFastReadTransport(
+                serial, echo=echo, event_cb=event_cb
+            )
+        ),
+    )
+
+    with pytest.raises(FrameValidationError, match="checksum"):
+        read_partial_d2xx("COM1")
+
+    assert serial.selector == SELECTOR_LOW
     assert native_reentry.reentry_required("COM1")
 
 

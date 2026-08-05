@@ -25,6 +25,7 @@ from ds2_fast_contracts import (
 from ds2_fast_partial_write import (
     FLASH_COMMAND,
     FINALIZE_CHALLENGE,
+    InitialWriteIdentityNotReady,
     InitialWriteSeedUnavailable,
     MAX_FINALIZE_SEED_ATTEMPTS,
     NativeFastPartialWriteTransport,
@@ -116,6 +117,7 @@ class PartialWriteStockSerial:
         wrong_cursor_at: int | None = None,
         readback_corrupt_address: int | None = None,
         missing_initial_key_ack: bool = False,
+        initial_identity_timeouts: int = 0,
         post_cleanup_identity_timeouts: int = 0,
         post_cleanup_identity_a2: int = 0,
         initial_seed_busy: int = 0,
@@ -126,6 +128,7 @@ class PartialWriteStockSerial:
         authorization_state: int = 0,
         wrong_key_count: int = 0,
         native_reentry_states=None,
+        high_selector_a2: bool = False,
     ):
         assert len(ds2_image) == FULL_IMAGE_SIZE
         assert len(token) == TOKEN_LENGTH
@@ -142,6 +145,7 @@ class PartialWriteStockSerial:
         self.wrong_cursor_at = wrong_cursor_at
         self.readback_corrupt_address = readback_corrupt_address
         self.missing_initial_key_ack = bool(missing_initial_key_ack)
+        self.initial_identity_timeouts = int(initial_identity_timeouts)
         self.post_cleanup_identity_timeouts = int(post_cleanup_identity_timeouts)
         self.post_cleanup_identity_a2 = int(post_cleanup_identity_a2)
         self.initial_seed_busy = int(initial_seed_busy)
@@ -158,6 +162,7 @@ class PartialWriteStockSerial:
             or ({"e72e": 0, "e659": 0xCC},)
         )
         self.native_reentry_index = 0
+        self.high_selector_a2 = bool(high_selector_a2)
         self.cleanup_completed = False
         self._readback_corruption_used = False
         self._baud = CAPTURED_RATE_PROFILE.low
@@ -226,6 +231,9 @@ class PartialWriteStockSerial:
             return len(raw)
 
         if frame.command == 0x00:
+            if not self.cleanup_completed and self.initial_identity_timeouts > 0:
+                self.initial_identity_timeouts -= 1
+                return len(raw)
             if self.cleanup_completed and self.post_cleanup_identity_timeouts > 0:
                 self.post_cleanup_identity_timeouts -= 1
                 return len(raw)
@@ -278,6 +286,9 @@ class PartialWriteStockSerial:
         if len(args) == TOKEN_LENGTH + 1 and args[1:] == self.token:
             selector = args[0]
             assert selector in self.ECU_RATES
+            if selector == 0x01 and self.high_selector_a2:
+                self._response(ResponseStatus.READINESS_A2)
+                return
             self._response(ResponseStatus.ACK)
             self.selector = selector
             self.ecu_baud = self.ECU_RATES[selector]
@@ -465,6 +476,26 @@ def _authorization_session(tmp_path, *, reentry_required=False, **serial_kwargs)
 def test_seed_key_matches_both_live_initial_and_finalize_keys():
     assert compute_ms41_write_key(0x1E, SEED) == bytes.fromhex("9a98a09c")
     assert compute_ms41_write_key(0x1F, SEED) == bytes.fromhex("9797a19a")
+
+
+def test_partial_initial_identity_timeout_never_enables_fallback(tmp_path):
+    session, serial, journal, _source = _session(
+        tmp_path,
+        serial_kwargs={"initial_identity_timeouts": 1},
+    )
+
+    with pytest.raises(InitialWriteIdentityNotReady):
+        session.execute()
+
+    assert sum(command == 0x00 for _baud, command, _args in serial.requests) == 1
+    assert not any(
+        command == SEED_KEY_COMMAND
+        for _baud, command, _args in serial.requests
+    )
+    assert serial.flash_requests == []
+    assert session.state is SessionState.FAILED
+    assert session.safe_legacy_fallback is False
+    assert journal.outcome == "failed"
 
 
 def test_pending_native_reentry_polls_shared_latch_before_first_challenge(tmp_path):
@@ -790,6 +821,50 @@ def test_exhausted_clean_a1_state_confirms_low_fallback_without_0x90_cleanup(
         command == SEED_KEY_COMMAND
         for _baud, command, _args in serial.requests[len(requests_before_recovery):]
     )
+
+
+def test_selector_a2_recovers_confirmed_low_without_selector_0x26(tmp_path):
+    session, serial, journal = _authorization_session(
+        tmp_path,
+        high_selector_a2=True,
+    )
+
+    with pytest.raises(
+        ContractViolation,
+        match="selector acknowledgement: status 0xA2, expected 0xA0",
+    ):
+        session.execute()
+
+    token_read = TOKEN_ADDRESS.to_bytes(4, "big") + bytes((TOKEN_LENGTH,))
+    selector_index = next(
+        index
+        for index, (_baud, command, args) in enumerate(serial.requests)
+        if command == SEED_KEY_COMMAND and args == b"\x01" + serial.token
+    )
+    assert serial.requests[selector_index + 1:] == [
+        (187500, 0x06, token_read),
+        (9600, 0x06, token_read),
+        (9600, 0x00, b""),
+    ]
+    assert [
+        args[0]
+        for _baud, command, args in serial.requests
+        if command == SEED_KEY_COMMAND
+        and len(args) == TOKEN_LENGTH + 1
+        and args[1:] == serial.token
+    ] == [0x01]
+    assert not session.destructive_started
+    assert serial.flash_requests == []
+    assert session.safe_legacy_fallback
+    assert session.state is SessionState.LOW_READY
+    assert session.link is LinkRate.LOW
+    assert not session.fast_write_armed
+    assert not serial.cleanup_completed
+    finish = next(
+        fields for event, fields in journal.events if event == "journal_finished"
+    )
+    assert finish["safe_legacy_fallback"] is True
+    assert finish["power_cycle_required"] is False
 
 
 @pytest.mark.parametrize(

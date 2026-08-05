@@ -93,8 +93,13 @@ def test_shared_progress_status_has_its_own_row_below_full_width_bar():
     app, window = _gui()
     try:
         root = window.centralWidget().widget().layout()
-        assert root.indexOf(window.progress_bar) >= 0
-        assert root.indexOf(window.progress_label) == root.indexOf(window.progress_bar) + 1
+        progress_index = root.indexOf(window.progress_bar)
+        assert progress_index >= 0
+        status_row = root.itemAt(progress_index + 1).layout()
+        assert status_row.indexOf(window.progress_label) == 0
+        assert status_row.indexOf(window.btn_about) == 1
+        assert window.btn_about.text().endswith("ⓘ")
+        assert window.btn_about.focusPolicy() != Qt.NoFocus
     finally:
         window.close()
 
@@ -743,37 +748,88 @@ def test_pending_post_write_cycle_blocks_native_write_while_e658_is_active(monke
         w.close()
 
 
-def test_native_read_reentry_block_is_not_hidden_by_slow_fallback(monkeypatch):
+@pytest.mark.parametrize(
+    ("which", "payload"),
+    [
+        ("tune", b"T" * 24576),
+        ("full", b"F" * 262144),
+    ],
+    ids=["tune", "full"],
+)
+def test_native_read_reentry_block_restarts_whole_read_when_low_reopen_confirmed(
+    monkeypatch,
+    which,
+    payload,
+):
     app, w = _gui()
     try:
+        expected_identity = b"I" * gui.ds2_fast_read.IDENTITY_LENGTH
         slow_reads = []
+        logs = []
         failure = gui.ds2_fast_read.NativeFastReadReentryNotReady(
             "native-fast read reentry did not complete"
         )
+
+        class InitiallyConnectedDS2:
+            def close(self):
+                pass
+
+        class ReopenedDS2:
+            uses_d2xx = True
+
+            def __init__(self, **_kwargs):
+                pass
+
+            def open(self):
+                pass
+
+            def identify(self):
+                return expected_identity
+
+            def close(self):
+                pass
+
+        def native_read(*_args, **_kwargs):
+            raise failure
+
+        def slow_read(requested_which, progress_fn, log_fn):
+            slow_reads.append((requested_which, progress_fn, log_fn))
+            return payload
+
+        monkeypatch.setattr(gui, "DS2Interface", ReopenedDS2)
         monkeypatch.setattr(
-            w,
-            "_run_via_native_fast_ds2",
-            lambda *args, **kwargs: (_ for _ in ()).throw(failure),
+            gui.ds2_fast_read,
+            "read_full_d2xx" if which == "full" else "read_partial_d2xx",
+            native_read,
         )
         monkeypatch.setattr(
             w,
             "_ds2_read",
-            lambda *args, **kwargs: slow_reads.append((args, kwargs)),
+            slow_read,
         )
 
-        with pytest.raises(
-            gui.ds2_fast_read.NativeFastReadReentryNotReady,
-            match="did not complete",
-        ) as caught:
-            w._native_fast_read_with_fallback(
-                "tune",
-                lambda *args, **kwargs: None,
-                lambda *args, **kwargs: None,
-            )
+        w._ds2 = InitiallyConnectedDS2()
+        w._connection_port = "COM1"
+        w._connection_echo = False
+        w._last_ident_raw = expected_identity
+        w._port_owner.acquire("flasher")
 
-        assert caught.value is failure
-        assert slow_reads == []
+        result = w._native_fast_read_with_fallback(
+            which,
+            lambda *args: logs.append(args),
+            lambda *args: None,
+        )
+
+        assert result == payload
+        assert [item[0] for item in slow_reads] == [which]
+        assert w._ds2 is not None
+        assert any(
+            "Restarting the entire read at normal DS2 9600" in item[0]
+            for item in logs
+        )
     finally:
+        w._ds2 = None
+        w._port_owner.release("flasher")
         w.close()
 
 
@@ -1264,7 +1320,7 @@ def test_patches_tab_lists_the_ms41_3_patches():
         assert "V4" in calguard_badges
         assert "BENCH PROVEN" in calguard_badges
         assert "UNTESTED" not in calguard_badges
-        assert "REQUIRES SOFT-BSL" in calguard_badges
+        assert "REQUIRES SOFT-BSL V10" in calguard_badges
         assert all("BOOT REGION" not in badge for badge in calguard_badges)
         assert "Fast compatibility guard" in (
             w._patch_checkboxes["cal_guard"].toolTip()
@@ -1372,7 +1428,7 @@ def test_installed_dependency_remove_button_is_blocked_by_launch_control():
         }
         assert remove.isEnabled() is False
         assert "Launch Control V5" in remove.toolTip()
-        assert "REQUIRED BY LAUNCH CONTROL V5" in labels
+        assert "USED BY LAUNCH CONTROL" in labels
     finally:
         w.close()
 
@@ -1382,8 +1438,8 @@ def test_patches_tab_removes_field_failed_v6_and_enables_v7(monkeypatch):
 
     app, w = _gui()
     try:
-        failed_image, _ = patch_service.build_image(
-            ref("MS41.3"), ["ignition_cut_v6"])
+        failed_image, _ = patch_service.patch_ms41.build(
+            ref("MS41.3"), ["ignition_cut_v6"], allow_deprecated=True)
         w._set_patch_base(failed_image, "field-failed-v6-test")
 
         assert w._patch_checkboxes["ignition_cut_v6"].isChecked()
@@ -1417,8 +1473,8 @@ def test_patches_tab_removes_deprecated_loader_and_enables_relocation(monkeypatc
 
     app, w = _gui()
     try:
-        legacy_image, _ = patch_service.build_image(
-            ref("MS41.3"), ["softbsl_loader_legacy"])
+        legacy_image, _ = patch_service.patch_ms41.build(
+            ref("MS41.3"), ["softbsl_loader_legacy"], allow_deprecated=True)
         w._set_patch_base(legacy_image, "legacy-loader-test")
 
         assert w._patch_checkboxes["softbsl_loader_legacy"].isChecked()
@@ -2685,10 +2741,10 @@ def test_bsl_dry_run_populates_preview_and_gates_arm(tmp_path):
         w.close()
 
 
-def test_bins_open_in_bsl_button_is_offline_local_action():
+def test_bins_open_in_bsl_button_is_offline_local_action(monkeypatch):
     app, w = _gui()
     try:
-        assert w.btn_backup_open_bsl.text() == "Open in BSL-Unbricker"
+        assert w.btn_backup_open_bsl.text() == "BSL-Unbricker"
         assert "does not open hardware or flash anything" in w.btn_backup_open_bsl.toolTip()
 
         w._ds2 = None
@@ -2699,6 +2755,10 @@ def test_bins_open_in_bsl_button_is_offline_local_action():
         row = w.backup_table.rowCount()
         w.backup_table.insertRow(row)
         w.backup_table.selectRow(row)
+        monkeypatch.setattr(
+            w, "_selected_backup",
+            lambda: type("Entry", (), {"file_type": "Full ROM"})(),
+        )
         w._set_backup_buttons_enabled()
         assert w.btn_backup_open_bsl.isEnabled()
         assert not w.btn_backup_flash.isEnabled()
@@ -3761,6 +3821,7 @@ def test_main_tab_native_read_restores_low_ds2_for_following_native_write(
         progress = []
         reopened = []
         open_attempts = []
+        expected_identity = b"SHINDE1" + b"\xFF" * 35
         tune_target = bytearray(b"\xFF" * gui.MS41ECU.TUNE_SIZE)
         for address in (0x0D, 0x17, 0x27, 0x37):
             tune_target[address] = ord("6")
@@ -3787,7 +3848,7 @@ def test_main_tab_native_read_restores_low_ds2_for_following_native_write(
 
             def identify(self):
                 events.append("ordinary_ds2_identified")
-                return b"SHINDE1" + b"\xFF" * 10
+                return expected_identity
 
             def close(self):
                 self.closed = True
@@ -3833,6 +3894,7 @@ def test_main_tab_native_read_restores_low_ds2_for_following_native_write(
         w._ds2 = InitiallyConnectedDS2()
         w._connection_port = "COM1"
         w._connection_echo = False
+        w._last_ident_raw = expected_identity
         w._ecu_softbsl_marker = None
         w._d2xx_ok = True
         w._port_owner.acquire("flasher")
@@ -3979,8 +4041,8 @@ def test_tab_order_is_workflow_grouped():
         order = [w.tabs.tabText(i).strip() for i in range(w.tabs.count())]
         assert order == [
             "Flash", "ECU Info", "DTC Codes", "Live Data", "Adaptations",
-            "Partial / Full", "Bins", "Patches", "ECU Config", "VIN / EWS",
-            "ROM Analyzer", "Soft-BSL", "BSL-Unbricker",
+            "EEPROM", "Partial / Full", "Bins", "Patches", "ECU Config",
+            "VIN / EWS", "ROM Analyzer", "Soft-BSL", "BSL-Unbricker",
         ]
     finally:
         w.close()

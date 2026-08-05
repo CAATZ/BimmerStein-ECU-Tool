@@ -196,8 +196,8 @@ def test_standalone_addresses_match_patch_descriptors_for_each_framing():
 
         if "VANOSRT" in xmlid:
             vanos_id = (
-                "vanos_minrpm_ms410"
-                if "VANOSRT1" in xmlid
+                "vanos_minrpm_v2_ms410"
+                if "MS410" in xmlid
                 else "vanos_minrpm_ms411"
             )
             vanos_full = _patch(vanos_id)["cave"]["cals"]["VANOSRPM"]
@@ -244,9 +244,9 @@ def test_standalone_matches_real_images_after_each_tunable_patch_set():
             [
                 "ignition_cut_v7_ms410",
                 "launch_control_v4_ms410",
-                "vanos_minrpm_ms410",
+                "vanos_minrpm_v2_ms410",
             ],
-            "BIMMERSTEIN_MS410_VANOSRT1_24K", "BIMMERSTEIN_MS410_VANOSRT1_256K",
+            "BIMMERSTEIN_MS410_VANOSRT3_24K", "BIMMERSTEIN_MS410_VANOSRT3_256K",
         ),
         (
             "MS41.1",

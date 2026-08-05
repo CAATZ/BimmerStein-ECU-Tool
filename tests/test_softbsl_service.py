@@ -43,10 +43,12 @@ def test_agent_log_downgrades_mechanics_but_preserves_actionable_messages():
     )
 
     log("streaming agent (1464 B) into SRAM 0xD800 ...")
+    log("E740=0x00 -> DS2 0x2A door")
     log("marker 0 was not confirmed after reset; trying stock program VERIFY ...", "warn")
 
     assert events == [
         ("streaming agent (1464 B) into SRAM 0xD800 ...", "debug"),
+        ("E740=0x00 -> DS2 0x2A door", "info"),
         ("marker 0 was not confirmed after reset; trying stock program VERIFY ...", "warn"),
     ]
 
@@ -648,6 +650,29 @@ def test_open_session_uses_direct_5a_for_calguard_mismatch(monkeypatch):
     assert ("enter_staged", "low", "5a") in sb.calls
 
 
+def test_custom_agent_auto_entry_uses_0x2a_before_0x5a(monkeypatch):
+    class CustomSB(_RecordingSB):
+        def calguard_direct_entry_ready(self):
+            raise AssertionError(
+                "custom auto entry must not probe the CalGuard recovery route")
+
+    sb = CustomSB()
+    _install_fakes(monkeypatch, sb)
+
+    d, _session = softbsl_service._open_session(
+        "COM1",
+        lambda *_args: None,
+        entry_mode="auto",
+        agent_payload=b"\x01\x02\x03",
+    )
+    d.close()
+
+    assert sb.calls == [
+        ("ensure_flash_mode", {"poll_ready": True}),
+        ("enter_retry", "5a"),
+    ]
+
+
 def test_forced_direct_5a_bypasses_detection_and_0x2a(monkeypatch):
     class ForcedSB(_RecordingSB):
         def calguard_direct_entry_ready(self):
@@ -691,6 +716,39 @@ def test_calguard_boot_mode_prearms_before_staged_5a(monkeypatch):
     assert not any(
         call[0] == "ensure_flash_mode"
         for call in sb.calls if isinstance(call, tuple))
+
+
+def test_custom_boot_service_skips_flash_family_detection(monkeypatch):
+    payload = b"\x01\x02\x03"
+    logs = []
+
+    class BootSB(_RecordingSB):
+        def prearm_calguard_boot(self, timeout=8.0):
+            self.calls.append(("prearm_calguard_boot", timeout))
+
+        def enter_staged(self, agent, tier, trigger):
+            self.calls.append(("enter_staged", bytes(agent), tier, trigger))
+
+    sb = BootSB()
+    _install_fakes(monkeypatch, sb, driver_signature=b"not used")
+
+    d, _session = softbsl_service._open_session(
+        "COM1",
+        logs.append,
+        baud_tier="low",
+        entry_mode="boot",
+        agent_payload=payload,
+    )
+    d.close()
+
+    assert sb.calls == [
+        ("prearm_calguard_boot", 8.0),
+        ("enter_staged", payload, "low", "5a"),
+    ]
+    assert logs == [
+        "CalGuard recovery acknowledged for custom RAM service; "
+        "flash-family detection is not required."
+    ]
 
 
 def test_boot_recovery_session_stays_open_for_read_then_closes_safely(monkeypatch):

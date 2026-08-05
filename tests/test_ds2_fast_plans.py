@@ -160,7 +160,7 @@ def test_full_write_reference_has_exact_control_addresses_and_primer():
         TUNE_ERASE_ADDRESS,
     ]
     assert plan.final_poll.address == FINAL_POLL_ADDRESS
-    assert len(plan.data_requests) == 651
+    assert len(plan.data_requests) == 650
     _assert_no_program_request_crosses_a_rom_block(plan.data_requests)
 
 

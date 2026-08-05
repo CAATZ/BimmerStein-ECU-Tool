@@ -15,6 +15,7 @@ from ds2_fast_full_write import (
 )
 from ds2_fast_plans import FULL_IMAGE_SIZE, TUNE_START
 from ds2_fast_partial_write import (
+    InitialWriteIdentityNotReady,
     PartialWriteStateError,
     PartialWriteTimeout,
     SEED_KEY_COMMAND,
@@ -210,6 +211,54 @@ def _authorization_full_session(tmp_path, **serial_kwargs):
     return session, serial, journal
 
 
+def test_program_only_initial_identity_wait_stops_on_first_valid_reply(tmp_path):
+    session, serial, journal = _authorization_full_session(
+        tmp_path,
+        initial_identity_timeouts=2,
+    )
+    progress = []
+    session.progress_cb = lambda phase, done, total: progress.append(
+        (phase, done, total)
+    )
+
+    assert session._identify(attempts=3) == IDENTITY
+
+    assert sum(command == 0x00 for _baud, command, _args in serial.requests) == 3
+    assert sum(
+        event == "initial_write_identity_timeout"
+        for event, _fields in journal.events
+    ) == 2
+    assert progress == [("Waiting for ECU normal DS2 readiness", 0, 1)]
+    assert not any(
+        command == SEED_KEY_COMMAND
+        for _baud, command, _args in serial.requests
+    )
+    assert serial.flash_requests == []
+
+
+def test_program_only_initial_identity_timeout_is_bounded_and_not_fallback_safe(
+    tmp_path,
+):
+    session, serial, journal = _authorization_full_session(
+        tmp_path,
+        initial_identity_timeouts=3,
+    )
+    session.initial_identity_attempts = 3
+
+    with pytest.raises(InitialWriteIdentityNotReady, match="3 bounded attempt"):
+        session.execute_program_only()
+
+    assert sum(command == 0x00 for _baud, command, _args in serial.requests) == 3
+    assert not any(
+        command == SEED_KEY_COMMAND
+        for _baud, command, _args in serial.requests
+    )
+    assert serial.flash_requests == []
+    assert session.state is SessionState.FAILED
+    assert session.safe_legacy_fallback is False
+    assert journal.outcome == "failed"
+
+
 def test_full_pre_erase_cleanup_waits_through_silence_and_a2(tmp_path):
     session, serial, journal = _pre_erase_cleanup_session(
         tmp_path,
@@ -279,6 +328,54 @@ def test_full_and_program_only_pre_authorization_failure_confirm_low_without_0x9
         command == SEED_KEY_COMMAND
         for _baud, command, _args in serial.requests[before:]
     )
+
+
+@pytest.mark.parametrize("program_only", (False, True))
+def test_full_and_program_only_selector_a2_recover_low_without_selector_0x26(
+    tmp_path, program_only
+):
+    session, serial, journal = _authorization_full_session(
+        tmp_path,
+        high_selector_a2=True,
+    )
+    operation = session.execute_program_only if program_only else session.execute
+
+    with pytest.raises(
+        ContractViolation,
+        match="selector acknowledgement: status 0xA2, expected 0xA0",
+    ):
+        operation()
+
+    token_read = TOKEN_ADDRESS.to_bytes(4, "big") + bytes((TOKEN_LENGTH,))
+    selector_index = next(
+        index
+        for index, (_baud, command, args) in enumerate(serial.requests)
+        if command == SEED_KEY_COMMAND and args == b"\x01" + serial.token
+    )
+    assert serial.requests[selector_index + 1:] == [
+        (187500, 0x06, token_read),
+        (9600, 0x06, token_read),
+        (9600, 0x00, b""),
+    ]
+    assert [
+        args[0]
+        for _baud, command, args in serial.requests
+        if command == SEED_KEY_COMMAND
+        and len(args) == TOKEN_LENGTH + 1
+        and args[1:] == serial.token
+    ] == [0x01]
+    assert not session.destructive_started
+    assert serial.flash_requests == []
+    assert session.safe_legacy_fallback
+    assert session.state is SessionState.LOW_READY
+    assert session.link is LinkRate.LOW
+    assert not session.fast_write_armed
+    assert not serial.cleanup_completed
+    finish = next(
+        fields for event, fields in journal.events if event == "journal_finished"
+    )
+    assert finish["safe_legacy_fallback"] is True
+    assert finish["power_cycle_required"] is False
 
 
 @pytest.mark.parametrize("program_only", (False, True))

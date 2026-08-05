@@ -300,9 +300,20 @@ code and calibration from different MS41 variants and is blocked from normal fla
 
 Bins catalogs files created by reads, backups, and patch composition. Entries include available
 variant, type, VIN/CAL metadata, notes, and source. Use descriptive notes and preserve a known-good
-original separately from edited or patched images.
+original separately from edited or patched images. Newly cataloged files also record a SHA-256
+identity so an externally replaced or modified file can be identified later.
 
-Select a 24 KB tune or 256 KB full-ROM entry and choose **Open in BSL-Unbricker** to load it as the
+Select exactly two entries and choose **Compare** for a read-only report of their SHA-256 identity,
+program/calibration variants, checksum state, installed patches, changed-byte count, and changed
+address ranges. A 256 KB full ROM can be compared with a 24 KB tune by comparing only the full
+ROM's correctly mapped tune region. Legacy entries whose original SHA-256 was never recorded are
+reported as such; Compare never updates that baseline or changes either file.
+
+Select a 256 KB full-ROM entry and choose **Patches** to load it directly into the Patches tab.
+Adding or removing patches works on an in-memory copy; **Build Patched Image** archives a new Bin
+and never overwrites the selected original.
+
+Select a 24 KB tune or 256 KB full-ROM entry and choose **BSL-Unbricker** to load it as the
 hardware-BSL reference image and open that tab. This prepares the recovery controls only; it does
 not connect to hardware, review or approve a flash plan, or flash the ECU. A tune selects the
 **tune** region when available. A full ROM leaves the chip, physical half, and region unchanged for
@@ -521,6 +532,17 @@ and exact ECU software identity before relying on matched values.
 
 Stop the operation. Confirm the connected ECU, file, variant, byte order, and definition. Re-read
 the value through an independent path before writing anything.
+
+### Exporting a support/test bundle
+
+Choose the build label at the lower-right of the main window, then **Export Support Bundle**.
+The ZIP contains build information plus, when available, privacy-scoped metadata and SHA-256 for
+the single selected Bin, the latest Live Data CSV, and the latest native-fast journal. Raw ROM
+bytes are never included.
+
+A session log is optional because it may contain VIN, ISN, ECU identifiers, local paths, and
+detailed errors. The application asks before including it. Bin filenames, VIN, ISN, notes, and ECU
+identifiers are excluded from the default metadata, and generic ZIP member names are used.
 
 <!-- pagebreak -->
 

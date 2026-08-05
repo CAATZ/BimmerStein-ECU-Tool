@@ -78,6 +78,31 @@ tracked BSD-3-Clause text uses the copyright and SPDX license identity declared
 by the installed `serial/__init__.py`; this provenance limitation is recorded
 instead of presenting the text as a byte-identical wheel artifact.
 
+### PyUSB 1.3.1
+
+- Project: PyUSB
+- Installed package metadata: BSD-3-Clause
+- Use: cross-platform USB API for the native CH341A backend
+- License material:
+  `THIRD_PARTY_LICENSES/PyUSB-1.3.1-BSD-3-Clause.txt`
+
+The tracked license is a byte-identical copy from the PyUSB 1.3.1 wheel.
+
+### libusb1 3.4.0 and libusb 1.0.29
+
+- Project: python-libusb1 and its bundled libusb shared library
+- Installed package metadata: LGPL-2.1-or-later
+- Use: supplies the replaceable `usb1/libusb-1.0.dll` used by PyUSB in the
+  Windows source and frozen applications
+- License material:
+  `THIRD_PARTY_LICENSES/libusb1-3.4.0-COPYING.txt` and
+  `THIRD_PARTY_LICENSES/libusb1-3.4.0-COPYING.LESSER.txt`
+
+The tracked texts are byte-identical copies from the libusb1 3.4.0 Windows x64
+wheel. The package does not install or replace a device driver. A non-HID USB
+device still needs a libusb-compatible Windows binding such as WinUSB or
+libusbK before PyUSB can open it.
+
 ### PyInstaller 6.21.0 bootloader
 
 - Project: PyInstaller
@@ -169,7 +194,7 @@ separately imported data.
 
 ## Trademarks and independence
 
-BMW, FTDI, Inno Setup, Microsoft, Nuitka, Python, PyQt, Qt, PyInstaller,
-ReportLab, pySerial, OpenSSL, and RomRaider names belong to their respective
-owners. BimmerStein ECU Tool is independent software and is not affiliated with
-or endorsed by those projects or companies.
+BMW, FTDI, Inno Setup, libusb, Microsoft, Nuitka, Python, PyQt, PyUSB, Qt,
+PyInstaller, ReportLab, pySerial, OpenSSL, and RomRaider names belong to their
+respective owners. BimmerStein ECU Tool is independent software and is not
+affiliated with or endorsed by those projects or companies.

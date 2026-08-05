@@ -97,6 +97,10 @@ class PartialWriteTimeout(PartialWriteError):
     """A complete echo or ECU reply did not arrive within the bound."""
 
 
+class InitialWriteIdentityNotReady(PartialWriteTimeout):
+    """Normal low-rate ECU identity did not arrive within the startup bound."""
+
+
 class InitialWriteSeedUnavailable(PartialWriteTimeout):
     """The ECU stayed safely locked but did not offer a seed within the bound."""
 
@@ -647,17 +651,41 @@ class NativeFastPartialWriteSession:
             state=self.state,
         )
 
-    def _identify(self) -> bytes:
-        return self._request(
-            IDENTIFY_COMMAND,
-            b"",
-            StatusResponseContract(
-                "initial write identity",
-                frozenset((ResponseStatus.ACK,)),
-                exact_payload_length=IDENTITY_LENGTH,
-            ),
-            "initial_write_identify",
-        ).payload
+    def _identify(self, *, attempts: int = 1) -> bytes:
+        if attempts < 1:
+            raise ValueError("initial identity attempts must be positive")
+        if attempts > 1:
+            self._progress("Waiting for ECU normal DS2 readiness", 0, 1)
+        for attempt in range(1, attempts + 1):
+            try:
+                return self._request(
+                    IDENTIFY_COMMAND,
+                    b"",
+                    StatusResponseContract(
+                        "initial write identity",
+                        frozenset((ResponseStatus.ACK,)),
+                        exact_payload_length=IDENTITY_LENGTH,
+                    ),
+                    (
+                        "initial_write_identify"
+                        if attempt == 1
+                        else f"initial_write_identify_retry_{attempt}"
+                    ),
+                ).payload
+            except PartialWriteTimeout as error:
+                self._record(
+                    "initial_write_identity_timeout",
+                    attempt=attempt,
+                    attempts=attempts,
+                    error=str(error),
+                )
+                if attempt == attempts:
+                    raise InitialWriteIdentityNotReady(
+                        "normal low DS2 identity did not become ready after "
+                        f"{attempts} bounded attempt(s): {error}"
+                    ) from error
+                self._sleep(self.timing.post_cleanup_poll_delay)
+        raise AssertionError("unreachable initial identity loop")
 
     def _read_mem(self, address: int, count: int, *, label: str) -> bytes:
         response = self._request(
@@ -1437,10 +1465,8 @@ class NativeFastPartialWriteSession:
             )
             return True
         if self.token is None:
-            self.safe_legacy_fallback = (
-                self.link is LinkRate.LOW and self.state is SessionState.LOW_READY
-            )
-            return self.safe_legacy_fallback
+            self.safe_legacy_fallback = False
+            return False
 
         found = None
         for candidate in (LinkRate.HIGH, LinkRate.LOW):
@@ -1464,8 +1490,28 @@ class NativeFastPartialWriteSession:
             self.link = LinkRate.UNKNOWN
             return False
 
-        # Selector 0x26 is valid from either discovered physical rate.  Set the
-        # contextual state explicitly; no destructive command has been sent.
+        if found is LinkRate.LOW:
+            self._wait_for_low_identity(
+                contract_name="partial pre-erase low readiness",
+                label="partial_pre_erase_low_readiness",
+                timeout_event="partial_pre_erase_low_readiness_timeout",
+            )
+            if self.state is SessionState.ARMED_LOW:
+                self.fast_write_armed = False
+            self._set_state(
+                state=SessionState.LOW_READY,
+                link=LinkRate.LOW,
+                reason="normal low identity confirmed before tune erase",
+            )
+            self.safe_legacy_fallback = True
+            self._record(
+                "partial_pre_erase_low_fallback_confirmed",
+                final_baud=self.rates.low,
+            )
+            return True
+
+        # The high-rate write state requires the proven selector/BMW cleanup.
+        # No destructive command has been sent.
         self.state = SessionState.HIGH_PARTIAL_WRITE
         cleanup_confirmed = self._cleanup_to_low()
         if not cleanup_confirmed:

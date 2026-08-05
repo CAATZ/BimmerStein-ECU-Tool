@@ -33,7 +33,20 @@ def test_build_rejects_unknown_and_mixed_target():
     with pytest.raises(patch_ms41.PatchError):
         patch_ms41.build(ref("MS41.3"), ["not_a_patch"])
     with pytest.raises(patch_ms41.PatchError):
-        patch_ms41.build(ref("MS41.3"), ["cal_guard", "vanos_minrpm_ms410"])  # .3 + .0 targets
+        patch_ms41.build(
+            ref("MS41.3"),
+            ["cal_guard", "vanos_minrpm_v2_ms410"],
+        )  # .3 + .0 targets
+
+
+def test_build_rejects_deprecated_patch_unless_explicitly_building_a_fixture():
+    with pytest.raises(patch_ms41.PatchError, match="detection/removal-only"):
+        patch_ms41.build(ref("MS41.3"), ["ignition_cut"])
+
+    fixture, _ = patch_ms41.build(
+        ref("MS41.3"), ["ignition_cut"], allow_deprecated=True)
+    assert patch_ms41.is_applied(
+        fixture, patch_ms41.load_patches()["ignition_cut"])
 
 
 def test_build_does_not_write_files(tmp_path):

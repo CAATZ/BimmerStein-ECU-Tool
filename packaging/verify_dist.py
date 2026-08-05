@@ -37,6 +37,9 @@ REQUIRED_LICENSE_FILES = {
     "PyQt5-sip-12.18.0-BSD-2-Clause.txt": (
         "3e6f5b427c36f94ecf86bc01698af7030a1ed6eb3748110d5dbb8d142d804611"
     ),
+    "PyUSB-1.3.1-BSD-3-Clause.txt": (
+        "03e39fdcee9c18f2f9d0c3500a993ddeac050695eb81070ea41347587c76a7fe"
+    ),
     "Python-3.14.6-LICENSE.txt": (
         "935cf13e19f8c31b497d20b05d73623431a226b230c3599bc30fa3348979bc68"
     ),
@@ -48,6 +51,12 @@ REQUIRED_LICENSE_FILES = {
     ),
     "pyserial-3.5-BSD-3-Clause.txt": (
         "ddba22532a6f362880d849b5e2ed4b0a288b8bec4315364d6640d8dad3feea27"
+    ),
+    "libusb1-3.4.0-COPYING.txt": (
+        "ab15fd526bd8dd18a9e77ebc139656bf4d33e97fc7238cd11bf60e2b9b8666c6"
+    ),
+    "libusb1-3.4.0-COPYING.LESSER.txt": (
+        "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
     ),
 }
 
@@ -87,6 +96,16 @@ def _pe_machine(path: Path) -> int | None:
 
 def _payload(path: Path) -> bytes:
     return bytes.fromhex("".join(path.read_text(encoding="ascii").split()))
+
+
+def _libusb_runtime_source() -> Path:
+    spec = importlib.util.find_spec("usb1")
+    if spec is None or spec.origin is None:
+        raise RuntimeError("libusb1 build dependency is unavailable")
+    path = Path(spec.origin).with_name("libusb-1.0.dll")
+    if not path.is_file():
+        raise RuntimeError("libusb1 build dependency has no Windows runtime DLL")
+    return path
 
 
 def _verify_license_inventory(app_dir: Path) -> dict[str, str]:
@@ -262,8 +281,10 @@ def verify_distribution(app_dir: Path, *, expected_backend: str | None = None) -
         content / "libffi-8.dll",
         content / "VCRUNTIME140.dll",
         content / "VCRUNTIME140_1.dll",
+        content / "usb1" / "libusb-1.0.dll",
         content / "engines" / "softbsl" / "agent.hex",
         content / "engines" / "softbsl" / "agent_28f.hex",
+        content / "engines" / "softbsl" / "eeprom_agent.hex",
         content / "engines" / "softbsl" / "stage1_payload.hex",
         content / "engines" / "softbsl" / "stage1_manifest.json",
         content / "engines" / "softbsl" / "agent_manifest.json",
@@ -281,6 +302,13 @@ def verify_distribution(app_dir: Path, *, expected_backend: str | None = None) -
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
         raise RuntimeError("packaged runtime files are missing:\n" + "\n".join(missing))
+
+    libusb_runtime = content / "usb1" / "libusb-1.0.dll"
+    if _pe_machine(libusb_runtime) != PE_MACHINE_AMD64:
+        raise RuntimeError(f"bundled libusb runtime is not x64: {libusb_runtime}")
+    if libusb_runtime.read_bytes() != _libusb_runtime_source().read_bytes():
+        raise RuntimeError(
+            "bundled libusb runtime does not match its unmodified build dependency")
 
     verified_msvc_runtime = _verify_msvc_runtime(content, backend=backend)
     _verify_release_metadata(app_dir, verified_msvc_runtime, backend=backend)

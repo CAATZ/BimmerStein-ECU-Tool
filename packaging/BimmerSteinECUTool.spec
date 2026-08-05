@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_dynamic_libs
+
 
 ROOT = Path(SPECPATH).resolve().parent
 APP_NAME = "BimmerStein ECU Tool"
@@ -37,6 +39,7 @@ softbsl_root = ROOT / "engines" / "softbsl"
 for filename in (
     "agent.hex",
     "agent_28f.hex",
+    "eeprom_agent.hex",
     "stage1_payload.hex",
     "stage1_manifest.json",
     "agent_manifest.json",
@@ -49,7 +52,7 @@ for filename in (
 a = Analysis(
     [str(ROOT / "gui.py")],
     pathex=[str(ROOT)],
-    binaries=[],
+    binaries=collect_dynamic_libs("usb1"),
     datas=datas,
     hiddenimports=["serial.tools.list_ports_windows"],
     hookspath=[],

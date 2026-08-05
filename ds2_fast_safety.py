@@ -13,10 +13,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Mapping, Optional, Union
 
+from app_paths import mutable_path
 from ds2_fast_contracts import FastOperation
 
 
 JOURNAL_SCHEMA = "ms41-native-fast-operation-journal/v1"
+NATIVE_JOURNAL_DIR = mutable_path("backups", "native_fast", "journals")
 
 
 class JournalError(RuntimeError):
@@ -27,6 +29,14 @@ def _utc_now() -> str:
     return _datetime.datetime.now(_datetime.timezone.utc).isoformat(
         timespec="milliseconds"
     ).replace("+00:00", "Z")
+
+
+def _stamp() -> str:
+    return _datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+
+
+def _safe_port(port: str) -> str:
+    return "".join(char if char.isalnum() else "_" for char in str(port))
 
 
 def _validate_utc(value: object, label: str) -> None:
@@ -149,6 +159,38 @@ class OperationJournal:
             else:
                 self.finish("failed", error=f"{exc_type.__name__}: {exc}")
         return False
+
+
+def new_operation_journal(
+    port: str,
+    operation: FastOperation,
+    *,
+    directory: Optional[Union[str, os.PathLike]] = None,
+) -> OperationJournal:
+    """Create a native-fast journal without exposing transport code to paths."""
+    journal_dir = NATIVE_JOURNAL_DIR if directory is None else Path(directory)
+    journal_dir.mkdir(parents=True, exist_ok=True)
+    path = journal_dir / (
+        f"{operation.value}-{_safe_port(port)}-{_stamp()}.jsonl"
+    )
+    return OperationJournal(
+        path,
+        operation=operation,
+        metadata={"port": str(port), "transport": "d2xx", "protocol": "native_fast_ds2"},
+    )
+
+
+def journal_event_sink(journal: OperationJournal, observer=None):
+    """Always journal transport events; mirror diagnostics without affecting I/O."""
+    def callback(event, fields):
+        journal.event_callback(event, fields)
+        if observer is not None:
+            try:
+                observer(event, dict(fields))
+            except Exception:
+                pass
+
+    return callback
 
 
 @dataclass(frozen=True)

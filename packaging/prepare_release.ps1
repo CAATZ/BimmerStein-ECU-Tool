@@ -24,6 +24,22 @@ $python = Join-Path $root ".venv\Scripts\python.exe"
 $standardBuildScript = Join-Path $root "build_windows.ps1"
 $nuitkaBuildScript = Join-Path $root "build_windows_nuitka.ps1"
 $releaseRoot = Join-Path $root "release"
+$buildStartedAtUtc = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+$sourceCommit = ""
+$sourceDirty = $null
+try {
+    $commitOutput = & git -C $root rev-parse HEAD 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        $sourceCommit = (($commitOutput -join "").Trim())
+        $statusOutput = & git -C $root status --porcelain --untracked-files=normal 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $sourceDirty = @($statusOutput).Count -gt 0
+        }
+    }
+}
+catch {
+    # Source archives may not include Git. Build time still distinguishes the package.
+}
 
 function Stage-ReleasePackage {
     param(
@@ -53,9 +69,14 @@ function Stage-ReleasePackage {
 
     $metadata = [ordered]@{
         product = "BimmerStein ECU Tool"
+        developer = "CAATZ"
+        repository = "https://github.com/CAATZ/BimmerStein-ECU-Tool"
         version = $Version
         platform = "Windows x64"
         build_backend = $Backend
+        built_at_utc = $buildStartedAtUtc
+        source_commit = $sourceCommit
+        source_dirty = $sourceDirty
         project_license = "GPL-3.0-only"
         intended_use = "off-road-only"
         pyqt_license_basis = $PyQtLicenseBasis
@@ -100,6 +121,11 @@ function Build-ReleaseInstaller {
 
 Push-Location $root
 try {
+    & $python "engines\patcher\verify_ms412_emulator.py"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Private MS41 patch-admission verification failed."
+    }
+
     & $standardBuildScript -Version $Version -SkipTests:$SkipTests
     if ($LASTEXITCODE -ne 0) { throw "Windows PyInstaller package build failed." }
 

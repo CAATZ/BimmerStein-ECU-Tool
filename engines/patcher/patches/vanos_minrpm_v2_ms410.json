@@ -1,0 +1,45 @@
+{
+  "id": "vanos_minrpm_v2_ms410",
+  "family_id": "vanos_minrpm",
+  "version": "V2",
+  "status": "TESTED",
+  "tested": true,
+  "verification": "V2 retains the byte-identical V1 runtime logic proven on-car, uses a distinct VANOSRT3 marker, and recomputes the enforced MS41.0 program checksum. Exact V1 upgrade, V1 removal, isolated V2 composition, checksums, and RomRaider matching are regression-tested.",
+  "title": "VANOS minimum RPM",
+  "user_description": "Adds a configurable minimum-RPM threshold for closed-throttle VANOS engagement on MS41.0. V2 retains the vehicle-tested runtime behavior and writes a valid program checksum.",
+  "description": "MS41.0 VANOS minimum-RPM retrofit V2. Splices the fd14.4 VANOS state-machine branch at file 0x2B7FA into the existing cave at file 0x30000. The cave re-tests fd14.4/fd14.5, reads the native RPM/32 mirror at 0xE9E2, enters the stock engage path at file 0x2B80A only at or above VANOSRPM, and otherwise returns to the stock off path at file 0x2B802. VANOSRPM uses blank SA 0x3000 and defaults to 0xFF, preserving stock behavior until configured. Marker VANOSRT3 at SA 0x3008 distinguishes this checksum-correct V2 from deprecated MS41.0 VANOSRT1 and MS41.1 VANOSRT2. V2 recomputes the enforced MS41.0 program checksum and supersedes V1. fd14.2 flash-mode handling remains untouched.",
+  "target": "MS41.0",
+  "recompute": ["program"],
+  "requires": [],
+  "conflicts": [],
+  "supersedes": ["vanos_minrpm_ms410"],
+  "cave": {
+    "region": "seg3-head",
+    "base": 196608,
+    "splice_off": 178170,
+    "splice_op": "jmps",
+    "relocatable": false,
+    "cals": {
+      "VANOSRPM": 94208,
+      "VERSION_MARKER": 94216
+    }
+  },
+  "edits": [
+    {
+      "off": 178170,
+      "expect": "8a0a0240",
+      "data": "fa030040"
+    },
+    {
+      "off": 196608,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "e60004008a0a02409a0a0750f3f8e2e943f800309d02fa0202f8fa020af8"
+    },
+    {
+      "off": 94216,
+      "expect": "ffffffffffffffff",
+      "upgrade_expect": ["56414e4f53525431"],
+      "data": "56414e4f53525433"
+    }
+  ]
+}

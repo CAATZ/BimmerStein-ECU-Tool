@@ -1,11 +1,16 @@
 {
   "id": "door_magic_ms411",
+  "version": "V2",
+  "status": "BENCH TEST REQUIRED",
+  "tested": false,
   "title": "DS2 0x2A Soft-BSL entry",
   "user_description": "Adds DS2 command 0x2A as a normal-mode entry into the persistent Soft-BSL loader on MS41.1 while leaving the standard 0x43 adaptation-clear command intact.",
-  "description": "MS41.1 unknown-command splice -> enter flash mode (E740=1 + commit + reset) -> reboot to the SA1 0x5A loader. Leaves 0x43 clear-adapts intact.",
+  "description": "V2 enforces the resident Soft-BSL loader dependency. MS41.1 unknown-command splice -> enter flash mode (E740=1 + commit + reset) -> reboot to the SA1 0x5A loader. Leaves 0x43 clear-adapts intact.",
   "target": "MS41.1",
   "recompute": ["program"],
-  "requires": [],
+  "requires": [
+    "softbsl_loader"
+  ],
   "conflicts": [],
   "cave": {
     "region": "proghigh",
