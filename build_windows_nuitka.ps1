@@ -16,9 +16,13 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
 Push-Location $root
 try {
     $env:BIMMERSTEIN_VERSION = $Version
-    & $python -c "import nuitka, PyQt5, reportlab"
+    & $python -c "import nuitka, PyQt5, reportlab, usb.core, usb.backend.libusb1, usb1"
     if ($LASTEXITCODE -ne 0) {
         throw "Nuitka build dependencies are missing. Run: .venv\Scripts\python.exe -m pip install -r requirements-build.txt"
+    }
+    $usb1Dll = & $python -c "from pathlib import Path; import usb1; print(Path(usb1.__file__).with_name('libusb-1.0.dll'))"
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $usb1Dll -PathType Leaf)) {
+        throw "The libusb1 Windows runtime DLL is missing."
     }
 
     & $python "packaging\generate_icon.py"
@@ -111,6 +115,9 @@ try {
     if (-not (Test-Path -LiteralPath (Join-Path $builtApp "BimmerStein ECU Tool.exe") -PathType Leaf)) {
         throw "Nuitka did not produce the expected standalone application."
     }
+    $usb1Target = Join-Path $builtApp "usb1"
+    New-Item -ItemType Directory -Path $usb1Target -Force | Out-Null
+    Copy-Item -LiteralPath $usb1Dll -Destination $usb1Target
     Move-Item -LiteralPath $builtApp -Destination $appDir
 
     $releaseReadme = Get-Content -Raw -LiteralPath "README.md" -Encoding utf8

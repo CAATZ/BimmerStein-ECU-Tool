@@ -1,5 +1,6 @@
 import os
 import sys
+import hashlib
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import backup_manager
@@ -26,6 +27,8 @@ def test_add_data_full_rom_records_program_and_cal_variant(tmp_path, monkeypatch
     assert entry.program_variant == "MS41.3"
     assert entry.cal_variant == "MS41.3"
     assert entry.hybrid == ""
+    assert entry.sha256 == hashlib.sha256(data).hexdigest()
+    assert backup_manager.BackupManager().entries[0].sha256 == entry.sha256
 
 
 def test_add_data_full_rom_ms41_1_records_program_and_cal_variant(tmp_path, monkeypatch):
@@ -44,6 +47,21 @@ def test_add_data_tune_leaves_program_fields_blank(tmp_path, monkeypatch):
     assert entry.file_type == "Tune"
     assert entry.program_variant == ""
     assert entry.hybrid == ""
+
+
+def test_add_data_eeprom_is_catalogued_separately(tmp_path, monkeypatch):
+    mgr = _mgr(tmp_path, monkeypatch)
+    entry = mgr.add_data(
+        bytes(512),
+        "ecu-eeprom.bin",
+        source="ECU EEPROM Agent",
+        variant="MS41.2",
+    )
+
+    assert entry.file_type == "EEPROM"
+    assert entry.variant == "MS41.2"
+    assert entry.source == "ECU EEPROM Agent"
+    assert entry.program_variant == entry.cal_variant == entry.cal_id == ""
 
 
 def test_old_index_entries_without_new_fields_load_cleanly(tmp_path, monkeypatch):
@@ -68,3 +86,4 @@ def test_old_index_entries_without_new_fields_load_cleanly(tmp_path, monkeypatch
     assert len(mgr.entries) == 1
     assert mgr.entries[0].program_variant == ""
     assert mgr.entries[0].cal_variant == ""
+    assert mgr.entries[0].sha256 == ""

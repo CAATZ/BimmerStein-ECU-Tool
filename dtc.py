@@ -1,8 +1,9 @@
 """BMW MS41 DS2 diagnostic-trouble-code database and parser.
 
-Command 0x04 returns 24 ten-byte records plus a trailer byte. Record byte 1
-contains the single-byte DTC and byte 9 distinguishes stored (0xAB) from active
-(0xAC) faults. The layout was verified against an MS41 serial capture.
+Command 0x04 returns a count byte followed by that many ten-byte records.
+Record byte 0 contains the single-byte DTC and record byte 1 contains its
+state flags. The layout was verified against an MS41 serial capture and the
+MS41.3 response builder.
 """
 
 from dataclasses import dataclass
@@ -25,7 +26,7 @@ def format_dtc_table(dtcs: list) -> str:
 # ---------------------------------------------------------------------------
 # DS2 single-byte DTC database (BMW MS41 / MS42 / MS43)
 # Source: openms41.sites.google.com DTC reference table (verified)
-# Code = single byte integer (1–255), matches byte[1] of each 10-byte DS2 record
+# Code = single byte integer (1–255), matches byte[0] of each 10-byte DS2 record
 # ---------------------------------------------------------------------------
 
 DS2_DTC_DB: dict = {
@@ -245,15 +246,16 @@ DS2_DTC_DB: dict = {
 # DS2 DTC record and parser
 # ---------------------------------------------------------------------------
 
-_DS2_STATUS_STORED = 0xAB   # fault stored in memory (may not be currently active)
-_DS2_STATUS_ACTIVE = 0xAC   # fault currently active
+_DS2_FLAG_RECORDED = 0x20
+_DS2_FLAG_ACTIVE = 0x40
+_DS2_FLAG_HISTORY = 0x80
 
 
 @dataclass
 class DS2DTCRecord:
     """A single DTC record decoded from a DS2 0x04 response."""
-    code:       int    # 1-byte DTC number from byte[1] of each 10-byte record
-    status_raw: int    # byte[9]: 0xAB = stored, 0xAC = active
+    code:       int    # 1-byte DTC number from record byte[0]
+    status_raw: int    # state flags from record byte[1]
     raw_record: bytes  # full 10-byte record (for debugging)
 
     # --- GUI-facing properties ------------------------------------------------
@@ -273,13 +275,13 @@ class DS2DTCRecord:
 
     @property
     def is_active(self) -> bool:
-        return self.status_raw == _DS2_STATUS_ACTIVE
+        return bool(self.status_raw & _DS2_FLAG_ACTIVE)
 
     @property
     def status_text(self) -> str:
-        if self.status_raw == _DS2_STATUS_ACTIVE:
+        if self.is_active:
             return "Active"
-        if self.status_raw == _DS2_STATUS_STORED:
+        if self.status_raw & (_DS2_FLAG_RECORDED | _DS2_FLAG_HISTORY):
             return "Stored"
         return f"0x{self.status_raw:02X}"
 
@@ -296,32 +298,32 @@ def parse_ds2_dtc_response(payload: bytes) -> list:
     """Parse a DS2 command-0x04 response payload into a list of DS2DTCRecord.
 
     Format verified against captured DS2 traffic:
-      payload = 241 bytes = 24 × 10-byte records + 1 trailer byte
-      Per record: byte[1] = DTC code (1-byte int), byte[9] = status marker
+      payload = count byte + count × 10-byte records
+      Per record: byte[0] = DTC code, byte[1] = state flags
       Records with code == 0 or code == 0xFF are silently skipped (empty slots).
-
-      NOTE: byte[3] is NOT the code — it is a separate flag/counter field that
-      reads as a constant 0x01 across most self-test slots. Reading byte[3]
-      instead of byte[1] was the original (incorrect) implementation and
-      caused every read to collapse to a single bogus "DTC 001" once the
-      genuine per-record codes (at byte[1]) were ignored.
 
     Returns unique DTC codes sorted by code number.
     """
-    if not payload:
-        return []
     data = bytes(payload)
+    if data == b"\x00\x00":
+        return []  # Stock MS41 empty response includes a zero pad byte.
+    if not data:
+        raise ValueError("empty DTC payload")
+    count = data[0]
+    expected = 1 + count * 10
+    if len(data) != expected:
+        raise ValueError(
+            f"unexpected DTC payload length: {len(data)}, expected {expected}")
+
     records = []
     seen = set()
-    i = 0
-    while i + 9 < len(data):
+    for i in range(1, expected, 10):
         rec = data[i:i + 10]
-        code       = rec[1]
-        status_raw = rec[9]
+        code = rec[0]
+        status_raw = rec[1]
         if code not in (0x00, 0xFF) and code not in seen:
             seen.add(code)
             records.append(DS2DTCRecord(code=code, status_raw=status_raw,
                                         raw_record=rec))
-        i += 10
     records.sort(key=lambda r: r.code)
     return records

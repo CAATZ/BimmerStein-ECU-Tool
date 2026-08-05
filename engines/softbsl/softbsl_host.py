@@ -94,6 +94,7 @@ HALF_NAME = {"T": "top/golden", "B": "bottom/working"}
 _DEPRECATED_LOADER_IDS = (
     "softbsl_loader_legacy",
     "softbsl_loader_relocated_v1",
+    "softbsl_loader_v2",
 )
 _DOOR_PATCH_IDS = {
     "MS41.0": ("door_0x43_ms410", "door_magic_ms410"),
@@ -2214,6 +2215,11 @@ def cmd_deploy_splice(args):
                     # installer supplies targeted ranges instead, so it does
                     # not incur a duplicate full-program read.
                     verify_write=bool(readback and not verify_ranges),
+                    initial_identity_attempts=(
+                        3
+                        if bool(getattr(args, "native_fast_retry_only", False))
+                        else 1
+                    ),
                     progress_cb=getattr(args, "progress_cb", None),
                 )
                 native_fast_done = True
@@ -2230,7 +2236,11 @@ def cmd_deploy_splice(args):
             # erase-time failure. Do not reopen, downshift, or cycle it.
             raise
         except ds2_native_fast_service.NativeFastPreEraseFailure as error:
-            if error.reentry_not_ready or error.power_cycle_required:
+            if (
+                error.initial_identity_not_ready
+                or error.reentry_not_ready
+                or error.power_cycle_required
+            ):
                 if bool(getattr(args, "phase1_reentry_recovery", False)):
                     # Preserve the structured service failure for the install-only
                     # operator recovery loop. The native service has already closed
@@ -2258,6 +2268,10 @@ def cmd_deploy_splice(args):
                     "Turn ignition OFF, wait at least 10 seconds, turn ignition ON, then retry"
                 ) from error
             if bool(getattr(args, "native_fast_retry_only", False)):
+                if error.safe_legacy_fallback:
+                    # Keep the typed pre-erase failure so the install-only loop
+                    # can offer another explicit ignition-cycle retry.
+                    raise
                 raise SoftBSLError(
                     "native fast bootstrap retry failed before erase; the legacy "
                     f"9600 writer was not attempted: {error}"
@@ -2903,7 +2917,7 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
     if len(base) != IMAGE_SIZE:
         raise SoftBSLError(f"base is {len(base)} B, expected {IMAGE_SIZE} (256 KB)")
     version = _patch_base_version(base)
-    if version != "MS41.3" and with_alphan:
+    if with_alphan and version != "MS41.3":
         raise SoftBSLError(
             "the alphan_failsafe restore patch is only applicable to MS41.3")
 
@@ -3110,6 +3124,8 @@ def _install_resolve_images(args):
             _emit("  non-triggering relocated loader v1 detected: migrating to the current CRC implementation")
         if "softbsl_loader_legacy" in old_loaders_installed:
             _emit("  legacy loader @0x5D36 detected: migrating to the descriptor-safe relocated layout")
+        if "softbsl_loader_v2" in old_loaders_installed:
+            _emit("  Soft-BSL V2 detected: migrating to bounds-checked V10")
     _confirm_reinstall(
         args, base, patch_defs, confirm_patches,
         bootstrap_door_id=bootstrap_door_id)
@@ -3589,7 +3605,15 @@ def cmd_install(args):
                 ) from error
             if (
                 isinstance(error, ds2_native_fast_service.NativeFastPreEraseFailure)
-                and (error.reentry_not_ready or error.power_cycle_required)
+                and (
+                    error.reentry_not_ready
+                    or error.initial_identity_not_ready
+                    or error.power_cycle_required
+                    or (
+                        native_fast_retry_only
+                        and error.safe_legacy_fallback
+                    )
+                )
             ):
                 recovery_prompt = getattr(args, "phase1_reentry_prompt", None)
                 if recovery_prompt is None:
@@ -3608,12 +3632,23 @@ def cmd_install(args):
                     )
                     cancel_detail = "no erase or flash command was sent"
                     cancel_phase = "pre_phase1_authorization"
-                else:
+                elif error.reentry_not_ready:
                     reason = (
                         "The ECU did not finish its previous native-fast session, so "
                         "the temporary Soft-BSL write was not started. No challenge, "
                         "selector, erase, or flash command was sent, and nothing was "
                         "erased."
+                    )
+                    cancel_detail = (
+                        "no challenge, selector, erase, or flash command was sent"
+                    )
+                    cancel_phase = "pre_phase1"
+                else:
+                    reason = (
+                        "The Phase 1 attempt lost normal DS2 communication before write "
+                        "authorization, so the temporary Soft-BSL write was not started. "
+                        "No challenge, selector, erase, or flash command was sent, and "
+                        "nothing was erased."
                     )
                     cancel_detail = (
                         "no challenge, selector, erase, or flash command was sent"
@@ -3758,8 +3793,7 @@ def main():
     pin.add_argument("--with-calguard", action="store_true",
                      help="compose mode: add the cal_guard no-brick version gate to the target (recommended).")
     pin.add_argument("--with-alphan", action="store_true",
-                     help="compose mode: add alphan_failsafe (MAF-unplug failover) to the target. NOTE: that "
-                          "patch embeds BMW-derived tables -- only if you have it locally.")
+                     help="compose mode: add the UNTESTED alphan_failsafe MAF fallback (MS41.3 only)")
     pin.add_argument("--dry-run", action="store_true", help="plan both phases, no serial I/O / no key-cycles "
                                                             "(compose mode needs --base + --chip for a dry-run)")
     pin.add_argument("--force", action="store_true", help="flash even if target/base checksums look invalid")

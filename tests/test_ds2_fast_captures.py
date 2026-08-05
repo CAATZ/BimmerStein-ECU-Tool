@@ -372,16 +372,17 @@ def test_partial_write_planner_reconstructs_the_capture_with_safer_boundaries():
         if request.address // 0x4000
         != (request.address + request.count - 1) // 0x4000
     ]
-    assert len(captured) == len(plan.program) == 79
+    assert len(captured) == 79
+    assert len(plan.program) == 77
     assert sum(request.count for request in captured) == 18_211
-    assert sum(request.count for request in plan.program) == 18_232
+    assert sum(request.count for request in plan.program) == 18_373
     assert len(captured_crossings) == 1
     assert captured_crossings[0].address == 0x13F2A
     assert planned_crossings == []
     assert bytes(planned_tune) == bytes(tune)
 
 
-def test_full_write_planner_replays_all_688_captured_flash_requests():
+def test_full_write_planner_reconstructs_the_capture_with_current_boundaries():
     frames, rejects = load_saleae_frames(
         _capture("Fast Full Write Third Step 192000.csv")
     )
@@ -402,13 +403,28 @@ def test_full_write_planner_replays_all_688_captured_flash_requests():
     capture_target_file = ds2_image_to_file_layout(capture_target_ds2)
     plan = build_fast_full_write_plan(capture_target_file, capture_target_file)
 
-    assert list(plan.high_flash_requests) == captured
-    assert len(plan.data_requests) == 679
-    assert sum(request.count for request in plan.data_requests) == 156_465
+    captured_control = [request for request in captured if not request.is_program]
+    planned_control = [
+        request for request in plan.high_flash_requests if not request.is_program
+    ]
+    planned_target_ds2 = bytearray(b"\xFF" * FULL_IMAGE_SIZE)
+    for request in plan.data_requests:
+        planned_target_ds2[
+            request.address : request.address + request.count
+        ] = request.data
+
+    assert planned_control == captured_control
+    assert plan.primer == next(request for request in captured if request.is_program)
+    assert bytes(planned_target_ds2) == bytes(capture_target_ds2)
+    assert len(plan.high_flash_requests) == 659
+    assert len(plan.data_requests) == 650
+    assert sum(request.count for request in plan.data_requests) == 156_261
     assert Counter(request.count for request in plan.data_requests) == {
-        107: 1,
         128: 1,
-        210: 1,
-        214: 8,
-        231: 668,
+        243: 637,
+        103: 8,
+        97: 1,
+        162: 1,
+        214: 1,
+        45: 1,
     }

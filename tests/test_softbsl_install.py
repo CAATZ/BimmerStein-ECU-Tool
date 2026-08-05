@@ -11,6 +11,20 @@ def test_d2xx_available_returns_bool_and_never_raises():
     assert softbsl_install.d2xx_available() in (True, False)
 
 
+def test_alphan_compose_is_available_only_for_ms413():
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+
+    image, patch_ids, _log = softbsl_install._sb.compose_persistent_image(
+        ref("MS41.3"), "29f400", with_alphan=True)
+    assert "alphan_failsafe" in patch_ids
+    assert patch_ms41.is_applied(
+        image, patch_ms41.load_patches()["alphan_failsafe"])
+    with pytest.raises(softbsl_install._sb.SoftBSLError, match="only applicable"):
+        softbsl_install._sb.compose_persistent_image(
+            ref("MS41.2"), "29f400", with_alphan=True)
+
+
 def test_install_log_keeps_detail_as_debug_and_one_terminal_success():
     events = []
     log = softbsl_install._install_log(
@@ -448,7 +462,8 @@ def test_ms411_deprecated_calguard_directly_upgrades_during_softbsl_compose(
     from tests.conftest import ref
 
     patches = load_patches()
-    legacy_image, _ = build(ref("MS41.1"), [legacy_id])
+    legacy_image, _ = build(
+        ref("MS41.1"), [legacy_id], allow_deprecated=True)
 
     composed, log = softbsl_install._sb._compose_image(
         legacy_image,
@@ -583,15 +598,20 @@ def test_persistent_composer_builds_ms412_and_migrates_deprecated_loaders():
     image, patch_ids, _log = softbsl_install.compose_persistent_target(
         ref("MS41.2"), with_calguard=True, marker="B", chip="29f400")
     assert patch_ids == ["softbsl_loader", "door_magic", "cal_guard", "amd_flash"]
-    assert image[0x55A2:0x55A4] == bytes.fromhex("921d")
+    assert image[0x55A0:0x55A4] == bytes.fromhex("da00921d")
     assert checksum.checksum_status(image) == {
         "boot": True, "program": True, "cal": True,
         "prog_disabled": False, "cal_disabled": False,
     }
 
     patches = patch_ms41.load_patches()
-    for old_id in ("softbsl_loader_legacy", "softbsl_loader_relocated_v1"):
-        old, _ = patch_ms41.build(ref("MS41.3"), [old_id])
+    for old_id in (
+            "softbsl_loader_legacy",
+            "softbsl_loader_relocated_v1",
+            "softbsl_loader_v2",
+    ):
+        old, _ = patch_ms41.build(
+            ref("MS41.3"), [old_id], allow_deprecated=True)
         migrated, _ids, _ = softbsl_install.compose_persistent_target(
             old, with_calguard=False, marker="B", chip="29f400")
         assert not patch_ms41.is_applied(migrated, patches[old_id])
@@ -625,7 +645,9 @@ def test_fixed_relocated_loader_restores_the_hardware_proven_crc_bytes():
 
     patches = patch_ms41.load_patches()
     current, _ = patch_ms41.build(ref("MS41.3"), ["softbsl_loader"])
-    broken, _ = patch_ms41.build(ref("MS41.3"), ["softbsl_loader_relocated_v1"])
+    broken, _ = patch_ms41.build(
+        ref("MS41.3"), ["softbsl_loader_relocated_v1"],
+        allow_deprecated=True)
     proven = bytes.fromhex(
         "f075e6f500d8e6f6ffff40572d0fa985c0845064e08df04668417c1648402d02"
         "56f601a028d13df708510defc2f427e45c84c2f528e4704540643d02e108db00"
@@ -638,7 +660,10 @@ def test_fixed_relocated_loader_restores_the_hardware_proven_crc_bytes():
 
 
 @pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
-@pytest.mark.parametrize("chip, wants_amd", [("28f200", False), ("29f400", True)])
+@pytest.mark.parametrize(
+    "chip, wants_amd",
+    [("28f200", False), ("29f200", True), ("29f400", True)],
+)
 def test_installer_composes_relocated_loader_for_both_flash_families(
         version, chip, wants_amd):
     from engines.patcher import patch_ms41
@@ -693,13 +718,18 @@ def test_reinstall_displaces_shared_alpha_n_cave_only_in_bootstrap():
     from tests.conftest import ref
 
     stock = ref("MS41.3")
+    fixture_patches = patch_ms41.load_patches()
+    fixture_patches["door_magic"] = {
+        **fixture_patches["door_magic"],
+        "requires": [],
+    }
     current, _ = patch_ms41.build(
         stock, [
             "softbsl_loader_legacy",
             "door_magic",
             "cal_guard_v1",
             "alphan_failsafe",
-        ])
+        ], patches=fixture_patches, allow_deprecated=True)
     args = softbsl_install._sb.InstallRequest(
         port="COM_TEST", prompt=lambda _message: None, base=current, chip="29f400",
         with_calguard=True,
@@ -1550,6 +1580,7 @@ def test_install_phase1_cycle_recovery_reuses_prepared_images_and_live_family(
     [
         ("reentry", "pre_phase1"),
         ("authorization", "pre_phase1_authorization"),
+        ("identity-timeout", "pre_phase1"),
     ],
 )
 def test_repeated_phase1_cycle_failure_requires_each_decision_and_cancel_is_typed(
@@ -1578,19 +1609,30 @@ def test_repeated_phase1_cycle_failure_requires_each_decision_and_cancel_is_type
     decisions = iter((True, False))
     prompt_calls = []
     attempts = []
+    reentry_error = ds2_native_fast_service.NativeFastPreEraseFailure(
+        ds2_native_fast_service.NativeFastWriteReentryNotReady(
+            "E659 did not reach 0xCC; no challenge, selector, or flash command was sent"
+        ),
+        safe_legacy_fallback=False,
+    )
     if failure_kind == "authorization":
-        cycle_error = ds2_native_fast_service.NativeFastPreEraseFailure(
+        phase1_errors = (ds2_native_fast_service.NativeFastPreEraseFailure(
             RuntimeError("write key acknowledgement: status 0xA2, expected 0xA0"),
             safe_legacy_fallback=False,
             power_cycle_required=True,
+        ),) * 2
+    elif failure_kind == "identity-timeout":
+        phase1_errors = (
+            reentry_error,
+            ds2_native_fast_service.NativeFastPreEraseFailure(
+                ds2_native_fast_service.InitialWriteIdentityNotReady(
+                    "normal low DS2 identity did not become ready after 3 bounded attempts"
+                ),
+                safe_legacy_fallback=False,
+            ),
         )
     else:
-        cycle_error = ds2_native_fast_service.NativeFastPreEraseFailure(
-            ds2_native_fast_service.NativeFastWriteReentryNotReady(
-                "E659 did not reach 0xCC; no challenge, selector, or flash command was sent"
-            ),
-            safe_legacy_fallback=False,
-        )
+        phase1_errors = (reentry_error,) * 2
     args = SimpleNamespace(
         bootstrap=str(bootstrap),
         target=str(target),
@@ -1619,7 +1661,7 @@ def test_repeated_phase1_cycle_failure_requires_each_decision_and_cancel_is_type
         attempts.append(
             (phase_args.image, phase_args.native_fast_retry_only)
         )
-        raise cycle_error
+        raise phase1_errors[len(attempts) - 1]
 
     monkeypatch.setattr(
         softbsl_install._sb, "cmd_deploy_splice", fail_before_erase
@@ -1636,6 +1678,8 @@ def test_repeated_phase1_cycle_failure_requires_each_decision_and_cancel_is_type
     assert caught.value.phase == cancel_phase
     assert attempts == [(str(bootstrap), False), (str(bootstrap), True)]
     assert len(prompt_calls) == 2
+    if failure_kind == "identity-timeout":
+        assert "lost normal DS2 communication" in prompt_calls[1][1]
 
 
 def test_phase1_native_retry_never_downshifts_to_legacy_writer(monkeypatch, tmp_path):
@@ -1661,17 +1705,17 @@ def test_phase1_native_retry_never_downshifts_to_legacy_writer(monkeypatch, tmp_
     native_calls = []
 
     def native_attempt(*_args, **_kwargs):
-        native_calls.append(True)
+        native_calls.append(_kwargs["initial_identity_attempts"])
         if len(native_calls) == 1:
             cause = ds2_native_fast_service.NativeFastWriteReentryNotReady(
                 "E659 did not reach 0xCC"
             )
-            safe_fallback = False
         else:
-            cause = OSError("fresh D2XX transport could not open")
-            safe_fallback = True
+            cause = ds2_native_fast_service.InitialWriteIdentityNotReady(
+                "normal low DS2 identity did not become ready after 3 bounded attempts"
+            )
         raise ds2_native_fast_service.NativeFastPreEraseFailure(
-            cause, safe_legacy_fallback=safe_fallback
+            cause, safe_legacy_fallback=False
         )
 
     monkeypatch.setattr(
@@ -1706,12 +1750,13 @@ def test_phase1_native_retry_never_downshifts_to_legacy_writer(monkeypatch, tmp_
 
     args.native_fast_retry_only = True
     with pytest.raises(
-        softbsl_install._sb.SoftBSLError,
-        match="legacy 9600 writer was not attempted",
-    ):
+        ds2_native_fast_service.NativeFastPreEraseFailure
+    ) as caught:
         softbsl_install._sb.cmd_deploy_splice(args)
 
-    assert len(native_calls) == 2
+    assert caught.value.initial_identity_not_ready is True
+    assert caught.value.safe_legacy_fallback is False
+    assert native_calls == [1, 3]
 
 
 @pytest.mark.parametrize(

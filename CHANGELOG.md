@@ -8,6 +8,54 @@ shared by BimmerStein applications.
 
 ## [Unreleased]
 
+## [0.1.0b13] - 2026-08-05
+
+### Added
+
+- Added automatic MS41 EEPROM layout detection with a manual override, CH341A
+  full-image service/recovery workflows, and Windows-safe automatic filenames.
+- Added exact-image release admission for the supported patch suite and
+  Intel/AMD flash drivers; missing required inputs now fail the release gate.
+- Restored AlphaN MAF-failsafe V2 with the historical A14-XOR transfer error
+  corrected. It remains **UNTESTED** for physical/on-car behavior.
+- Added read-only comparison of two Bins with SHA-256 catalog identity,
+  variant/checksum and installed-patch summaries, and changed-byte ranges.
+- Added packaged build identity/About information and privacy-scoped support
+  ZIP export without raw ROMs; session logs require explicit opt-in.
+
+### Fixed
+
+- Corrected regular-DS2 write fallback so eligible native-fast startup failures
+  retry at 9600 baud instead of ending the operation immediately.
+- Accepted the two-byte empty DTC response (`00 00`) returned by some ECUs.
+- Allowed CH341A EEPROM reads before a manual layout is selected and sanitized
+  unreadable ECU identifiers before using them in Windows filenames.
+- Hardened Soft-BSL Phase 1 startup with bounded normal-DS2 identity retries
+  and no unsafe fallback after an indeterminate native-fast start.
+- Kept provisional Connect transports worker-owned through setup and cleanup,
+  reported slow adapter/ECU responses, and prevented a second transport or
+  application close from racing an active connection attempt.
+- Enforced installed patch dependencies during composition and removal,
+  including deprecated-loader migration, and added the checksum-correct MS41.0
+  VANOS minimum-RPM V2 upgrade.
+
+### Changed
+
+- Updated the persistent Soft-BSL loader to bounds-checked V10 and retained DS2
+  command `0x2A` as the normal-mode entry path. Soft-BSL V10 and the
+  MS41.2/MS41.3 entry patch are **TESTED**; CalGuard V4 remains
+  **BENCH PROVEN**.
+- Reused connection-matched full ECU reads for Soft-BSL preparation and
+  shortened Patches-tab dependency badges while preserving complete details in
+  tooltips. A selected full-ROM Bin can now be opened directly in Patches.
+- Shortened Bins toolbar labels and made single-Bin actions unambiguous when
+  two rows are selected for comparison.
+- Retained the Beta 12 Ignition Cut V7 and Launch Control V4/V5 payloads and
+  matching definitions. Newer experimental revisions are not included.
+- Ignition Cut V7 and Launch Control V4/V5 still require the vehicle testing or
+  retesting indicated by their descriptors; AlphaN MAF-failsafe remains
+  untested.
+
 ## [0.1.0b12] - 2026-07-26
 
 ### Added

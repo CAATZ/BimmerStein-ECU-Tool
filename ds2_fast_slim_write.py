@@ -409,6 +409,7 @@ class SlimNativeFastFullWriteSession(
         challenge: int = INITIAL_CHALLENGE,
         reentry_required: bool = False,
         reentry_ready_cb: Optional[Callable[[], None]] = None,
+        initial_identity_attempts: int = 1,
         progress_cb: Optional[Callable[[str, int, int], None]] = None,
         sleeper: Callable[[float], None] = time.sleep,
     ):
@@ -433,6 +434,9 @@ class SlimNativeFastFullWriteSession(
         self.challenge = challenge
         self.reentry_required = bool(reentry_required)
         self.reentry_ready_cb = reentry_ready_cb
+        if initial_identity_attempts < 1:
+            raise ValueError("initial identity attempts must be positive")
+        self.initial_identity_attempts = int(initial_identity_attempts)
         self.progress_cb = progress_cb
         self.cancel_cb = None
         self._sleep = sleeper
@@ -682,7 +686,9 @@ class SlimNativeFastFullWriteSession(
     def execute(self) -> SlimFullWriteResult:
         try:
             self._validate_family()
-            self.identity = self._identify()
+            self.identity = self._identify(
+                attempts=self.initial_identity_attempts
+            )
             self.plan = build_fast_full_write_plan(
                 self.target_file_image,
                 self.target_file_image,
@@ -775,7 +781,9 @@ class SlimNativeFastFullWriteSession(
         self.program_only = True
         try:
             self._validate_family()
-            self.identity = self._identify()
+            self.identity = self._identify(
+                attempts=self.initial_identity_attempts
+            )
             self.plan = build_fast_full_write_plan(
                 self.target_file_image,
                 self.target_file_image,

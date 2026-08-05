@@ -1,0 +1,38 @@
+{
+  "id": "alphan_failsafe_v1",
+  "label": "V1 broken A14-XOR transfers",
+  "deprecated": true,
+  "version": "V1",
+  "status": "BROKEN - DEPRECATED",
+  "tested": false,
+  "title": "AlphaN MAF failsafe",
+  "user_description": "Broken AlphaN V1 retained only so existing images can be identified, removed, or upgraded to V2. Never install V1 on an ECU.",
+  "description": "Historical V1 encoded three inter-segment transfers with file addresses instead of C166 CPU addresses. Retained only for exact installed-state detection, safe removal, and direct migration to V2.",
+  "target": "MS41.3",
+  "recompute": [
+    "cal"
+  ],
+  "requires": [],
+  "conflicts": [
+    "alphan_failsafe"
+  ],
+  "cave": {
+    "region": "proghigh",
+    "base": 236394,
+    "splice_off": 174504,
+    "splice_op": "jmps",
+    "relocatable": false
+  },
+  "edits": [
+    {
+      "off": 174504,
+      "expect": "f6f4e4e8",
+      "data": "fa036a9b"
+    },
+    {
+      "off": 236394,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "8a1106a08a180410f6f4e4e8fa02aea9e6fc8a04c2fd3cfcda03ac48e6fc0005f2fd02e9da039e49e6fc8841da036a4af1c8e6fc8804c2fdd0e8da03fc48e6fcc842da036a4ac08dc0ccda03b846f7f8ebe88a180600e6fc4840da036a4af1c80d05e6fcbe04da03344af1c8c0ccc2fdebe8da030c44c08c5c7cc2fd00e95c8dda034447f6f4e4e8f0c4f2fd3afcda03ce46f6f454fcfa02aea9"
+    }
+  ]
+}

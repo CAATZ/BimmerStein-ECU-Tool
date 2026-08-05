@@ -2,7 +2,7 @@
   "format_version": 1,
   "assembler": {
     "path": "tools/AssembleC166.java",
-    "text_sha256": "71ceeb2bbd20b99f3597f146202eff898a4e8274a45e781fab8ec13b732c9f8b"
+    "text_sha256": "fc6d1bb2e1d68ede25e266d7310acdf493578bb8c72ed48192aebb484ba32fb2"
   },
   "agents": {
     "amd": {
@@ -20,6 +20,14 @@
       "payload": "agent_28f.hex",
       "payload_size": 1464,
       "payload_sha256": "5c35c219cf350f9dfd936be92907b2a44d9c52e0cb40d0831f805f49f8a418c2"
+    },
+    "eeprom_ms41": {
+      "source": "eeprom_agent_build.asm",
+      "source_text_sha256": "ac02acb967276d09dbc00651b079ed4f3be32ce3dcc5bedc4dc51f87e5ee42d5",
+      "preprocessed_sha256": "76d908c0522e3de0ffd0cb83107bf0a9d6a57d2e39c96493fc21a5b78dfa0f0d",
+      "payload": "eeprom_agent.hex",
+      "payload_size": 1442,
+      "payload_sha256": "e1c17e3a4e3684ab99f8d3ca98506a1829d37315028a00ff86a04c6f4ca3949f"
     }
   }
 }

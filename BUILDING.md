@@ -30,10 +30,18 @@ $env:QT_QPA_PLATFORM = "offscreen"
 .venv\Scripts\python.exe -m ruff check . --select F,E9
 .venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp .pytest-release
 .venv\Scripts\python.exe -m engines.softbsl.verify_agent_artifacts
+$env:MS41EMU_ROOT = "C:\path\to\ECU Emulator"
+$env:MS41_TEST_DATA_ROOT = "C:\path\to\MS41 Projects\_shared"
+.venv\Scripts\python.exe engines\patcher\verify_ms412_emulator.py
 ```
 
 The RAM-agent verification is mandatory. It confirms that the checked-in HEX
 payloads match their manifests and reproducible source artifacts.
+The private emulator admission is also mandatory for release preparation. It
+executes exact composed patch bytes and the Intel/AMD flash drivers against
+hash-bound private reference ROMs. The emulator and ROMs are development inputs;
+they are not imported, packaged, or shipped with the application. Missing
+private inputs fail this command instead of skipping it.
 
 ## 3. Rebuild the documentation
 
@@ -71,7 +79,7 @@ adjacent `_internal` directory.
 To compile the Nuitka portable package:
 
 ```powershell
-.\build_windows_nuitka.ps1 -Version 0.1.0b12
+.\build_windows_nuitka.ps1 -Version 0.1.0b13
 ```
 
 Its output is `dist\BimmerStein ECU Tool Nuitka\`. It is a flat Nuitka
@@ -111,11 +119,11 @@ After the release owner has selected a version, create the final ZIP with the
 GPLv3 licensing gate selected for the public beta:
 
 Beta versions use the same compact `bN` suffix as BimmerStein Tuning Suite.
-The current beta is `0.1.0b12`, with Git tag `v0.1.0b12`.
+The current beta is `0.1.0b13`, with Git tag `v0.1.0b13`.
 
 ```powershell
 .\packaging\prepare_release.ps1 `
-    -Version 0.1.0b12 `
+    -Version 0.1.0b13 `
     -PyQtLicenseBasis GPLv3 `
     -IncludeNuitka `
     -IsccPath "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
@@ -127,6 +135,8 @@ script performs a fresh build, verifies every staged x64 package, records the
 backend, project license, bundled-definition status, and selected PyQt5 basis in
 `RELEASE-METADATA.json`, and writes the portable ZIPs, per-user installer EXEs,
 individual checksum files, and one complete `SHA256SUMS.txt` under `release\`.
+Before building, it runs the same mandatory private emulator admission using
+`MS41EMU_ROOT` and `MS41_TEST_DATA_ROOT`.
 
 The PyInstaller and Nuitka installers retain distinct internal identities and
 installation directories. Both use the BimmerStein icon and the same

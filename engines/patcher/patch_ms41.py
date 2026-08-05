@@ -240,7 +240,9 @@ def cmd_list(patches, args):
         cave = f"  cave@0x{p['cave']['base']:05X}" if p.get("cave") else ""
         rc = ",".join(p.get("recompute", [])) or "none"
         target_text = "/".join(patch_targets(p))
-        print(f"  {pid:18} [{target_text}]  {len(p['edits'])} edits/{tot}B  recompute={rc}{cave}")
+        retired = "  DEPRECATED - removal only" if p.get("deprecated") else ""
+        print(f"  {pid:18} [{target_text}]  {len(p['edits'])} edits/{tot}B  "
+              f"recompute={rc}{cave}{retired}")
         print(f"       {p['title']} - {p['description'][:96]}")
     # pairwise collisions across the WHOLE library (informational)
     ids = list(patches)
@@ -271,7 +273,9 @@ def cmd_show(patches, args):
 
 
 def cmd_validate(patches, args):
-    sel = args.patch or list(patches)
+    sel = args.patch or [
+        pid for pid, patch in patches.items() if not patch.get("deprecated")
+    ]
     print("jump-target validation (precise splice->cave check):")
     errs = []
     for pid in sel:
@@ -303,13 +307,16 @@ class PatchError(Exception):
     """A patch selection could not be composed (bad base, collision, expect mismatch, etc.)."""
 
 
-def build(base_data, patch_ids, patches=None, marker=None):
+def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=False):
     """Compose the selected patches onto base_data (bytes); return (out_bytes, log_lines).
 
     Pure: no file I/O, no printing, no sys.exit. Raises PatchError on any rejection
     (unknown patch, unsupported target, bad base, unmet requires, conflict, byte collision,
-    unresolved cave splice, or an expect-byte mismatch). marker (None/'B'/'T') sets the
-    bank-ID byte @0x5FFC. Checksums are recomputed from the final image.
+    unresolved cave splice, or an expect-byte mismatch). Deprecated definitions are
+    detection/removal fixtures and are rejected unless an internal test explicitly passes
+    ``allow_deprecated=True``; that fixture-only escape also permits a deprecated
+    descriptor whose historical defect is an invalid splice. marker (None/'B'/'T')
+    sets the bank-ID byte @0x5FFC. Checksums are recomputed from the final image.
     """
     if patches is None:
         patches = load_patches()
@@ -319,6 +326,11 @@ def build(base_data, patch_ids, patches=None, marker=None):
         if pid not in patches:
             raise PatchError(f"no such patch: {pid}")
     chosen = [patches[pid] for pid in patch_ids]
+    deprecated = [p["id"] for p in chosen if p.get("deprecated")]
+    if deprecated and not allow_deprecated:
+        raise PatchError(
+            "deprecated patch(es) are detection/removal-only and cannot be installed: "
+            + ", ".join(deprecated))
 
     data = bytearray(base_data)
     if not chosen and marker is None:
@@ -372,7 +384,11 @@ def build(base_data, patch_ids, patches=None, marker=None):
     # JUMP-TARGET CHECK (precise A14-XOR splice->cave resolution)
     xerr = []
     for p in chosen:
-        xerr += validate_splices(p)
+        errors = validate_splices(p)
+        if errors and allow_deprecated and p.get("deprecated"):
+            log.extend("fixture warning: " + error for error in errors)
+        else:
+            xerr += errors
     if xerr:
         raise PatchError("JUMP-TARGET ERROR: " + "; ".join(xerr))
     log.append("jump-target check: OK - all cave splices resolve")
@@ -380,15 +396,18 @@ def build(base_data, patch_ids, patches=None, marker=None):
         for w in scan_cave_intraseg(p):
             log.append("warn: " + w)
 
-    # Verify every expect, then apply.  A descriptor may carry a precise
-    # ``upgrade_expect`` for superseded revisions of one edit.  This is not a
+    # Verify every expect, then apply. An unchanged edit may already match its
+    # current payload while another edit is upgraded. A descriptor may also
+    # carry a precise ``upgrade_expect`` for a superseded revision. This is not a
     # broad bypass: only an exact listed prior payload may be replaced in place.
     recompute = {"program"} if target == "MS41.3" else set()
     for p in chosen:
         for e in p["edits"]:
-            off = e["off"]; exp = bytes.fromhex(e["expect"])
+            off = e["off"]
+            exp = bytes.fromhex(e["expect"])
             cur = bytes(data[off:off + len(exp)])
-            if cur != exp:
+            dat = bytes.fromhex(e["data"])
+            if cur not in (exp, dat):
                 upgrades = e.get("upgrade_expect", [])
                 if isinstance(upgrades, str):
                     upgrades = [upgrades]

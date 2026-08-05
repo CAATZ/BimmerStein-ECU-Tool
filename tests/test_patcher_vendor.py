@@ -7,7 +7,7 @@ import checksum
 import pytest
 
 EXPECTED_IDS = {
-    "alphan_failsafe", "amd_flash", "cal_guard", "cal_guard_v1",
+    "alphan_failsafe", "alphan_failsafe_v1", "amd_flash", "cal_guard", "cal_guard_v1",
     "cal_guard_v2", "door_0x43",
     "door_0x43_ms410", "door_0x43_ms411", "door_magic", "door_magic_ms410",
     "door_magic_ms411", "ignition_cut", "ignition_cut_v2", "ignition_cut_v3", "ignition_cut_v4",
@@ -16,8 +16,9 @@ EXPECTED_IDS = {
     "launch_control_v2_ms412", "launch_control_v3", "launch_control_v3_ms412",
     "launch_control_v4", "launch_control_v4_ms410", "launch_control_v4_ms411",
     "launch_control_v4_ms412", "launch_control_v5",
-    "softbsl_loader", "softbsl_loader_legacy", "softbsl_loader_relocated_v1",
-    "vanos_minrpm_ms410", "vanos_minrpm_ms411",
+    "softbsl_loader", "softbsl_loader_v2", "softbsl_loader_legacy",
+    "softbsl_loader_relocated_v1", "vanos_minrpm_ms410",
+    "vanos_minrpm_v2_ms410", "vanos_minrpm_ms411",
 }
 
 
@@ -160,6 +161,7 @@ def test_needs_boot_write_flags_only_the_sa1_patches():
     # These edit file 0x4000-0x5FFF (SA1/boot); DS2 and un-armed soft-BSL can't write there.
     assert boot == {
         "cal_guard", "cal_guard_v1", "cal_guard_v2", "softbsl_loader",
+        "softbsl_loader_v2",
         "softbsl_loader_legacy", "softbsl_loader_relocated_v1", "amd_flash",
     }
     # Program/cal patches are DS2-writable.
@@ -396,7 +398,7 @@ def test_latest_ms413_program_patches_recompute_all_checksums():
             [
                 "ignition_cut_v7_ms410",
                 "launch_control_v4_ms410",
-                "vanos_minrpm_ms410",
+                "vanos_minrpm_v2_ms410",
             ],
         ),
         (

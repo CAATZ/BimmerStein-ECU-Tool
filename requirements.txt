@@ -1,6 +1,11 @@
 # pyserial provides the portable fallback used by DS2 and hardware BSL.
 pyserial>=3.5
 
+# PyUSB uses the host libusb on Unix-like systems. The Windows wheel supplies
+# the native DLL used by source and frozen CH341A support.
+PyUSB==1.3.1
+libusb1==3.4.0; sys_platform == "win32"
+
 # The desktop application additionally needs PyQt5. FTDI D2XX acceleration
 # uses the vendor driver directly when it is installed; no Python package is required.
 PyQt5>=5.15

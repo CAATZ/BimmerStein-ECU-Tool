@@ -62,15 +62,42 @@ def _installed_patch_state(data, all_patches=None):
     return ver, installed_ids, shadowed_ids
 
 
+def _installed_revision_satisfies(all_patches, requirement_id, installed_id):
+    """Whether an installed revision belongs to a required current patch's lineage."""
+    pending = [requirement_id]
+    seen = set()
+    while pending:
+        candidate = pending.pop()
+        if candidate == installed_id:
+            return True
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        supersedes = all_patches.get(candidate, {}).get("supersedes")
+        pending.extend(
+            [supersedes] if isinstance(supersedes, str) else supersedes or []
+        )
+    return False
+
+
+def _dependent_ids(all_patches, effective_ids, patch_id):
+    return sorted(
+        candidate_id for candidate_id in effective_ids
+        if candidate_id != patch_id
+        and any(
+            _installed_revision_satisfies(
+                all_patches, required_id, patch_id)
+            for required_id in all_patches[candidate_id].get("requires", [])
+        )
+    )
+
+
 def installed_dependents(data, patch_id):
     """Effective installed patches that directly require ``patch_id``."""
     all_patches = patch_ms41.load_patches()
     _ver, installed_ids, shadowed_ids = _installed_patch_state(data, all_patches)
     effective_ids = installed_ids - shadowed_ids
-    return sorted(
-        pid for pid in effective_ids
-        if pid != patch_id and patch_id in all_patches[pid].get("requires", [])
-    )
+    return _dependent_ids(all_patches, effective_ids, patch_id)
 
 
 def available_patches(data):
@@ -89,10 +116,7 @@ def available_patches(data):
         if pid in PATCH_TAB_HIDDEN_IDS:
             continue
         installed = pid in installed_ids
-        required_by = sorted(
-            other_id for other_id in effective_ids
-            if other_id != pid and pid in all_patches[other_id].get("requires", [])
-        )
+        required_by = _dependent_ids(all_patches, effective_ids, pid)
         if p.get("deprecated"):
             # Deprecated patches are hidden UNLESS one is actually installed on this base - then surface a
             # remove-only row so a stray/old install can be reverted directly from the tab (no need to first
@@ -115,6 +139,13 @@ def available_patches(data):
         if not patch_ms41.supports_target(p, ver):
             continue
         errs = patch_ms41.validate_splices(p)
+        missing_requirements = [
+            required_id for required_id in p.get("requires", [])
+            if installed and required_id not in effective_ids
+        ]
+        if missing_requirements:
+            errs.append(
+                "MISSING REQUIRED PATCH: " + ", ".join(missing_requirements))
         entry = {
             "id": pid,
             "title": p.get("title", ""),
@@ -123,7 +154,7 @@ def available_patches(data):
             "target": ver,
             "version": p.get("version", ""),
             "status": p.get("status", ""),
-            "tested": p.get("tested"),
+            "tested": p.get("tested", False),
             "requires": p.get("requires", []),
             "conflicts": p.get("conflicts", []),
             "ok": len(errs) == 0,
@@ -138,11 +169,16 @@ def available_patches(data):
         # it — an old/broken revision must be reverted before the new one will apply.
         sup = p.get("supersedes")
         sup_ids = [sup] if isinstance(sup, str) else list(sup or [])
-        entry["legacy"] = [
-            {"id": lid, "label": all_patches[lid].get("label", lid)}
-            for lid in sup_ids
-            if lid in installed_ids and lid not in shadowed_ids
-        ]
+        entry["legacy"] = []
+        for lid in sup_ids:
+            if lid not in installed_ids or lid in shadowed_ids:
+                continue
+            legacy = {"id": lid, "label": all_patches[lid].get("label", lid)}
+            legacy_required_by = _dependent_ids(
+                all_patches, effective_ids, lid)
+            if legacy_required_by:
+                legacy["required_by"] = legacy_required_by
+            entry["legacy"].append(legacy)
         out.append(entry)
     return out
 
@@ -184,7 +220,35 @@ def revert_patch(base_data, patch_id):
 def build_image(base_data, selected_ids, marker=None):
     """Compose the selected patches onto base_data. Returns (bytes, log_lines).
     Raises patch_ms41.PatchError on any rejection (bad base, collision, expect mismatch...)."""
-    return patch_ms41.build(bytes(base_data), list(selected_ids), marker=marker)
+    base_data = bytes(base_data)
+    selected_ids = list(selected_ids)
+    all_patches = patch_ms41.load_patches()
+    _ver, installed_ids, shadowed_ids = _installed_patch_state(
+        base_data, all_patches)
+    effective_after_build = (installed_ids - shadowed_ids) | set(selected_ids)
+    missing = {
+        patch_id: [
+            required_id
+            for required_id in all_patches[patch_id].get("requires", [])
+            if required_id not in effective_after_build
+        ]
+        for patch_id in installed_ids - shadowed_ids
+    }
+    missing = {
+        patch_id: required_ids
+        for patch_id, required_ids in missing.items()
+        if required_ids
+    }
+    if missing:
+        details = "; ".join(
+            f"{patch_id} requires {', '.join(required_ids)}"
+            for patch_id, required_ids in sorted(missing.items())
+        )
+        raise PatchError(
+            "installed patch dependency is incomplete; select the required "
+            f"patch or remove the dependent patch first: {details}")
+    return patch_ms41.build(
+        base_data, selected_ids, marker=marker)
 
 
 # SA1 / boot window (file offsets) — the region DS2 and un-armed soft-BSL never write.

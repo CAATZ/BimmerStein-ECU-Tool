@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import datetime as _datetime
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,6 +10,7 @@ from ds2_fast_full_write import (
     NativeFastFullWriteTransport,
 )
 from ds2_fast_partial_write import (
+    InitialWriteIdentityNotReady,
     InitialWriteSeedUnavailable,
     NativeFastWriteReentryNotReady,
     NativeFastPartialWriteTransport,
@@ -19,16 +19,17 @@ from ds2_fast_slim_write import (
     SlimNativeFastFullWriteSession,
     SlimNativeFastPartialWriteSession,
 )
-from ds2_fast_safety import OperationJournal
+from ds2_fast_safety import (
+    NATIVE_JOURNAL_DIR,
+    OperationJournal,
+    journal_event_sink,
+    new_operation_journal,
+)
 from ds2_native_fast_reentry import (
     clear_reentry_required,
     mark_reentry_required,
     reentry_required,
 )
-from app_paths import mutable_path
-
-
-NATIVE_JOURNAL_DIR = mutable_path("backups", "native_fast", "journals")
 
 
 class NativeFastServiceError(RuntimeError):
@@ -48,6 +49,9 @@ class NativeFastPreEraseFailure(NativeFastServiceError):
         self.cause = cause
         self.safe_legacy_fallback = bool(safe_legacy_fallback)
         self.power_cycle_required = bool(power_cycle_required)
+        self.initial_identity_not_ready = isinstance(
+            cause, InitialWriteIdentityNotReady
+        )
         self.seed_unavailable = isinstance(cause, InitialWriteSeedUnavailable)
         self.reentry_not_ready = isinstance(cause, NativeFastWriteReentryNotReady)
         super().__init__(str(cause))
@@ -90,14 +94,6 @@ class NativeWriteRecoveryRequired(NativeFastServiceError):
         )
 
 
-def _stamp() -> str:
-    return _datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-
-
-def _safe_port(port: str) -> str:
-    return "".join(char if char.isalnum() else "_" for char in str(port))
-
-
 def _progress_adapter(progress_cb):
     if progress_cb is None:
         return None
@@ -105,28 +101,17 @@ def _progress_adapter(progress_cb):
 
 
 def _new_journal(port: str, operation: FastOperation) -> OperationJournal:
-    NATIVE_JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
-    path = NATIVE_JOURNAL_DIR / (
-        f"{operation.value}-{_safe_port(port)}-{_stamp()}.jsonl"
-    )
-    return OperationJournal(
-        path,
-        operation=operation,
-        metadata={"port": str(port), "transport": "d2xx", "protocol": "native_fast_ds2"},
+    """Compatibility wrapper for callers/tests that patch the service directory."""
+    return new_operation_journal(
+        port,
+        operation,
+        directory=NATIVE_JOURNAL_DIR,
     )
 
 
 def _event_sink(journal: OperationJournal, observer=None):
-    """Always journal transport events; mirror diagnostics without affecting I/O."""
-    def callback(event, fields):
-        journal.event_callback(event, fields)
-        if observer is not None:
-            try:
-                observer(event, dict(fields))
-            except Exception:
-                # External diagnostic rendering must never alter flash state.
-                pass
-    return callback
+    """Compatibility wrapper around the shared native-fast event sink."""
+    return journal_event_sink(journal, observer)
 
 
 def _finish_setup_failure(
@@ -302,6 +287,7 @@ def write_program_d2xx(
     *,
     connected_family: str,
     verify_write: bool = False,
+    initial_identity_attempts: int = 1,
     progress_cb=None,
     event_cb=None,
 ):
@@ -318,10 +304,8 @@ def write_program_d2xx(
             port, event_cb=_event_sink(journal, event_cb)
         )
     except Exception as error:
-        # No transport means no request reached the ECU; a caller may safely
-        # retry the exact operation through its legacy low-rate path.
         _finish_setup_failure(journal, error, phase="transport_open")
-        raise NativeFastPreEraseFailure(error, safe_legacy_fallback=True) from error
+        raise NativeFastPreEraseFailure(error, safe_legacy_fallback=False) from error
     pending = reentry_required(port)
     try:
         session = SlimNativeFastFullWriteSession(
@@ -332,6 +316,7 @@ def write_program_d2xx(
             verify_write=verify_write,
             reentry_required=pending,
             reentry_ready_cb=lambda: clear_reentry_required(port),
+            initial_identity_attempts=initial_identity_attempts,
             progress_cb=_progress_adapter(progress_cb),
         )
     except Exception as error:

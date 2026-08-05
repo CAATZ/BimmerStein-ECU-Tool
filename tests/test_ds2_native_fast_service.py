@@ -44,6 +44,19 @@ class FakeTransport:
         self.is_open = False
 
 
+def test_service_journal_factory_keeps_directory_override_compatibility(
+    monkeypatch, tmp_path
+):
+    journal_dir = tmp_path / "compat-journals"
+    monkeypatch.setattr(service, "NATIVE_JOURNAL_DIR", journal_dir)
+
+    journal = service._new_journal("COM/1", FastOperation.PARTIAL_READ)
+    journal.finish("aborted", destructive_started=False)
+
+    assert journal.path.parent == journal_dir
+    assert journal.path.name.startswith("partial_read-COM_1-")
+
+
 def test_partial_service_uses_slim_session_without_backup_and_passes_verify(
     monkeypatch, tmp_path
 ):
@@ -239,6 +252,7 @@ def test_program_only_service_uses_program_only_session(
         b"target",
         connected_family="amd",
         verify_write=False,
+        initial_identity_attempts=3,
         event_cb=lambda event, fields: observed.append((event, dict(fields))),
     )
 
@@ -246,6 +260,7 @@ def test_program_only_service_uses_program_only_session(
     assert captured["target"] == b"target"
     assert captured["kwargs"]["connected_family"] == "amd"
     assert captured["kwargs"]["verify_write"] is False
+    assert captured["kwargs"]["initial_identity_attempts"] == 3
     assert not native_reentry.reentry_required("COM1")
     assert journal.events == observed == [
         (
@@ -254,6 +269,34 @@ def test_program_only_service_uses_program_only_session(
         )
     ]
     assert not transport.is_open
+
+
+def test_program_only_transport_open_failure_is_not_fallback_safe(
+    monkeypatch, tmp_path
+):
+    journal = FakeJournal(
+        tmp_path / "program-open-failure.jsonl", FastOperation.FULL_WRITE
+    )
+    monkeypatch.setattr(service, "_new_journal", lambda port, operation: journal)
+    monkeypatch.setattr(
+        service.NativeFastFullWriteTransport,
+        "open_d2xx",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            OSError("D2XX unavailable")
+        ),
+    )
+
+    with pytest.raises(service.NativeFastPreEraseFailure) as caught:
+        service.write_program_d2xx(
+            "COM1",
+            b"target",
+            connected_family="amd",
+        )
+
+    assert caught.value.safe_legacy_fallback is False
+    assert journal.closed
+    assert journal.outcome == "failed"
+    assert journal.fields["phase"] == "transport_open"
 
 
 def test_program_only_reentry_timeout_closes_transport_and_preserves_gate(

@@ -1,11 +1,4 @@
-"""Regression test for parse_ds2_dtc_response() against a real capture.
-
-Bug: the parser read the DTC code from byte[3] of each 10-byte record
-instead of byte[1]. byte[3] is a constant flag/counter field (0x01) across
-most self-test slots, so on a healthy ECU (where the earlier "catalog"
-records are placeholder 0x00/0xFF and get filtered) every read collapsed
-to a single bogus "DTC 001" regardless of the ECU's actual fault state.
-"""
+"""Regression tests for the captured MS41 DS2 command-0x04 record layout."""
 import csv
 import os
 from pathlib import Path
@@ -41,6 +34,32 @@ def _optional_capture() -> Path | None:
 CAPTURE = _optional_capture()
 
 
+def test_parse_ds2_dtc_response_uses_count_aligned_flags_and_active_bit():
+    stored = bytes.fromhex("08 B4 03 04 17 0B 30 05 AB 57")
+    active = bytes.fromhex("64 61 00 00 00 00 00 40 24 00")
+
+    dtc8, dtc100 = parse_ds2_dtc_response(b"\x02" + stored + active)
+
+    assert (dtc8.code, dtc8.status_raw, dtc8.status_text) == (8, 0xB4, "Stored")
+    assert not dtc8.is_active
+    assert dtc8.raw_record == stored
+    assert (dtc100.code, dtc100.status_raw, dtc100.status_text) == (
+        100, 0x61, "Active")
+    assert dtc100.is_active
+    assert dtc100.raw_record == active
+
+
+def test_parse_ds2_dtc_response_validates_count_framing():
+    assert parse_ds2_dtc_response(b"\x00") == []
+    assert parse_ds2_dtc_response(b"\x00\x00") == []
+    with pytest.raises(ValueError, match="empty DTC payload"):
+        parse_ds2_dtc_response(b"")
+    with pytest.raises(ValueError, match="unexpected DTC payload length"):
+        parse_ds2_dtc_response(b"\x01")
+    with pytest.raises(ValueError, match="unexpected DTC payload length"):
+        parse_ds2_dtc_response(b"\x00\x01")
+
+
 def _load_payload() -> bytes:
     assert CAPTURE is not None
     rows = list(csv.reader(CAPTURE.open(encoding="utf-8")))
@@ -52,7 +71,7 @@ def _load_payload() -> bytes:
 
 
 @pytest.mark.skipif(CAPTURE is None, reason="private DTC capture not configured")
-def test_parse_ds2_dtc_response_reads_code_from_byte1_not_byte3():
+def test_parse_ds2_dtc_response_matches_real_capture():
     payload = _load_payload()
     dtcs = parse_ds2_dtc_response(payload)
 
@@ -62,6 +81,4 @@ def test_parse_ds2_dtc_response_reads_code_from_byte1_not_byte3():
         12, 79, 74, 24, 23, 27, 53, 22, 62, 20, 50, 69, 51, 18,
     ])
     assert codes == expected
-    # The old (buggy) byte[3] read would have collapsed 14 of these
-    # records into a single duplicate "code 1" entry.
     assert 1 not in codes

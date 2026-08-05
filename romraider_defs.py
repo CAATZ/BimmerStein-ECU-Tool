@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Dict, List
 
 # Characters allowed in a scaling expression we will eval (defence-in-depth).
-_EXPR_OK = set("x0123456789.+-*/() eE")
+_EXPR_OK = set("x0123456789.+-*/%() eE")
 
 
 @dataclass

@@ -15,6 +15,7 @@ from typing import Callable, Mapping, Optional, Sequence, Tuple
 from ds2_fast_contracts import (
     ContractViolation,
     DS2Response,
+    FastOperation,
     FrameValidationError,
     LinkRate,
     ResponseStatus,
@@ -26,6 +27,7 @@ from ds2_fast_contracts import (
     read_response_contract,
     selector_ack_contract,
 )
+from ds2_fast_safety import journal_event_sink, new_operation_journal
 from ds2_fast_plans import (
     FULL_IMAGE_SIZE,
     TUNE_SIZE,
@@ -433,6 +435,7 @@ class NativeFastReadSession:
         self.cleanup_b0_seen = False
         self.recovery_used = False
         self.fast_selector_attempted = False
+        self.fast_selector_acknowledged = False
 
     def _emit(self, event: str, **fields: object) -> None:
         if self.event_cb is not None:
@@ -721,6 +724,7 @@ class NativeFastReadSession:
             selector_ack_contract(),
             f"selector_0x{selector:02X}_{old.name.lower()}_to_{target.name.lower()}",
         )
+        self.fast_selector_acknowledged = True
         self._set_state(
             state=target_state,
             link=LinkRate.UNKNOWN,
@@ -1084,6 +1088,76 @@ class NativeFastReadSession:
         )
         return assemble_read_pass(requests, payloads)
 
+def _finish_read_failure(journal, error: Exception, *, phase: str) -> None:
+    if journal.closed:
+        return
+    try:
+        journal.finish(
+            "failed",
+            phase=phase,
+            error=f"{type(error).__name__}: {error}",
+            destructive_started=False,
+        )
+    except Exception:
+        # Preserve the transport/session failure if durable logging also fails.
+        pass
+
+
+def _read_d2xx(
+    port: str,
+    *,
+    operation: FastOperation,
+    progress_cb: Optional[ProgressCallback] = None,
+    event_cb: Optional[EventCallback] = None,
+    echo: bool = True,
+) -> object:
+    journal = new_operation_journal(port, operation)
+    event_sink = journal_event_sink(journal, event_cb)
+    transport = None
+    session: Optional[NativeFastReadSession] = None
+    phase = "transport_open"
+    try:
+        transport = NativeFastReadTransport.open_d2xx(
+            port,
+            echo=echo,
+            event_cb=event_sink,
+        )
+        phase = "session_setup"
+        try:
+            session = NativeFastReadSession(
+                transport,
+                progress_cb=progress_cb,
+                event_cb=event_sink,
+                reentry_required=reentry_required(port),
+                reentry_ready_cb=lambda: clear_reentry_required(port),
+            )
+            phase = operation.value
+            result = (
+                session.read_full()
+                if operation is FastOperation.FULL_READ
+                else session.read_partial()
+            )
+        finally:
+            if (
+                session is not None
+                and (
+                    session.fast_selector_acknowledged
+                    or (
+                        session.fast_selector_attempted
+                        and session.link is LinkRate.LOW
+                    )
+                )
+            ):
+                mark_reentry_required(port)
+            transport.close()
+    except Exception as error:
+        _finish_read_failure(journal, error, phase=phase)
+        raise
+
+    journal.finish("success", destructive_started=False)
+    return result
+
+
 def read_partial_d2xx(
     port: str,
     *,
@@ -1091,32 +1165,15 @@ def read_partial_d2xx(
     event_cb: Optional[EventCallback] = None,
     echo: bool = True,
 ) -> FastPartialReadResult:
-    """Run one standalone read-only partial operation through D2XX."""
+    """Run one journaled standalone read-only partial operation through D2XX."""
 
-    transport = NativeFastReadTransport.open_d2xx(
+    return _read_d2xx(
         port,
-        echo=echo,
+        operation=FastOperation.PARTIAL_READ,
+        progress_cb=progress_cb,
         event_cb=event_cb,
+        echo=echo,
     )
-    pending = reentry_required(port)
-    session: Optional[NativeFastReadSession] = None
-    try:
-        session = NativeFastReadSession(
-            transport,
-            progress_cb=progress_cb,
-            event_cb=event_cb,
-            reentry_required=pending,
-            reentry_ready_cb=lambda: clear_reentry_required(port),
-        )
-        return session.read_partial()
-    finally:
-        if (
-            session is not None
-            and session.fast_selector_attempted
-            and session.link is LinkRate.LOW
-        ):
-            mark_reentry_required(port)
-        transport.close()
 
 
 def read_full_d2xx(
@@ -1126,29 +1183,12 @@ def read_full_d2xx(
     event_cb: Optional[EventCallback] = None,
     echo: bool = True,
 ) -> FastFullReadResult:
-    """Run the slim one-pass production full dump through D2XX."""
+    """Run the journaled slim one-pass production full dump through D2XX."""
 
-    transport = NativeFastReadTransport.open_d2xx(
+    return _read_d2xx(
         port,
-        echo=echo,
+        operation=FastOperation.FULL_READ,
+        progress_cb=progress_cb,
         event_cb=event_cb,
+        echo=echo,
     )
-    pending = reentry_required(port)
-    session: Optional[NativeFastReadSession] = None
-    try:
-        session = NativeFastReadSession(
-            transport,
-            progress_cb=progress_cb,
-            event_cb=event_cb,
-            reentry_required=pending,
-            reentry_ready_cb=lambda: clear_reentry_required(port),
-        )
-        return session.read_full()
-    finally:
-        if (
-            session is not None
-            and session.fast_selector_attempted
-            and session.link is LinkRate.LOW
-        ):
-            mark_reentry_required(port)
-        transport.close()

@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <strong><a href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b12">Download Beta 12</a></strong>
+  <strong><a href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b13">Download Beta 13</a></strong>
   &nbsp;&middot;&nbsp;
   <a href="manual/USER_MANUAL.md">User Manual</a>
   &nbsp;&middot;&nbsp;
@@ -151,6 +151,14 @@ The Flash tab does not enforce a backup or host read-back verification. **Back u
 **Verify after write** follow the operator's selections. ECU-side finalization remains part of
 every successful DS2 write and is separate from optional host byte-for-byte verification.
 
+## Offline Bin management
+
+Bins catalogs reads, imports, and generated images. Select exactly two entries and choose
+**Compare** for a read-only report covering SHA-256 identity, program/calibration variants,
+checksums, installed patches, and changed-byte ranges. Newly cataloged files retain their original
+SHA-256 so external replacement can be detected; legacy entries are clearly identified when no
+original hash exists.
+
 ## Firmware patches
 
 The Patches tab detects installed and deprecated revisions, validates dependencies and byte
@@ -201,10 +209,14 @@ Full ROMs and logs can contain VIN and ECU identity information. Treat them as p
 
 ## Documentation and support
 
+The build label at the lower-right opens About and can export a support ZIP containing build
+information, privacy-scoped selected-Bin metadata/hash, the latest Live Data CSV, and the latest
+native-fast journal. Raw ROMs are excluded. Session logs require an explicit privacy opt-in.
+
 The illustrated manual covers normal flashing, recovery behavior, Soft-BSL, hardware BSL,
 diagnostics, offline tools, patches, and final checklists:
 
-- [Download BimmerStein ECU Tool 0.1.0 Beta 12](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b12)
+- [Download BimmerStein ECU Tool 0.1.0 Beta 13](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b13)
 - [Illustrated PDF manual](output/pdf/BimmerStein-ECU-Tool-User-Manual.pdf)
 - [User manual (web-readable Markdown)](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/manual/USER_MANUAL.md)
 - [Build and release instructions](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/BUILDING.md)
