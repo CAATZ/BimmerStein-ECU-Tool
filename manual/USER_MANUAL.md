@@ -4,9 +4,9 @@
 
 Windows x64
 
-BimmerStein ECU Tool combines normal DS2 diagnostics, stock-ECU high-speed DS2 transfers,
-Soft-BSL programming, hardware bootstrap recovery, offline ROM utilities, and firmware patch
-management in one desktop application.
+BimmerStein ECU Tool combines normal DS2 diagnostics and adaptations, stock-ECU high-speed DS2
+transfers, EEPROM inspection and recovery, Soft-BSL programming, hardware bootstrap recovery,
+offline ROM utilities, and firmware patch management in one desktop application.
 
 <!-- pagebreak -->
 
@@ -56,6 +56,8 @@ read-back verification.
 | ECU families | BMW MS41.0, MS41.1, MS41.2, and MS41.3 | Full-ROM conversion is supported across all four variants. |
 | Normal communications | BMW DS2 over K-Line, 9600 baud, 8E2 | DS2 is not KWP2000. |
 | Stock fast transfers | Native-fast DS2 through an FTDI D2XX connection | The ECU-exact requested high rate is 187,500 baud. |
+| Adaptations | Read fuel, throttle, and knock adaptations or clear selected learned groups | Resetting adaptations changes learned ECU state and requires a new learning cycle. |
+| EEPROM | Inspect, edit, read, write, and catalogue physical MS41 24C04 images | A physical image is exactly 512 bytes; a padded RAM mirror is not a restorable chip image. |
 | Soft-BSL | Persistent loader plus RAM agents | Installation modifies firmware and requires the guided workflow. |
 | Hardware BSL | Intel 28F200 and AMD/JEDEC 29F200/29F400 | Uses a separate direct ASC0 tap, not the normal K-Line connection. |
 | File sizes | 256 KB full ROM and 24 KB tune | Choose the operation matching the file and intended region. |
@@ -102,6 +104,10 @@ Install the driver for the selected FTDI adapter. D2XX is preferred for stock na
 Soft-BSL, and hardware BSL. When D2XX is unavailable, normal DS2 and supported hardware-BSL paths
 can fall back to pyserial at their compatible rates.
 
+The packaged CH341A backend includes its USB runtime but does not install or replace a Windows
+device driver. Direct CH341A access requires a deliberate WinUSB or libusbK binding. Rebinding can
+prevent other programmer software that expects the vendor driver from opening that device.
+
 ### Data folders
 
 The portable application creates mutable data beside the executable:
@@ -142,6 +148,8 @@ The shared log and progress controls remain visible below it.
 | ECU Info | Live identity, firmware, calibration, VIN, chip, and loader information. |
 | DTC Codes | Read, describe, export, and clear diagnostic trouble codes. |
 | Live Data | Poll selected MS41 values and record CSV data. |
+| Adaptations | Read stored fuel, throttle, and knock adaptations or reset selected groups. |
+| EEPROM | Inspect and edit 24C04 images; access the chip through the ECU Agent or CH341A. |
 | Partial / Full | Convert between 24 KB tune and 256 KB full images. |
 | Bins | Catalog reads, backups, generated images, and notes. |
 | Patches | Compose, detect, migrate, or remove supported firmware patches. |
@@ -259,6 +267,99 @@ Live Data is read-only with respect to flash memory.
 
 <!-- pagebreak -->
 
+## Adaptations
+
+![Stored fuel, throttle, and knock adaptations](images/adaptations.png)
+
+The Adaptations tab works through a connected normal DS2 session and does not require an external
+definition file.
+
+- **Read Adaptations** displays the stored fuel and throttle values plus the knock-correction
+  tables for the identified ECU. This is a read-only operation.
+- **Reset Adaptations** opens a choice of all, idle, knock, lambda/fuel-trim, or throttle learned
+  values. Review or record the current values first, select only the required group, and confirm
+  the state change.
+
+Resetting adaptations clears learned ECU state; it does not edit a ROM or install a firmware
+patch. The ECU must relearn the cleared values during subsequent operation, so correct the cause of
+an abnormal adaptation before resetting it.
+
+<!-- pagebreak -->
+
+## EEPROM
+
+![Loaded image, ECU Agent, and CH341A EEPROM workflows](images/eeprom.png)
+
+The EEPROM tab has one shared **Loaded EEPROM Image** target above separate **ECU Agent** and
+**CH341A Programmer** panels. Both writers use the image currently displayed in that shared panel.
+
+> [!DANGER]
+> A physical MS41 24C04 image is exactly 512 bytes. A shorter live RAM mirror padded with zeros to
+> 512 bytes is not a physical chip dump and must never be restored to the EEPROM. Use only an image
+> whose source and exact size are known.
+
+### Loaded EEPROM Image
+
+1. Choose **Open EEPROM File...**, or select an EEPROM entry in **Bins** and choose
+   **Load EEPROM**.
+2. The application uses source metadata, image contents, and the connected ECU identity when
+   available to select the MS41 layout automatically.
+3. If the result is ambiguous or unknown, enable **Manual override** and select the exact MS41
+   program family. Editing and writing remain unavailable until a layout is resolved.
+4. Choose **View / Edit...** to inspect known records, use the transmission shortcut, or explicitly
+   enable expert raw-byte editing. **Update Checks for Edited Records** updates only known checked
+   records whose payload was changed from the loaded baseline; untouched invalid records stay
+   untouched.
+5. Choose **Save Copy...** to preserve the displayed image as a new exact 512-byte file.
+
+### ECU Agent
+
+The ECU Agent requires a normal DS2 connection with a complete ECU identity, a recognized
+MS41.0-MS41.3 program, and the matching installed Soft-BSL entry. **Read EEPROM...** reads the
+physical 512-byte device and archives it before offering an additional external copy.
+
+**Write Loaded Image...** writes only changed bytes from the displayed target. Before any EEPROM
+byte is written, the staged entry tries the selected fast D2XX path. If that entry fails, the
+application repeats the complete entry at 9600 baud; it does not continue a half-completed fast
+entry. The writer then creates a unique immutable before-image and requires an exact full-device
+readback of the target.
+
+If a reply becomes uncertain after a byte may have changed, keep ignition ON, leave the adapter
+connected, and choose **Resolve Pending Write...**. It queries the retained transaction state before
+resuming any remaining change; it does not blindly repeat the last byte write.
+
+### CH341A Programmer
+
+Bind the programmer to WinUSB or libusbK, connect exactly one CH341A, then choose
+**Detect CH341A**. Detection only enumerates USB devices; it does not read the EEPROM. Disconnect
+the normal ECU session before using the programmer, and keep the ECU completely unpowered and
+isolated from every other power or communication path.
+
+- **Read EEPROM...** requires stable matching full-device reads and saves the result in Bins.
+- **Write Loaded Image...** obtains and saves a fresh full before-image in the same programmer
+  session, writes only changed bytes, and verifies the exact 512-byte target.
+- **Seed ECU Recovery...** becomes available only after a verified read from the same programmer,
+  a resolved MS41 layout, and a recognized seedable state. It makes only the narrow persistent
+  state change that asks an intact stock flash listener to accept conventional DS2 recovery.
+- **Restore Pre-Seed State...** uses the exact retained original bytes from the verified seed
+  workflow. It never guesses the previous state.
+
+After a verified seed, disconnect the programmer before powering the ECU, key-cycle it, select
+**Force DS2 (Slow)**, and use the normal guarded full-write recovery workflow with a compatible
+256 KB image.
+
+> [!WARNING]
+> Seed ECU Recovery can restore stock DS2 access on some locked or apparently bricked ECUs only
+> when the CPU, power, K-Line, boot region, stock listener, and resident flash driver are intact.
+> It cannot repair erased or corrupt boot code, electrical faults, or an incompatible flash driver.
+> If stock DS2 still does not answer, stop and use hardware BSL; repeated seeding will not help.
+
+Direct physical EEPROM writes through the ECU Agent or CH341A, including Seed ECU Recovery, remain
+experimental and have not been validated across every supported ECU/programmer combination. Keep
+using the durable backups and exact readback verification for every operation.
+
+<!-- pagebreak -->
+
 ## Offline files, conversion, and Bins
 
 ### ROM Analyzer
@@ -298,10 +399,16 @@ code and calibration from different MS41 variants and is blocked from normal fla
 
 ### Bins
 
-Bins catalogs files created by reads, backups, and patch composition. Entries include available
-variant, type, VIN/CAL metadata, notes, and source. Use descriptive notes and preserve a known-good
-original separately from edited or patched images. Newly cataloged files also record a SHA-256
-identity so an externally replaced or modified file can be identified later.
+Bins catalogs files created by reads, backups, EEPROM operations, and patch composition. Entries
+include available variant, type, VIN/CAL metadata, notes, and source. Use descriptive notes and
+preserve a known-good original separately from edited or patched images. Newly cataloged files also
+record a SHA-256 identity so an externally replaced or modified file can be identified later.
+
+EEPROM reads, immutable write-time before-images, verified readbacks, and available safety captures
+from cancelled or uncertain writes are cataloged as **EEPROM** entries. Select one and choose
+**Load EEPROM** to make it the shared target in the EEPROM tab without writing or opening the
+editor automatically. ROM comparison, patch, configuration, and flash actions remain unavailable
+for EEPROM entries.
 
 Select exactly two entries and choose **Compare** for a read-only report of their SHA-256 identity,
 program/calibration variants, checksum state, installed patches, changed-byte count, and changed
@@ -515,11 +622,39 @@ native-fast DS2 check fails before erase and normal ECU state is confirmed, it c
 complete operation over normal DS2. Check adapter latency, wiring, ground, ECU voltage, and signal
 integrity before retrying.
 
+### The EEPROM layout or editor is unavailable
+
+Confirm the loaded file is exactly 512 bytes. If the status reports an ambiguous or undetected
+layout, enable **Manual override** and select the exact MS41 program family. Do not choose a layout
+by guesswork; obtain the image provenance or identify the matching ECU first. A padded live RAM
+mirror is not made safe by manually assigning a layout.
+
+### The ECU Agent buttons are unavailable or a write is uncertain
+
+Reconnect through normal DS2 and confirm that the ECU has a recognized program identity and the
+matching installed Soft-BSL entry. The Agent remains disabled without those admission checks. If
+**Resolve Pending Write...** appears, keep ignition ON and the adapter connected, then use that
+button before disconnecting, closing the application, or starting another operation.
+
+### The CH341A is detected but not ready
+
+Close the normal ECU connection, connect exactly one programmer, and confirm it is bound to
+WinUSB or libusbK. Keep the ECU unpowered and isolated. If a write result is uncertain,
+perform and save a new stable full **Read EEPROM...** before attempting any further change.
+
+### A seeded ECU still does not answer DS2
+
+Disconnect the programmer completely, power the ECU normally, key-cycle it, and retry through
+**Force DS2 (Slow)**. If the stock listener still does not answer, stop. Seed recovery cannot repair
+the boot region or an electrical fault; use hardware BSL instead of repeating the marker write.
+
 ### A write failed
 
 - If the UI says erase did not start, correct the reported connection or file problem and retry.
 - If the UI says recovery is active, keep ignition ON and use **Retry Flash Recovery**.
 - If the ECU no longer boots and no retained session exists, prepare the hardware-BSL connection.
+
+<!-- pagebreak -->
 
 ### The ROM Analyzer cannot load definitions
 
@@ -564,6 +699,43 @@ identifiers are excluded from the default metadata, and generic ZIP member names
 - [ ] Backup and Verify choices reflect the operator's decision.
 - [ ] Stable power and hardware recovery are available.
 - [ ] No other software owns the COM port.
+
+### Before resetting adaptations
+
+- [ ] The connected ECU identity is correct and the present values have been recorded.
+- [ ] The cause of any abnormal learned value has been investigated or corrected.
+- [ ] The selected reset group is intentional; **All adaptations** is not being used by habit.
+- [ ] The ECU can complete the required relearning after the reset.
+
+### Before an ECU Agent EEPROM write
+
+- [ ] The target is a known-provenance physical 512-byte image, not a padded RAM mirror.
+- [ ] The selected layout exactly matches the connected ECU program family.
+- [ ] The application reports the matching installed Soft-BSL entry and enables the Agent.
+- [ ] The displayed loaded image is the intended target and its edits have been reviewed.
+- [ ] Stable ECU power, an uninterrupted adapter connection, and writable backup storage are
+      available for the complete operation.
+- [ ] If **Resolve Pending Write...** appears, ignition will remain ON until it completes.
+
+### Before a CH341A EEPROM operation
+
+- [ ] The ECU is completely unpowered and isolated from other power and communication paths.
+- [ ] EEPROM orientation, programmer voltage, wiring, and write-protect state are correct.
+- [ ] Exactly one CH341A is connected through WinUSB or libusbK.
+- [ ] The normal ECU connection is closed.
+- [ ] Before any write, a stable full-device read has been saved and the exact MS41 layout is known.
+- [ ] The programmer will be disconnected before the ECU is powered again.
+
+<!-- pagebreak -->
+
+### Before Seed ECU Recovery
+
+- [ ] A fresh verified read from this same programmer is displayed and Seed ECU is enabled.
+- [ ] The immutable pre-seed image can be preserved with the ECU recovery records.
+- [ ] The limitation is understood: seeding selects an intact stock listener; it does not repair
+      boot code or electrical faults.
+- [ ] A compatible 256 KB image and the **Force DS2 (Slow)** full-write workflow are ready.
+- [ ] Hardware BSL is available if the stock listener still does not answer after a key cycle.
 
 ### Before hardware BSL programming
 

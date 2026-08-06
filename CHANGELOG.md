@@ -10,10 +10,20 @@ shared by BimmerStein applications.
 
 ## [0.1.0b13] - 2026-08-05
 
+### Highlights
+
+- Added a complete EEPROM workspace for MS41.0 through MS41.3. Full 512-byte
+  images can be read, inspected, edited, archived, and written through either
+  the ECU Agent or a CH341A programmer.
+- Added Seed ECU Recovery for some locked or apparently bricked ECUs whose
+  stock boot code and DS2 listener are still intact. The original full image is
+  preserved, every write receives a full-device readback, and Restore
+  Pre-Seed State restores the exact captured bytes.
+
 ### Added
 
-- Added automatic MS41 EEPROM layout detection with a manual override, CH341A
-  full-image service/recovery workflows, and Windows-safe automatic filenames.
+- Added automatic MS41 EEPROM layout detection with a manual override and
+  Windows-safe automatic filenames.
 - Added exact-image release admission for the supported patch suite and
   Intel/AMD flash drivers; missing required inputs now fail the release gate.
 - Restored AlphaN MAF-failsafe V2 with the historical A14-XOR transfer error
@@ -55,6 +65,8 @@ shared by BimmerStein applications.
 - Ignition Cut V7 and Launch Control V4/V5 still require the vehicle testing or
   retesting indicated by their descriptors; AlphaN MAF-failsafe remains
   untested.
+- EEPROM writes and Seed ECU Recovery remain experimental and are not yet
+  validated across every supported ECU/programmer combination.
 
 ## [0.1.0b12] - 2026-07-26
 
