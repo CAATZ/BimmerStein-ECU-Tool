@@ -159,6 +159,7 @@ def main() -> int:
 
     import gui
     import patch_service
+    from engines.softbsl import eeprom_ram
 
     app = QApplication.instance() or QApplication([])
     # Qt's Windows offscreen platform does not enumerate system fonts. Register
@@ -231,6 +232,64 @@ def main() -> int:
         window._info_labels[key].setText(value)
     _select_tab(window, "ECU Info")
     _save_window(window, app, images / "diagnostics.png")
+
+    synthetic_adaptations = {
+        "ecu_id": "SYNTHETIC",
+        "additive": [0.05, -0.03],
+        "ltft": [2.10, 1.65],
+        "throttle": 1.53,
+        "load": [223, 327, 425, 501],
+        "rpm": [
+            480, 800, 992, 1216, 1504, 1728, 1984, 2496,
+            3008, 3488, 4000, 4416, 4992, 5504, 6016, 6240,
+        ],
+        "knock": [
+            [
+                [0.0 - 0.375 * ((table + row + column) % 4) for column in range(4)]
+                for row in range(16)
+            ]
+            for table in range(6)
+        ],
+    }
+    window._show_adaptations(synthetic_adaptations)
+    window.btn_read_adaptations.setEnabled(True)
+    window.lbl_adapt_status.setText(
+        "Synthetic documentation values - not read from an ECU"
+    )
+    _select_tab(window, "Adaptations")
+    _save_window(window, app, images / "adaptations.png")
+
+    synthetic_eeprom = bytearray(
+        (index * 73 + 19) & 0xFF for index in range(eeprom_ram.EEPROM_SIZE)
+    )
+    for field in eeprom_ram.fields_for_variant("MS41.1"):
+        if field.checked:
+            end = field.offset + field.length
+            check = eeprom_ram.additive_check(
+                synthetic_eeprom[field.offset:end - 2]
+            )
+            synthetic_eeprom[end - 2:end] = check.to_bytes(2, "little")
+    synthetic_eeprom[0x1E3:0x1EF] = b"SYNTHETIC001"
+    synthetic_eeprom[0x1EF:0x1F6] = b"DEMO001"
+    synthetic_eeprom[0x1F6:0x1FD] = b"DEMO001"
+    original_detect_layouts = eeprom_ram.detect_layouts
+    try:
+        eeprom_ram.detect_layouts = lambda _image: ("MS41.1",)
+        window._show_eeprom_image(
+            bytes(synthetic_eeprom), "Synthetic_MS41_1_Documentation.bin"
+        )
+    finally:
+        eeprom_ram.detect_layouts = original_detect_layouts
+    window.lbl_eeprom_ram_status.setText(
+        "Documentation demo - no ECU or serial port is open. "
+        "Connect through installed Soft-BSL for ECU Agent access."
+    )
+    window.lbl_ch341a_status.setText(
+        "Documentation demo - no USB programmer is connected. Detect, read, "
+        "and save the full EEPROM before Seed ECU Recovery can be enabled."
+    )
+    _select_tab(window, "EEPROM")
+    _save_window(window, app, images / "eeprom.png")
 
     original_available = patch_service.available_patches
     try:

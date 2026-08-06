@@ -2,16 +2,29 @@
 
 ## 0.1.0 Beta 13
 
-Beta 13 improves DS2 fallback, EEPROM service, diagnostics, recovery, and
-offline file handling. It intentionally retains the Ignition Cut and Launch
-Control revisions distributed in Beta 12; newer experimental revisions are not
-included.
+Beta 13 introduces a complete EEPROM service and recovery workspace for every
+supported MS41 variant. It also improves DS2 fallback, diagnostics, recovery,
+and offline file handling. It intentionally retains the Ignition Cut and
+Launch Control revisions distributed in Beta 12; newer experimental revisions
+are not included.
 
 **OFF-ROAD, COMPETITION, RESEARCH, AND BENCH USE ONLY.** Do not use this software
 to modify a vehicle operated on public roads. The user is responsible for
 compliance with applicable emissions, safety, registration, and other laws.
 
-### Changes
+### Highlights
+
+- **Complete EEPROM workspace:** read, inspect, edit, archive, and write full
+  512-byte EEPROM images through either the ECU Agent or a CH341A programmer on
+  MS41.0, MS41.1, MS41.2, and MS41.3.
+- **Seed ECU Recovery:** recover stock DS2 access on some locked or apparently
+  bricked ECUs when their boot code and stock listener are still intact. This
+  does not repair damaged flash or bypass a missing listener.
+- **Exact recovery safeguards:** each write requires an immutable full
+  before-image, performs a full-device readback, and can restore the exact
+  bytes captured before seeding with **Restore Pre-Seed State**.
+
+### Technical fixes and additions
 
 - Corrected regular-DS2 write fallback so an eligible native-fast startup
   failure retries at 9600 baud instead of ending the operation immediately.
@@ -51,6 +64,8 @@ compliance with applicable emissions, safety, registration, and other laws.
 - Launch Control V4 on MS41.2 and Launch Control V5 on MS41.3:
   **VEHICLE RETEST REQUIRED**.
 - AlphaN MAF-failsafe V2: **UNTESTED** for physical/on-car behavior.
+- EEPROM writes and Seed ECU Recovery: **EXPERIMENTAL - NOT YET VALIDATED
+  ACROSS EVERY SUPPORTED ECU/PROGRAMMER COMBINATION**.
 
 **IGNITION CUT HAZARD:** Ignition Cut V7 is highly experimental and extremely
 aggressive. It can cause fuel-related, misfire, and coil-related DTCs and

@@ -39,6 +39,10 @@ BimmerStein ECU Tool brings BMW MS41 flashing, diagnostics, configuration, patch
 - Correct the applicable MS41 checksums before flashing.
 - Honor the operator's backup and host read-back Verify selections.
 - Preserve an active recovery session after a post-erase write failure.
+- Read, inspect, edit, archive, and write full 512-byte EEPROM images through
+  the ECU Agent or a CH341A programmer.
+- Recover stock DS2 access on some locked or apparently bricked ECUs by safely
+  seeding their EEPROM, when the stock boot code and listener remain intact.
 - Read ECU information, DTCs, live data, coding, VIN, and EWS information.
 - Analyze ROMs with user-managed definitions and a detachable parameter table.
 - Convert, catalogue, and patch ROM images offline.
@@ -78,6 +82,7 @@ least 10 seconds, then ignition ON.
 | Stock fast transfer | Native-fast DS2 through FTDI D2XX, requesting the ECU-exact 187,500 baud rate |
 | Soft-BSL | Persistent loader and Intel/AMD RAM agents |
 | Hardware BSL | Intel 28F200 and AMD/JEDEC 29F200/29F400 through a separate direct ASC0 connection |
+| EEPROM | Full 512-byte read/edit/archive/write through the ECU Agent or CH341A on MS41.0 through MS41.3 |
 | Image sizes | 256 KB full ROM and 24 KB tune |
 
 Hardware-BSL and armed Soft-BSL boot-region operations are advanced recovery-sensitive workflows.
@@ -86,6 +91,27 @@ not use that Intel programming-voltage requirement.
 
 For the bench wiring and hardware connections used by the BSL-Unbricker tab, see
 [CAATZ/MS41-BSL-Unbricker](https://github.com/CAATZ/MS41-BSL-Unbricker).
+
+## EEPROM service and Seed ECU Recovery
+
+The EEPROM tab provides one workspace for full 512-byte images across MS41.0,
+MS41.1, MS41.2, and MS41.3. Use the ECU Agent for in-ECU access or a CH341A
+programmer for direct access, then inspect, edit, archive, and write the same
+loaded image. Layout detection is automatic, with a manual override when the
+image is ambiguous.
+
+**Seed ECU Recovery** can restore stock DS2 access on some locked or apparently
+bricked ECUs when the ECU's boot code and stock DS2 listener are still intact.
+It does not repair damaged flash or an absent listener. Before writing, the
+tool preserves an immutable full before-image; after writing, it reads back the
+entire device. **Restore Pre-Seed State** writes back the exact bytes captured
+before seeding.
+
+> [!CAUTION]
+> EEPROM writes and Seed ECU Recovery remain experimental and are not yet
+> validated across every supported ECU/programmer combination. Keep the ECU
+> unpowered and isolated when using a CH341A programmer, retain the before-image,
+> and verify the full readback before relying on a write.
 
 ## Soft-BSL: persistent high-speed ECU access
 
