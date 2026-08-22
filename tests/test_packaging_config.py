@@ -21,6 +21,7 @@ def test_windows_spec_uses_gui_entry_and_excludes_private_material():
     assert 'ROOT / "THIRD_PARTY_LICENSES"' in text
     assert '"agent.hex"' in text and '"agent_28f.hex"' in text
     assert '"eeprom_agent.hex"' in text
+    assert '"st9030_agent.hex"' in text
     assert 'collect_dynamic_libs("usb1")' in text
     assert '"stage1_payload.hex"' in text and '"stage1_manifest.json"' in text
     assert "_private" not in text

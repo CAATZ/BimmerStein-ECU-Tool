@@ -40,6 +40,7 @@ for filename in (
     "agent.hex",
     "agent_28f.hex",
     "eeprom_agent.hex",
+    "st9030_agent.hex",
     "stage1_payload.hex",
     "stage1_manifest.json",
     "agent_manifest.json",
