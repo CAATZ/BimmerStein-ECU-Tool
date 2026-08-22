@@ -179,7 +179,7 @@ CAPTURED_PARTIAL_WRITE_TIMING = PartialWriteTiming()
 
 
 class NativeFastPartialWriteTransport:
-    """D2XX-only, one-request-at-a-time transport with a partial-only allowlist."""
+    """One-request-at-a-time native transport with a partial-only allowlist."""
 
     _FLASH_MODE = FastOperation.PARTIAL_WRITE
 
@@ -199,34 +199,39 @@ class NativeFastPartialWriteTransport:
         *,
         baud: int = PRODUCTION_RATE_PROFILE.low,
         echo: bool = True,
+        flash_enabled: bool = True,
         first_byte_timeout: float = 1.5,
         inter_byte_timeout: float = 0.25,
         event_cb: Optional[EventCallback] = None,
     ):
-        if getattr(serial_port, "transport_name", None) != "d2xx":
+        if not bool(getattr(serial_port, "native_fast_capable", False)):
             raise UnsafePartialWriteCommand(
-                "native fast partial write requires an injected D2XX transport"
+                "native fast partial write requires a supported direct USB transport"
             )
         if not isinstance(getattr(serial_port, "port", None), str) or not serial_port.port:
-            raise UnsafePartialWriteCommand("D2XX COM-port association is missing")
-        adapter_index = getattr(serial_port, "index", None)
-        if (
-            not isinstance(adapter_index, int)
-            or isinstance(adapter_index, bool)
-            or adapter_index < 0
-        ):
-            raise UnsafePartialWriteCommand("D2XX device index is missing or invalid")
+            raise UnsafePartialWriteCommand("serial-port association is missing")
+        if getattr(serial_port, "transport_name", None) == "d2xx":
+            adapter_index = getattr(serial_port, "index", None)
+            if (
+                not isinstance(adapter_index, int)
+                or isinstance(adapter_index, bool)
+                or adapter_index < 0
+            ):
+                raise UnsafePartialWriteCommand(
+                    "D2XX device index is missing or invalid"
+                )
         if not echo:
             raise UnsafePartialWriteCommand(
                 "native fast partial write requires exact K-Line echo validation"
             )
         if int(getattr(serial_port, "baudrate", -1)) != int(baud):
             raise UnsafePartialWriteCommand(
-                "injected D2XX transport is not configured at the declared low baud"
+                "injected transport is not configured at the declared low baud"
             )
         self.serial = serial_port
         self.baud = int(baud)
         self.echo = True
+        self.flash_enabled = bool(flash_enabled)
         self.first_byte_timeout = max(0.01, float(first_byte_timeout))
         self.inter_byte_timeout = max(0.01, float(inter_byte_timeout))
         self.event_cb = event_cb
@@ -241,6 +246,7 @@ class NativeFastPartialWriteTransport:
         baud: int = PRODUCTION_RATE_PROFILE.low,
         event_cb: Optional[EventCallback] = None,
         serial_factory=None,
+        flash_enabled: bool = True,
     ):
         """Open the D2XX device mapped to ``port`` with strict 8E2 echo."""
         if serial_factory is None:
@@ -261,6 +267,7 @@ class NativeFastPartialWriteTransport:
                 serial_port,
                 baud=baud,
                 echo=True,
+                flash_enabled=flash_enabled,
                 event_cb=event_cb,
             )
         except Exception:
@@ -403,6 +410,10 @@ class NativeFastPartialWriteTransport:
             if contract is None:
                 raise ValueError("control request requires a response contract")
         else:
+            if not self.flash_enabled:
+                raise UnsafePartialWriteCommand(
+                    "flash requests are disabled for this transport"
+                )
             if command != FLASH_COMMAND or args != flash_request.payload:
                 raise UnsafePartialWriteCommand("flash request/frame mismatch")
             self._validate_flash(flash_request, state)

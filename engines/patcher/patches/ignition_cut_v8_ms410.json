@@ -1,0 +1,69 @@
+{
+  "id": "ignition_cut_v8_ms410",
+  "family_id": "ignition_cut_v8",
+  "version": "V8",
+  "deprecated": true,
+  "superseded_by": "ignition_cut_v9_ms410",
+  "status": "EMULATOR VERIFIED - ON-CAR TEST REQUIRED",
+  "tested": false,
+  "verification": "The shared-request architecture, corrected FD50/FD51 switch bytes, both real P1L hooks, hysteresis, fixed-IPW boundaries, cut-active adaptation freeze, the shared roughness/misfire-detection and coil/resistor cleanup guard, exact coil/resistor DTC descriptors, and post-release DTC maturation pass the canonical MS41.0 emulator gate. MS41.0 has per-cylinder roughness/misfire detection, but its stock descriptor table has no dedicated DTC 238-243 entries. Vehicle validation remains required.",
+  "title": "Ignition Cut",
+  "user_description": "Adds an independent MS41.0 ignition-cut limiter with corrected pin inputs, adjustable RPM hysteresis, and fixed injector pulse width while cutting.",
+  "description": "MS41.0 Ignition Cut V8. E812.0 owns the standalone limiter request and E812.1 is reserved for Launch Control V6. Pins 80/81 read FD51.1/.0 and pin 82 reads FD50.7, matching the MS41.0 input latch. CUT_HYST is RPM/32 and CUT_IPW is uint16 x0.00534 ms; FF/FFFF retain legacy behavior. While E812.0/.1/.2 reports a real cut, trim stores pause and the homologous lambda, upstream O2-voltage, shared roughness/misfire-detection, and coil/resistor paths take their stock disabled cleanup routes. MS41.0 has per-cylinder roughness/misfire detection, but its stock descriptor table has no dedicated DTC 238-243 entries.",
+  "target": "MS41.0",
+  "recompute": ["program"],
+  "requires": [],
+  "conflicts": ["ignition_cut_v7_ms410"],
+  "supersedes": ["ignition_cut_v7_ms410"],
+  "cave": {
+    "region": "proghigh-tail",
+    "base": 223264,
+    "splice_off": 222968,
+    "splice_op": "calls",
+    "relocatable": false,
+    "splices": [
+      {"off": 222968, "base": 223264, "op": "calls"},
+      {"off": 223068, "base": 223264, "op": "calls"},
+      {"off": 137280, "base": 223744, "op": "calls"},
+      {"off": 181860, "base": 224544, "op": "jmps"},
+      {"off": 183360, "base": 224582, "op": "calls"},
+      {"off": 183406, "base": 224618, "op": "calls"},
+      {"off": 167064, "base": 224654, "op": "jmps"},
+      {"off": 146754, "base": 224694, "op": "jmps"},
+      {"off": 145796, "base": 224734, "op": "jmps"}
+    ],
+    "cals": {
+      "CUTSW": 94224,
+      "CUTRPM": 94225,
+      "CUT_HYST": 94226,
+      "CUT_IPW": 94227
+    }
+  },
+  "edits": [
+    {"off": 222968, "expect": "65f204ff", "upgrade_expect": ["da032028"], "data": "da032028"},
+    {"off": 223068, "expect": "65f204ff", "upgrade_expect": ["da032028"], "data": "da032028"},
+    {"off": 137280, "expect": "f2f4baec", "data": "da03002a"},
+    {
+      "off": 223264,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "upgrade_expect": ["ec00ecf4e6000400f3f85afd67f880003d27f3f8103047f8ff002d2547f800002d1a47f801003d06f3f861fd67f802002d1a0d1147f802003d06f3f861fd67f801002d110d0847f804003d0df3f860fd67f880002d08f3f8e6fa43f811308d03fcf4fc00db00fcf4fc0065f204ffdb00"],
+      "data": "ecf4f3f812e867f8f00047f8a0003d04f3f812e869833d04fcf465f204ffdb00fcf4db00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 223744,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf5ecf6e6000400f3fa12e867faf00047faa0002d04e7faa000f7fa12e8f3fa103047faff002d3849a02d1549a13d05f3fa51fd69a22d300d0e49a23d05f3fa51fd69a12d290d0749a43d26f3fa50fd67fa80002d21f3fa12e869a12d14f3fa123047faff002d06f3fc113041ca8d0521ca0d04f3fc11300d01e10cf3fae6fa41ac8d0a0d05f3fae6fa43fa11308d04e11a75fa12e80d04e7fafe0065fa12e8f3fa12e869a32d09f2f5133046f5ffff2d04f6f5bcecf6f5beecfcf6fcf5fc00f2f4baecdb00"
+    },
+    {"off": 181860, "expect": "88d08880", "data": "fa03202d"},
+    {"off": 183360, "expect": "c4861800", "data": "da03462d"},
+    {"off": 183406, "expect": "c4471000", "data": "da036a2d"},
+    {"off": 167064, "expect": "f3f8defa", "data": "fa038e2d"},
+    {"off": 146754, "expect": "f4893300", "data": "fa03b62d"},
+    {"off": 145796, "expect": "e6f490ed", "data": "fa03de2d"},
+    {
+      "off": 224544,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ecf4f3f812e867f8f00047f8a0003d06f3f812e869872d02fcf4db00fcf4ecfdecf8fa026886ecf4f3f812e867f8f00047f8a0003d06f3f812e869872d02fcf4db00fcf4c4861800db00ecf4f3f812e867f8f00047f8a0003d06f3f812e869872d02fcf4db00fcf4c4471000db00ecf4f3f812e867f8f00047f8a0003d07f3f812e869872d03fcf4fa0258cffcf4f3f8defafa029cccecf4f3f812e867f8f00047f8a0003d07f3f812e869872d03fcf4fa02fa7dfcf4f4893300fa02467decf4f3f812e867f8f00047f8a0003d07f3f812e869872d03fcf4fa02c079fcf4e6f490edfa028879"
+    }
+  ]
+}

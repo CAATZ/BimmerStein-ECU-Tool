@@ -301,7 +301,9 @@ def test_generic_write_cancel_keeps_before_image_and_sends_no_write(
     assert backend.opened[0].calls == [("read_full",)]
 
 
-def test_restore_pre_seed_state_is_exact_inverse(tmp_path, monkeypatch):
+def test_restore_pre_seed_state_is_exact_inverse_after_programmer_reconnect(
+    tmp_path, monkeypatch
+):
     original_image = _writeable_image()
     backend = FakeBackend(original_image)
     _install_backend(monkeypatch, backend)
@@ -309,6 +311,7 @@ def test_restore_pre_seed_state_is_exact_inverse(tmp_path, monkeypatch):
     backend.storage[
         service.RECOVERY_OFFSET:service.RECOVERY_OFFSET + 3
     ] = service.RECOVERY_PROGRESSION
+    backend.devices = (FakeDevice("CH341A-reconnected"),)
     seeded = service.read_eeprom(tmp_path / "seeded.bin")
 
     result = service.restore_pre_seed(
@@ -349,14 +352,7 @@ def test_restore_pre_seed_still_rejects_a_stale_seeded_capture(
     )
 
 
-@pytest.mark.parametrize(
-    ("change", "match"),
-    (({"device": object()}, "different CH341A"),
-     ({"variant": "MS41.1"}, "different MS41 layout")),
-)
-def test_restore_pre_seed_rejects_mismatched_original(
-    tmp_path, monkeypatch, change, match
-):
+def test_restore_pre_seed_rejects_mismatched_layout(tmp_path, monkeypatch):
     original_image = _writeable_image()
     backend = FakeBackend(original_image)
     _install_backend(monkeypatch, backend)
@@ -370,10 +366,10 @@ def test_restore_pre_seed_rejects_mismatched_original(
     seeded = service._capture(
         bytes(seeded_image), seeded_path, original.device, original.variant)
 
-    with pytest.raises(service.SeedRefused, match=match):
+    with pytest.raises(service.SeedRefused, match="different MS41 layout"):
         service.restore_pre_seed(
             seeded,
-            replace(original, **change),
+            replace(original, variant="MS41.1"),
             tmp_path / "restore-before.bin",
             confirm=lambda _message: True,
         )

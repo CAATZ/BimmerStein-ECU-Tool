@@ -1,6 +1,7 @@
 import os
 import sys
 import hashlib
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import backup_manager
@@ -87,3 +88,60 @@ def test_old_index_entries_without_new_fields_load_cleanly(tmp_path, monkeypatch
     assert mgr.entries[0].program_variant == ""
     assert mgr.entries[0].cal_variant == ""
     assert mgr.entries[0].sha256 == ""
+    assert mgr.entries[0].folder == ""
+
+
+def test_catalog_exact_crud_is_content_checked_and_collision_safe(tmp_path, monkeypatch):
+    mgr = _mgr(tmp_path, monkeypatch)
+    first = mgr.add_data(bytes(512), "ecu.bin", notes="before", variant="MS41.2")
+    second = mgr.add_data(bytes([1]) * 512, "ecu.bin", variant="MS41.2")
+    third = mgr.add_data(bytes([2]) * 512, "ecu.bin", variant="MS41.2")
+
+    assert len({first.filename, second.filename, third.filename}) == 3
+    assert mgr.read_data(first.filename, first.sha256) == bytes(512)
+    assert mgr.update_notes_exact(first.filename, first.sha256, "after").notes == "after"
+    old_name = first.filename
+    assert mgr.rename_exact(first.filename, first.sha256, "Daily baseline.bin").filename == \
+        "Daily baseline.bin"
+    assert not (tmp_path / "backups" / old_name).exists()
+    assert mgr.read_data(first.filename, first.sha256) == bytes(512)
+    assert not list((tmp_path / "backups").glob(".*.tmp"))
+
+    with pytest.raises(ValueError, match="identity changed"):
+        mgr.read_data(first.filename, "f" * 64)
+    with pytest.raises(ValueError, match="filename"):
+        mgr.exact_entry("../ecu.bin", first.sha256)
+    with pytest.raises(ValueError, match="portable"):
+        mgr.rename_exact(first.filename, first.sha256, "bad?.bin")
+    with pytest.raises(ValueError, match="already exists"):
+        mgr.rename_exact(first.filename, first.sha256, second.filename)
+
+    mgr.remove_exact(first.filename, first.sha256)
+    assert not (tmp_path / "backups" / first.filename).exists()
+    assert [entry.filename for entry in backup_manager.BackupManager().entries] == [
+        second.filename,
+        third.filename,
+    ]
+
+
+def test_catalog_folders_change_metadata_without_moving_images(tmp_path, monkeypatch):
+    mgr = _mgr(tmp_path, monkeypatch)
+    first = mgr.add_data(bytes(512), "first.bin", variant="MS41.2")
+    second = mgr.add_data(bytes([1]) * 512, "second.bin", variant="MS41.2")
+    original_paths = {first.filename: first.path, second.filename: second.path}
+
+    assert mgr.update_folder_exact(first.filename, first.sha256, " Track  cars ").folder == \
+        "Track cars"
+    mgr.update_folder_exact(second.filename, second.sha256, "Stock")
+    assert mgr.rename_folder("Track cars", "Race day") == 1
+    assert mgr.clear_folder("Race day") == 1
+    assert mgr.exact_entry(first.filename, first.sha256).folder == ""
+    assert mgr.exact_entry(second.filename, second.sha256).folder == "Stock"
+    assert {first.filename: first.path, second.filename: second.path} == original_paths
+    assert all(os.path.exists(path) for path in original_paths.values())
+
+    with pytest.raises(ValueError, match="reserved"):
+        mgr.update_folder_exact(first.filename, first.sha256, "Unfiled")
+    mgr.update_folder_exact(first.filename, first.sha256, "Other")
+    with pytest.raises(ValueError, match="already exists"):
+        mgr.rename_folder("Other", "stock")

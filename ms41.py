@@ -94,6 +94,20 @@ _PROG_ECU_ID_MAP = {
     "1429373": "MS41.0", "1438137": "MS41.0",
 }
 
+
+def variant_from_cal_id(value):
+    """Broad MS41 family from a CAL/compatibility ID, or ``None``."""
+    text = value.decode("ascii", "ignore") if isinstance(value, bytes) else str(value or "")
+    return CALID_VARIANT.get(text[:2]) or CALID_VARIANT.get(text[-2:])
+
+
+def variant_from_program_id(value):
+    """Program family from the seven-character DME part/ECU ID, or ``None``."""
+    text = value.decode("ascii", "ignore") if isinstance(value, bytes) else str(value or "")
+    if text == "SHINDE1":
+        return "MS41.3"
+    return _PROG_ECU_ID_MAP.get(text)
+
 # The protected boot/parameter region exposes the live three-byte coding-family
 # value at DS2 0x1CF4 (= file 0x5CF4).  When that region is preserved during a
 # cross-variant full write, the same value must be copied into the target
@@ -206,6 +220,8 @@ class MS41ECU:
     def tune_into_full(full: bytes, partial: bytes) -> bytearray:
         """Merge a 24 KB CPU/DS2-order tune partition back into a FILE-order full ROM
         (exact inverse of tune_from_full)."""
+        if len(full) != MS41ECU.FULL_ROM_SIZE:
+            raise ValueError(f"expected a {MS41ECU.FULL_ROM_SIZE} B full ROM, got {len(full)}")
         if len(partial) != MS41ECU.TUNE_SIZE:
             raise ValueError(f"expected a {MS41ECU.TUNE_SIZE} B tune partition, got {len(partial)}")
         out = bytearray(full)

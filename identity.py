@@ -1,4 +1,4 @@
-"""MS41 per-unit identity — serial / ISN / VIN decode, encode, graft, EWS frames.
+"""MS41 per-unit identity and provenance decode, encode, graft, EWS frames.
 
 The DME's per-unit serial is stored in flash as 9 ASCII digits at file 0x5CE5
 (NUL-terminated at 0x5CEE); its last 4 digits at 0x5CEA are the ISN the external
@@ -11,13 +11,23 @@ from dataclasses import dataclass, field
 _VIN_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _VIN_RE = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$")
 
+PRODUCTION_OFF = 0x5CD5   # manufacturing / production identity block
+PRODUCTION_END = 0x5CEF
 SERIAL_OFF     = 0x5CE5   # per-unit serial: 9 ASCII digits
 SERIAL_NUL_OFF = 0x5CEE   # serial terminator
 PARTNUM_OFF    = 0x6025   # firmware-common BMW part number (NOT per-unit)
 MARK_1585_OFF  = 0x5CE0   # constant "1585" marker right before the serial
-VIN_OFF        = 0x5D07
+AIF_OFF        = 0x5D07   # 14 append-only programming-history records
+AIF_RECORD_SIZE = 0x2E
+AIF_RECORD_COUNT = 14
+AIF_END        = AIF_OFF + AIF_RECORD_SIZE * AIF_RECORD_COUNT
+VIN_OFF        = AIF_OFF  # packed VIN begins the first AIF record
 VIN_LEN        = 13
 FULL_ROM_SIZE  = 262144
+IDENTITY_GRAFT_RANGES = (
+    (PRODUCTION_OFF, PRODUCTION_END),
+    (AIF_OFF, AIF_END),
+)
 
 # The identity editor reads a 16 KB file-order window so it can show both the
 # per-unit data in param1/SA1 and the adjacent firmware descriptors in param2.
@@ -177,19 +187,18 @@ def boot_strings(data: bytes, *, min_length: int = 4, max_items: int = 32) -> li
 
 
 def graft_identity(target: bytes, source: bytes) -> bytearray:
-    """Carry the donor ECU's per-unit identity onto a target image.
+    """Carry the ECU's manufacturing identity and AIF history onto a target.
 
-    Copies the full 9-digit serial (0x5CE5-0x5CEE incl. NUL, which contains the
-    4-digit ISN the EWS is aligned to) and the full VIN (0x5D07-0x5D13). Firmware-
-    common descriptor fields (part# 0x6025, etc.) are intentionally NOT carried:
-    after a convert the ECU IS the target version, so they read as the target's.
-    Checksum-neutral — both fields lie in the un-checksummed gap 0x5C14-0x6100.
+    Copies the complete production block (including the serial/ISN) and all 14
+    AIF programming-history records (including the packed VIN). The coding-family
+    gap and firmware-owned ZIF/program descriptors are intentionally left to their
+    existing owners. Checksum-neutral: both ranges are inside 0x5C14-0x6100.
     """
     if len(target) < 0x6100 or len(source) < 0x6100:
-        raise ValueError("both target and source must be 256 KB full ROMs")
+        raise ValueError("target and source must contain the complete identity ranges")
     out = bytearray(target)
-    out[SERIAL_OFF:SERIAL_NUL_OFF + 1] = source[SERIAL_OFF:SERIAL_NUL_OFF + 1]
-    out[VIN_OFF:VIN_OFF + VIN_LEN] = source[VIN_OFF:VIN_OFF + VIN_LEN]
+    for start, end in IDENTITY_GRAFT_RANGES:
+        out[start:end] = source[start:end]
     return out
 
 

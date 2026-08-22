@@ -6,9 +6,11 @@ from ds2_fast_contracts import (
     FastOperation,
     FlashOperation,
     LinkRate,
+    ResponseStatus,
     SessionState,
 )
 from ds2_fast_full_write import (
+    FullWriteError,
     FullWriteFamilyError,
     FullWriteTiming,
     NativeFastFullWriteTransport,
@@ -96,6 +98,10 @@ class FullWriteStockSerial(PartialWriteStockSerial):
         self.flash_requests.append((operation, address, data))
         flash_index = len(self.flash_requests)
 
+        if flash_index in self.flash_outer_status_at:
+            self._response(self.flash_outer_status_at[flash_index])
+            return
+
         if operation == FlashOperation.ERASE:
             if address == 0x002000:
                 self.memory[0x002000:0x008000] = b"\xFF" * 0x6000
@@ -131,6 +137,7 @@ def _session(
     serial_kwargs=None,
     verify_write=True,
     variant_conversion=False,
+    expected_ecu_id=None,
 ):
     source = _image_fixture()
     token = source.ds2_image[TOKEN_ADDRESS : TOKEN_ADDRESS + TOKEN_LENGTH]
@@ -151,6 +158,7 @@ def _session(
         connected_family=connected_family,
         verify_write=verify_write,
         variant_conversion=variant_conversion,
+        expected_ecu_id=expected_ecu_id,
         timing=ZERO_TIMING,
         sleeper=lambda _seconds: None,
     )
@@ -627,6 +635,58 @@ def test_retained_full_session_can_reerase_restore_and_optionally_verify(tmp_pat
     assert session.journal.outcome == "success"
 
 
+def test_retained_full_recovery_a2_disables_further_replay(tmp_path):
+    session, serial, first_journal = _authorization_full_session(tmp_path)
+    serial.missing_flash_response_at = 3
+    serial.flash_outer_status_at = {6: ResponseStatus.READINESS_A2}
+    with pytest.raises(CommitUnknownError):
+        session.execute()
+    assert session.can_recover_in_place
+
+    serial.missing_flash_response_at = None
+    session.journal = FullMemoryJournal(tmp_path / "recovery-a2.jsonl")
+    with pytest.raises(ContractViolation, match="status 0xA2, expected 0xA0"):
+        session.recover_in_place()
+
+    assert serial.flash_requests[-1] == (FlashOperation.ERASE, 0x002000, b"")
+    assert session.transport.is_open
+    assert session.link is LinkRate.HIGH
+    assert session.fast_write_armed is False
+    assert session.state is SessionState.POWER_CYCLE_REQUIRED
+    assert session.can_recover_in_place is False
+    assert session.journal.outcome == "power_cycle_required"
+    finish = next(
+        fields for event, fields in session.journal.events
+        if event == "journal_finished"
+    )
+    assert finish["retry_supported"] is False
+    assert finish["transport_retained"] is True
+    assert finish["power_cycle_required"] is True
+
+    requests_after_a2 = len(serial.flash_requests)
+    with pytest.raises(FullWriteError, match="no longer qualified"):
+        session.recover_in_place()
+    assert len(serial.flash_requests) == requests_after_a2
+
+
+@pytest.mark.parametrize("program_only", (False, True))
+def test_original_full_a2_never_qualifies_retained_replay(tmp_path, program_only):
+    session, serial, _journal = _authorization_full_session(tmp_path)
+    serial.flash_outer_status_at = {3: ResponseStatus.READINESS_A2}
+    operation = session.execute_program_only if program_only else session.execute
+
+    with pytest.raises(ContractViolation, match="status 0xA2, expected 0xA0") as caught:
+        operation()
+
+    assert caught.value.response_status == ResponseStatus.READINESS_A2
+    assert session.state is SessionState.POWER_CYCLE_REQUIRED
+    assert session.can_recover_in_place is False
+    requests_after_a2 = len(serial.flash_requests)
+    with pytest.raises(FullWriteError, match="no longer qualified"):
+        session.recover_in_place()
+    assert len(serial.flash_requests) == requests_after_a2
+
+
 def test_full_write_family_mismatch_blocks_before_authorization_or_flash(tmp_path):
     session, serial, journal, _source = _session(
         tmp_path,
@@ -636,6 +696,20 @@ def test_full_write_family_mismatch_blocks_before_authorization_or_flash(tmp_pat
         session.execute()
     assert serial.flash_requests == []
     assert not session.destructive_started
+    assert journal.outcome == "failed"
+
+
+def test_full_write_expected_identity_mismatch_blocks_before_authorization(tmp_path):
+    session, serial, journal, _source = _session(
+        tmp_path,
+        expected_ecu_id="WRONGID",
+    )
+
+    with pytest.raises(FullWriteError, match="identity mismatch"):
+        session.execute()
+
+    assert serial.authorized is False
+    assert serial.flash_requests == []
     assert journal.outcome == "failed"
 
 

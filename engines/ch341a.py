@@ -21,6 +21,8 @@ EEPROM_SIZE = 512
 PAGE_SIZE = 16
 USB_PACKET_SIZE = 32
 USB_TIMEOUT_MS = 2_000
+USB_DRAIN_TIMEOUT_MS = 50
+MAX_STALE_PACKETS = 32
 WRITE_CYCLE_SECONDS = 0.010
 
 _I2C_STREAM = 0xAA
@@ -344,9 +346,10 @@ def _bulk_endpoint_pair(configuration, util):
 
 
 class CH341AProgrammer:
-    def __init__(self, device, usb_util):
+    def __init__(self, device, usb_util, usb_core):
         self._device = device
         self._usb_util = usb_util
+        self._usb_core = usb_core
         self._interface_number = None
         self._claimed = False
         self._ep_in = None
@@ -365,6 +368,7 @@ class CH341AProgrammer:
             self._claimed = True
             self._is_open = True
             self._send(bytes((_I2C_STREAM, _I2C_SET_100KHZ, _I2C_END)))
+            self._drain_input()
         except CH341AError:
             self.close()
             raise
@@ -415,6 +419,24 @@ class CH341AProgrammer:
             raise ProtocolError(
                 f"CH341A short USB read ({len(response)}/{expected} bytes)")
         return response
+
+    def _drain_input(self) -> None:
+        for _ in range(MAX_STALE_PACKETS):
+            try:
+                response = self._device.read(
+                    self._ep_in,
+                    USB_PACKET_SIZE,
+                    timeout=USB_DRAIN_TIMEOUT_MS,
+                )
+            except self._usb_core.USBTimeoutError:
+                return
+            except Exception as error:
+                raise ProtocolError(
+                    f"CH341A stale USB input drain failed: {error}"
+                ) from error
+            if not response:
+                return
+        raise ProtocolError("CH341A input did not become idle")
 
     def _read_once(self, address: int, length: int) -> bytes:
         output = bytearray()
@@ -473,7 +495,7 @@ class CH341AProgrammer:
 
 def open_first() -> CH341AProgrammer:
     try:
-        _core, util, _backend, devices = _libusb_devices()
+        core, util, _backend, devices = _libusb_devices()
     except BackendUnavailable as error:
         detected = _windows_registry_devices()
         if detected:
@@ -491,4 +513,4 @@ def open_first() -> CH341AProgrammer:
         raise MultipleDevices(
             f"Detected {len(devices)} accessible CH341A programmers; connect exactly one."
         )
-    return CH341AProgrammer(devices[0], util)
+    return CH341AProgrammer(devices[0], util, core)

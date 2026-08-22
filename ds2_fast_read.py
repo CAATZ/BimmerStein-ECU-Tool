@@ -176,6 +176,10 @@ class NativeFastReadTransport:
         inter_byte_timeout: float = 0.6,
         event_cb: Optional[EventCallback] = None,
     ):
+        if not bool(getattr(serial_port, "native_fast_capable", False)):
+            raise FastReadError(
+                "native fast read requires a supported direct USB transport"
+            )
         self.serial = serial_port
         self.baud = int(baud)
         self.echo = bool(echo)
@@ -1110,6 +1114,7 @@ def _read_d2xx(
     progress_cb: Optional[ProgressCallback] = None,
     event_cb: Optional[EventCallback] = None,
     echo: bool = True,
+    serial_factory=None,
 ) -> object:
     journal = new_operation_journal(port, operation)
     event_sink = journal_event_sink(journal, event_cb)
@@ -1117,11 +1122,10 @@ def _read_d2xx(
     session: Optional[NativeFastReadSession] = None
     phase = "transport_open"
     try:
-        transport = NativeFastReadTransport.open_d2xx(
-            port,
-            echo=echo,
-            event_cb=event_sink,
-        )
+        open_kwargs = {"echo": echo, "event_cb": event_sink}
+        if serial_factory is not None:
+            open_kwargs["serial_factory"] = serial_factory
+        transport = NativeFastReadTransport.open_d2xx(port, **open_kwargs)
         phase = "session_setup"
         try:
             session = NativeFastReadSession(
@@ -1164,6 +1168,7 @@ def read_partial_d2xx(
     progress_cb: Optional[ProgressCallback] = None,
     event_cb: Optional[EventCallback] = None,
     echo: bool = True,
+    serial_factory=None,
 ) -> FastPartialReadResult:
     """Run one journaled standalone read-only partial operation through D2XX."""
 
@@ -1173,6 +1178,7 @@ def read_partial_d2xx(
         progress_cb=progress_cb,
         event_cb=event_cb,
         echo=echo,
+        serial_factory=serial_factory,
     )
 
 
@@ -1182,6 +1188,7 @@ def read_full_d2xx(
     progress_cb: Optional[ProgressCallback] = None,
     event_cb: Optional[EventCallback] = None,
     echo: bool = True,
+    serial_factory=None,
 ) -> FastFullReadResult:
     """Run the journaled slim one-pass production full dump through D2XX."""
 
@@ -1191,4 +1198,5 @@ def read_full_d2xx(
         progress_cb=progress_cb,
         event_cb=event_cb,
         echo=echo,
+        serial_factory=serial_factory,
     )

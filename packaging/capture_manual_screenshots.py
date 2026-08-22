@@ -86,13 +86,13 @@ def _synthetic_patch_records() -> list[dict]:
             "removable": True,
         },
         {
-            "id": "ignition_cut_v7",
+            "id": "ignition_cut_v9",
             "title": "Ignition Cut",
-            "version": "V7",
-            "description": "Current ignition-cut limiter implementation.",
-            "user_description": "Adds the current configurable ignition-cut limiter.",
+            "version": "V9",
+            "description": "Independent ignition-cut limiter with hysteresis and fixed-IPW control.",
+            "user_description": "Adds an independent ignition-cut limiter.",
             "target": "MS41.3",
-            "status": "VEHICLE TEST REQUIRED",
+            "status": "EMULATOR VERIFIED - ON-CAR TEST REQUIRED",
             "tested": False,
             "requires": [],
             "conflicts": [],
@@ -105,15 +105,15 @@ def _synthetic_patch_records() -> list[dict]:
             "removable": False,
         },
         {
-            "id": "launch_control_v5",
+            "id": "launch_control_v7",
             "title": "Launch Control / 2-step",
-            "version": "V5",
-            "description": "Current staged launch-control limiter implementation.",
-            "user_description": "Adds configurable staged launch control.",
+            "version": "V7",
+            "description": "Independent launch requester using fuel cut or the shared V9 ignition engine.",
+            "user_description": "Adds independently armed staged launch control.",
             "target": "MS41.3",
-            "status": "VEHICLE RETEST REQUIRED",
+            "status": "EMULATOR VERIFIED - ON-CAR TEST REQUIRED",
             "tested": False,
-            "requires": ["ignition_cut_v7"],
+            "requires": ["ignition_cut_v9"],
             "conflicts": [],
             "ok": True,
             "badge": "",
@@ -159,7 +159,6 @@ def main() -> int:
 
     import gui
     import patch_service
-    from engines.softbsl import eeprom_ram
 
     app = QApplication.instance() or QApplication([])
     # Qt's Windows offscreen platform does not enumerate system fonts. Register
@@ -219,77 +218,25 @@ def main() -> int:
     _save_window(window, app, images / "flash-workflow.png")
 
     synthetic_info = {
-        "ECU ID": "1437806 (synthetic)",
-        "CAL ID": "98A0 (synthetic)",
-        "Detected Variant": "MS41.3",
-        "Firmware Version": "Documentation example",
+        "ECU Family": "MS41.3",
+        "Reported ECU Identifier": "1437806 (synthetic)",
+        "BMW Program Part Number": "1406464 (synthetic)",
+        "Calibration ID": "98A0 (synthetic)",
+        "Program / Calibration Match": "Match (synthetic)",
+        "Recorded ZB / ZUSB": "Documentation example",
+        "Programming Date": "2026-08-22 (synthetic)",
+        "Recorded Software Number": "0000000 (synthetic)",
+        "Programming Count": "1 (synthetic)",
+        "BMW Program Lineage": "MS41.3 documentation example",
         "VIN": "WBAZZ0000TEST0001",
-        "ISN": "0000 (synthetic)",
-        "Flash Chip": "Intel 28F200",
-        "Transmission": "Manual",
+        "DME Production Serial": "900000001 (synthetic)",
+        "EWS2 ISN": "0000 (synthetic)",
+        "Transmission Mode": "Manual",
     }
     for key, value in synthetic_info.items():
         window._info_labels[key].setText(value)
     _select_tab(window, "ECU Info")
     _save_window(window, app, images / "diagnostics.png")
-
-    synthetic_adaptations = {
-        "ecu_id": "SYNTHETIC",
-        "additive": [0.05, -0.03],
-        "ltft": [2.10, 1.65],
-        "throttle": 1.53,
-        "load": [223, 327, 425, 501],
-        "rpm": [
-            480, 800, 992, 1216, 1504, 1728, 1984, 2496,
-            3008, 3488, 4000, 4416, 4992, 5504, 6016, 6240,
-        ],
-        "knock": [
-            [
-                [0.0 - 0.375 * ((table + row + column) % 4) for column in range(4)]
-                for row in range(16)
-            ]
-            for table in range(6)
-        ],
-    }
-    window._show_adaptations(synthetic_adaptations)
-    window.btn_read_adaptations.setEnabled(True)
-    window.lbl_adapt_status.setText(
-        "Synthetic documentation values - not read from an ECU"
-    )
-    _select_tab(window, "Adaptations")
-    _save_window(window, app, images / "adaptations.png")
-
-    synthetic_eeprom = bytearray(
-        (index * 73 + 19) & 0xFF for index in range(eeprom_ram.EEPROM_SIZE)
-    )
-    for field in eeprom_ram.fields_for_variant("MS41.1"):
-        if field.checked:
-            end = field.offset + field.length
-            check = eeprom_ram.additive_check(
-                synthetic_eeprom[field.offset:end - 2]
-            )
-            synthetic_eeprom[end - 2:end] = check.to_bytes(2, "little")
-    synthetic_eeprom[0x1E3:0x1EF] = b"SYNTHETIC001"
-    synthetic_eeprom[0x1EF:0x1F6] = b"DEMO001"
-    synthetic_eeprom[0x1F6:0x1FD] = b"DEMO001"
-    original_detect_layouts = eeprom_ram.detect_layouts
-    try:
-        eeprom_ram.detect_layouts = lambda _image: ("MS41.1",)
-        window._show_eeprom_image(
-            bytes(synthetic_eeprom), "Synthetic_MS41_1_Documentation.bin"
-        )
-    finally:
-        eeprom_ram.detect_layouts = original_detect_layouts
-    window.lbl_eeprom_ram_status.setText(
-        "Documentation demo - no ECU or serial port is open. "
-        "Connect through installed Soft-BSL for ECU Agent access."
-    )
-    window.lbl_ch341a_status.setText(
-        "Documentation demo - no USB programmer is connected. Detect, read, "
-        "and save the full EEPROM before Seed ECU Recovery can be enabled."
-    )
-    _select_tab(window, "EEPROM")
-    _save_window(window, app, images / "eeprom.png")
 
     original_available = patch_service.available_patches
     try:
@@ -300,8 +247,8 @@ def main() -> int:
             "Base: Synthetic_MS41_3_Demo.bin — MS41.3 documentation example"
         )
         window._refresh_patch_list()
-        window._patch_checkboxes["ignition_cut_v7"].setChecked(True)
-        window._patch_checkboxes["launch_control_v5"].setChecked(True)
+        window._patch_checkboxes["ignition_cut_v9"].setChecked(True)
+        window._patch_checkboxes["launch_control_v7"].setChecked(True)
     finally:
         patch_service.available_patches = original_available
     _select_tab(window, "Patches")

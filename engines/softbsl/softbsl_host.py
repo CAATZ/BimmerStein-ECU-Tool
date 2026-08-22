@@ -26,6 +26,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import ecu_info
 
@@ -95,7 +96,9 @@ _DEPRECATED_LOADER_IDS = (
     "softbsl_loader_legacy",
     "softbsl_loader_relocated_v1",
     "softbsl_loader_v2",
+    "softbsl_loader_v10",
 )
+_DEPRECATED_CAL_GUARD_IDS = ("cal_guard_v1", "cal_guard_v2", "cal_guard_v4")
 _DOOR_PATCH_IDS = {
     "MS41.0": ("door_0x43_ms410", "door_magic_ms410"),
     "MS41.1": ("door_0x43_ms411", "door_magic_ms411"),
@@ -136,6 +139,7 @@ class InstallRequest:
     phase1_reentry_prompt: object = None
     progress_cb: object = None
     ds2_factory: object = DS2Interface
+    serial_factory: object = None
     verbose: bool = False
     no_echo: bool = False
     dry_run: bool = False
@@ -417,8 +421,12 @@ class InstallCancelled(SoftBSLError):
         super().__init__(message)
 
 
+class BootstrapVerificationError(SoftBSLError):
+    """Phase 1 is present but its post-cycle entry path was not proven safe."""
+
+
 class D2XXRequiredError(SoftBSLError):
-    """A fast baud tier was requested on a transport that is not D2XX."""
+    """A fast baud tier was requested on an unqualified transport."""
 
 
 class _EraseBoundaryTracker:
@@ -505,6 +513,10 @@ class InstallRecoveryRequired(SoftBSLError):
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+class AgentLinkPreEraseFailure(SoftBSLError):
+    """Agent entry stopped safely before the persistent-target erase."""
+
+
 def load_agent(path):
     with open(path) as f:
         agent = bytes.fromhex("".join(f.read().split()))
@@ -527,7 +539,7 @@ def load_stage_payload():
     expected_size = int(manifest.get("payload_size", -1))
     expected_sha = str(manifest.get("payload_sha256", ""))
     if len(payload) != expected_size or hashlib.sha256(payload).hexdigest() != expected_sha:
-        raise SoftBSLError("staged-entry payload failed its packaged manifest integrity check")
+        raise SoftBSLError("staged-entry payload failed its integrity check")
     if manifest.get("status") != "production-staged-entry-v1":
         raise SoftBSLError("staged-entry payload manifest is not production-enabled")
     return payload
@@ -556,13 +568,88 @@ class SoftBSL:
         return self.ds2._ser
 
     def _txs(self, data):
+        data = bytes(data)
         ser = self._ser()
         ser.reset_input_buffer()
-        ser.write(data)
-        ser.flush()
-        # echo arrives as the bytes go out (half-duplex); allow TX time + margin.
-        tmo = 2.0 + len(data) * 12 / max(self.ds2.baud, 1)
-        self.ds2._read_exact(len(data), tmo)        # consume + discard the echo
+        echo_enabled = bool(getattr(self.ds2, "echo", True))
+        chunk_size = int(getattr(ser, "echo_drain_chunk_size", 0) or 0)
+        if not echo_enabled or chunk_size <= 0:
+            # D2XX/pyserial drain RX in their drivers, so preserve the proven
+            # one-write Soft-BSL frames on desktop transports.
+            ser.write(data)
+            ser.flush()
+            if echo_enabled:
+                timeout = 2.0 + len(data) * 12 / max(self.ds2.baud, 1)
+                self.ds2._read_exact(len(data), timeout)
+            return
+
+        # Android has no background USB reader while a long UART write drains.
+        # Keep each echoed burst below the FT232 FIFO, and drain+validate it
+        # before sending the next bytes. This is one forward stream: no purge
+        # between chunks and no byte is retransmitted.
+        timeout = 2.0 + len(data) * 12 / max(self.ds2.baud, 1)
+        deadline = time.perf_counter() + timeout
+        previous_chunk_deadline = None
+        for offset in range(0, len(data), chunk_size):
+            outbound = data[offset:offset + chunk_size]
+            chunk_started = time.perf_counter()
+            if (previous_chunk_deadline is not None
+                    and chunk_started >= previous_chunk_deadline):
+                raise SoftBSLError(
+                    f"K-line inter-chunk deadline exceeded before byte {offset}")
+            chunk_deadline = (
+                chunk_started
+                + len(outbound) * 12 / max(self.ds2.baud, 1)
+                + 0.032
+            )
+            previous_chunk_deadline = chunk_deadline
+            try:
+                written = ser.write(outbound)
+                if written is not None and written != len(outbound):
+                    raise SoftBSLError(
+                        f"short serial write at byte {offset}: "
+                        f"wrote {written}/{len(outbound)} bytes")
+                ser.flush()
+            except SoftBSLError:
+                raise
+            except Exception as error:
+                raise SoftBSLError(
+                    f"serial write failed at byte {offset}: {error}") from error
+            if not echo_enabled:
+                continue
+
+            echo = bytearray()
+            try:
+                echo_deadline = min(deadline, chunk_deadline)
+                while len(echo) < len(outbound):
+                    remaining_time = echo_deadline - time.perf_counter()
+                    if remaining_time <= 0:
+                        break
+                    ser.timeout = max(0.001, min(0.01, remaining_time))
+                    incoming = bytes(ser.read(len(outbound) - len(echo)))
+                    if incoming:
+                        echo.extend(incoming)
+                    else:
+                        time.sleep(min(0.001, remaining_time))
+            except Exception as error:
+                raise SoftBSLError(
+                    f"K-line echo read failed at byte {offset}: {error}") from error
+            echoed = bytes(echo)
+            if len(echoed) != len(outbound):
+                raise SoftBSLError(
+                    f"K-line echo length mismatch at byte {offset}: "
+                    f"received {len(echoed)}/{len(outbound)} bytes")
+            if echoed != outbound:
+                mismatch = next(
+                    index for index, (actual, expected) in enumerate(
+                        zip(echoed, outbound)
+                    ) if actual != expected
+                )
+                absolute = offset + mismatch
+                raise SoftBSLError(
+                    "K-line echo content mismatch at byte "
+                    f"{absolute}: received 0x{echoed[mismatch]:02X}, "
+                    f"expected 0x{outbound[mismatch]:02X}")
 
     def _tx(self, byte):
         self._txs(bytes([byte]))
@@ -574,7 +661,7 @@ class SoftBSL:
         return b[0]
 
     def prearm_calguard_boot(self, timeout=8.0):
-        """Transmit CalGuard V4's raw token until a key-on boot poll ACKs it."""
+        """Transmit CalGuard V5's raw token until a key-on boot poll ACKs it."""
         token = bytes((0x5A, MAGIC_HI, MAGIC_LO))
         deadline = time.perf_counter() + timeout
         attempts = 0
@@ -597,7 +684,7 @@ class SoftBSL:
                 time.sleep(0.05)  # let the stock listener initialize before its first DS2 frame
                 return
         raise SoftBSLError(
-            "CalGuard boot recovery was not acknowledged. Confirm CalGuard V4 and "
+            "CalGuard boot recovery was not acknowledged. Confirm CalGuard V5 and "
             "Soft-BSL are installed, then retry from ignition OFF.")
 
     @staticmethod
@@ -632,7 +719,7 @@ class SoftBSL:
         elif trigger == "5a":
             # The persistent boot/param1 loader (after install; the temporary 0x43 hook is gone).
             # DS2 cmd 0x5A + selector 0x9C9C -> SA1 dispatcher default @0x15A0 ->
-            # descriptor-safe relocated loader main @CPU 0x1D92.
+            # AIF-safe relocated loader main @CPU 0x1F8C.
             # Same frame shape as 43: 12 0A 5A 9C 9C <lenHi><lenLo> <crcHi><crcLo> <xor>. CLEAN LOCKED
             # (NO unlock). Mirrors the proven trigger_sa1.py.
             body = bytes([d.ecu_addr, 0x0A, 0x5A, MAGIC_HI, MAGIC_LO]) + ln + crc.to_bytes(2, "big")
@@ -682,6 +769,21 @@ class SoftBSL:
         self._ser().reset_input_buffer()
         time.sleep(0.003)
 
+    def _staged_send(self, data, stage):
+        try:
+            self._txs(data)
+        except Exception as error:
+            raise SoftBSLError(f"{stage}: {error}") from error
+
+    def _staged_expect(self, expected, timeout, stage):
+        try:
+            actual = self._rx(timeout)
+        except Exception as error:
+            raise SoftBSLError(f"{stage}: {error}") from error
+        if actual != expected:
+            raise SoftBSLError(
+                f"{stage}: received 0x{actual:02X}, expected 0x{expected:02X}")
+
     def enter_staged(self, agent, tier, trigger="5a", stage_payload=None,
                      ack_timeout=2.0):
         """Enter the unchanged production agent through the qualified two-stage loader.
@@ -700,29 +802,31 @@ class SoftBSL:
         self.log(f"staged {trigger} entry "
                  f"(stage={len(stage_payload)} B, tier={tier}, agent={len(agent)} B) ...")
         try:
-            self._txs(frame)
-            if self._rx(ack_timeout) != ACK:
-                raise SoftBSLError("staged loader trigger rejected")
-            self._txs(stage_payload)
-            if self._rx(3.0) != ACK:
-                raise SoftBSLError("persistent loader rejected the staged payload CRC")
-            if self._rx(1.0) != STAGE_READY:
-                raise SoftBSLError("stage one did not announce its 0x5B ready byte")
+            trigger_stage = f"staged 0x{trigger.upper()} trigger ACK"
+            self._staged_send(frame, trigger_stage)
+            self._staged_expect(ACK, ack_timeout, trigger_stage)
+            self._staged_send(stage_payload, "staged payload echo")
+            self._staged_expect(ACK, 3.0, "staged payload CRC ACK")
+            self._staged_expect(STAGE_READY, 1.0, "stage-one ready byte")
 
             # Stage one ACKs its compact header at the inherited baud, then changes ASC0 itself.
-            self._txs(self._stage_header(tier, agent))
-            if self._rx(ack_timeout) != ACK:
-                raise SoftBSLError(f"stage-one {tier} header was rejected")
+            header_stage = f"stage-one {tier} header ACK"
+            self._staged_send(self._stage_header(tier, agent), header_stage)
+            self._staged_expect(ACK, ack_timeout, header_stage)
             self._retune_staged_host(tier)
-            self._tx(STAGE_HANDSHAKE)
-            if self._rx(0.75) != ACK:
-                raise SoftBSLError(f"stage-one {tier} baud handshake failed")
-            self._stream_and_confirm(agent)
+            handshake_stage = f"stage-one {tier} baud handshake ACK"
+            self._staged_send(bytes((STAGE_HANDSHAKE,)), handshake_stage)
+            self._staged_expect(ACK, 0.75, handshake_stage)
+            try:
+                self._stream_and_confirm(agent)
+            except Exception as error:
+                raise SoftBSLError(f"production-agent handoff: {error}") from error
             self.staged_entry = True
             self.log(f"staged entry complete at {BG[tier][1]} baud")
         except Exception:
-            # Stage failure is pre-erase and its own failure path returns to stock DS2. Keep the
-            # host ready for the next lower-tier attempt; never issue a production reset here.
+            # Stage failure is pre-erase, but a missing trigger ACK is ambiguous: the loader
+            # may already be receiving the payload. Restore only the host baud so the owner can
+            # prove stock state on this handle; never retransmit the trigger here.
             try:
                 self._ser().baudrate = 9600
                 self.ds2.baud = 9600
@@ -1346,8 +1450,8 @@ class SoftBSL:
             self.log("Read-back verification skipped (Verify off). ECU-side finalization will be "
                      "completed by the caller.")
 
-    def flash_cross_bank(self, image, *, baud="low", do_verify=True, prompt=input, skip_marker_guard=False,
-                         guard_addr=0x1FFC):
+    def flash_cross_bank(self, image, *, baud="low", do_verify=True, prompt=input,
+                         skip_marker_guard=False, guard_addr=0x1FFC, progress_cb=None):
         """CROSS-BANK top-half write (29F400 golden bank). PRECONDITION: the agent was ENTERED FROM THE
         BOTTOM so that bank stays intact as the recovery path. Sequence: arm -> [operator flips A17 to
         UPPER] -> erase+program the coarse upper map with the FUSED SA7 (boot/vectors) written LAST ->
@@ -1397,8 +1501,10 @@ class SoftBSL:
                      "guard BYPASSED; trusting the OPERATOR's metered A17=HIGH (UPPER) confirmation.")
         else:
             self.log(f"  A17 flip CONFIRMED: guard @0x{guard_addr:05X} {pre.hex()} (bottom) -> {post.hex()} (top).")
-        for addr, name, prot in order:
+        for sector_index, (addr, name, prot) in enumerate(order):
             lo, hi = addr, addr + SEC
+            if progress_cb:
+                progress_cb(sector_index * SEC, IMAGE_SIZE, "erase")
             self.log(f"erase {name} @ DS2 0x{addr:05X} ...")
             st = self.erase(addr); etries = 0
             while st in (2, 4) and etries < PROG_RETRIES:
@@ -1412,6 +1518,10 @@ class SoftBSL:
             for f in range(lo, hi, CHUNK_SIZE):
                 if bar:
                     bar(f - lo, SEC)
+                if progress_cb:
+                    progress_cb(
+                        sector_index * SEC + f - lo, IMAGE_SIZE, "program",
+                    )
                 blk = image[f:f + CHUNK_SIZE]
                 if not blk or blk == b"\xFF" * len(blk):
                     continue                                      # FF (incl. the SA7 bus-hole) skipped
@@ -1431,15 +1541,21 @@ class SoftBSL:
             if bar:
                 bar(SEC, SEC); _tty_newline()
             self.log(f"  {name} programmed.")
+        if progress_cb:
+            progress_cb(IMAGE_SIZE, IMAGE_SIZE, "program")
         if do_verify:
             self.log("verify (read-back @ the UPPER view) ...")
             bad = 0
-            for addr, name, prot in order:
+            for sector_index, (addr, name, prot) in enumerate(order):
                 lo, hi = addr, addr + SEC
                 # The CRC-read command is proven for 1 KB and normal full-image
                 # verification already uses it. Avoid the legacy 128-byte
                 # transaction size here while still comparing every byte.
                 for f in range(lo, hi, CHUNK_SIZE):
+                    if progress_cb:
+                        progress_cb(
+                            sector_index * SEC + f - lo, IMAGE_SIZE, "verify",
+                        )
                     blk = image[f:f + CHUNK_SIZE]
                     if not blk or blk == b"\xFF" * len(blk):
                         continue
@@ -1454,6 +1570,8 @@ class SoftBSL:
             if bad:
                 raise SoftBSLError(f"top verify failed ({bad}+ mismatched blocks). A17 UPPER -- flip to "
                                    "LOWER + boot the bottom; the golden top is bad, re-run.")
+            if progress_cb:
+                progress_cb(IMAGE_SIZE, IMAGE_SIZE, "verify")
             self.log("verify OK -- golden top written.")
         prompt("\n  >>> FLIP THE A17 COCKPIT SWITCH BACK TO **LOWER** NOW, then press Enter. ")
         self.reset()
@@ -1479,7 +1597,15 @@ def _open(args, require_d2xx=False):
     if not args.port:
         raise SoftBSLError("no serial port was selected")
     ds2_factory = getattr(args, "ds2_factory", DS2Interface)
-    d = ds2_factory(args.port, baud=9600, verbose=args.verbose, echo=not args.no_echo)
+    factory_kwargs = {
+        "baud": 9600,
+        "verbose": bool(getattr(args, "verbose", False)),
+        "echo": not bool(getattr(args, "no_echo", False)),
+    }
+    serial_factory = getattr(args, "serial_factory", None)
+    if serial_factory is not None:
+        factory_kwargs["serial_factory"] = serial_factory
+    d = ds2_factory(args.port, **factory_kwargs)
     try:
         d.open()
     except Exception:
@@ -1490,10 +1616,11 @@ def _open(args, require_d2xx=False):
         except Exception:
             pass
         raise
-    if require_d2xx and not getattr(d, "uses_d2xx", False):
+    if require_d2xx and not getattr(d, "native_fast_capable", False):
         d.close()
         raise D2XXRequiredError(
-            f"{args.port} opened through {getattr(d, 'transport_name', None) or 'a non-D2XX transport'}")
+            f"{args.port} opened through "
+            f"{getattr(d, 'transport_name', None) or 'an unsupported transport'}")
     return d
 
 
@@ -1551,11 +1678,11 @@ def _session_with_baud_fallback(args):
     """Enter the disposable agent and prove a baud before any erase.
 
     The temporary 0x43 door and persistent 0x5A door share the staged
-    handshake. Installer attempts therefore use staged entry at the fast
-    tiers; the known legacy 9600 entry remains the final fallback. Each
-    failed tier is abandoned while flash is still untouched. Once erase
-    begins, cmd_flash does not restart the brick-class operation at another
-    baud.
+    handshake. Installer attempts therefore use staged entry at a fast tier.
+    An unavailable fast transport may safely select the legacy 9600 route
+    before any trigger, but a staged-trigger failure stops the ladder until
+    an ignition cycle resolves the ambiguous loader state. Once erase begins,
+    cmd_flash never restarts the brick-class operation at another baud.
     """
     tiers = _baud_candidates(getattr(args, "baud", "low"))
     # Hand-built/test request objects may omit a trigger; preserve their
@@ -1563,6 +1690,7 @@ def _session_with_baud_fallback(args):
     trigger = getattr(args, "trigger", None)
     d = sb = None
     index = 0
+    failures = []
     while index < len(tiers):
         tier = tiers[index]
         staged_attempt = trigger == "43" and tier != "low"
@@ -1585,6 +1713,7 @@ def _session_with_baud_fallback(args):
             _emit(f"  agent baud preflight: '{tier}' passed (3 CRC reads); erase is now permitted.")
             return d, sb, tier
         except Exception as error:
+            failures.append((tier, str(error)))
             _emit(f"  agent baud preflight: '{tier}' failed before erase ({error}).")
             # A staged-entry failure is pre-erase and owns its no-reset boundary.
             # Once the normal agent has started, the existing reset cleanup remains
@@ -1600,6 +1729,19 @@ def _session_with_baud_fallback(args):
                 except Exception:
                     pass
             d = sb = None
+            if staged_attempt and not isinstance(error, D2XXRequiredError):
+                # A missing trigger ACK is ambiguous: the door may already be waiting for
+                # the staged payload. Sending another trigger in this ignition cycle would
+                # then become payload data and desynchronize entry. Stop after this one
+                # attempt; the installer owns the required cycle before any retry.
+                detail = "; ".join(
+                    f"{failed_tier} ({failed_error})"
+                    for failed_tier, failed_error in failures
+                )
+                raise AgentLinkPreEraseFailure(
+                    "staged agent entry stopped before erase; an ignition cycle is "
+                    f"required before retry: {detail}"
+                ) from error
             if isinstance(error, D2XXRequiredError) and "low" in tiers[index + 1:]:
                 index = tiers.index("low")
                 _emit("  D2XX is unavailable for the selected adapter; skipping unsupported fast "
@@ -1610,7 +1752,10 @@ def _session_with_baud_fallback(args):
                     _emit(f"  retrying agent entry at '{tiers[index]}' baud; flash is still untouched.")
             if index < len(tiers):
                 time.sleep(1.5)
-    raise SoftBSLError(f"agent link failed baud preflight at every tier: {', '.join(tiers)}")
+    detail = "; ".join(f"{tier} ({error})" for tier, error in failures)
+    raise AgentLinkPreEraseFailure(
+        f"agent link failed baud preflight at every tier: {detail}"
+    )
 
 
 def _check_image_checksums(image):
@@ -1676,7 +1821,7 @@ def _select_agent_for_chip(args, chip):
 
 
 def cmd_flash(args):
-    image = open(args.image, "rb").read()
+    image = Path(args.image).read_bytes()
     if len(image) != IMAGE_SIZE:
         raise SoftBSLError(f"image is {len(image)} B, expected {IMAGE_SIZE} (256 KB)")
     scope = args.scope
@@ -2133,7 +2278,7 @@ def cmd_deploy_splice(args):
     THEN a byte-for-byte READ-BACK verify reads the deployed program back and compares to the written
     image -- the stock verify only checks ~36 fixed signature bytes, NOT our custom patches, so this is
     what actually catches an error in door_magic/cal_guard/amd_flash/0x43. --no-readback skips it."""
-    img = open(args.image, "rb").read()
+    img = Path(args.image).read_bytes()
     if len(img) != DS2Interface.FULL_SIZE:
         raise SoftBSLError(f"image is {len(img)} B, expected {DS2Interface.FULL_SIZE} (256 KB)")
     block = DS2Interface._BLOCK
@@ -2175,14 +2320,21 @@ def cmd_deploy_splice(args):
             preflight = _live_preflight(args)
             if preflight is None:
                 probe = _open(args)
-                uses_d2xx = bool(getattr(probe, "uses_d2xx", False))
+                native_fast_capable = bool(
+                    getattr(probe, "native_fast_capable", False)
+                )
                 live_family, live_sig = _detect_flash_chip(probe)
             else:
-                uses_d2xx = bool(preflight["uses_d2xx"])
+                native_fast_capable = bool(
+                    preflight["native_fast_capable"]
+                )
                 live_family = preflight["flash_family"]
                 live_sig = preflight["flash_signature"]
-            if not uses_d2xx:
-                _emit("   native fast bootstrap skipped: active DS2 transport is not D2XX.", "warn")
+            if not native_fast_capable:
+                _emit(
+                    "   native fast bootstrap skipped: active DS2 transport is unsupported.",
+                    "warn",
+                )
             else:
                 # Release the read-only DS2 probe before the native service
                 # opens its own D2XX handle on the same COM port. A compose
@@ -2206,21 +2358,25 @@ def cmd_deploy_splice(args):
                     f"-- native fast DS2 bootstrap ({live_family.upper()}, exact 187500 baud; tune untouched) --"
                 )
 
-                fast_result = ds2_native_fast_service.write_program_d2xx(
-                    args.port,
-                    img,
-                    connected_family=live_family,
+                fast_kwargs = {
+                    "connected_family": live_family,
                     # Preserve deploy-splice's default readback contract, but
                     # perform it at high rate inside the native session. The
                     # installer supplies targeted ranges instead, so it does
                     # not incur a duplicate full-program read.
-                    verify_write=bool(readback and not verify_ranges),
-                    initial_identity_attempts=(
+                    "verify_write": bool(readback and not verify_ranges),
+                    "initial_identity_attempts": (
                         3
                         if bool(getattr(args, "native_fast_retry_only", False))
                         else 1
                     ),
-                    progress_cb=getattr(args, "progress_cb", None),
+                    "progress_cb": getattr(args, "progress_cb", None),
+                }
+                serial_factory = getattr(args, "serial_factory", None)
+                if serial_factory is not None:
+                    fast_kwargs["serial_factory"] = serial_factory
+                fast_result = ds2_native_fast_service.write_program_d2xx(
+                    args.port, img, **fast_kwargs
                 )
                 native_fast_done = True
                 _emit(
@@ -2438,9 +2594,10 @@ def _verify_install(args, target):
     spots = [
         ("boot/param1 bank-ID marker @0x5FFC", 0x5FFC, 4),
         ("boot/param1 0x5A hook @0x55A0", 0x55A0, 4),
+        ("boot/param1 loader RX helper @0x4412", 0x4412, 4),
         ("boot/param1 loader CRC helper @0x5C32", 0x5C32, 4),
-        ("boot/param1 loader main @0x5D92", 0x5D92, 4),
-        ("boot/param1 loader I/O helper @0x5FC4", 0x5FC4, 4),
+        ("boot/param1 loader TX helper @0x5CA0", 0x5CA0, 4),
+        ("boot/param1 loader main @0x5F8C", 0x5F8C, 4),
         (f"program door        @0x{persistent_off:05X}", persistent_off, 4),
         (f"program 0x43 slot   @0x{bootstrap_off:05X}", bootstrap_off, 4),
     ]
@@ -2502,9 +2659,9 @@ _CODING_FAMILY_ADDR = 0x1CF4
 
 def _detect_ecu_variant(d, *, accept_credit=True):
     """Read the cal_guard markers over stock DS2 (READ-ONLY, brick-safe) and return
-    (cal_variant, prog_variant, consistent). ``accept_credit`` preserves the broader
-    offline/install detector; False mirrors CalGuard runtime exactly: strict SS1v2,
-    otherwise CAL-ID, with no ABHISHEK shortcut. DS2 addr = file ^ 0x4000.
+    (cal_variant, prog_variant, consistent). ``accept_credit=False`` skips the
+    optional calibration credit marker; the exact program signature remains
+    authoritative for the derived variant. DS2 addr = file ^ 0x4000.
     PROGRAM side: the exact 9a116390 signature @file 0x39A9A else ECU-ID[2:5] @0x6025."""
     def rd(a, n):
         for _ in range(4):
@@ -2516,12 +2673,18 @@ def _detect_ecu_variant(d, *, accept_credit=True):
     ss1 = rd(0x133BB, 5)
     credit = rd(0x15F60, 8) if accept_credit else b""
     calid = rd(0x1000E, 8)
-    cal_v = ("MS41.3" if (ss1 == _SS1V2 or (accept_credit and credit == _ABHISHEK))
-             else _CALID_VARIANT.get(calid[:2].decode("latin1", "ignore")))
-    sig = rd(0x3DA9A, 4); ecuid = rd(0x2025, 7)          # program markers (file 0x39A9A / 0x6025)
-    prog_v = "MS41.3" if sig == _PROG_SIG_3 else _ECUID_PROG_VARIANT.get(ecuid[2:5].decode("latin1", "ignore"))
-    consistent = cal_v is not None and cal_v == prog_v
-    return cal_v, prog_v, consistent
+    sig = rd(0x3DA9A, 4)
+    ecuid = rd(0x2025, 7)          # program markers (file 0x39A9A / 0x6025)
+    return ecu_info.resolve_live_variants(
+        ecuid.decode("ascii", "ignore"),
+        cal_id=calid,
+        program_part=ecuid,
+        program_compat=rd(_COMPAT_PROGRAM_ADDR, 4),
+        calibration_compat=rd(_COMPAT_CAL_ADDR, 4),
+        program_signature=sig,
+        cal_marker=ss1,
+        credit=credit,
+    )
 
 
 def _detect_firmware_compatibility(d):
@@ -2589,6 +2752,11 @@ def _store_live_preflight(args, d, flash_family, flash_signature):
     that read and reuse it for the version gate and Phase-1 bootstrap.
     """
 
+    identity = bytes(d.identify())
+    if len(identity) < 7:
+        raise SoftBSLError(
+            "live preflight returned an invalid ECU identity: "
+            f"{identity.hex() or '<empty>'}")
     cal_v, prog_v, broad_consistent = _detect_ecu_variant(
         d, accept_credit=False)
     cal_id, program_id, coding_family, exact_consistent = (
@@ -2597,8 +2765,12 @@ def _store_live_preflight(args, d, flash_family, flash_signature):
     evidence = {
         "port": str(getattr(args, "port", "")),
         "uses_d2xx": bool(getattr(d, "uses_d2xx", False)),
+        "native_fast_capable": bool(
+            getattr(d, "native_fast_capable", False)
+        ),
         "flash_family": flash_family,
         "flash_signature": bytes(flash_signature),
+        "identity": identity[:7],
         "cal_variant": cal_v,
         "program_variant": prog_v,
         "cal_compatibility_id": cal_id,
@@ -2620,6 +2792,7 @@ def _live_preflight(args):
         return None
     required = {
         "uses_d2xx",
+        "native_fast_capable",
         "flash_family",
         "flash_signature",
         "cal_variant",
@@ -2638,6 +2811,25 @@ def _live_preflight(args):
 # The base program is BMW/community copyright -> not publishable. What IS publishable = our patches
 # (the Patcher's JSONs) + this host + the agent. So we obtain the base at RUNTIME (read the ECU, or a
 # user-supplied --base file) and compose the flashable image from base + patches via the Patcher.
+def _normalize_patch_marker_for_match(base_bytes, patch, marker):
+    """Restore a patch's declared marker bytes only for exact B/T marker matching."""
+    base = bytes(base_bytes)
+    if marker not in ("B", "T"):
+        return base
+    marker_bytes = bytes([0xA5, 0x5A, ord(marker), ord(marker) ^ 0xFF])
+    if base[MARKER_OFF:MARKER_OFF + len(marker_bytes)] != marker_bytes:
+        return base
+    normalized = bytearray(base)
+    for edit in patch["edits"]:
+        off = int(edit["off"])
+        patch_bytes = bytes.fromhex(edit["data"])
+        lo = max(off, MARKER_OFF)
+        hi = min(off + len(patch_bytes), MARKER_OFF + len(marker_bytes))
+        if lo < hi:
+            normalized[lo:hi] = patch_bytes[lo - off:hi - off]
+    return bytes(normalized)
+
+
 def _compose_image(base_bytes, patch_ids, *, marker=None, return_log=False):
     """Compose base + patches in-process through the internal patch module.
 
@@ -2655,25 +2847,8 @@ def _compose_image(base_bytes, patch_ids, *, marker=None, return_log=False):
     try:
         patches = load_patches()
         def applied_for_target(patch):
-            if is_applied(base_bytes, patch):
-                return True
-            if marker not in ("B", "T"):
-                return False
-            # softbsl_loader owns the default B marker as one of its edits. A golden-TOP image
-            # intentionally overrides only those four bytes to T after applying the loader, so
-            # ordinary is_applied() reports a false partial. Compare every edit with the requested
-            # marker substituted at the overlap instead.
-            marker_bytes = bytes([0xA5, 0x5A, ord(marker), ord(marker) ^ 0xFF])
-            for edit in patch["edits"]:
-                off = int(edit["off"])
-                expected = bytearray(bytes.fromhex(edit["data"]))
-                lo = max(off, MARKER_OFF)
-                hi = min(off + len(expected), MARKER_OFF + len(marker_bytes))
-                if lo < hi:
-                    expected[lo - off:hi - off] = marker_bytes[lo - MARKER_OFF:hi - MARKER_OFF]
-                if bytes(base_bytes[off:off + len(expected)]) != bytes(expected):
-                    return False
-            return True
+            return is_applied(
+                _normalize_patch_marker_for_match(base_bytes, patch, marker), patch)
 
         missing = [patch_id for patch_id in patch_ids
                    if not applied_for_target(patches[patch_id])]
@@ -2736,11 +2911,14 @@ def _read_ecu_base_fast(args, log=_emit, progress_cb=None):
     log("  reading the ECU as the base via native fast stock DS2 (exact 187500 baud) ...")
     bar = (_progress_adapter(progress_cb, "base read")
            if progress_cb else _progress_bar("base read"))
-    result = read_full_d2xx(
-        args.port,
-        progress_cb=bar,
-        echo=not getattr(args, "no_echo", False),
-    )
+    read_kwargs = {
+        "progress_cb": bar,
+        "echo": not getattr(args, "no_echo", False),
+    }
+    serial_factory = getattr(args, "serial_factory", None)
+    if serial_factory is not None:
+        read_kwargs["serial_factory"] = serial_factory
+    result = read_full_d2xx(args.port, **read_kwargs)
     if bar and not progress_cb:
         _tty_newline()
     base = bytes(result.file_image)
@@ -2766,6 +2944,84 @@ def _bootstrap_verify_ranges(patch_ids):
     return ranges
 
 
+def _bootstrap_cpu_bytes(image, address, length):
+    """Return file-order image bytes as they must appear at CPU/DS2 addresses."""
+    image = bytes(image)
+    try:
+        return bytes(image[(address + offset) ^ DESCR] for offset in range(length))
+    except IndexError as error:
+        raise BootstrapVerificationError(
+            f"bootstrap range 0x{address:05X}+{length} is outside the image") from error
+
+
+def _verify_post_keycycle_bootstrap(args, probe, identity):
+    """Prove Phase 1's exact identity, marker, hook, and cave before Phase 2."""
+    try:
+        with open(args.bootstrap, "rb") as stream:
+            bootstrap = stream.read()
+    except Exception as error:
+        raise BootstrapVerificationError(
+            f"could not load the prepared Phase 1 image: {error}") from error
+    if len(bootstrap) != IMAGE_SIZE:
+        raise BootstrapVerificationError(
+            f"prepared Phase 1 image is {len(bootstrap)} B, expected {IMAGE_SIZE}")
+
+    preflight = _live_preflight(args)
+    expected_identity = (
+        bytes(preflight.get("identity", b""))
+        if preflight is not None else b""
+    )
+    if len(expected_identity) != 7:
+        raise BootstrapVerificationError(
+            "the exact seven-byte pre-Phase-1 ECU identity is unavailable")
+    actual_identity = bytes(identity)
+    if actual_identity[:7] != expected_identity:
+        raise BootstrapVerificationError(
+            "post-cycle ECU identity mismatch: received "
+            f"{actual_identity[:7].hex() or '<empty>'}, expected {expected_identity.hex()}")
+
+    try:
+        marker = bytes(probe.read_mem(0xE740, 1))
+    except Exception as error:
+        raise BootstrapVerificationError(
+            f"post-cycle E740 marker could not be read: {error}") from error
+    if marker != b"\x00":
+        raise BootstrapVerificationError(
+            "post-cycle E740 marker is not clean-normal 0x00: "
+            f"received {marker.hex() or '<empty>'}")
+
+    version = getattr(args, "target_version", None)
+    if version not in _DOOR_PATCH_IDS:
+        try:
+            version = _patch_base_version(bootstrap)
+        except Exception as error:
+            raise BootstrapVerificationError(
+                f"prepared Phase 1 image version is not supported: {error}") from error
+    door_id, _persistent_id = _door_patch_ids(version)
+    ranges = list(getattr(args, "bootstrap_verify_ranges", ()) or ())
+    if not ranges:
+        ranges = _bootstrap_verify_ranges((door_id,))
+    if not ranges:
+        raise BootstrapVerificationError(
+            f"no descriptor-derived Phase 1 ranges exist for {door_id}")
+    for address, length, label in ranges:
+        expected = _bootstrap_cpu_bytes(bootstrap, address, length)
+        try:
+            actual = bytes(probe.read_memory_range(address, length))
+        except Exception as error:
+            raise BootstrapVerificationError(
+                f"post-cycle {label} read failed @DS2 0x{address:05X}: {error}") from error
+        if actual != expected:
+            raise BootstrapVerificationError(
+                f"post-cycle {label} mismatch @DS2 0x{address:05X}: "
+                f"read {actual.hex()}, expected {expected.hex()}")
+        _emit(
+            f"Post-key-cycle Phase 1 verified: {label} "
+            f"@DS2 0x{address:05X} ({length} bytes).",
+            level="ok",
+        )
+
+
 def _patch_state(image, patch):
     """Return absent/applied/legacy/partial for one patch's exact edit bytes."""
     states = []
@@ -2778,13 +3034,20 @@ def _patch_state(image, patch):
         if isinstance(legacy, str):
             legacy = [legacy]
         legacy = [bytes.fromhex(value) for value in legacy]
-        states.append("applied" if current == applied
-                      else "legacy" if current in legacy
-                      else "absent" if current == expected
-                      else "partial")
+        if current in legacy:
+            states.append("legacy")
+        elif applied == expected and current == applied:
+            continue
+        else:
+            states.append("applied" if current == applied
+                          else "absent" if current == expected
+                          else "partial")
     if states and all(state == "applied" for state in states):
         return "applied"
-    if states and all(state in ("applied", "legacy") for state in states):
+    # A successor may add new stock-expected edits around exact predecessor
+    # spans. That recognized mix is safely upgradable, not a partial install.
+    if (states and "legacy" in states
+            and all(state in ("absent", "applied", "legacy") for state in states)):
         return "legacy"
     if states and all(state == "absent" for state in states):
         return "absent"
@@ -2906,7 +3169,8 @@ def _patch_base_version(base):
     return matches[0]
 
 
-def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False):
+def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False,
+                           marker=None):
     """Return ``(clean_base, target_patch_ids, driver_patch_ids)`` for a persistent image.
 
     This is the shared composition contract for the ordinary installer and the 29F400 golden
@@ -2944,13 +3208,39 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
     patch_defs = load_patches()
     bootstrap_door_id, persistent_door_id = _door_patch_ids(version)
     clean_base = base
+    current_guard = patch_defs["cal_guard"]
+    normalized_guard = _normalize_patch_marker_for_match(
+        clean_base, current_guard, marker)
+    guard_states = {}
+    for old_guard_id in _DEPRECATED_CAL_GUARD_IDS:
+        old_guard = patch_defs.get(old_guard_id)
+        normalized = (
+            _normalize_patch_marker_for_match(clean_base, old_guard, marker)
+            if old_guard else clean_base)
+        if old_guard:
+            guard_states[old_guard_id] = _patch_state(normalized, old_guard)
+    exact_guards = [pid for pid, state in guard_states.items() if state == "applied"]
+    if (_patch_state(normalized_guard, current_guard) != "applied"
+            and not exact_guards
+            and any(state == "partial" for state in guard_states.values())):
+        raise SoftBSLError(
+            "a deprecated CalGuard is partial/corrupt; restore its boot region "
+            "from a known-good backup before migration")
+    for old_guard_id in exact_guards:
+        old_guard = patch_defs[old_guard_id]
+        normalized = (
+            _normalize_patch_marker_for_match(clean_base, old_guard, marker)
+            if old_guard else clean_base)
+        clean_base = bytes(revert(normalized, old_guard))
     for old_loader_id in _DEPRECATED_LOADER_IDS:
         old_loader = patch_defs.get(old_loader_id)
-        if old_loader and is_applied(clean_base, old_loader):
-            # Exact installed-state matching makes this safe for both the descriptor-overlapping
-            # legacy loader and the non-triggering first relocation. Restore each revision's
-            # declared pre-patch bytes before composing the current CRC loader.
-            clean_base = bytes(revert(clean_base, old_loader))
+        normalized = (
+            _normalize_patch_marker_for_match(clean_base, old_loader, marker)
+            if old_loader else clean_base)
+        if old_loader and is_applied(normalized, old_loader):
+            # Exact installed-state matching restores each revision's declared
+            # pre-patch bytes before composing the current AIF-safe loader.
+            clean_base = bytes(revert(normalized, old_loader))
     if is_applied(clean_base, patch_defs[bootstrap_door_id]):
         clean_base = bytes(revert(clean_base, patch_defs[bootstrap_door_id]))
     patch_ids = (["softbsl_loader", persistent_door_id]
@@ -2959,12 +3249,15 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
                  + driver_patches)
     # Reinstall composition is idempotent: normalize any selected persistent patch that is
     # already present before asking the patch builder to apply it again. Unselected feature
-    # patches (for example an existing AlphaN or cal_guard when the option is not requested)
-    # remain in the target and are preserved byte-for-byte.
+    # current feature patches (for example AlphaN or CalGuard V5 when unselected)
+    # remain byte-for-byte; deprecated CalGuard revisions were normalized above.
     for patch_id in patch_ids:
         patch = patch_defs.get(patch_id)
-        if patch and is_applied(clean_base, patch):
-            clean_base = bytes(revert(clean_base, patch))
+        normalized = (
+            _normalize_patch_marker_for_match(clean_base, patch, marker)
+            if patch else clean_base)
+        if patch and is_applied(normalized, patch):
+            clean_base = bytes(revert(normalized, patch))
     return clean_base, patch_ids, driver_patches
 
 
@@ -2975,7 +3268,8 @@ def compose_persistent_image(base, chip, *, with_calguard=False, with_alphan=Fal
     recomputes its boot CRC even when every persistent patch was already present in the base.
     """
     clean_base, patch_ids, _driver_patches = _persistent_patch_plan(
-        base, chip, with_calguard=with_calguard, with_alphan=with_alphan)
+        base, chip, with_calguard=with_calguard, with_alphan=with_alphan,
+        marker=marker)
     image, build_log = _compose_image(
         clean_base, patch_ids, marker=marker, return_log=True)
     return image, patch_ids, build_log
@@ -3014,6 +3308,7 @@ def _install_resolve_images(args):
         or (factory_name == "DS2Interface" and factory_module in {
             "ds2", "engines.softbsl.ds2"
         })
+        or getattr(args, "serial_factory", None) is not None
     )
     use_fast_base = (
         live_base_needed and not dry and bool(getattr(args, "port", None))
@@ -3084,7 +3379,7 @@ def _install_resolve_images(args):
             base = bytes(base_inline)
             _emit(f"  base: cached application full read ({len(base)} B)")
         else:
-            base = open(base_src, "rb").read()
+            base = Path(base_src).read_bytes()
             _emit(f"  base: {base_src} ({len(base)} B, file)")
     else:
         _emit(f"  base: ECU read ({len(base)} B, {base_source or 'stock DS2'})")
@@ -3116,6 +3411,10 @@ def _install_resolve_images(args):
         patch_id for patch_id in _DEPRECATED_LOADER_IDS
         if patch_id in patch_defs and _patch_state(base, patch_defs[patch_id]) == "applied"
     ]
+    old_guards_installed = [
+        patch_id for patch_id in _DEPRECATED_CAL_GUARD_IDS
+        if patch_id in patch_defs and _patch_state(base, patch_defs[patch_id]) == "applied"
+    ]
     confirm_patches = list(relevant_patches)
     if old_loaders_installed:
         confirm_patches = [pid for pid in confirm_patches if pid != "softbsl_loader"]
@@ -3123,9 +3422,14 @@ def _install_resolve_images(args):
         if "softbsl_loader_relocated_v1" in old_loaders_installed:
             _emit("  non-triggering relocated loader v1 detected: migrating to the current CRC implementation")
         if "softbsl_loader_legacy" in old_loaders_installed:
-            _emit("  legacy loader @0x5D36 detected: migrating to the descriptor-safe relocated layout")
+            _emit("  legacy loader @0x5D36 detected: migrating to AIF-safe V11")
         if "softbsl_loader_v2" in old_loaders_installed:
-            _emit("  Soft-BSL V2 detected: migrating to bounds-checked V10")
+            _emit("  Soft-BSL V2 detected: migrating to AIF-safe V11")
+        if "softbsl_loader_v10" in old_loaders_installed:
+            _emit("  Soft-BSL V10 detected: relocating its AIF-overlapping main body")
+    if old_guards_installed:
+        confirm_patches.extend(old_guards_installed)
+        _emit("  AIF-overlapping CalGuard detected: relocating to the V5 layout")
     _confirm_reinstall(
         args, base, patch_defs, confirm_patches,
         bootstrap_door_id=bootstrap_door_id)
@@ -3244,12 +3548,16 @@ def _install_keycycle(args):
     while True:
         probe = None
         readiness_error = None
+        verification_error = None
         try:
             _emit("Confirming that the ECU rebooted into normal 9600-baud DS2 before Phase 2 ...")
             probe = _open(args)
             identity = probe.identify()
             if not identity:
                 raise SoftBSLError("stock DS2 identify returned an empty response")
+            _verify_post_keycycle_bootstrap(args, probe, identity)
+        except BootstrapVerificationError as error:
+            verification_error = error
         except Exception as error:
             readiness_error = error
         finally:
@@ -3257,13 +3565,27 @@ def _install_keycycle(args):
                 try:
                     probe.close()
                 except Exception as close_error:
-                    readiness_error = SoftBSLError(
-                        f"post-key-cycle DS2 probe could not release the serial port: {close_error}"
-                    )
+                    if verification_error is None:
+                        readiness_error = SoftBSLError(
+                            "post-key-cycle DS2 probe could not release the serial port: "
+                            f"{close_error}"
+                        )
                     _emit(
                         f"Post-key-cycle DS2 probe cleanup failed: {close_error}",
                         level="error",
                     )
+        if verification_error is not None:
+            _emit(
+                "Post-key-cycle Phase 1 verification failed; Phase 2 remains untouched: "
+                f"{verification_error}",
+                level="error",
+            )
+            raise InstallCancelled(
+                "installation stopped safely after Phase 1 because the post-cycle "
+                f"identity/marker/entry-byte check failed ({verification_error}); "
+                "Phase 2 erase was not started",
+                phase="pre_phase2",
+            ) from verification_error
         if readiness_error is not None:
             detail = (
                 "The ECU did not answer normal 9600-baud DS2 after the required ignition "
@@ -3289,7 +3611,11 @@ def _install_keycycle(args):
                     phase="post_phase1",
                 ) from readiness_error
             continue
-        _emit("Post-key-cycle stock DS2 readiness confirmed; Phase 2 may begin.", level="ok")
+        _emit(
+            "Post-key-cycle stock DS2 identity, E740=0, and Phase 1 entry bytes "
+            "confirmed; Phase 2 may begin.",
+            level="ok",
+        )
         return
 
 
@@ -3331,7 +3657,35 @@ def _finish_install(args, target):
 
 def _continue_install_after_bootstrap(args, target, flash_over):
     _install_keycycle(args)
-    _run_install_target_phase(args, target, flash_over)
+    while True:
+        try:
+            _run_install_target_phase(args, target, flash_over)
+            break
+        except AgentLinkPreEraseFailure as error:
+            message = (
+                "Phase 2 could not establish the RAM-agent link before any "
+                f"persistent-target erase ({error}).\n\n"
+                "The temporary 0x43 entry path remains installed. Its first "
+                "trigger result is ambiguous, so retry requires an ignition "
+                "cycle before Phase 2 is attempted again. Phase 1 is not rerun. "
+                "Cancel stops safely before Phase 2 erase."
+            )
+            _emit(message, level="warn")
+            retry_prompt = getattr(args, "keycycle_retry_prompt", None)
+            retry = (
+                bool(retry_prompt(message))
+                if retry_prompt is not None
+                else input("\n  Phase 2 entry failed. Type R to retry or C to cancel: ")
+                .strip().lower() in ("r", "retry")
+            )
+            if not retry:
+                raise InstallCancelled(
+                    "installation stopped safely after Phase 1; Phase 2 erase "
+                    "was not started. Complete an ignition cycle before any "
+                    "later USB operation",
+                    phase="pre_phase2",
+                ) from error
+            _install_keycycle(args)
     _finish_install(args, target)
 
 
@@ -3403,12 +3757,12 @@ def cmd_install(args):
     IMAGES: pass NO target/bootstrap to COMPOSE them at runtime from patches (base = --base file, else read
     the ECU over stock DS2) -- so no firmware .bin ships. Or pass explicit target + --bootstrap files (legacy)."""
     _install_resolve_images(args)                    # compose bootstrap+target from patches unless files were given
-    target = open(args.target, "rb").read()
+    target = Path(args.target).read_bytes()
     if len(target) != IMAGE_SIZE:
         raise SoftBSLError(f"target is {len(target)} B, expected {IMAGE_SIZE} (256 KB)")
     target_version = _patch_base_version(target)
     args.target_version = target_version
-    bootstrap = open(args.bootstrap, "rb").read()
+    bootstrap = Path(args.bootstrap).read_bytes()
     if len(bootstrap) != IMAGE_SIZE:
         raise SoftBSLError(f"bootstrap image is not {IMAGE_SIZE} B")
     _emit("== persistent Soft-BSL install ==")
@@ -3721,7 +4075,7 @@ def main():
                          "5a=SA1 bootloader (flash-mode), 9c=legacy param1 stub")
     ap.add_argument(
         "--boot-recovery", action="store_true",
-        help="CalGuard V4 boot recovery: start with ignition OFF, pre-arm raw 5A/9C/9C, "
+        help="CalGuard V5 boot recovery: start with ignition OFF, pre-arm raw 5A/9C/9C, "
              "then turn ignition ON; requires --trigger 5a")
     ap.add_argument("--no-echo", action="store_true", help="adapter suppresses the half-duplex echo")
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -3793,7 +4147,8 @@ def main():
     pin.add_argument("--with-calguard", action="store_true",
                      help="compose mode: add the cal_guard no-brick version gate to the target (recommended).")
     pin.add_argument("--with-alphan", action="store_true",
-                     help="compose mode: add the UNTESTED alphan_failsafe MAF fallback (MS41.3 only)")
+                     help="compose mode: add the emulator-verified, on-car-untested "
+                          "alphan_failsafe MAF fallback (MS41.3 only)")
     pin.add_argument("--dry-run", action="store_true", help="plan both phases, no serial I/O / no key-cycles "
                                                             "(compose mode needs --base + --chip for a dry-run)")
     pin.add_argument("--force", action="store_true", help="flash even if target/base checksums look invalid")

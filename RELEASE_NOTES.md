@@ -1,80 +1,58 @@
 # BimmerStein ECU Tool Release Notes
 
-## 0.1.0 Beta 13
+## 0.1.0 Beta 14
 
-Beta 13 introduces a complete EEPROM service and recovery workspace for every
-supported MS41 variant. It also improves DS2 fallback, diagnostics, recovery,
-and offline file handling. It intentionally retains the Ignition Cut and
-Launch Control revisions distributed in Beta 12; newer experimental revisions
-are not included.
+Beta 14 adds human-readable vehicle diagnostics and coding, improves ECU
+identity reporting, and hardens recovery and flashing workflows. The packaged
+Ignition Cut and Launch Control payloads remain frozen to the exact Beta 13
+versions while newer development revisions are investigated.
 
 **OFF-ROAD, COMPETITION, RESEARCH, AND BENCH USE ONLY.** Do not use this software
 to modify a vehicle operated on public roads. The user is responsible for
 compliance with applicable emissions, safety, registration, and other laws.
 
-### Highlights
+### Changes
 
-- **Complete EEPROM workspace:** read, inspect, edit, archive, and write full
-  512-byte EEPROM images through either the ECU Agent or a CH341A programmer on
-  MS41.0, MS41.1, MS41.2, and MS41.3.
-- **Seed ECU Recovery:** recover stock DS2 access on some locked or apparently
-  bricked ECUs when their boot code and stock listener are still intact. This
-  does not repair damaged flash or bypass a missing listener.
-- **Exact recovery safeguards:** each write requires an immutable full
-  before-image, performs a full-device readback, and can restore the exact
-  bytes captured before seeding with **Restore Pre-Seed State**.
-
-### Technical fixes and additions
-
-- Corrected regular-DS2 write fallback so an eligible native-fast startup
-  failure retries at 9600 baud instead of ending the operation immediately.
-- Accepted the two-byte empty DTC response (`00 00`) returned by some ECUs.
-- Added MS41 EEPROM layout detection with an optional manual override. CH341A
-  reads no longer require a layout selection, and unreadable ECU identifiers
-  are sanitized before automatic Windows filenames are created.
-- Added CH341A full-image read, guarded write, seed/recovery, exact readback,
-  and restore workflows with saved-before-image requirements.
-- Updated the persistent Soft-BSL loader to V10 with stricter dispatcher-hook
-  and RAM-agent length validation.
-- Hardened Soft-BSL Phase 1 startup, serial connection ownership, cleanup, and
-  recovery handoff. A connection-matched full ECU read from Patches can be
-  reused instead of repeating the read.
-- Enforced installed patch dependencies and blocked removal of loaders still
-  required by installed patches. A selected full-ROM Bin can now be opened
-  directly in Patches.
-- Added read-only comparison of two Bins, including SHA-256 replacement
-  detection, program/calibration and checksum details, installed patch
-  inventory, and changed-byte ranges.
-- Restored AlphaN MAF-failsafe V2 with its historical A14-XOR transfer error
-  corrected, and added the checksum-correct MS41.0 VANOS minimum-RPM V2
-  migration.
-- Added packaged build information and privacy-scoped support export. Raw ROMs
-  are excluded, and session logs require explicit privacy consent.
-- Retained the Beta 12 patch set and matching definitions exactly: Ignition Cut
-  V7 for MS41.0 through MS41.3; Launch Control V4 for MS41.0 through MS41.2;
-  and Launch Control V5 for MS41.3.
+- Added a Diagnostics tab that discovers the supported engine, transmission,
+  immobilizer, ABS/traction-control, climate-control, and cruise-control
+  modules over K-line, with exact-profile fault reading and clearing where
+  supported.
+- Added a human-readable Coding tab for reviewed GM3 window, lock, and memory
+  settings plus exact E46 driver-seat memory settings. Everyday controls are
+  shown first; technical references remain behind the Advanced switch.
+- Added a read-only transmission-swap compatibility summary. One-click
+  conversion remains unavailable until every required vehicle-order and module
+  writer is exact and self-contained.
+- Expanded ECU Info with programming history, program lineage, firmware-aware
+  transmission state, and clearer identity fields.
+- Added advisory battery-voltage checks before writes. Low or unavailable
+  voltage warns the user but does not enforce a programming block.
+- Relocated Soft-BSL V11 and CalGuard V5 outside the complete programming-history
+  area, with exact migration from V10/V4. Both require renewed bench testing.
+- Replaced AlphaN MAF-failsafe V2 with V3, correcting its fallback load path and
+  preserving diagnostic reason information. Physical validation is still
+  required.
+- Kept the exact packaged Beta 13 Ignition Cut V9 and Launch Control V7
+  descriptors in both Windows builds; newer development bytes are excluded.
 
 ### Validation status
 
-- Soft-BSL loader V10 and the MS41.2/MS41.3 DS2 `0x2A` entry patch:
-  **TESTED**.
-- CalGuard V4: **BENCH PROVEN**.
-- Ignition Cut V7: **VEHICLE TEST REQUIRED**.
-- Launch Control V4 on MS41.0/MS41.1: **VEHICLE TEST REQUIRED**.
-- Launch Control V4 on MS41.2 and Launch Control V5 on MS41.3:
-  **VEHICLE RETEST REQUIRED**.
-- AlphaN MAF-failsafe V2: **UNTESTED** for physical/on-car behavior.
-- EEPROM writes and Seed ECU Recovery: **EXPERIMENTAL - NOT YET VALIDATED
-  ACROSS EVERY SUPPORTED ECU/PROGRAMMER COMBINATION**.
+- The frozen Ignition Cut V9 and Launch Control V7 payloads remain experimental,
+  retain their Beta 13 offline verification status, and still require on-car testing.
+- Soft-BSL V11, CalGuard V5, and AlphaN MAF-failsafe V3 passed exact firmware
+  execution checks; renewed physical testing is required.
+- Vehicle diagnostics and coding are restricted to reviewed exact profiles;
+  unknown module revisions remain read-only.
 
-**IGNITION CUT HAZARD:** Ignition Cut V7 is highly experimental and extremely
-aggressive. It can cause fuel-related, misfire, and coil-related DTCs and
-fuel-trim issues. Never use it on a vehicle with catalytic converters;
-unburned fuel can destroy them.
+**IGNITION CUT HAZARD:** Ignition Cut V9 may suppress spark while injection
+continues at the stock or configured fixed pulse width. Unburned fuel can
+damage catalytic converters and exhaust components; never use it on a car with
+catalytic converters. Offline validation does not establish safe behavior on
+an engine.
 
 ### Distribution status
 
-Version `0.1.0b13` is distributed under GNU GPL version 3 (`GPL-3.0-only`) using
+Version `0.1.0b14` is prepared under GNU GPL version 3 (`GPL-3.0-only`) using
 the GPLv3 PyQt5 distribution path. PyInstaller and Nuitka Windows x64 builds are
 supplied as per-user installers and portable ZIPs, with
 `BimmerStein MS41 Patch Definitions.xml` beside the executable, release

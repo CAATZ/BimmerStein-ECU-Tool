@@ -4,7 +4,8 @@ import pytest
 
 import ds2_native_fast_service as service
 import ds2_native_fast_reentry as native_reentry
-from ds2_fast_contracts import FastOperation, SessionState
+from ds2_fast_contracts import FastOperation, LinkRate, SessionState
+from ds2_fast_partial_write import PartialWriteCancelled
 
 
 @pytest.fixture(autouse=True)
@@ -65,8 +66,11 @@ def test_partial_service_uses_slim_session_without_backup_and_passes_verify(
     captured = {}
     sentinel = object()
     monkeypatch.setattr(service, "_new_journal", lambda port, operation: journal)
-    def open_transport(port, event_cb=None):
+    injected_factory = object()
+
+    def open_transport(port, event_cb=None, serial_factory=None):
         captured["event_cb"] = event_cb
+        captured["serial_factory"] = serial_factory
         return transport
 
     monkeypatch.setattr(
@@ -97,12 +101,24 @@ def test_partial_service_uses_slim_session_without_backup_and_passes_verify(
         "COM1",
         b"target",
         verify_write=True,
+        expected_ecu_id="1406464",
+        expected_program_compatibility_id="0660",
+        expected_coding_family="606",
+        expected_program_signature_hex="a5a5a5a5",
+        expected_driver_signature_hex="e00e0d58f04ec084",
         event_cb=lambda event, fields: observed.append((event, dict(fields))),
+        serial_factory=injected_factory,
     )
 
     assert result is sentinel
     assert captured["target"] == b"target"
     assert captured["kwargs"]["verify_write"] is True
+    assert captured["kwargs"]["expected_ecu_id"] == "1406464"
+    assert captured["kwargs"]["expected_program_compatibility_id"] == "0660"
+    assert captured["kwargs"]["expected_coding_family"] == "606"
+    assert captured["kwargs"]["expected_program_signature_hex"] == "a5a5a5a5"
+    assert captured["kwargs"]["expected_driver_signature_hex"] == "e00e0d58f04ec084"
+    assert captured["serial_factory"] is injected_factory
     assert captured["kwargs"]["reentry_required"] is False
     assert journal.events == observed == [
         (
@@ -144,6 +160,122 @@ def test_partial_service_consumes_pending_same_port_reentry(monkeypatch, tmp_pat
     assert service.write_partial_d2xx("com1", b"target") is sentinel
     assert not native_reentry.reentry_required("COM1")
     assert not transport.is_open
+
+
+def test_write_entry_qualification_returns_only_after_proven_low_cleanup(
+    monkeypatch, tmp_path
+):
+    journal = FakeJournal(
+        tmp_path / "write-entry-qualification.jsonl",
+        FastOperation.PARTIAL_WRITE,
+    )
+    transport = FakeTransport()
+    captured = {}
+    monkeypatch.setattr(service, "_new_journal", lambda port, operation: journal)
+
+    def open_transport(port, **kwargs):
+        captured["open"] = kwargs
+        return transport
+
+    monkeypatch.setattr(
+        service.NativeFastPartialWriteTransport,
+        "open_d2xx",
+        open_transport,
+    )
+
+    class QualificationSession:
+        destructive_started = False
+        cleanup_attempted = True
+        safe_legacy_fallback = True
+        link = LinkRate.LOW
+        state = SessionState.LOW_READY
+        identity = b"SHINDE1" + b" " * 35
+        write_authorized = True
+        authorization_may_be_active = True
+        authorization_state_requires_cycle = False
+        fast_write_armed = True
+
+        def __init__(self, _transport, target, _journal, **kwargs):
+            captured["target"] = target
+            captured["session"] = kwargs
+
+        def execute(self):
+            assert captured["session"]["cancel_cb"]() is True
+            journal.finish(
+                "aborted",
+                destructive_started=False,
+                safe_legacy_fallback=True,
+            )
+            raise PartialWriteCancelled("cancelled at before_tune_erase")
+
+    monkeypatch.setattr(
+        service, "SlimNativeFastPartialWriteSession", QualificationSession
+    )
+
+    result = service.qualify_partial_write_entry_d2xx(
+        "COM1",
+        expected_ecu_id="SHINDE1",
+        serial_factory=object(),
+    )
+
+    assert captured["open"]["flash_enabled"] is False
+    assert captured["target"] == b"\xFF" * (24 * 1024)
+    assert captured["session"]["expected_ecu_id"] == "SHINDE1"
+    assert result.identity[:7] == b"SHINDE1"
+    assert result.final_link is LinkRate.LOW
+    assert result.final_state is SessionState.LOW_READY
+    assert result.cleanup_confirmed is True
+    assert result.destructive_started is False
+    assert result.power_cycle_required is True
+    assert transport.is_open is False
+
+
+def test_write_entry_qualification_failure_after_authorization_requires_cycle(
+    monkeypatch, tmp_path
+):
+    journal = FakeJournal(
+        tmp_path / "write-entry-failure.jsonl",
+        FastOperation.PARTIAL_WRITE,
+    )
+    transport = FakeTransport()
+    monkeypatch.setattr(service, "_new_journal", lambda port, operation: journal)
+    monkeypatch.setattr(
+        service.NativeFastPartialWriteTransport,
+        "open_d2xx",
+        lambda port, **kwargs: transport,
+    )
+
+    class FailedQualificationSession:
+        destructive_started = False
+        cleanup_attempted = False
+        safe_legacy_fallback = False
+        link = LinkRate.UNKNOWN
+        state = SessionState.POWER_CYCLE_REQUIRED
+        write_authorized = True
+        authorization_may_be_active = True
+        authorization_state_requires_cycle = False
+        fast_write_armed = False
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def execute(self):
+            journal.finish("failed", destructive_started=False)
+            raise RuntimeError("cleanup identity unavailable")
+
+    monkeypatch.setattr(
+        service,
+        "SlimNativeFastPartialWriteSession",
+        FailedQualificationSession,
+    )
+
+    with pytest.raises(service.NativeFastPreEraseFailure) as caught:
+        service.qualify_partial_write_entry_d2xx(
+            "COM1", expected_ecu_id="SHINDE1"
+        )
+
+    assert caught.value.power_cycle_required is True
+    assert transport.is_open is False
 
 
 def test_transport_open_failure_still_seals_journal(monkeypatch, tmp_path):
@@ -198,12 +330,19 @@ def test_full_service_uses_slim_session_and_verify_is_optional(monkeypatch, tmp_
         connected_family="amd",
         verify_write=False,
         variant_conversion=True,
+        expected_ecu_id="SHINDE1",
+        expected_program_compatibility_id="0912",
+        expected_coding_family="909",
+        expected_program_signature_hex="01020304",
+        expected_driver_signature_hex="e00e0d58f04ec084",
     )
 
     assert result is sentinel
     assert captured["kwargs"]["connected_family"] == "amd"
     assert captured["kwargs"]["verify_write"] is False
     assert captured["kwargs"]["variant_conversion"] is True
+    assert captured["kwargs"]["expected_ecu_id"] == "SHINDE1"
+    assert captured["kwargs"]["expected_driver_signature_hex"] == "e00e0d58f04ec084"
     assert not transport.is_open
 
 
@@ -393,8 +532,12 @@ def test_failed_retained_recovery_keeps_transport_and_seals_new_journal(
     class FailingSession:
         progress_cb = None
         journal = None
+        can_recover_in_place = True
+        recovery_calls = 0
 
         def recover_in_place(self):
+            self.recovery_calls += 1
+            self.can_recover_in_place = False
             raise RuntimeError("link still noisy")
 
     session = FailingSession()
@@ -412,10 +555,68 @@ def test_failed_retained_recovery_keeps_transport_and_seals_new_journal(
         service.resume_recovery(recovery)
 
     assert raised.value.recovery is recovery
+    assert "automatic retained replay is disabled" in str(raised.value)
+    assert "KEEP ECU POWER ON" in str(raised.value)
+    assert recovery.retry_supported is False
+    assert recovery.power_cycle_required is False
     assert transport.is_open
     assert journal.closed
     assert journal.outcome == "commit_unknown"
     assert journal.fields["transport_retained"] is True
+    with pytest.raises(service.NativeFastServiceError, match="same-session replay"):
+        service.resume_recovery(recovery)
+    assert session.recovery_calls == 1
+
+
+def test_recovery_without_explicit_capability_fails_closed_before_opening_journal(
+    monkeypatch, tmp_path
+):
+    transport = FakeTransport()
+
+    class UnknownSession:
+        def recover_in_place(self):
+            raise AssertionError("unqualified recovery must not be attempted")
+
+    recovery = service.NativeWriteRecovery(
+        port="COM1",
+        transport=transport,
+        session=UnknownSession(),
+        target=b"immutable",
+        journal_path=tmp_path / "old.jsonl",
+        error=RuntimeError("first failure"),
+    )
+    monkeypatch.setattr(
+        service,
+        "_new_journal",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("recovery journal must not be opened")
+        ),
+    )
+
+    assert recovery.retry_supported is False
+    with pytest.raises(service.NativeFastServiceError, match="same-session replay"):
+        service.resume_recovery(recovery)
+    assert transport.is_open is True
+
+
+def test_a2_refusal_exposes_only_controlled_power_cycle_handoff(tmp_path):
+    class A2RefusedSession:
+        can_recover_in_place = False
+        state = SessionState.POWER_CYCLE_REQUIRED
+
+    recovery = service.NativeWriteRecovery(
+        port="COM1",
+        transport=FakeTransport(),
+        session=A2RefusedSession(),
+        target=b"immutable",
+        journal_path=tmp_path / "a2.jsonl",
+        error=RuntimeError("erase returned A2"),
+    )
+    error = service.NativeWriteRecoveryRequired(recovery)
+
+    assert recovery.retry_supported is False
+    assert recovery.power_cycle_required is True
+    assert "controlled recovery power-cycle" in str(error)
 
 
 def test_finalizer_failure_recovery_refuses_replay_before_opening_journal(
@@ -460,6 +661,7 @@ def test_successful_retained_recovery_closes_transport(monkeypatch, tmp_path):
     class SuccessfulSession:
         progress_cb = None
         journal = None
+        can_recover_in_place = True
 
         def recover_in_place(self):
             self.journal.finish("power_cycle_required", recovery=True)

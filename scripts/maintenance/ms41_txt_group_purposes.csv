@@ -1,0 +1,253 @@
+index,english_purpose
+1,Cold-start pre-injection time
+2,Upper engine-speed limit during starting
+3,Stationary injection-start angle during starting
+4,Cold-start injection time
+5,Cold-start injection reduction factor
+6,Repeat-start correction
+7,Cold post-start injection-time correction
+8,Cold post-start reduction factor
+9,Warm-up injection-time correction
+10,Coolant-temperature weighting for warm-up correction
+11,Active duration of catalyst-heating fuel correction
+12,Catalyst-heating injection-time correction
+13,Base catalyst-heating fuel factor
+14,Coolant-temperature weighting for catalyst-heating fuel correction
+15,Coolant-temperature weighting for catalyst-heating fuel correction at idle
+16,Repeat-start factor for post-start injection correction
+17,Starting and post-start constants
+18,Base injection time
+19,VANOS-dependent injection-time deviation
+20,Stationary injection-start angle
+21,VANOS-dependent injection-start angle correction
+22,Coolant-temperature correction for injection-start angle
+23,Injector dead-time correction
+24,Throttle angle used to detect full load
+25,Full-load injection-time correction
+26,Enleanment for the catalyst variant
+27,Coolant-temperature weighting of catalyst-variant warm-up enleanment
+28,Base and full-load fuel constants
+29,Injection-time correction from the idle-speed controller
+30,Idle fuel constants
+31,Throttle-gradient detection for acceleration enrichment
+32,Coolant-temperature correction of the acceleration throttle-gradient threshold
+33,Throttle-tip-in injection correction
+34,Load weighting for throttle-tip-in correction
+35,Duration of throttle-tip-in enrichment in engine cycles
+36,Acceleration injection-time correction
+37,Wall-film injection correction during acceleration
+38,Duration of acceleration enrichment in engine cycles
+39,Decay of acceleration enrichment below the coolant-temperature split
+40,Decay of acceleration enrichment above the coolant-temperature split
+41,Transient injection-end angle
+42,Throttle-gradient detection for deceleration enleanment
+43,Coolant-temperature correction of the deceleration throttle-gradient threshold
+44,Injection-time correction during deceleration
+45,Wall-film injection correction during deceleration
+46,Duration of deceleration enleanment in engine cycles
+47,Decay of deceleration injection correction
+48,Engine-speed threshold for fuel restoration
+49,Engine-speed threshold for fuel restoration with air-conditioning load
+50,Acceleration deceleration and fuel-restoration constants
+51,Fuel-restoration injection correction at idle and overrun
+52,Fuel-restoration injection correction at part load
+53,Fuel-restoration injection correction after acceleration
+54,Injection correction during engine-speed catch
+55,Fuel-restoration constants
+56,Front oxygen-sensor heater feed-forward command
+57,Oxygen-sensor heater change-rate limiting
+58,Post-start oxygen-sensor heater reduction duration
+59,Post-start oxygen-sensor heater reduction decrement
+60,Oxygen-sensor heater controller response
+61,Minimum temperature for closed-loop lambda control
+62,Minimum temperature for closed-loop lambda control at idle
+63,Proportional and integral maps for the lambda controller
+64,Factor that slows lambda control during overrun
+65,Oxygen-sensor heater change-rate limiting during fuel restoration
+66,Oxygen-sensor heater and lambda-controller constants
+67,Weighting for multiplicative lambda adaptation
+68,Weighting for additive lambda adaptation
+69,Lambda-adaptation constants
+70,Air-mass threshold for catalyst-protection activation
+71,Catalyst-protection injection correction by engine speed and load
+72,Catalyst-protection injection correction by ignition angle
+73,Catalyst-protection constants
+74,Ignition timing during starting
+75,Coolant-temperature ignition correction during starting
+76,Coil charge time for follow-up sparks
+77,Ignition limit against post-start engine-speed overshoot
+78,Starting and post-start ignition constants
+79,Base ignition timing maps
+80,VANOS ignition-timing correction
+81,Coolant and intake-temperature ignition correction by engine speed and load
+82,Coolant and intake-temperature weighting of ignition correction
+83,Active duration of catalyst-heating ignition correction
+84,Catalyst-heating ignition timing maps
+85,Temperature correction for manual-transmission catalyst-heating ignition
+86,Temperature correction for automatic-transmission catalyst-heating ignition
+87,Ignition timing used for spark-plug cleaning
+88,Normal coil charge time
+89,Target ignition-current value
+90,Base part-load and full-load ignition constants
+91,Idle ignition timing
+92,Coolant-temperature correction for idle ignition timing
+93,Idle-speed-error ignition correction
+94,Temperature correction for catalyst-heating ignition at idle
+95,Catalyst-heating ignition timing at idle
+96,Temperature weighting of idle ignition correction
+97,Active duration of catalyst-heating phase 2
+98,Catalyst-heating phase-2 ignition timing
+99,Temperature weighting of catalyst-heating phase-2 ignition timing
+100,Idle and catalyst-heating ignition constants
+101,Ignition correction during overrun
+102,Ignition correction during overrun fuel cut
+103,Ignition correction during fuel restoration with air-conditioning load
+104,Ignition change-rate limiting during overrun by engine speed and load
+105,Coolant-temperature ignition change-rate limiting during overrun
+106,Filtered-load threshold for rapid overrun retard
+107,Maximum ignition correction during overrun fuel cut
+108,Throttle-dynamic detection for transient ignition intervention
+109,Transient ignition correction by engine speed and load
+110,Intake-temperature weighting of transient ignition correction
+111,Duration of transient ignition correction
+112,Overrun fuel-cut and transient-ignition constants
+113,Ignition change-rate limiting during idle-speed catch
+114,Ignition correction during part-load fuel restoration
+115,Ignition change-rate limiting during part-load fuel restoration
+116,Advance angle used during engine-speed catch
+117,Part-load fuel-restoration constants
+118,Knock-signal gain
+119,Target knock-noise value
+120,Knock-control operating boundary
+121,Knock-retard step magnitude for intensity 1
+122,Knock-retard step magnitude for intensity 2
+123,Stationary knock-retard recovery step
+124,Knock-control failsafe ignition timing
+125,Coolant-temperature weighting of knock failsafe timing
+126,Engine-speed-gradient threshold for dynamic knock detection
+127,Duration of dynamic knock handling
+128,Knock-signal additive correction
+129,Knock-signal factor for cylinder 1
+130,Knock-signal factor for cylinder 2
+131,Knock-signal factor for cylinder 3
+132,Knock-signal factor for cylinder 4
+133,Knock-signal factor for cylinder 5
+134,Knock-signal factor for cylinder 6
+135,Knock-window start angle for cylinder 1
+136,Knock-window start angle for cylinder 2
+137,Knock-window start angle for cylinder 3
+138,Knock-window start angle for cylinder 4
+139,Knock-window start angle for cylinder 5
+140,Knock-window start angle for cylinder 6
+141,Knock-window end angle for cylinder 1
+142,Knock-window end angle for cylinder 2
+143,Knock-window end angle for cylinder 3
+144,Knock-window end angle for cylinder 4
+145,Knock-window end angle for cylinder 5
+146,Knock-window end angle for cylinder 6
+147,Knock-adaptation range 1 for cylinder 1
+148,Knock-adaptation range 1 for cylinder 2
+149,Knock-adaptation range 1 for cylinder 3
+150,Knock-adaptation range 1 for cylinder 4
+151,Knock-adaptation range 1 for cylinder 5
+152,Knock-adaptation range 1 for cylinder 6
+153,Load threshold for knock-adaptation range 1
+154,Throttle-dynamic detection for knock control
+155,Duration of the transient knock factor
+156,Knock control and knock-adaptation constants
+157,Idle-air start correction
+158,Idle-air feed-forward correction for throttle leakage
+159,Base idle-air feed-forward map
+160,Base idle-air feed-forward map during catalyst heating
+161,Idle-air dashpot map
+162,Idle-air change-rate limiting
+163,Coolant-temperature idle-air correction without accessory load
+164,Idle-air correction with drive-range load active
+165,Coolant-temperature idle-air correction with air-conditioning load
+166,Coolant-temperature idle-air correction with drive-range and air-conditioning load
+167,Idle-air ramp limits when drive-range load switches on or off
+168,Idle-air correction for an elevated target idle speed
+169,Base air-conditioning load feed-forward command
+170,Air-conditioning load-stage weighting
+171,Transient idle-air correction when the air-conditioning compressor engages
+172,Increment of the air-conditioning load ramp factor
+173,Idle-air correction for catalyst heating at idle
+174,Idle-air correction for catalyst-heating phase-2 target-speed increase
+175,Idle-air correction for VANOS intervention during catalyst-heating phase 2
+176,Idle-air correction for ignition intervention during catalyst-heating phase 2
+177,Base idle-air map for weak load-dynamics intervention
+178,Base idle-air map for strong load-dynamics intervention
+179,Idle-air correction for serial target-idle adjustment
+180,Coolant-temperature weighting of serial target-idle feed-forward correction
+181,Intake-air-temperature correction for idle-air feed-forward
+182,Idle-air actuator characteristic linearization
+183,Battery-voltage correction for the idle-air actuator
+184,Idle-air feed-forward and deceleration constants
+185,Initial integral term for the idle-speed controller
+186,Proportional term of the idle-speed controller
+187,Positive and negative integral terms of the idle-speed controller
+188,Derivative term of the idle-speed controller
+189,Coolant-temperature correction of the idle-speed controller
+190,Target idle speed
+191,Catalyst-heating phase-2 target-idle increase
+192,Change-rate limit for catalyst-heating target-idle increase
+193,Coolant-temperature weighting of programmed target-idle adjustment
+194,Minimum target idle speed by battery voltage
+195,Idle-speed-control constants
+196,Initial values for idle-air adaptation
+197,Idle cycles required before idle adaptation is enabled
+198,Maximum load at which idle-air adaptation is permitted
+199,Idle-air actuator adaptation constants
+200,Canister-purge valve feed-forward duty maps
+201,Canister-purge valve duty ramp maps
+202,Load threshold for altitude correction of purge-valve duty
+203,Lambda-controller setpoint during canister purge
+204,Battery-voltage correction for the canister-purge valve
+205,Change-rate limit for the purge lambda-controller setpoint
+206,Canister-purge valve characteristic correction
+207,Canister-purge control constants
+208,Engine-cycle spacing for cylinder cut
+209,Engine-speed and vehicle-speed limiter constants
+210,Maximum torque-reduction factor
+211,Latest allowed ignition angle during torque reduction
+212,Torque-reduction factor linearization
+213,Ignition-correction linearization for torque reduction
+214,ASC traction-control ignition correction
+215,Torque-reduction constants
+216,Filter factors for air-mass correction
+217,Filter factors for air-mass correction during deceleration
+218,Filter factors for air-mass correction during overrun and fuel cut
+219,Coolant-temperature threshold for VANOS lockout
+220,VANOS switching load threshold for manual-transmission vehicles
+221,VANOS switching load threshold for automatic-transmission vehicles
+222,Load hysteresis for VANOS switching
+223,Throttle threshold for high-load VANOS state
+224,VANOS state at high load
+225,VANOS state during catalyst-heating phase 2
+226,Throttle threshold for the exhaust flap
+227,Air mass for zero engine torque
+228,Air-conditioning compressor switch-on delay
+229,Air-conditioning compressor switch-off delay
+230,Thresholds for active torque reduction
+231,Thresholds for entering and leaving torque reduction
+232,Ignition timing during torque reduction
+233,Ignition change-rate limit while torque reduction is active
+234,Ignition change-rate limit after torque reduction
+235,Coolant-temperature conversion for the displayed engine temperature
+236,Initial air-mass value at first idle entry
+237,Mass-airflow sensor transfer curve
+238,Intake-air-temperature sensor transfer curve
+239,Coolant-temperature sensor transfer curve
+240,Supplementary-function constants
+241,Substitute air mass when no throttle fault is present
+242,Substitute air mass when a throttle fault is present
+243,Substitute throttle value during throttle diagnosis failure
+244,Throttle-weighted substitute air mass for idle-air actuator failure
+245,Idle-air-actuator-based substitute air mass
+246,Intake-air-temperature correction for substitute air mass
+247,Maximum engine speed with an idle-air actuator fault and no throttle fault
+248,Minimum spark burn duration
+249,Coolant-temperature substitute-value increment during a coolant-sensor fault
+250,Idle reference value for the LU diagnostic monitor
+251,Coolant-temperature correction of the idle LU diagnostic reference
+252,Diagnostic thresholds counters delays and substitute-value constants

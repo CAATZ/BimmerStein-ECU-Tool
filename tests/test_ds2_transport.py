@@ -378,6 +378,54 @@ def test_wire_decoded_a1_preserves_command_status_and_payload_context():
     assert caught.value.response == bytes.fromhex("12 05 A1 7E C8")
 
 
+def test_factory_battery_voltage_telegram_decodes_big_endian(monkeypatch):
+    d = DS2Interface("COM1")
+    calls = []
+    monkeypatch.setattr(
+        d, "execute",
+        lambda command, args=b"":
+        (calls.append((command, bytes(args))), b"\x00\x7B")[1],
+    )
+
+    assert d.read_battery_voltage() == pytest.approx(12.423)
+    assert calls == [(ds2.DS2Commands.TELEGRAM, b"\x02\x0E\x00\x00\x07")]
+    assert d._command_frame(*calls[0]) == bytes.fromhex(
+        "12 09 0B 02 0E 00 00 07 1B")
+
+    monkeypatch.setattr(d, "execute", lambda *_args, **_kwargs: b"\x7B")
+    with pytest.raises(ds2.DS2Error, match="payload length 1"):
+        d.read_battery_voltage()
+
+
+def test_send_frame_rejects_short_tx_and_impossible_reply(monkeypatch):
+    class Serial:
+        is_open = True
+
+        def __init__(self, written):
+            self.written = written
+
+        def reset_input_buffer(self):
+            pass
+
+        def write(self, _frame):
+            return self.written
+
+        def flush(self):
+            pass
+
+    d = DS2Interface("COM1")
+    frame = bytes.fromhex("44 04 00 40")
+    d._ser = Serial(3)
+    with pytest.raises(ds2.DS2Error, match="short write"):
+        d.send_frame(frame, 0x44)
+
+    d._ser = Serial(4)
+    monkeypatch.setattr(d, "_discard_echo", lambda _frame: None)
+    monkeypatch.setattr(d, "_read_exact", lambda *_args: bytes.fromhex("44 03"))
+    with pytest.raises(ds2.DS2Error, match="implausible response length 3"):
+        d.send_frame(frame, 0x44)
+
+
 class _FakeReadSerial:
     """Answers every READ_MEM (0x06) execute() with a valid zero-filled response.
     Enough to drive read_full/read_memory_range end-to-end without real I/O."""
@@ -443,6 +491,53 @@ def test_open_prefers_d2xx_when_available(monkeypatch):
     assert calls and calls[0][0] == "d2xx"
     assert d._ser.__class__ is FakeD2XX
     assert d.uses_d2xx is True
+
+
+def test_injected_serial_factory_bypasses_desktop_backends(monkeypatch):
+    calls = []
+
+    class InjectedSerial:
+        transport_name = "android_usb"
+        native_fast_capable = True
+
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+            self._open = True
+
+        def setDTR(self, _value):
+            pass
+
+        def setRTS(self, _value):
+            pass
+
+        @property
+        def is_open(self):
+            return self._open
+
+        def close(self):
+            self._open = False
+
+    monkeypatch.setattr(
+        ds2,
+        "_import_d2xx_serial",
+        lambda: (_ for _ in ()).throw(AssertionError("D2XX must not be imported")),
+    )
+    monkeypatch.setattr(ds2, "serial", None)
+
+    d = ds2.DS2Interface(
+        port="usb:0403:6001", baud=9600, serial_factory=InjectedSerial)
+    d.open()
+
+    assert calls == [{
+        "port": "usb:0403:6001",
+        "baudrate": 9600,
+        "timeout": ds2.READ_TIMEOUT,
+        "write_timeout": 3.0,
+        "two_stop": True,
+    }]
+    assert d.transport_name == "android_usb"
+    assert d.native_fast_capable is True
+    assert d.uses_d2xx is False
 
 
 def test_d2xx_does_not_require_pyserial_to_be_installed(monkeypatch):
@@ -625,6 +720,22 @@ def test_kline_echo_true_consumes_exact_transmitted_frame(monkeypatch):
     assert seen[-1] == ("read", len(frame), d._ECHO_READ_TMO)
 
 
+def test_kline_echo_uses_transport_specific_timeout(monkeypatch):
+    d = DS2Interface(port="android-ft232:7", baud=9600, echo=True)
+    d._ser = type("AndroidSerial", (), {"echo_read_timeout": 0.050})()
+    seen = []
+    monkeypatch.setattr(ds2.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        d, "_read_exact",
+        lambda n, timeout: seen.append((n, timeout)) or bytes(n),
+    )
+
+    frame = b"\x12\x04\x00\x16"
+    d._discard_echo(frame)
+
+    assert seen == [(len(frame), 0.050)]
+
+
 class _TxOnlySerial:
     is_open = True
 
@@ -727,3 +838,19 @@ def test_custom_batch_plan_preserves_group_lengths_and_wire_size():
     assert len(payload) == 132
     for entry in ("000000E800", "010000FA98", "010000FA9E", "010000E810"):
         assert bytes.fromhex(entry) in payload
+
+
+def test_adaptation_clear_uses_factory_family_frame_lengths():
+    interface = DS2Interface("COM1")
+    calls = []
+    interface.execute = lambda command, payload=b"", **_kwargs: calls.append(
+        (command, payload)
+    ) or b""
+
+    interface.clear_adaptations(*interface.ADAPT_ALL_MS410)
+    interface.clear_adaptations(*interface.ADAPT_ALL)
+
+    assert calls == [
+        (ds2.DS2Commands.CLEAR_ADAPT, b"\xFF"),
+        (ds2.DS2Commands.CLEAR_ADAPT, b"\xFF\xFF"),
+    ]

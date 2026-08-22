@@ -66,6 +66,42 @@ def test_hardware_bsl_falls_back_to_pyserial(monkeypatch):
         bsl.close()
 
 
+def test_hardware_bsl_injected_factory_bypasses_desktop_backends(monkeypatch):
+    calls = []
+
+    class InjectedSerial:
+        transport_name = "android_usb"
+
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+            self.dtr = None
+            self.is_open = True
+
+        def setDTR(self, value):
+            self.dtr = bool(value)
+
+        def close(self):
+            self.is_open = False
+
+    monkeypatch.setattr(
+        engine, "_import_d2xx_serial",
+        lambda: (_ for _ in ()).throw(AssertionError("desktop D2XX opened")))
+    monkeypatch.setattr(engine, "serial", None)
+
+    bsl = engine.BSL(
+        "android-ft232:1043", baud=19200, reset_line="dtr",
+        serial_factory=InjectedSerial)
+    try:
+        assert bsl.transport_name == "android_usb"
+        assert calls == [{
+            "port": "android-ft232:1043", "baudrate": 19200,
+            "timeout": 2.0, "write_timeout": 3.0, "two_stop": False,
+        }]
+        assert bsl.ser.dtr is False
+    finally:
+        bsl.close()
+
+
 def test_hardware_bsl_d2xx_monitor_handoff_waits_for_wire_drain(monkeypatch):
     sleeps = []
 
@@ -165,6 +201,37 @@ def test_hardware_bsl_programming_rejects_short_transport_write():
     assert any("SHORT TRANSPORT WRITE" in message for message in messages)
 
 
+def test_hardware_bsl_windowed_progress_does_not_require_stdout(monkeypatch):
+    class FakeSerial:
+        def reset_input_buffer(self):
+            pass
+
+        def write(self, payload):
+            return len(payload)
+
+        def flush(self):
+            pass
+
+    bsl = object.__new__(engine.BSL)
+    bsl.ser = FakeSerial()
+    bsl.transport_name = "d2xx"
+    progress = []
+
+    with monkeypatch.context() as patch:
+        patch.setattr(engine.sys, "stdout", None)
+        assert engine._make_bar("BSL test") is None
+        bsl.read = lambda length, timeout=2.0: b"\x5A" * length
+        readback = bsl.mon_read(
+            0x10000, 16, progress=lambda *values: progress.append(values))
+        bsl.read = lambda _length, timeout=2.0: b"K"
+        programmed = bsl.mon_program(
+            0x10000, b"\xA5\x5A", progress=lambda *values: progress.append(values))
+
+    assert readback == b"\x5A" * 16
+    assert programmed is True
+    assert progress == [(16, 16), (2, 2)]
+
+
 def test_flash_dry_run_never_opens_port(tmp_path, monkeypatch):
     ref = tmp_path / "tune_ref.bin"
     ref.write_bytes(b"\xFF" * 24576)
@@ -187,9 +254,15 @@ def test_plan_freezes_reference_and_options(tmp_path, monkeypatch):
     ref.write_bytes(b"\x00" * 24576)
 
     captured = {}
+    serial_factory = object()
+    destructive_cb = lambda: None
+    backup_cb = lambda _path: None
+    backup_dir = tmp_path / "mobile-backups"
     monkeypatch.setattr(bsl_service, "_run_handler",
                         lambda handler, args, log, **_options: captured.update(args=args) or 0)
-    bsl_service.flash_arm(plan, lambda _line: None)
+    bsl_service.flash_arm(
+        plan, lambda _line: None, serial_factory=serial_factory,
+        destructive_cb=destructive_cb, backup_dir=backup_dir)
 
     assert captured["args"].ref_bytes == original
     assert captured["args"].chip == "28f200"
@@ -198,6 +271,16 @@ def test_plan_freezes_reference_and_options(tmp_path, monkeypatch):
     assert captured["args"].fix_checksums is True
     assert captured["args"].force is True
     assert captured["args"].arm is True
+    assert captured["args"].serial_factory is serial_factory
+    assert captured["args"].destructive_cb is destructive_cb
+    assert captured["args"].backup_cb is None
+    assert captured["args"].backup_dir == os.fspath(backup_dir)
+    bsl_service.flash_arm(
+        plan, lambda _line: None, backup_cb=backup_cb)
+    assert captured["args"].backup_cb is backup_cb
+    default_request = bsl_service._flash_request(plan, True)
+    assert default_request.backup_cb is None
+    assert default_request.backup_dir == bsl_service._BACKUP_DIR
 
 
 def test_auto_chip_is_rejected_for_flash_plan(tmp_path):
@@ -304,6 +387,7 @@ def test_flash_plan_allows_amd_image_for_amd_geometry(tmp_path):
 
 def test_diagnostic_commands_call_handlers_in_process(monkeypatch):
     calls = []
+    serial_factory = object()
 
     def fake_run(handler, args, log):
         calls.append((handler, args))
@@ -311,26 +395,38 @@ def test_diagnostic_commands_call_handlers_in_process(monkeypatch):
 
     monkeypatch.setattr(bsl_service, "_run_handler", fake_run)
     log = lambda _line: None
-    assert bsl_service.sync("COM3", "auto", "upper", log) == 0
-    assert bsl_service.chip_id("COM3", "auto", "upper", log) == 0
-    assert bsl_service.businfo("COM3", "auto", "upper", log) == 0
-    assert bsl_service.verify_alias("COM3", "auto", "upper", log) == 0
+    assert bsl_service.sync(
+        "COM3", "auto", "upper", log, serial_factory=serial_factory) == 0
+    assert bsl_service.chip_id(
+        "COM3", "auto", "upper", log, serial_factory=serial_factory) == 0
+    assert bsl_service.businfo(
+        "COM3", "auto", "upper", log, serial_factory=serial_factory) == 0
+    assert bsl_service.verify_alias(
+        "COM3", "auto", "upper", log, serial_factory=serial_factory) == 0
     progress = []
     assert bsl_service.dump_full(
         "COM3", "out.bin", "28f200", "upper", log,
-        progress=lambda *args: progress.append(args), baud=19200) == 0
+        progress=lambda *args: progress.append(args), baud=19200,
+        serial_factory=serial_factory) == 0
     assert bsl_service.dump_tune(
-        "COM3", "tune.bin", "28f200", "upper", log, baud=38400) == 0
+        "COM3", "tune.bin", "28f200", "upper", log, baud=38400,
+        serial_factory=serial_factory) == 0
     assert [handler for handler, _args in calls] == [
         engine.cmd_sync, engine.cmd_id, engine.cmd_businfo,
         engine.cmd_verify_alias, engine.cmd_dump, engine.cmd_dump]
+    assert calls[0][1].serial_factory is serial_factory
+    assert calls[1][1].serial_factory is serial_factory
+    assert calls[2][1].serial_factory is serial_factory
+    assert calls[3][1].serial_factory is serial_factory
     assert calls[-2][1].file == "out.bin"
     assert calls[-2][1].partial is False
     assert calls[-2][1].baud == 19200
     assert calls[-2][1].reset_line == "dtr"
+    assert calls[-2][1].serial_factory is serial_factory
     assert calls[-1][1].file == "tune.bin"
     assert calls[-1][1].partial is True
     assert calls[-1][1].baud == 38400
+    assert calls[-1][1].serial_factory is serial_factory
     calls[-2][1].progress_cb(1, 2, "BSL dump")
     assert progress == [(1, 2, "BSL dump")]
 
@@ -339,3 +435,18 @@ def test_vpp_rejected_for_amd_without_opening_port(monkeypatch):
     monkeypatch.setattr(bsl_service, "_run_handler",
                         lambda *_args: (_ for _ in ()).throw(AssertionError("handler called")))
     assert bsl_service.vpp_on("COM3", "29f400", "upper", lambda _line: None) == 2
+
+
+def test_intel_vpp_forwards_injected_transport(monkeypatch):
+    captured = {}
+    serial_factory = object()
+    monkeypatch.setattr(
+        bsl_service, "_run_handler",
+        lambda handler, request, log: captured.update(
+            handler=handler, request=request) or 0)
+
+    assert bsl_service.vpp_on(
+        "COM3", "28f200", "upper", lambda _line: None,
+        serial_factory=serial_factory) == 0
+    assert captured["handler"] is engine.cmd_vpp_on
+    assert captured["request"].serial_factory is serial_factory

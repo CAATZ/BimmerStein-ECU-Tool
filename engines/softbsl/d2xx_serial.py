@@ -108,6 +108,8 @@ class D2XXSerial:
     A Windows COM name is resolved to its matching D2XX device; ``index`` is used only
     when no COM name is supplied."""
 
+    native_fast_capable = True
+
     def __init__(self, port=None, baudrate=9600, bytesize=_BITS_8, parity=_PAR_EVEN,
                  timeout=1.0, write_timeout=3.0, index=0, two_stop=True, **_ignore):
         try:

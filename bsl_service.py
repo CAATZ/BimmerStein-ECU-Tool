@@ -25,7 +25,10 @@ class BSLOperationRequest:
     reset_settle: float = 15.0
     reset_invert: bool = False
     progress_cb: Optional[Callable] = None
+    backup_cb: Optional[Callable] = None
+    destructive_cb: Optional[Callable] = None
     session_registry: list = field(default_factory=list)
+    serial_factory: object = None
     backup_dir: str = _BACKUP_DIR
 
     region: Optional[str] = None
@@ -109,14 +112,15 @@ def create_flash_plan(port, region, ref_path, chip, half, fix_checksums=False, f
         fix_checksums=bool(fix_checksums), force=bool(force))
 
 
-def _base_request(port, chip, half, progress=None, *, baud=9600, reset_line="dtr"):
+def _base_request(port, chip, half, progress=None, *, baud=9600, reset_line="dtr",
+                  serial_factory=None):
     def progress_cb(done, total, label):
         if progress:
             progress(done, total, label)
 
     return BSLOperationRequest(
         port=port, chip=chip, half=half, baud=int(baud), reset_line=reset_line,
-        progress_cb=progress_cb if progress else None)
+        progress_cb=progress_cb if progress else None, serial_factory=serial_factory)
 
 
 _NOISY_LIVE_PREFIXES = (
@@ -164,13 +168,17 @@ def _run_handler(handler, request, log, *, concise=False):
                 pass
 
 
-def _flash_request(plan, arm, progress=None):
+def _flash_request(plan, arm, progress=None, *, serial_factory=None,
+                   destructive_cb=None, backup_dir=None, backup_cb=None):
     request = _base_request(
         plan.port, plan.chip, plan.half, progress,
-        baud=plan.baud, reset_line=plan.reset_line)
+        baud=plan.baud, reset_line=plan.reset_line,
+        serial_factory=serial_factory)
     return replace(
         request, region=plan.region, ref=plan.ref_path, ref_bytes=plan.ref_bytes,
-        fix_checksums=plan.fix_checksums, force=plan.force, arm=bool(arm))
+        fix_checksums=plan.fix_checksums, force=plan.force, arm=bool(arm),
+        destructive_cb=destructive_cb, backup_cb=backup_cb,
+        backup_dir=request.backup_dir if backup_dir is None else os.fspath(backup_dir))
 
 
 def _log_transport(log, port, baud, reset_line):
@@ -184,46 +192,57 @@ def flash_dry_run(plan, log):
     return _run_handler(engine.cmd_flash, _flash_request(plan, arm=False), log)
 
 
-def flash_arm(plan, log, progress=None):
+def flash_arm(plan, log, progress=None, *, serial_factory=None,
+              destructive_cb=None, backup_dir=None, backup_cb=None):
     _log_transport(log, plan.port, plan.baud, plan.reset_line)
     return _run_handler(
-        engine.cmd_flash, _flash_request(plan, arm=True, progress=progress),
+        engine.cmd_flash, _flash_request(
+            plan, arm=True, progress=progress, serial_factory=serial_factory,
+            destructive_cb=destructive_cb, backup_dir=backup_dir,
+            backup_cb=backup_cb),
         log, concise=True)
 
 
 def _diag(handler, port, chip, half, log, progress=None, *, baud=9600,
-          reset_line="dtr", **fields):
+          reset_line="dtr", serial_factory=None, **fields):
     request = replace(
-        _base_request(port, chip, half, progress, baud=baud, reset_line=reset_line),
+        _base_request(
+            port, chip, half, progress, baud=baud, reset_line=reset_line,
+            serial_factory=serial_factory),
         **fields)
     return _run_handler(handler, request, log)
 
 
-def sync(port, chip, half, log, *, baud=9600, reset_line="dtr", progress=None):
+def sync(port, chip, half, log, *, baud=9600, reset_line="dtr", progress=None,
+         serial_factory=None):
     return _diag(
         engine.cmd_sync, port, chip, half, log, progress,
-        baud=baud, reset_line=reset_line)
+        baud=baud, reset_line=reset_line, serial_factory=serial_factory)
 
 
-def chip_id(port, chip, half, log, *, baud=9600, reset_line="dtr", progress=None):
+def chip_id(port, chip, half, log, *, baud=9600, reset_line="dtr", progress=None,
+            serial_factory=None):
     return _diag(
         engine.cmd_id, port, chip, half, log, progress,
-        baud=baud, reset_line=reset_line)
+        baud=baud, reset_line=reset_line, serial_factory=serial_factory)
 
 
-def businfo(port, chip, half, log, *, baud=9600, reset_line="dtr", progress=None):
+def businfo(port, chip, half, log, *, baud=9600, reset_line="dtr", progress=None,
+            serial_factory=None):
     return _diag(
         engine.cmd_businfo, port, chip, half, log, progress,
-        baud=baud, reset_line=reset_line)
+        baud=baud, reset_line=reset_line, serial_factory=serial_factory)
 
 
-def verify_alias(port, chip, half, log, *, baud=9600, reset_line="dtr", progress=None):
+def verify_alias(port, chip, half, log, *, baud=9600, reset_line="dtr", progress=None,
+                 serial_factory=None):
     return _diag(
         engine.cmd_verify_alias, port, chip, half, log, progress,
-        baud=baud, reset_line=reset_line)
+        baud=baud, reset_line=reset_line, serial_factory=serial_factory)
 
 
-def vpp_on(port, chip, half, log, *, baud=9600, reset_line="dtr", progress=None):
+def vpp_on(port, chip, half, log, *, baud=9600, reset_line="dtr", progress=None,
+           serial_factory=None):
     if chip != "28f200":
         _event_forwarder(log)(
             "VPP control applies only to the Intel 28F200; AMD/JEDEC flash is single-supply.",
@@ -231,32 +250,34 @@ def vpp_on(port, chip, half, log, *, baud=9600, reset_line="dtr", progress=None)
         return 2
     return _diag(
         engine.cmd_vpp_on, port, chip, half, log, progress,
-        baud=baud, reset_line=reset_line)
+        baud=baud, reset_line=reset_line, serial_factory=serial_factory)
 
 
 def _dump(port, outfile, chip, half, log, progress=None, *, partial, baud=9600,
-          reset_line="dtr"):
+          reset_line="dtr", serial_factory=None):
     return _diag(
         engine.cmd_dump, port, chip, half, log, progress,
-        baud=baud, reset_line=reset_line,
+        baud=baud, reset_line=reset_line, serial_factory=serial_factory,
         file=outfile, partial=bool(partial), range=None, no_alias=False,
         raw_hole=False, cpu_order=False, file_order=True)
 
 
 def dump_full(port, outfile, chip, half, log, progress=None, *, baud=9600,
-              reset_line="dtr"):
+              reset_line="dtr", serial_factory=None):
     """Read one visible 256 KB flash bank into a standard file-order image."""
     return _dump(
         port, outfile, chip, half, log, progress,
-        partial=False, baud=baud, reset_line=reset_line)
+        partial=False, baud=baud, reset_line=reset_line,
+        serial_factory=serial_factory)
 
 
 def dump_tune(port, outfile, chip, half, log, progress=None, *, baud=9600,
-              reset_line="dtr"):
+              reset_line="dtr", serial_factory=None):
     """Read the standard 24 KB CPU/DS2-order calibration partial."""
     return _dump(
         port, outfile, chip, half, log, progress,
-        partial=True, baud=baud, reset_line=reset_line)
+        partial=True, baud=baud, reset_line=reset_line,
+        serial_factory=serial_factory)
 
 
 # Compatibility for older internal callers: an unqualified dump is a full read.

@@ -5,7 +5,7 @@
   "version": "V2",
   "title": "Launch Control / 2-step",
   "description": "DEPRECATED and remove-only. The arm/latch brain executed on-car, but ignition mode could not reach the V5 spark hook and fuel mode invoked only the stock soft staged limiter because DB87 was never coordinated. Retained so an installed V2 can be detected and reverted before installing Launch Control V5.",
-  "superseded_by": "launch_control_v5",
+  "superseded_by": "launch_control_v6",
   "target": "MS41.3",
   "recompute": [],
   "requires": [

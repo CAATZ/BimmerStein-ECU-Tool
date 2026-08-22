@@ -66,11 +66,19 @@ def _import_d2xx_serial():
     return D2XXSerial
 
 
+def _finish_progress_line():
+    stream = sys.stdout
+    if stream is not None:
+        stream.write("\n")
+        stream.flush()
+
+
 def _make_bar(label):
     """Return a progress callback cb(done, total) that draws a one-line '\\r' bar for a long
     transfer — or None if stdout isn't a TTY (so redirected/piped output isn't spammed).
     The caller (mon_read/mon_program) writes the closing newline when the transfer ends."""
-    if not sys.stdout.isatty():
+    stream = sys.stdout
+    if stream is None or not stream.isatty():
         return None
     t0 = time.time()
 
@@ -81,10 +89,10 @@ def _make_bar(label):
         el = time.time() - t0
         rate = done / el if el > 0 else 0
         eta = (total - done) / rate if rate > 0 else 0
-        sys.stdout.write(f"\r  {label:<11}[{'#' * fill}{'.' * (w - fill)}] {frac * 100:3.0f}% "
-                         f"{done // 1024:>3}/{total // 1024 or 1} KB  {rate / 1024:4.1f} KB/s "
-                         f"ETA {eta:3.0f}s ")
-        sys.stdout.flush()
+        stream.write(f"\r  {label:<11}[{'#' * fill}{'.' * (w - fill)}] {frac * 100:3.0f}% "
+                     f"{done // 1024:>3}/{total // 1024 or 1} KB  {rate / 1024:4.1f} KB/s "
+                     f"ETA {eta:3.0f}s ")
+        stream.flush()
     return cb
 
 
@@ -98,7 +106,8 @@ class BSL:
     ACK_BYTE  = 0x55           # ECU -> host (BSL acknowledge)
 
     def __init__(self, port, baud=9600, timeout=2.0,
-                 reset_line=None, reset_hold=0.02, reset_settle=0.015, reset_invert=False):
+                 reset_line=None, reset_hold=0.02, reset_settle=0.015, reset_invert=False,
+                 serial_factory=None):
         self.baud = baud
         self.port = port
         self.timeout = timeout
@@ -106,6 +115,7 @@ class BSL:
         self.reset_hold = reset_hold          # s to hold reset asserted
         self.reset_settle = reset_settle      # s to wait after release before sync
         self.reset_invert = reset_invert      # flip polarity (transistor/inverter in the path)
+        self.serial_factory = serial_factory
         self.transport_name = None
         self.ser = None
         self._open_transport()
@@ -122,6 +132,18 @@ class BSL:
         ``0x00`` and expects a full-duplex direct tap.  D2XX is therefore
         configured explicitly for 8N1 here rather than inheriting DS2's 8E2.
         """
+        if self.serial_factory is not None:
+            self.ser = self.serial_factory(
+                port=self.port, baudrate=self.baud,
+                timeout=self.timeout, write_timeout=3.0, two_stop=False)
+            if self.ser is None:
+                raise BSLError("injected serial factory returned no transport")
+            self.transport_name = getattr(
+                self.ser, "transport_name", None) or "injected"
+            _emit(
+                f"  BSL transport: {self.transport_name} direct ASC0/8N1 ({self.port})")
+            return
+
         d2xx_error = None
         if prefer_d2xx and os.environ.get("BSL_D2XX", "1") != "0":
             try:
@@ -350,7 +372,7 @@ class BSL:
             addr += n
             length -= n
         if progress:
-            sys.stdout.write("\n"); sys.stdout.flush()
+            _finish_progress_line()
         return bytes(out)
 
     def mon_write(self, addr, data):
@@ -520,7 +542,7 @@ class BSL:
             written = self.ser.write(cmd)
             if written is not None and written != len(cmd):
                 if progress:
-                    sys.stdout.write("\n"); sys.stdout.flush()
+                    _finish_progress_line()
                 log(
                     f"  program @0x{addr:05X} x{n}: SHORT TRANSPORT WRITE "
                     f"({written}/{len(cmd)} command bytes)"
@@ -530,7 +552,7 @@ class BSL:
             ack = self.read(1, timeout=5.0 + n * 0.003)
             if ack != b"\x4b":                     # 'K'
                 if progress:
-                    sys.stdout.write("\n"); sys.stdout.flush()
+                    _finish_progress_line()
                 log(f"  program @0x{addr:05X} x{n}: NO ACK (got {ack.hex() or '<nothing>'})")
                 return False
             addr += n
@@ -538,7 +560,7 @@ class BSL:
             if progress:
                 progress(i, total)
         if progress:
-            sys.stdout.write("\n"); sys.stdout.flush()
+            _finish_progress_line()
         return True
 
     @staticmethod
@@ -658,7 +680,8 @@ def _bsl(args):
     """Build a BSL session from a typed request or optional CLI namespace."""
     bsl = BSL(args.port, args.baud,
               reset_line=args.reset_line, reset_hold=args.reset_ms / 1000.0,
-              reset_settle=args.reset_settle / 1000.0, reset_invert=args.reset_invert)
+              reset_settle=args.reset_settle / 1000.0, reset_invert=args.reset_invert,
+              serial_factory=getattr(args, "serial_factory", None))
     registry = getattr(args, "session_registry", None)
     if registry is not None:
         registry.append(bsl)
@@ -1001,6 +1024,8 @@ def _save_region_backup(args, region, plan, physical_data):
     path = os.path.join(directory, filename)
     with open(path, "xb") as handle:
         handle.write(file_order)
+        handle.flush()
+        os.fsync(handle.fileno())
     return path
 FLASH_REGIONS = {
     "boot":         dict(erase=0x00000, span=(0x00000, 0x02000), low=True),             # ->param1 8K: vectors
@@ -1415,6 +1440,9 @@ def _flash_region(bsl, args, region, p, amd=False):
                 bsl, lo, hi, hole=hole, alias=acc,
                 progress=_progress_for(args, "BSL backup"))
             bpath = _save_region_backup(args, region, p, before)
+            backup_cb = getattr(args, "backup_cb", None)
+            if backup_cb:
+                backup_cb(bpath)
         except Exception as error:
             _emit(f"RESULT: exact pre-erase backup failed ({error}); nothing erased.")
             return 1
@@ -1424,6 +1452,11 @@ def _flash_region(bsl, args, region, p, amd=False):
         _emit(f"  erasing 0x{ea:05X}" + (f" via alias 0x{ea + acc:05X}" if acc else "") +
               (f"  ({len(erase_addrs)} sectors in this span)" if len(erase_addrs) > 1 else
                f"  (whole {hi - lo} B block)") + "…")
+        if not getattr(args, "_destructive_started", False):
+            callback = getattr(args, "destructive_cb", None)
+            if callback:
+                callback()
+            args._destructive_started = True
         sr = bsl.mon_erase(ea + acc)
         _emit(f"  erase status  : {_decode_sr(sr)}")
         if sr is None or not (sr & 0x80) or (sr & 0x28):

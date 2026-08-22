@@ -14,7 +14,9 @@ from ds2_fast_partial_write import (
     InitialWriteSeedUnavailable,
     NativeFastWriteReentryNotReady,
     NativeFastPartialWriteTransport,
+    PartialWriteCancelled,
 )
+from ds2_fast_plans import TUNE_SIZE
 from ds2_fast_slim_write import (
     SlimNativeFastFullWriteSession,
     SlimNativeFastPartialWriteSession,
@@ -57,6 +59,18 @@ class NativeFastPreEraseFailure(NativeFastServiceError):
         super().__init__(str(cause))
 
 
+@dataclass(frozen=True)
+class NativeWriteEntryQualificationResult:
+    operation_id: str
+    journal_path: Path
+    identity: bytes
+    final_link: LinkRate
+    final_state: SessionState
+    cleanup_confirmed: bool
+    destructive_started: bool = False
+    power_cycle_required: bool = True
+
+
 @dataclass
 class NativeWriteRecovery:
     """Live post-erase context that must remain powered and open for recovery."""
@@ -75,8 +89,11 @@ class NativeWriteRecovery:
     @property
     def retry_supported(self) -> bool:
         """Whether the retained ECU handler is still qualified for replay."""
-        value = getattr(self.session, "can_recover_in_place", None)
-        return True if value is None else bool(value)
+        return bool(getattr(self.session, "can_recover_in_place", False))
+
+    @property
+    def power_cycle_required(self) -> bool:
+        return getattr(self.session, "state", None) is SessionState.POWER_CYCLE_REQUIRED
 
     def close_after_confirmed_power_cycle(self) -> None:
         """Release only after the operator has physically cycled/recovered the ECU."""
@@ -88,10 +105,23 @@ class NativeWriteRecoveryRequired(NativeFastServiceError):
 
     def __init__(self, recovery: NativeWriteRecovery):
         self.recovery = recovery
-        super().__init__(
-            f"{recovery.error}. FLASH INCOMPLETE — DO NOT TURN IGNITION OFF; "
-            "the native fast recovery session is still open"
-        )
+        if recovery.retry_supported:
+            detail = (
+                "DO NOT TURN IGNITION OFF; the native fast recovery session is "
+                "still open"
+            )
+        elif recovery.power_cycle_required:
+            detail = (
+                "automatic retained replay is disabled; follow the controlled "
+                "recovery power-cycle instructions before releasing the open adapter"
+            )
+        else:
+            detail = (
+                "automatic retained replay is disabled while the flash result remains "
+                "unknown; KEEP ECU POWER ON, export a support bundle, and contact support "
+                "before any ignition cycle"
+            )
+        super().__init__(f"{recovery.error}. FLASH INCOMPLETE — {detail}")
 
 
 def _progress_adapter(progress_cb):
@@ -141,15 +171,23 @@ def write_partial_d2xx(
     target_tune: bytes,
     *,
     verify_write: bool = False,
+    expected_ecu_id: str | None = None,
+    expected_program_compatibility_id: str | None = None,
+    expected_coding_family: str | None = None,
+    expected_coding_digit: str | None = None,
+    expected_program_signature_hex: str | None = None,
+    expected_driver_signature_hex: str | None = None,
     progress_cb=None,
     event_cb=None,
+    serial_factory=None,
 ):
     """Run the slim partial writer and retain D2XX after a post-erase failure."""
     journal = _new_journal(port, FastOperation.PARTIAL_WRITE)
     try:
-        transport = NativeFastPartialWriteTransport.open_d2xx(
-            port, event_cb=_event_sink(journal, event_cb)
-        )
+        open_kwargs = {"event_cb": _event_sink(journal, event_cb)}
+        if serial_factory is not None:
+            open_kwargs["serial_factory"] = serial_factory
+        transport = NativeFastPartialWriteTransport.open_d2xx(port, **open_kwargs)
     except Exception as error:
         _finish_setup_failure(journal, error, phase="transport_open")
         raise
@@ -160,6 +198,12 @@ def write_partial_d2xx(
             bytes(target_tune),
             journal,
             verify_write=verify_write,
+            expected_ecu_id=expected_ecu_id,
+            expected_program_compatibility_id=expected_program_compatibility_id,
+            expected_coding_family=expected_coding_family,
+            expected_coding_digit=expected_coding_digit,
+            expected_program_signature_hex=expected_program_signature_hex,
+            expected_driver_signature_hex=expected_driver_signature_hex,
             reentry_required=pending,
             reentry_ready_cb=lambda: clear_reentry_required(port),
             progress_cb=_progress_adapter(progress_cb),
@@ -208,6 +252,120 @@ def write_partial_d2xx(
         return result
 
 
+def qualify_partial_write_entry_d2xx(
+    port: str,
+    *,
+    expected_ecu_id: str,
+    progress_cb=None,
+    event_cb=None,
+    serial_factory=None,
+) -> NativeWriteEntryQualificationResult:
+    """Prove stock-DS2 write entry and cleanup without sending a flash request."""
+    journal = _new_journal(port, FastOperation.PARTIAL_WRITE)
+    try:
+        open_kwargs = {
+            "event_cb": _event_sink(journal, event_cb),
+            "flash_enabled": False,
+        }
+        if serial_factory is not None:
+            open_kwargs["serial_factory"] = serial_factory
+        transport = NativeFastPartialWriteTransport.open_d2xx(port, **open_kwargs)
+    except Exception as error:
+        _finish_setup_failure(journal, error, phase="transport_open")
+        raise
+
+    pending = reentry_required(port)
+    try:
+        session = SlimNativeFastPartialWriteSession(
+            transport,
+            b"\xFF" * TUNE_SIZE,
+            journal,
+            verify_write=False,
+            reentry_required=pending,
+            reentry_ready_cb=lambda: clear_reentry_required(port),
+            expected_ecu_id=expected_ecu_id,
+            cancel_cb=lambda: True,
+            progress_cb=_progress_adapter(progress_cb),
+        )
+    except Exception as error:
+        transport.close()
+        _finish_setup_failure(journal, error, phase="session_setup")
+        raise NativeFastPreEraseFailure(
+            error, safe_legacy_fallback=False
+        ) from error
+
+    try:
+        session.execute()
+    except PartialWriteCancelled as error:
+        cleanup_confirmed = bool(
+            not session.destructive_started
+            and session.cleanup_attempted
+            and session.safe_legacy_fallback
+            and session.link is LinkRate.LOW
+            and session.state is SessionState.LOW_READY
+        )
+        transport.close()
+        if not cleanup_confirmed:
+            raise NativeFastPreEraseFailure(
+                error,
+                safe_legacy_fallback=False,
+                power_cycle_required=True,
+            ) from error
+        return NativeWriteEntryQualificationResult(
+            operation_id=journal.operation_id,
+            journal_path=journal.path,
+            identity=bytes(session.identity),
+            final_link=session.link,
+            final_state=session.state,
+            cleanup_confirmed=True,
+        )
+    except Exception as error:
+        if session.destructive_started:
+            raise NativeWriteRecoveryRequired(
+                NativeWriteRecovery(
+                    port=str(port),
+                    transport=transport,
+                    session=session,
+                    target=b"\xFF" * TUNE_SIZE,
+                    journal_path=journal.path,
+                    error=error,
+                )
+            ) from error
+        power_cycle_required = bool(
+            getattr(session, "write_authorized", False)
+            or getattr(session, "authorization_may_be_active", False)
+            or getattr(session, "authorization_state_requires_cycle", False)
+            or getattr(session, "fast_write_armed", False)
+            or getattr(session, "state", None) is SessionState.POWER_CYCLE_REQUIRED
+        )
+        transport.close()
+        raise NativeFastPreEraseFailure(
+            error,
+            safe_legacy_fallback=session.safe_legacy_fallback,
+            power_cycle_required=power_cycle_required,
+        ) from error
+    else:
+        # The qualification callback must always stop at before_tune_erase.
+        # Retain any impossible destructive regression for the normal recovery path.
+        if session.destructive_started:
+            raise NativeWriteRecoveryRequired(
+                NativeWriteRecovery(
+                    port=str(port),
+                    transport=transport,
+                    session=session,
+                    target=b"\xFF" * TUNE_SIZE,
+                    journal_path=journal.path,
+                    error=NativeFastServiceError(
+                        "write-entry qualification crossed the destructive boundary"
+                    ),
+                )
+            )
+        transport.close()
+        raise NativeFastServiceError(
+            "write-entry qualification did not stop at the pre-erase checkpoint"
+        )
+
+
 def write_full_d2xx(
     port: str,
     target_file_image: bytes,
@@ -215,15 +373,22 @@ def write_full_d2xx(
     connected_family: str,
     verify_write: bool = False,
     variant_conversion: bool = False,
+    expected_ecu_id: str | None = None,
+    expected_program_compatibility_id: str | None = None,
+    expected_coding_family: str | None = None,
+    expected_program_signature_hex: str | None = None,
+    expected_driver_signature_hex: str | None = None,
     progress_cb=None,
     event_cb=None,
+    serial_factory=None,
 ):
     """Run the slim full writer, staying high on success and retaining failures."""
     journal = _new_journal(port, FastOperation.FULL_WRITE)
     try:
-        transport = NativeFastFullWriteTransport.open_d2xx(
-            port, event_cb=_event_sink(journal, event_cb)
-        )
+        open_kwargs = {"event_cb": _event_sink(journal, event_cb)}
+        if serial_factory is not None:
+            open_kwargs["serial_factory"] = serial_factory
+        transport = NativeFastFullWriteTransport.open_d2xx(port, **open_kwargs)
     except Exception as error:
         _finish_setup_failure(journal, error, phase="transport_open")
         raise
@@ -236,6 +401,11 @@ def write_full_d2xx(
             connected_family=connected_family,
             verify_write=verify_write,
             variant_conversion=variant_conversion,
+            expected_ecu_id=expected_ecu_id,
+            expected_program_compatibility_id=expected_program_compatibility_id,
+            expected_coding_family=expected_coding_family,
+            expected_program_signature_hex=expected_program_signature_hex,
+            expected_driver_signature_hex=expected_driver_signature_hex,
             reentry_required=pending,
             reentry_ready_cb=lambda: clear_reentry_required(port),
             progress_cb=_progress_adapter(progress_cb),
@@ -290,6 +460,7 @@ def write_program_d2xx(
     initial_identity_attempts: int = 1,
     progress_cb=None,
     event_cb=None,
+    serial_factory=None,
 ):
     """Deploy only the program array with the native fast DS2 contract.
 
@@ -300,9 +471,10 @@ def write_program_d2xx(
     """
     journal = _new_journal(port, FastOperation.FULL_WRITE)
     try:
-        transport = NativeFastFullWriteTransport.open_d2xx(
-            port, event_cb=_event_sink(journal, event_cb)
-        )
+        open_kwargs = {"event_cb": _event_sink(journal, event_cb)}
+        if serial_factory is not None:
+            open_kwargs["serial_factory"] = serial_factory
+        transport = NativeFastFullWriteTransport.open_d2xx(port, **open_kwargs)
     except Exception as error:
         _finish_setup_failure(journal, error, phase="transport_open")
         raise NativeFastPreEraseFailure(error, safe_legacy_fallback=False) from error
@@ -362,9 +534,8 @@ def resume_recovery(recovery: NativeWriteRecovery, *, progress_cb=None):
         raise NativeFastServiceError("the retained native recovery transport is closed")
     if not recovery.retry_supported:
         raise NativeFastServiceError(
-            "the write failed during or after finalization; same-session replay is "
-            "disabled because the retained ECU handler is no longer in a qualified "
-            "write state"
+            "same-session replay is disabled because the retained ECU handler is "
+            "no longer qualified to write"
         )
     operation = (
         FastOperation.FULL_WRITE

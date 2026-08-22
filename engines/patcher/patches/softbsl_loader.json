@@ -1,30 +1,35 @@
 {
   "id": "softbsl_loader",
-  "label": "V10 bounds-checked loader",
-  "version": "V10",
+  "label": "V11 AIF-safe loader",
+  "version": "V11",
   "title": "Soft-BSL 0x5A loader",
-  "status": "TESTED",
-  "tested": true,
-  "user_description": "Persistent Soft-BSL recovery loader with a fully anchored boot hook and a bounded 1-2048 byte RAM-agent upload.",
-  "description": "Soft-BSL V10 validates the complete four-byte dispatcher call before replacing it and rejects RAM-agent lengths outside 1..0x800 before ACK, copy, CRC, or execution. The loader remains split across descriptor-safe SA1 gaps (file 0x5C32/0x5D92-0x5E05/0x5FC4), preserves optional coding records at 0x5D36-0x5D90, composes with AMD flash + cal_guard, and includes the 'B' bank marker.",
+  "status": "EMULATOR VERIFIED - BENCH TEST REQUIRED",
+  "tested": false,
+  "user_description": "Persistent Soft-BSL recovery loader relocated outside the complete BMW AIF programming-history area.",
+  "description": "Soft-BSL V11 keeps every executable byte outside file 0x5D07-0x5F8A, retains the bounded 1-2048 byte RAM-agent upload and full hook anchor, and preserves all 14 MS41.2 AIF slots.",
   "target": "MS41.3",
   "targets": ["MS41.0", "MS41.1", "MS41.2", "MS41.3"],
-  "recompute": [
-    "boot_crc"
-  ],
+  "recompute": ["boot_crc"],
   "requires": [],
   "conflicts": [],
+  "revert_superseded": true,
   "supersedes": [
     "softbsl_loader_legacy",
     "softbsl_loader_relocated_v1",
-    "softbsl_loader_v2"
+    "softbsl_loader_v2",
+    "softbsl_loader_v10"
   ],
   "cave": null,
   "edits": [
     {
       "off": 21920,
       "expect": "da00440a",
-      "data": "da00921d"
+      "data": "da008c1f"
+    },
+    {
+      "off": 17426,
+      "expect": "ffffffffffffffffffffffffffffffffffffffff",
+      "data": "4fd87eb7a758a7a79ab7fc70f3f8b2fe7eb7db00"
     },
     {
       "off": 23602,
@@ -32,15 +37,14 @@
       "data": "f075e6f500d8e6f6ffff40572d0fa985c0845064e08df04668417c1648402d0256f601a028d13df708510defc2f427e45c84c2f528e4704540643d02e108db00e118db00"
     },
     {
-      "off": 23954,
-      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-      "upgrade_expect": "f3f853e647f85a003d2ff3f823e447f89c003d2af3f824e447f89c003d25be88e168da00d81fc2fc25e45c8cc2f426e470c4e6f500d848c02d06da00c41fb985085128c10df8da00321c49803d08e168da00d81fa758a7a7da0000d80dffe7f81500da00d81f0dfada00440adb00ffffffffffff",
-      "data": "f3f853e647f85a003d32f3f823e447f89c003d2df3f824e447f89c003d28c2fc25e45c8cc2f426e470c448c02d1b46fc0008ed18be88e168da00d81fe6f500d8da00c41fb985085128c13dfada00321c49803d08e168da00d81fa758a7a7da0000d80dffe7f81500da00d81f0dfada00440adb00"
+      "off": 23712,
+      "expect": "ffffffffffffffffffffffffffffffffffff",
+      "data": "4ed8f7f8b0fea758a7a79ab6fc707eb6db00"
     },
     {
-      "off": 24516,
-      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-      "data": "4fd87eb7a758a7a79ab7fc70f3f8b2fe7eb7db004ed8f7f8b0fea758a7a79ab6fc707eb6db00"
+      "off": 24460,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "f3f853e647f85a003d31f3f823e447f89c003d2cf3f824e447f89c003d27c2fc25e45c8cc2f426e470c42d1b46fc0008ed18be88e168da00a01ce6f500d8da001204b985085128c13dfada00321c49803d08e168da00a01ca758a7a7da0000d80dffe7f81500da00a01c0dfaea00440a"
     },
     {
       "off": 24572,

@@ -2,12 +2,13 @@
   "id": "alphan_failsafe_v1",
   "label": "V1 broken A14-XOR transfers",
   "deprecated": true,
+  "superseded_by": "alphan_failsafe",
   "version": "V1",
   "status": "BROKEN - DEPRECATED",
   "tested": false,
   "title": "AlphaN MAF failsafe",
-  "user_description": "Broken AlphaN V1 retained only so existing images can be identified, removed, or upgraded to V2. Never install V1 on an ECU.",
-  "description": "Historical V1 encoded three inter-segment transfers with file addresses instead of C166 CPU addresses. Retained only for exact installed-state detection, safe removal, and direct migration to V2.",
+  "user_description": "Broken AlphaN V1 retained only so existing images can be identified, removed, or upgraded to V3. Never install V1 on an ECU.",
+  "description": "Historical V1 encoded three inter-segment transfers with file addresses instead of C166 CPU addresses. Retained only for exact installed-state detection, safe removal, and direct migration to V3.",
   "target": "MS41.3",
   "recompute": [
     "cal"

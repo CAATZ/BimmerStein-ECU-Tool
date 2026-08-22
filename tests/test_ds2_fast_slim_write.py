@@ -1,16 +1,19 @@
 """Production-policy tests for the slim stock-ECU native DS2 writers."""
 
+import ecu_info
 import pytest
 
 from ds2_fast_contracts import LinkRate, SessionState
 from ds2_fast_full_write import FullWriteError, NativeFastFullWriteTransport
 from ds2_fast_partial_write import (
     NativeFastPartialWriteTransport,
+    PartialWriteCancelled,
     PartialWriteStateError,
     TOKEN_ADDRESS,
     TOKEN_LENGTH,
 )
 from ds2_fast_plans import (
+    FULL_IMAGE_SIZE,
     PROGRAM_HIGH_START,
     TUNE_END,
     TUNE_START,
@@ -20,7 +23,11 @@ from ds2_fast_slim_write import (
     SlimNativeFastFullWriteSession,
     SlimNativeFastPartialWriteSession,
 )
-from ms41 import MS41ECU
+from ms41 import (
+    CODING_FAMILY_FILE_ADDR,
+    MS41ECU,
+    SS1V2_PROG_SIG_ADDR,
+)
 from tests.test_ds2_fast_full_write import (
     FullMemoryJournal,
     FullWriteStockSerial,
@@ -48,7 +55,19 @@ def _read_requests_at(serial, address):
     )
 
 
-def _partial_session(tmp_path, *, verify_write, progress_cb=None):
+def _partial_session(
+    tmp_path,
+    *,
+    verify_write,
+    progress_cb=None,
+    expected_ecu_id=None,
+    expected_program_compatibility_id=None,
+    expected_coding_family=None,
+    expected_coding_digit=None,
+    expected_program_signature_hex=None,
+    expected_driver_signature_hex=None,
+    cancel_cb=None,
+):
     source = _image_fixture()
     token = source.ds2_image[TOKEN_ADDRESS:TOKEN_ADDRESS + TOKEN_LENGTH]
     serial = PartialWriteStockSerial(source.ds2_image, token=token)
@@ -60,11 +79,198 @@ def _partial_session(tmp_path, *, verify_write, progress_cb=None):
         target,
         journal,
         verify_write=verify_write,
+        expected_ecu_id=expected_ecu_id,
+        expected_program_compatibility_id=expected_program_compatibility_id,
+        expected_coding_family=expected_coding_family,
+        expected_coding_digit=expected_coding_digit,
+        expected_program_signature_hex=expected_program_signature_hex,
+        expected_driver_signature_hex=expected_driver_signature_hex,
+        cancel_cb=cancel_cb,
         timing=ZERO_PARTIAL_TIMING,
         progress_cb=progress_cb,
         sleeper=lambda _seconds: None,
     )
     return session, serial, journal, target
+
+
+def _sparse_write_expectations(source):
+    return {
+        "expected_program_compatibility_id":
+            MS41ECU.read_program_compatibility_id(source.file_image),
+        "expected_coding_family": bytes(
+            source.file_image[CODING_FAMILY_FILE_ADDR:CODING_FAMILY_FILE_ADDR + 3]
+        ).decode("ascii"),
+        "expected_program_signature_hex": bytes(
+            source.file_image[SS1V2_PROG_SIG_ADDR:SS1V2_PROG_SIG_ADDR + 4]
+        ).hex(),
+        "expected_driver_signature_hex": bytes(
+            source.file_image[
+                ecu_info.DRV_SIG_FILE_OFFSET:
+                ecu_info.DRV_SIG_FILE_OFFSET + ecu_info.DRV_SIG_LEN
+            ]
+        ).hex(),
+    }
+
+
+def _qualification_session(tmp_path, *, expected_ecu_id):
+    token = bytes(range(TOKEN_LENGTH))
+    image = bytearray(b"\xFF" * (256 * 1024))
+    image[TOKEN_ADDRESS:TOKEN_ADDRESS + TOKEN_LENGTH] = token
+    serial = PartialWriteStockSerial(bytes(image), token=token)
+    journal = MemoryJournal(tmp_path / "write-entry-qualification.jsonl")
+    transport = NativeFastPartialWriteTransport(
+        serial,
+        flash_enabled=False,
+        event_cb=journal.event_callback,
+    )
+    session = SlimNativeFastPartialWriteSession(
+        transport,
+        b"\xFF" * (TUNE_END - TUNE_START),
+        journal,
+        verify_write=False,
+        expected_ecu_id=expected_ecu_id,
+        cancel_cb=lambda: True,
+        timing=ZERO_PARTIAL_TIMING,
+        sleeper=lambda _seconds: None,
+    )
+    return session, serial, journal
+
+
+def _sparse_driver_session(tmp_path, *, modify_target=False):
+    token = bytes(range(TOKEN_LENGTH))
+    signature = bytes.fromhex("e00e0d58f04ec084")
+    image = bytearray(b"\xA5" * FULL_IMAGE_SIZE)
+    image[TOKEN_ADDRESS:TOKEN_ADDRESS + TOKEN_LENGTH] = token
+    image[
+        ecu_info.DRV_SIG_ADDR:ecu_info.DRV_SIG_ADDR + ecu_info.DRV_SIG_LEN
+    ] = signature
+    live_tune = bytes(image[TUNE_START:TUNE_END])
+    target = bytearray(live_tune)
+    if modify_target:
+        target[100] ^= 1
+    target = bytes(target)
+    serial = PartialWriteStockSerial(bytes(image), token=token)
+    journal = MemoryJournal(tmp_path / "sparse-live-checks.jsonl")
+    session = SlimNativeFastPartialWriteSession(
+        NativeFastPartialWriteTransport(serial, event_cb=journal.event_callback),
+        target,
+        journal,
+        verify_write=False,
+        expected_ecu_id="SIMULAT",
+        expected_driver_signature_hex=signature.hex(),
+        timing=ZERO_PARTIAL_TIMING,
+        sleeper=lambda _seconds: None,
+    )
+    return session, serial, target, live_tune
+
+
+def test_slim_write_entry_qualification_stops_before_every_flash_request(tmp_path):
+    session, serial, journal = _qualification_session(
+        tmp_path, expected_ecu_id="SIMULAT"
+    )
+
+    with pytest.raises(PartialWriteCancelled, match="before_tune_erase"):
+        session.execute()
+
+    assert serial.flash_requests == []
+    assert serial.cleanup_completed
+    assert session.destructive_started is False
+    assert session.cleanup_attempted
+    assert session.safe_legacy_fallback
+    assert session.link is LinkRate.LOW
+    assert session.state is SessionState.LOW_READY
+    assert journal.outcome == "aborted"
+
+
+def test_slim_expected_identity_mismatch_stops_before_authorization(tmp_path):
+    session, serial, _journal = _qualification_session(
+        tmp_path, expected_ecu_id="WRONGID"
+    )
+
+    with pytest.raises(PartialWriteStateError, match="identity mismatch"):
+        session.execute()
+
+    assert serial.authorized is False
+    assert serial.armed is False
+    assert serial.flash_requests == []
+
+
+def test_slim_live_program_mismatch_stops_before_authorization(tmp_path):
+    source = _image_fixture()
+    evidence = _sparse_write_expectations(source)
+    evidence["expected_program_compatibility_id"] = "9999"
+    session, serial, _journal, _target = _partial_session(
+        tmp_path,
+        verify_write=False,
+        expected_ecu_id="SIMULAT",
+        **evidence,
+    )
+
+    with pytest.raises(PartialWriteStateError, match="program compatibility mismatch"):
+        session.execute()
+
+    assert serial.authorized is False
+    assert serial.armed is False
+    assert serial.flash_requests == []
+
+
+def test_slim_tune_coding_digit_is_checked_without_inventing_a_family(tmp_path):
+    source = _image_fixture()
+    family = bytes(
+        source.file_image[
+            CODING_FAMILY_FILE_ADDR:CODING_FAMILY_FILE_ADDR + 3
+        ]
+    ).decode("ascii")
+    wrong = "0" if family[-1] != "0" else "1"
+    session, serial, _journal, _target = _partial_session(
+        tmp_path,
+        verify_write=False,
+        expected_coding_digit=wrong,
+    )
+
+    with pytest.raises(PartialWriteStateError, match="coding-family digit"):
+        session.execute()
+
+    assert serial.authorized is False
+    assert serial.flash_requests == []
+
+
+def test_slim_modified_target_with_sparse_live_checks_proceeds(tmp_path):
+    session, serial, target, live_tune = _sparse_driver_session(
+        tmp_path, modify_target=True
+    )
+
+    result = session.execute()
+
+    assert target != live_tune
+    assert serial.authorized
+    assert bytes(serial.memory[TUNE_START:TUNE_END]) == target
+    assert result.program_payload_bytes > 0
+
+
+def test_slim_live_tune_is_not_preread(tmp_path):
+    session, serial, target, _live_tune = _sparse_driver_session(
+        tmp_path, modify_target=True
+    )
+    serial.memory[TUNE_START + 100] ^= 1
+
+    session.execute()
+
+    assert serial.authorized
+    assert bytes(serial.memory[TUNE_START:TUNE_END]) == target
+    assert _read_requests_at(serial, TUNE_START) == 0
+
+
+def test_slim_changed_driver_signature_stops_before_authorization_and_erase(tmp_path):
+    session, serial, _target, _live_tune = _sparse_driver_session(tmp_path)
+    serial.memory[ecu_info.DRV_SIG_ADDR] ^= 1
+
+    with pytest.raises(PartialWriteStateError, match="driver signature does not match"):
+        session.execute()
+
+    assert serial.authorized is False
+    assert serial.armed is False
+    assert serial.flash_requests == []
 
 
 def _full_session(tmp_path, *, verify_write, progress_cb=None):

@@ -79,7 +79,7 @@ adjacent `_internal` directory.
 To compile the Nuitka portable package:
 
 ```powershell
-.\build_windows_nuitka.ps1 -Version 0.1.0b13
+.\build_windows_nuitka.ps1 -Version 0.1.0b14
 ```
 
 Its output is `dist\BimmerStein ECU Tool Nuitka\`. It is a flat Nuitka
@@ -119,11 +119,11 @@ After the release owner has selected a version, create the final ZIP with the
 GPLv3 licensing gate selected for the public beta:
 
 Beta versions use the same compact `bN` suffix as BimmerStein Tuning Suite.
-The current beta is `0.1.0b13`, with Git tag `v0.1.0b13`.
+The current beta is `0.1.0b14`, with Git tag `v0.1.0b14`.
 
 ```powershell
 .\packaging\prepare_release.ps1 `
-    -Version 0.1.0b13 `
+    -Version 0.1.0b14 `
     -PyQtLicenseBasis GPLv3 `
     -IncludeNuitka `
     -IsccPath "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"

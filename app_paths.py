@@ -8,6 +8,7 @@ import sys
 
 
 APP_DATA_DIRNAME = "BimmerStein ECU Tool"
+DATA_DIR_ENV = "BIMMERSTEIN_DATA_DIR"
 
 
 def install_root() -> Path:
@@ -19,11 +20,16 @@ def install_root() -> Path:
 
 def mutable_path(*parts: str) -> Path:
     """Return a user-created data path anchored beside the portable application."""
-    return install_root().joinpath(*parts)
+    override = os.environ.get(DATA_DIR_ENV)
+    root = Path(override) if override else install_root()
+    return root.joinpath(*parts)
 
 
 def user_data_root() -> Path:
     """Return the per-user data directory used across application upgrades."""
+    override = os.environ.get(DATA_DIR_ENV)
+    if override:
+        return Path(override)
     local_app_data = os.environ.get("LOCALAPPDATA")
     if local_app_data:
         return Path(local_app_data) / APP_DATA_DIRNAME

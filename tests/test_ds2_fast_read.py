@@ -64,6 +64,8 @@ def _clean_native_reentry_registry(monkeypatch, tmp_path):
 class ReadOnlyStockSerial:
     """Byte-level stock-path model; it implements no write/flash commands."""
 
+    native_fast_capable = True
+
     ECU_RATES = {
         SELECTOR_LOW: 9615.4,
         SELECTOR_MID: 19736.8,
@@ -335,6 +337,14 @@ def test_open_d2xx_propagates_factory_failure_without_pyserial_fallback():
 
     with pytest.raises(OSError, match="D2XX adapter unavailable"):
         NativeFastReadTransport.open_d2xx("COM1", serial_factory=factory)
+
+
+def test_native_fast_read_rejects_unqualified_injected_transport():
+    serial = ReadOnlyStockSerial()
+    serial.native_fast_capable = False
+
+    with pytest.raises(FastReadError, match="supported direct USB transport"):
+        NativeFastReadTransport(serial)
 
 
 def test_partial_read_restores_low_and_confirms_identity_after_b0():

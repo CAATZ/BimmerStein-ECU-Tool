@@ -7,8 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from engines import ch341a as _ch341a
 from engines.softbsl import eeprom_ram
+
+
+_ch341a = None
 
 
 EEPROM_SIZE = eeprom_ram.EEPROM_SIZE
@@ -138,7 +140,17 @@ class WriteResult:
 
 
 def _load_backend():
+    global _ch341a
+    if _ch341a is None:
+        from engines import ch341a
+        _ch341a = ch341a
     return _ch341a
+
+
+def configure_backend(backend) -> None:
+    """Install a platform backend before discovery (Android supplies UsbManager I/O)."""
+    global _ch341a
+    _ch341a = backend
 
 
 def _device_accessible(device: object) -> bool:
@@ -341,8 +353,6 @@ def seed_ecu(
     before_path = _require_new_path(backup_path, "EEPROM before-image")
     after_path = _require_new_path(_after_path(before_path), "EEPROM after-image")
     status = _require_ready()
-    if status.devices[0] != expected.device:
-        raise SeedRefused("the connected CH341A no longer matches the prior capture")
     backend = _load_backend()
 
     with backend.open_first() as programmer:
@@ -444,8 +454,6 @@ def _write_eeprom(
     target = eeprom_ram.validate_write_image(target, variant)
     before_path = _require_new_path(backup_path, "EEPROM before-image")
     status = _require_ready()
-    if expected is not None and status.devices[0] != expected.device:
-        raise SeedRefused("the connected CH341A no longer matches the prior capture")
     backend = _load_backend()
 
     with backend.open_first() as programmer:
@@ -556,8 +564,6 @@ def restore_pre_seed(
     """Restore the exact three-byte progression from a saved pre-seed image."""
     _validate_capture(expected_seeded, "Restore Pre-Seed State")
     _validate_capture(original, "Restore Pre-Seed State")
-    if original.device != expected_seeded.device:
-        raise SeedRefused("the pre-seed image came from a different CH341A device")
     if original.variant != expected_seeded.variant:
         raise SeedRefused("the pre-seed image uses a different MS41 layout")
     if expected_seeded.marker != RECOVERY_PROGRESSION:
@@ -575,3 +581,35 @@ def restore_pre_seed(
         confirm=confirm,
         expected=expected_seeded,
     )
+
+
+def recover_pre_seed_capture(
+    expected_seeded: Capture,
+    candidate_paths,
+) -> Capture | None:
+    """Recover one exact saved inverse after a programmer reconnect."""
+    _validate_capture(expected_seeded, "Restore Pre-Seed State")
+    if expected_seeded.marker != RECOVERY_PROGRESSION:
+        return None
+    matches = {}
+    for value in candidate_paths:
+        path = Path(value)
+        try:
+            image = path.read_bytes()
+            candidate = _capture(
+                image, path, expected_seeded.device, expected_seeded.variant,
+            )
+            _validate_capture(candidate, "Restore Pre-Seed State")
+        except (OSError, TypeError, ValueError, SeedRefused, eeprom_ram.EepromError):
+            continue
+        if (
+            candidate.marker in SEEDABLE_PROGRESSIONS
+            and eeprom_ram.changed_offsets(expected_seeded.image, candidate.image)
+            == RECOVERY_OFFSETS
+        ):
+            matches.setdefault(candidate.sha256, candidate)
+    if len(matches) > 1:
+        raise SeedRefused(
+            "multiple distinct exact pre-seed images match this seeded EEPROM"
+        )
+    return next(iter(matches.values()), None)

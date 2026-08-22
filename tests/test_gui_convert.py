@@ -474,8 +474,14 @@ def test_boot_write_grafts_live_identity_onto_conversion_target(monkeypatch):
         assert out_info.serial == src_info.serial
         assert out_info.isn4 == src_info.isn4
         assert out_info.vin == src_info.vin
-        # everything outside the graft still comes from the target file
-        assert written[:0x5CE5] == bytes(ref("MS41.3"))[:0x5CE5]
+        target_bytes = bytes(ref("MS41.3"))
+        for start, end in identity.IDENTITY_GRAFT_RANGES:
+            assert written[start:end] == source[start:end]
+        assert written[:identity.PRODUCTION_OFF] == target_bytes[:identity.PRODUCTION_OFF]
+        assert written[identity.PRODUCTION_END:identity.AIF_OFF] == target_bytes[
+            identity.PRODUCTION_END:identity.AIF_OFF
+        ]
+        assert written[0x6001:0x6072] == target_bytes[0x6001:0x6072]
     finally:
         w.close()
 
@@ -798,9 +804,16 @@ def test_graft_softbsl_target_passes_through_with_no_cached_read(tmp_path):
 def test_graft_softbsl_target_grafts_cached_identity(tmp_path):
     app, w = _gui()
     try:
-        source = ref("MS41.1")
+        source = bytearray(b"\x5A" * identity.FULL_ROM_SIZE)
+        source[identity.MARK_1585_OFF:identity.MARK_1585_OFF + 4] = b"1585"
+        source[identity.SERIAL_OFF:identity.SERIAL_NUL_OFF + 1] = b"123456789\x00"
+        source[identity.VIN_OFF:identity.VIN_OFF + identity.VIN_LEN] = identity.encode_vin(
+            "WBAAA1300H8250001"
+        )
+        source = bytes(source)
+        target = bytes([0xA5]) * identity.FULL_ROM_SIZE
         target_path = tmp_path / "target.bin"
-        target_path.write_bytes(ref("MS41.3"))
+        target_path.write_bytes(target)
         w._last_full_read = source
 
         out_path, info = w._graft_softbsl_target(str(target_path))
@@ -813,6 +826,56 @@ def test_graft_softbsl_target_grafts_cached_identity(tmp_path):
         out_info = identity.decode_identity(grafted)
         assert out_info.serial == src_info.serial
         assert out_info.vin == src_info.vin
+        for start, end in identity.IDENTITY_GRAFT_RANGES:
+            assert grafted[start:end] == source[start:end]
+        assert grafted[identity.PRODUCTION_END:identity.AIF_OFF] == target[
+            identity.PRODUCTION_END:identity.AIF_OFF
+        ]
+        assert grafted[0x6001:0x6072] == target[0x6001:0x6072]
         os.remove(out_path)
     finally:
         w.close()
+
+
+def test_live_identity_source_reads_complete_provenance_ranges():
+    source = bytearray(b"\xFF" * 0x6100)
+    source[identity.PRODUCTION_OFF:identity.PRODUCTION_END] = bytes(range(26))
+    source[identity.MARK_1585_OFF:identity.MARK_1585_OFF + 4] = b"1585"
+    source[identity.SERIAL_OFF:identity.SERIAL_NUL_OFF + 1] = b"123456789\x00"
+    source[identity.AIF_OFF:identity.AIF_END] = bytes(
+        (index * 17 + 3) & 0xFF for index in range(identity.AIF_END - identity.AIF_OFF)
+    )
+    source[identity.VIN_OFF:identity.VIN_OFF + identity.VIN_LEN] = identity.encode_vin(
+        "WBAAA1300H8250001"
+    )
+    source = bytes(source)
+    reads = []
+
+    class Ds2:
+        def read_mem(self, address, length):
+            reads.append(("read_mem", address, length))
+            file_offset = address ^ 0x4000
+            return source[file_offset:file_offset + length]
+
+        def read_memory_range(self, address, length):
+            reads.append(("read_memory_range", address, length))
+            file_offset = address ^ 0x4000
+            return source[file_offset:file_offset + length]
+
+    captured = gui.MS41FlashGUI._read_live_identity_source(Ds2(), lambda *_args: None)
+
+    assert captured is not None
+    for start, end in identity.IDENTITY_GRAFT_RANGES:
+        assert captured[start:end] == source[start:end]
+    assert reads == [
+        (
+            "read_mem",
+            identity.PRODUCTION_OFF ^ 0x4000,
+            identity.PRODUCTION_END - identity.PRODUCTION_OFF,
+        ),
+        (
+            "read_memory_range",
+            identity.AIF_OFF ^ 0x4000,
+            identity.AIF_END - identity.AIF_OFF,
+        ),
+    ]

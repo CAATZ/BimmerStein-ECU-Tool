@@ -41,6 +41,16 @@ class SoftBSLInstallRecovery:
     def is_open(self):
         return self.engine_recovery.is_open
 
+    @property
+    def retry_supported(self):
+        retained = getattr(self.engine_recovery, "retained", None)
+        return bool(getattr(retained, "retry_supported", True))
+
+    @property
+    def power_cycle_required(self):
+        retained = getattr(self.engine_recovery, "retained", None)
+        return bool(getattr(retained, "power_cycle_required", False))
+
     def close_after_confirmed_power_cycle(self):
         self.engine_recovery.close_after_confirmed_power_cycle()
 
@@ -51,9 +61,21 @@ class SoftBSLInstallRecoveryRequired(SoftBSLInstallError):
     def __init__(self, recovery):
         self.recovery = recovery
         phase = "temporary bootstrap" if recovery.phase == "bootstrap" else "persistent target"
+        guidance = (
+            "DO NOT TURN IGNITION OFF; the same live recovery session is still open."
+            if recovery.retry_supported
+            else (
+                "Automatic retained replay is disabled; follow the controlled "
+                "recovery power-cycle instructions before releasing the open adapter."
+                if recovery.power_cycle_required
+                else "Automatic retained replay is disabled while the flash result "
+                "remains unknown; KEEP ECU POWER ON, export a support bundle, and "
+                "contact support before any ignition cycle."
+            )
+        )
         super().__init__(
             f"Soft-BSL installation is incomplete during the {phase} write. "
-            "DO NOT TURN IGNITION OFF; the same live recovery session is still open."
+            f"{guidance}"
         )
 
 
@@ -129,13 +151,15 @@ def _install_log(log):
 
 def _install_args(*, port, target=None, bootstrap=None, base=None, with_calguard=False,
                   allow_convert=False, prompt, baud="low", progress_cb=None,
-                  confirm_reinstall=None, preserve_cal=True):
+                  confirm_reinstall=None, preserve_cal=True,
+                  serial_factory=None):
     """Build the typed internal installation request."""
     return _sb.InstallRequest(
         port=port, prompt=prompt, target=target, bootstrap=bootstrap, base=base,
         with_calguard=with_calguard, allow_convert=lambda: bool(allow_convert),
         baud=baud, progress_cb=progress_cb, ds2_factory=AppDS2Interface,
         confirm_reinstall=confirm_reinstall, preserve_cal=bool(preserve_cal),
+        serial_factory=serial_factory,
     )
 
 
@@ -177,16 +201,19 @@ def resume_install(recovery, log, progress_cb=None):
         raise SoftBSLInstallError(str(error)) from error
 
 
-def install(target, bootstrap, port, allow_convert, prompt, log, baud="low", progress_cb=None):
+def install(target, bootstrap, port, allow_convert, prompt, log, baud="low",
+            progress_cb=None, serial_factory=None):
     """Guided install from two pre-built images through the in-process engine."""
     args = _install_args(port=port, target=target, bootstrap=bootstrap,
                          allow_convert=allow_convert, prompt=prompt,
-                         baud=baud, progress_cb=progress_cb)
+                         baud=baud, progress_cb=progress_cb,
+                         serial_factory=serial_factory)
     return _run_install(args, log)
 
 
 def install_compose(port, base, with_calguard, allow_convert, prompt, log, baud="low",
-                    progress_cb=None, confirm_reinstall=None, preserve_cal=True):
+                    progress_cb=None, confirm_reinstall=None, preserve_cal=True,
+                    serial_factory=None):
     """Prepare and install Soft-BSL without pre-built firmware images.
 
     With ``base=None``, the connected ECU's full image is the source and therefore preserves its
@@ -198,7 +225,8 @@ def install_compose(port, base, with_calguard, allow_convert, prompt, log, baud=
                          allow_convert=allow_convert, prompt=prompt,
                          baud=baud, progress_cb=progress_cb,
                          confirm_reinstall=confirm_reinstall,
-                         preserve_cal=preserve_cal)
+                         preserve_cal=preserve_cal,
+                         serial_factory=serial_factory)
     return _run_install(args, log)
 
 
