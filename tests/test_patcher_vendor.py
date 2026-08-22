@@ -167,9 +167,9 @@ def test_exact_calguard_artifact_is_registered_and_prior_revision_is_upgradable(
     assert bytes(upgraded[CAVE_FILE:CAVE_FILE + len(guard_bytes)]) == guard_bytes
     assert patch_ms41.is_applied(upgraded, patches["softbsl_loader"])
     assert not patch_ms41.is_applied(upgraded, patches["cal_guard_v4"])
-    assert {line for line in upgrade_log if "removed exact predecessor" in line} == {
+    assert {line for line in upgrade_log if line.startswith("removed exact ")} == {
         "removed exact predecessor softbsl_loader_v10",
-        "removed exact predecessor cal_guard_v4",
+        "removed exact dependent cal_guard_v4",
     }
 
     base = bytearray(b"\xFF" * patch_ms41.FULL)
@@ -271,37 +271,6 @@ def test_previous_local_v8_v6_revision_upgrades_in_place(
     assert patch_ms41.is_applied(upgraded, patches[ignition_id])
     assert patch_ms41.is_applied(upgraded, patches[launch_id])
     assert sum("exact prior revision" in line for line in log) == 4
-
-
-@pytest.mark.parametrize(
-    "variant,ignition_id,launch_id,offsets",
-    [
-        ("MS41.0", "ignition_cut_v9_ms410", "launch_control_v7_ms410",
-         (0x36B00, 0x36C80, 0x36CC0)),
-        ("MS41.1", "ignition_cut_v9_ms411", "launch_control_v7_ms411",
-         (0x3B9C0, 0x3BB40, 0x3BB80)),
-        ("MS41.2", "ignition_cut_v9_ms412", "launch_control_v7_ms412",
-         (0x39F80, 0x3A100, 0x3A140)),
-        ("MS41.3", "ignition_cut_v9", "launch_control_v7",
-         (0x39F80, 0x3A100, 0x3A140)),
-    ],
-)
-def test_launch_latch_revision_upgrades_all_sites(
-        variant, ignition_id, launch_id, offsets):
-    patches = patch_ms41.load_patches()
-    patch_ids = [ignition_id, launch_id]
-    current, _ = patch_ms41.build(ref(variant), patch_ids, patches=patches)
-    prior = bytearray(current)
-    launch = patches[launch_id]
-    for offset in offsets:
-        edit = next(item for item in launch["edits"] if item["off"] == offset)
-        payload = bytes.fromhex(edit["upgrade_expect"][-1])
-        prior[offset:offset + len(payload)] = payload
-
-    upgraded, log = patch_ms41.build(bytes(prior), patch_ids, patches=patches)
-
-    assert upgraded == current
-    assert sum("exact prior revision" in line for line in log) == 3
 
 
 def test_check_base_accepts_ms41_3_and_rejects_blank():

@@ -504,7 +504,7 @@ def test_boot_write_preservation_blocks_when_live_identity_is_unavailable(monkey
         w._ds2_write_full(bytearray(ref("MS41.3")), "target.bin")
 
         assert critical_calls
-        assert "VIN / ISN Preservation Unavailable" in critical_calls[0][1]
+        assert "ECU Identity Preservation Unavailable" in critical_calls[0][1]
         assert "ran" not in captured
     finally:
         w.close()
