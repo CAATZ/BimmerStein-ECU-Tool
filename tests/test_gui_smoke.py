@@ -6273,6 +6273,697 @@ def test_coding_tab_reads_and_writes_exact_e46_seat_choices(monkeypatch):
         w.close()
 
 
+def test_transmission_conversion_requires_preflight_confirmation_and_cycle(
+        monkeypatch):
+    app, w = _gui()
+    connection = object()
+    calls = []
+    results = iter((
+        {
+            "token": "plan-1", "status": "ready", "title": "Ready to convert",
+            "source": "automatic", "target": "manual", "family": "MS43",
+            "chassis": "E46", "warnings": ["Keep the battery supported."],
+            "changes": ["Update the vehicle order."],
+        },
+        {
+            "token": "plan-1", "status": "ready", "title": "Coding verified",
+            "source": "automatic", "target": "manual",
+            "requires_key_cycle": True, "completed": False,
+        },
+        {
+            "status": "ready", "title": "Conversion complete",
+            "source": "automatic", "target": "manual", "completed": True,
+            "changes": ["All fitted modules passed final verification."],
+        },
+    ))
+
+    def sync_run(task, on_success=None, **_kwargs):
+        result = task(lambda *_args: None, lambda *_args: None)
+        if on_success:
+            on_success(result)
+
+    try:
+        w._ds2 = connection
+        w._connection_echo = True
+        monkeypatch.setattr(w, "_run_task", sync_run)
+        monkeypatch.setattr(
+            w, "_prepare_transmission_swap_core",
+            lambda target, _log, _progress:
+            calls.append(("prepare", target)) or next(results),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            w, "_execute_transmission_swap_core",
+            lambda token, mechanical, _log, _progress:
+            calls.append(("execute", token, mechanical)) or next(results),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            QMessageBox, "question",
+            staticmethod(lambda *_args, **_kwargs: QMessageBox.Yes),
+        )
+        monkeypatch.setattr(
+            QMessageBox, "information", staticmethod(lambda *_args, **_kwargs: None)
+        )
+
+        w._update_coding_actions()
+        assert w.btn_transmission_swap_check.isEnabled()
+        assert not w.btn_transmission_swap_convert.isEnabled()
+
+        w._on_prepare_transmission_swap()
+        assert calls == [("prepare", "manual")]
+        assert "Update the vehicle order" in w.transmission_swap_details.toPlainText()
+        assert w.chk_transmission_swap_mechanical.isEnabled()
+        assert not w.btn_transmission_swap_convert.isEnabled()
+
+        w.chk_transmission_swap_mechanical.setChecked(True)
+        assert w.btn_transmission_swap_convert.isEnabled()
+        w._on_execute_transmission_swap()
+        assert calls[-1] == ("execute", "plan-1", True)
+        assert not w.lbl_transmission_swap_cycle.isHidden()
+        assert not w.btn_transmission_swap_verify.isEnabled()
+
+        w.chk_transmission_swap_cycle.setChecked(True)
+        assert w.btn_transmission_swap_verify.isEnabled()
+        w._on_verify_transmission_swap()
+        assert calls[-1] == ("execute", "plan-1", True)
+        assert w._transmission_swap_token is None
+        assert w.btn_transmission_swap_verify.isHidden()
+        assert "Conversion complete" in w.transmission_swap_details.toPlainText()
+    finally:
+        w._ds2 = None
+        w.close()
+
+
+def test_transmission_conversion_treats_verified_eeprom_reset_as_cycle_required(
+        monkeypatch, tmp_path):
+    import transmission_conversion as conversion
+    from engines.softbsl import eeprom_ram
+
+    _app, w = _gui()
+    target = bytes(range(256)) * 2
+    session = conversion.ConnectedSwapSession(
+        "plan-reset", "ready", "Ready", (), (), (),
+        conversion.Transmission.AUTOMATIC,
+        conversion.Transmission.MANUAL,
+        "MS41.2", "E39",
+        dme_ident=b"1406464" + bytes(35),
+        eeprom_before=bytes(reversed(target)),
+        eeprom_target=target,
+    )
+    backup = tmp_path / "before.bin"
+    eeprom_ram._after_capture_path(backup).write_bytes(target)
+    journal_events = []
+
+    class Journal:
+        def mark_write_intent(self, operation_id, owner, details):
+            journal_events.append(("intent", operation_id, owner, details))
+
+        def mark_write_complete(self, operation_id, owner):
+            journal_events.append(("complete", operation_id, owner))
+
+        def mark_awaiting_cycle(self, operation_id):
+            journal_events.append(("cycle", operation_id))
+
+    def write_modules(_ds2, current, **kwargs):
+        assert kwargs["journal"] is w._transmission_swap_journal
+        assert kwargs["journal_id"] == session.token
+        assert kwargs["eeprom_current"] == session.eeprom_before
+        current.phase = "modules_written"
+        return current.wire()
+
+    eeprom_runs = 0
+
+    def fresh_read_then_verified_reset(*_args, **_kwargs):
+        nonlocal eeprom_runs
+        eeprom_runs += 1
+        if eeprom_runs == 1:
+            return type("Capture", (), {"image": session.eeprom_before})()
+        w._ds2 = None
+        raise eeprom_ram.EepromResetRequired("normal reset was not confirmed")
+
+    try:
+        w._ds2 = object()
+        w._transmission_swap_journal = Journal()
+        w._transmission_swap_sessions[session.token] = session
+        monkeypatch.setattr(
+            conversion, "write_connected_modules", write_modules)
+        monkeypatch.setattr(w, "_automatic_eeprom_path", lambda _prefix: str(backup))
+        monkeypatch.setattr(
+            w, "_run_via_eeprom", fresh_read_then_verified_reset)
+
+        result = w._execute_transmission_swap_core(
+            session.token, True, lambda *_args: None, lambda *_args: None)
+
+        assert result["status"] == "action_required"
+        assert result["requires_key_cycle"] is True
+        assert session.phase == "awaiting_cycle"
+        assert any("normal K-Line cleanup" in item for item in session.warnings)
+        assert [event[:3] for event in journal_events] == [
+            ("intent", session.token, "dme_eeprom"),
+            ("complete", session.token, "dme_eeprom"),
+            ("cycle", session.token),
+        ]
+    finally:
+        w._ds2 = None
+        w.close()
+
+
+def test_transmission_preflight_refuses_matching_interrupted_record(monkeypatch):
+    import transmission_conversion as conversion
+
+    _app, w = _gui()
+    identity = b"matching connected DME"
+    record = object()
+    pending = type("Pending", (), {"dme_ident": identity})()
+
+    class DS2:
+        @staticmethod
+        def identify():
+            return identity
+
+    try:
+        w._ds2 = DS2()
+        monkeypatch.setattr(
+            conversion, "recoverable_connected_swaps",
+            lambda journal: (record,))
+        monkeypatch.setattr(
+            conversion, "load_connected_swap_journal",
+            lambda current: pending)
+
+        with pytest.raises(RuntimeError, match="Recover Interrupted Conversion"):
+            w._prepare_transmission_swap_core(
+                "manual", lambda *_args: None, lambda *_args: None)
+    finally:
+        w._ds2 = None
+        w.close()
+
+
+def test_matching_transmission_journal_quarantines_writes_not_diagnostics(
+        monkeypatch, tmp_path):
+    import transmission_conversion as conversion
+
+    _app, w = _gui()
+    identity = b"I" * ds2_fast_read.IDENTITY_LENGTH
+    record = type("Record", (), {"operation_id": "pending-swap"})()
+    session = type(
+        "Session", (), {"token": "swap-token", "dme_ident": identity})()
+
+    class DS2:
+        uses_d2xx = False
+
+        @staticmethod
+        def close():
+            pass
+
+    try:
+        w._ds2 = DS2()
+        w._connection_port = "COM1"
+        w._transmission_swap_journal = type(
+            "Journal", (), {"directory": tmp_path})()
+        monkeypatch.setattr(
+            conversion, "recoverable_connected_swaps", lambda _journal: (record,))
+        monkeypatch.setattr(
+            conversion, "load_connected_swap_journal", lambda _record: session)
+
+        w._on_connected(ident=identity)
+
+        assert w._transmission_recovery_quarantine_id == "pending-swap"
+        assert not w.btn_write_tune.isEnabled()
+        assert not w.btn_reset_adapt.isEnabled()
+        assert not w.btn_clear_dtc.isEnabled()
+        assert w.btn_read_dtc.isEnabled()
+        assert w.btn_scan_modules.isEnabled()
+        assert w.btn_transmission_swap_recover.isEnabled()
+        assert not w.btn_transmission_swap_check.isEnabled()
+
+        session.dme_ident = b"different exact DME"
+        assert not w._refresh_transmission_recovery_quarantine(identity)
+        w._set_ds2_buttons_enabled()
+        assert w.btn_write_tune.isEnabled()
+        assert w.btn_clear_dtc.isEnabled()
+    finally:
+        w._ds2 = None
+        w.close()
+
+
+def test_transmission_journal_read_error_fails_closed_with_file_guidance(
+        monkeypatch, tmp_path):
+    import transmission_conversion as conversion
+
+    _app, w = _gui()
+    identity = b"I" * ds2_fast_read.IDENTITY_LENGTH
+    scans = []
+    warnings = []
+    ran = []
+
+    def broken(_journal):
+        scans.append(True)
+        raise ValueError("checksum mismatch")
+
+    try:
+        w._last_ident_raw = identity
+        w._transmission_swap_journal = type(
+            "Journal", (), {"directory": tmp_path})()
+        monkeypatch.setattr(conversion, "recoverable_connected_swaps", broken)
+        monkeypatch.setattr(
+            QMessageBox, "warning",
+            staticmethod(lambda *_args: warnings.append(_args[2])),
+        )
+        monkeypatch.setattr(
+            w, "_run_task", lambda *_args, **_kwargs: ran.append(True))
+
+        assert w._refresh_transmission_recovery_quarantine(
+            identity, announce=True)
+        assert w._transmission_recovery_quarantine_error == "checksum mismatch"
+        assert not w.btn_write_tune.isEnabled()
+        assert w._run_state_changing_task(lambda *_args: None) is False
+        assert len(scans) == 2
+        assert ran == []
+        assert str(tmp_path) in warnings[-1]
+        assert "Read-only diagnostics remain available" in (
+            w.transmission_swap_details.toPlainText())
+    finally:
+        w.close()
+
+
+def test_matching_journal_is_rechecked_before_write_and_guided_recovery_runs(
+        monkeypatch, tmp_path):
+    import transmission_conversion as conversion
+
+    _app, w = _gui()
+    identity = b"I" * ds2_fast_read.IDENTITY_LENGTH
+    record = type("Record", (), {"operation_id": "pending-swap"})()
+    session = type(
+        "Session", (), {"token": "swap-token", "dme_ident": identity})()
+    scans = []
+    ran = []
+
+    try:
+        w._last_ident_raw = identity
+        w._transmission_swap_journal = type(
+            "Journal", (), {"directory": tmp_path})()
+        monkeypatch.setattr(
+            conversion,
+            "recoverable_connected_swaps",
+            lambda _journal: scans.append(True) or (record,),
+        )
+        monkeypatch.setattr(
+            conversion, "load_connected_swap_journal", lambda _record: session)
+        monkeypatch.setattr(
+            QMessageBox, "warning", staticmethod(lambda *_args: None))
+        monkeypatch.setattr(
+            w, "_run_task", lambda task, **_kwargs: ran.append(task))
+
+        task = lambda *_args: None
+        assert w._run_state_changing_task(task) is False
+        assert ran == []
+        assert w._run_state_changing_task(
+            task, transmission_recovery=True) is True
+        assert ran == [task]
+        assert len(scans) == 2
+    finally:
+        w.close()
+
+
+@pytest.mark.parametrize(
+    ("restored", "expected_mode"),
+    [(False, "Manual"), (True, "Automatic")],
+)
+def test_terminal_transmission_recovery_does_not_recreate_cycle_token_and_updates_mode(
+        monkeypatch, tmp_path, restored, expected_mode):
+    import transmission_conversion as conversion
+
+    _app, w = _gui()
+    identity = b"7500255 connected identity"
+    session = conversion.ConnectedSwapSession(
+        "0123456789abcdef0123456789abcdef", "action_required", "Recover", (),
+        (), (), conversion.Transmission.AUTOMATIC,
+        conversion.Transmission.MANUAL, "MS42", "E46",
+        dme_ident=identity, program="7500255",
+    )
+    session.phase = "recovery"
+    record = type("Record", (), {"operation_id": "interrupted"})()
+    records = [record]
+
+    class DS2:
+        @staticmethod
+        def identify():
+            return identity
+
+    def sync_run(task, on_success=None, on_failure=None):
+        try:
+            result = task(lambda *_args: None, lambda *_args: None)
+        except Exception as error:
+            if on_failure:
+                on_failure(error)
+        else:
+            if on_success:
+                on_success(result)
+
+    def recover(*_args, **_kwargs):
+        records.clear()
+        return {
+            "completed": True,
+            "restored": restored,
+            "source": "automatic",
+            "target": "manual",
+            "title": "Recovery verified",
+        }
+
+    try:
+        w._ds2 = DS2()
+        w._last_ident_raw = identity
+        w._transmission_swap_journal = type(
+            "Journal", (), {"directory": tmp_path})()
+        monkeypatch.setattr(w, "_run_task", sync_run)
+        monkeypatch.setattr(
+            conversion, "recoverable_connected_swaps", lambda _journal: tuple(records))
+        monkeypatch.setattr(
+            conversion, "load_connected_swap_journal", lambda _record: session)
+        monkeypatch.setattr(
+            w, "_choose_transmission_recovery_action", lambda _session: "target")
+        monkeypatch.setattr(w, "_recover_transmission_swap_core", recover)
+        monkeypatch.setattr(
+            QMessageBox, "information", staticmethod(lambda *_args: None))
+
+        w._on_recover_transmission_swap()
+
+        assert w._transmission_swap_token is None
+        assert w._transmission_swap_phase == "complete"
+        assert w.btn_transmission_swap_verify.isHidden()
+        assert session.token not in w._transmission_swap_sessions
+        assert w._info_labels["Transmission Mode"].text() == expected_mode
+        assert f"Engine-reported transmission mode: {expected_mode}" in (
+            w.lbl_transmission_swap_status.text())
+    finally:
+        w._ds2 = None
+        w.close()
+
+
+def test_transmission_recovery_restores_awaiting_original_ui(monkeypatch):
+    import transmission_conversion as conversion
+
+    _app, w = _gui()
+    identity = b"7500255 connected identity"
+    session = conversion.ConnectedSwapSession(
+        "0123456789abcdef0123456789abcdef", "action_required",
+        "Ignition cycle required", (), (), (),
+        conversion.Transmission.AUTOMATIC,
+        conversion.Transmission.MANUAL,
+        "MS42", "E46", dme_ident=identity, program="7500255",
+    )
+    session.phase = "rollback_awaiting_cycle"
+    record = type(
+        "Record", (), {
+            "operation_id": "recovery-original",
+            "phase": "awaiting_cycle",
+            "failed_from": None,
+        })()
+
+    class DS2:
+        @staticmethod
+        def identify():
+            return identity
+
+    class Journal:
+        @staticmethod
+        def load(operation_id):
+            assert operation_id == record.operation_id
+            return record
+
+    def sync_run(task, on_success=None, on_failure=None):
+        try:
+            result = task(lambda *_args: None, lambda *_args: None)
+        except Exception as error:
+            if on_failure:
+                on_failure(error)
+        else:
+            if on_success:
+                on_success(result)
+
+    try:
+        w._ds2 = DS2()
+        w._transmission_swap_journal = Journal()
+        monkeypatch.setattr(w, "_run_task", sync_run)
+        monkeypatch.setattr(
+            conversion, "recoverable_connected_swaps",
+            lambda journal: (record,))
+        monkeypatch.setattr(
+            conversion, "load_connected_swap_journal",
+            lambda current: session)
+        monkeypatch.setattr(
+            w, "_choose_transmission_recovery_action",
+            lambda *_args: pytest.fail("awaiting-cycle recovery must not rewrite"))
+
+        w._on_recover_transmission_swap()
+
+        assert w._transmission_swap_sessions[session.token] is session
+        assert w._transmission_swap_journal_ids[session.token] == record.operation_id
+        assert w._transmission_swap_token == session.token
+        assert w._transmission_swap_phase == "awaiting_cycle"
+        assert not w.btn_transmission_swap_verify.isHidden()
+    finally:
+        w._ds2 = None
+        w.close()
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_phase", "expected_attr", "restoring_original"),
+    [
+        ("target", "modules_written", "eeprom_target", False),
+        ("original", "rollback_modules_written", "eeprom_before", True),
+    ],
+)
+def test_ms41_transmission_recovery_writes_exact_archived_eeprom(
+        monkeypatch, tmp_path, action, expected_phase, expected_attr,
+        restoring_original):
+    import transmission_conversion as conversion
+    from engines.softbsl import eeprom_ram
+
+    _app, w = _gui()
+    before = bytes(range(256)) * 2
+    target = bytes(reversed(before))
+    session = conversion.ConnectedSwapSession(
+        "0123456789abcdef0123456789abcdef", "action_required", "Recover", (),
+        (), (), conversion.Transmission.AUTOMATIC,
+        conversion.Transmission.MANUAL, "MS41.2", "E39",
+        dme_ident=b"1406464 connected identity", program="1406464",
+        eeprom_before=before, eeprom_target=target, eeprom_variant="MS41.2",
+    )
+    session.phase = "recovery"
+    record = type("Record", (), {"operation_id": "interrupted"})()
+    calls = {}
+
+    def recover(_ds2, current, selected, **kwargs):
+        assert selected == action
+        assert kwargs["eeprom_current"] == before
+        calls["recovery"] = kwargs
+        current.phase = expected_phase
+        return current.wire()
+
+    def mark_intent(current, journal, **kwargs):
+        calls["intent"] = (current, journal, kwargs)
+
+    def write_image(port, image, **kwargs):
+        calls["write"] = (port, image, kwargs)
+        return type("Capture", (), {"image": image})()
+
+    def finish(current, image, operation_id, **kwargs):
+        calls["finish"] = (current.phase, image, operation_id, kwargs)
+        current.phase = (
+            "rollback_awaiting_cycle" if restoring_original else "awaiting_cycle")
+        return {"requires_key_cycle": True}
+
+    try:
+        w._ds2 = object()
+        w._transmission_swap_journal = object()
+        monkeypatch.setattr(conversion, "recover_connected_modules", recover)
+        monkeypatch.setattr(conversion, "mark_eeprom_write_intent", mark_intent)
+        monkeypatch.setattr(eeprom_ram, "write_image", write_image)
+        monkeypatch.setattr(
+            w, "_automatic_eeprom_path",
+            lambda prefix: str(tmp_path / f"{prefix}.bin"))
+        def run_via_eeprom(operation, log_fn, progress_fn):
+            if "fresh_read" not in calls:
+                calls["fresh_read"] = True
+                return type("Capture", (), {"image": before})()
+            return operation("COM1", progress_fn, log_fn)
+
+        monkeypatch.setattr(w, "_run_via_eeprom", run_via_eeprom)
+        monkeypatch.setattr(w, "_finish_transmission_eeprom", finish)
+
+        result = w._recover_transmission_swap_core(
+            record, session, action,
+            lambda *_args: None, lambda *_args: None)
+
+        expected = getattr(session, expected_attr)
+        assert calls["write"][1] == expected
+        assert calls["write"][2]["variant"] == "MS41.2"
+        assert calls["intent"][2]["restoring_original"] is restoring_original
+        assert calls["finish"][1] == expected
+        assert calls["finish"][3]["restoring_original"] is restoring_original
+        assert result["recovery_action"] == action
+    finally:
+        w._ds2 = None
+        w.close()
+
+
+def test_retained_eeprom_resolution_completes_original_recovery_journal(
+        monkeypatch, tmp_path):
+    import transmission_conversion as conversion
+    from engines.softbsl import eeprom_ram
+
+    _app, w = _gui()
+    image = bytes(range(256)) * 2
+    session = conversion.ConnectedSwapSession(
+        "0123456789abcdef0123456789abcdef", "action_required", "Recover", (),
+        (), (), conversion.Transmission.AUTOMATIC,
+        conversion.Transmission.MANUAL, "MS41.2", "E39",
+        dme_ident=b"1406464 connected identity", program="1406464",
+        eeprom_before=image, eeprom_target=bytes(reversed(image)),
+        eeprom_variant="MS41.2",
+    )
+    session.phase = "eeprom_recovery"
+
+    class Recovery:
+        is_open = True
+        after_path = tmp_path / "after.bin"
+        variant = "MS41.2"
+
+    recovery = Recovery()
+    calls = []
+
+    def resolve(current):
+        assert current is recovery
+        current.is_open = False
+        return image
+
+    def finish(current, current_image, operation_id, **kwargs):
+        calls.append((current.phase, current_image, operation_id, kwargs))
+        current.phase = "rollback_awaiting_cycle"
+        return {
+            "title": "Original coding restored; ignition cycle required",
+            "source": "automatic", "target": "manual",
+            "requires_key_cycle": True,
+        }
+
+    def sync_run(task, on_success=None, on_failure=None):
+        try:
+            result = task(lambda *_args: None, lambda *_args: None)
+        except Exception as error:
+            if on_failure:
+                on_failure(error)
+        else:
+            if on_success:
+                on_success(result)
+
+    try:
+        w._connection_port = "COM1"
+        w._last_ident_raw = b"I" * ds2_fast_read.IDENTITY_LENGTH
+        w._eeprom_write_recovery = recovery
+        w._port_owner.acquire("eeprom")
+        w._transmission_swap_sessions[session.token] = session
+        w._transmission_swap_recovery_token = session.token
+        w._transmission_swap_eeprom_context = {
+            "token": session.token,
+            "journal_id": "restore-operation",
+            "restoring_original": True,
+            "resume_phase": "rollback_modules_written",
+        }
+        monkeypatch.setattr(eeprom_ram, "resolve_write_recovery", resolve)
+        monkeypatch.setattr(
+            eeprom_ram, "repair_write_recovery",
+            lambda *_args, **_kwargs:
+            pytest.fail("verified recovery must not replay writes"))
+        monkeypatch.setattr(
+            w, "_reopen_ds2_with_retry",
+            lambda *_args, **_kwargs: setattr(w, "_ds2", object()) or True)
+        monkeypatch.setattr(
+            w, "_catalogue_eeprom_safety_image", lambda *_args: None)
+        monkeypatch.setattr(w, "_show_eeprom_image", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(w, "_finish_transmission_eeprom", finish)
+        monkeypatch.setattr(w, "_run_task", sync_run)
+        monkeypatch.setattr(
+            QMessageBox, "information", staticmethod(lambda *_args, **_kwargs: None))
+
+        w._on_eeprom_resolve()
+
+        assert calls == [(
+            "rollback_modules_written", image, "restore-operation",
+            {"restoring_original": True},
+        )]
+        assert w._transmission_swap_phase == "awaiting_cycle"
+        assert w._transmission_swap_eeprom_context is None
+        assert w._transmission_swap_recovery_token is None
+    finally:
+        w._ds2 = None
+        w._port_owner.release("flasher")
+        w.close()
+
+
+def test_transmission_original_final_verify_uses_journal_and_settles_chain(
+        monkeypatch):
+    import transmission_conversion as conversion
+
+    _app, w = _gui()
+    identity = b"7500255 connected identity"
+    session = conversion.ConnectedSwapSession(
+        "0123456789abcdef0123456789abcdef", "action_required", "Verify", (),
+        (), (), conversion.Transmission.AUTOMATIC,
+        conversion.Transmission.MANUAL, "MS42", "E46",
+        dme_ident=identity, program="7500255",
+    )
+    session.phase = "rollback_awaiting_cycle"
+    record = type(
+        "Record", (), {
+            "phase": "awaiting_cycle", "failed_from": None,
+        })()
+    operation_id = "restore-operation"
+    calls = []
+
+    class DS2:
+        @staticmethod
+        def identify():
+            return identity
+
+    class Journal:
+        @staticmethod
+        def load(current_id):
+            assert current_id == operation_id
+            return record
+
+    def verify(_ds2, current, **kwargs):
+        calls.append(("verify", current, kwargs))
+        current.phase = "restored"
+        return {"completed": True, "restored": True}
+
+    try:
+        w._ds2 = DS2()
+        w._transmission_swap_journal = Journal()
+        w._transmission_swap_sessions[session.token] = session
+        w._transmission_swap_journal_ids[session.token] = operation_id
+        monkeypatch.setattr(conversion, "verify_connected_original", verify)
+        monkeypatch.setattr(
+            conversion, "settle_superseded_connected_swaps",
+            lambda journal, current_id: calls.append(
+                ("settle", journal, current_id)))
+
+        result = w._execute_transmission_swap_core(
+            session.token, True, lambda *_args: None, lambda *_args: None)
+
+        assert result["restored"] is True
+        assert calls[0][0] == "verify"
+        assert calls[0][2]["journal"] is w._transmission_swap_journal
+        assert calls[0][2]["journal_id"] == operation_id
+        assert calls[1] == (
+            "settle", w._transmission_swap_journal, operation_id)
+        assert session.token not in w._transmission_swap_sessions
+    finally:
+        w._ds2 = None
+        w.close()
+
+
 def test_diagnostics_scan_populates_exact_fault_profiles(monkeypatch):
     from vehicle_diagnostics import ModuleScanResult
 

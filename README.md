@@ -40,6 +40,9 @@ BimmerStein ECU Tool brings BMW MS41 flashing, diagnostics, configuration, patch
 - Honor the operator's backup and host read-back Verify selections.
 - Preserve an active recovery session after a post-erase write failure.
 - Read ECU information, DTCs, live data, coding, VIN, and EWS information.
+- Run guided manual/automatic transmission conversion on exact supported E39
+  MS41 and E46 MS42/MS43 vehicle profiles, with full-car preflight and
+  restart-safe recovery.
 - Analyze ROMs with user-managed definitions and a detachable parameter table.
 - Convert, catalogue, and patch ROM images offline.
 - Install and use Soft-BSL for supported high-speed operations.
@@ -75,6 +78,7 @@ least 10 seconds, then ignition ON.
 | --- | --- |
 | ECU software | BMW MS41.0, MS41.1, MS41.2, and MS41.3 |
 | Normal diagnostics | BMW DS2 over K-Line, 9600 baud, 8E2 |
+| Transmission conversion | Exact reviewed E39 MS41-family, E46 MS42 AM51, and late E46 MS43 EV51 profiles over K-Line |
 | Stock fast transfer | Native-fast DS2 through FTDI D2XX, requesting the ECU-exact 187,500 baud rate |
 | Soft-BSL | Persistent loader and Intel/AMD RAM agents |
 | Hardware BSL | Intel 28F200 and AMD/JEDEC 29F200/29F400 through a separate direct ASC0 connection |

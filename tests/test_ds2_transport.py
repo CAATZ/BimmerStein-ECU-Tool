@@ -426,6 +426,42 @@ def test_send_frame_rejects_short_tx_and_impossible_reply(monkeypatch):
         d.send_frame(frame, 0x44)
 
 
+def test_bmw_fast_transport_frames_and_validates_mk60_reply(monkeypatch):
+    class Serial:
+        is_open = True
+
+        def __init__(self):
+            self.writes = []
+
+        def reset_input_buffer(self):
+            pass
+
+        def write(self, frame):
+            self.writes.append(bytes(frame))
+            return len(frame)
+
+        def flush(self):
+            pass
+
+    request = bytes.fromhex("B8 29 F1 03 22 30 00")
+    response_body = bytes.fromhex("B8 F1 29 04 62 30 00 01")
+    response = response_body + bytes((_xor(response_body),))
+    reads = iter((response[:4], response[4:]))
+    d = DS2Interface("COM1", echo=False)
+    d._ser = Serial()
+    monkeypatch.setattr(d, "_read_exact", lambda *_args: next(reads))
+
+    assert d.send_bmw_fast(request, target=0x29) == response
+    assert d._ser.writes == [request + bytes((_xor(request),))]
+
+    bad = bytearray(response)
+    bad[-1] ^= 1
+    reads = iter((bytes(bad[:4]), bytes(bad[4:])))
+    monkeypatch.setattr(d, "_read_exact", lambda *_args: next(reads))
+    with pytest.raises(ds2.DS2ChecksumError, match="BMW-Fast"):
+        d.send_bmw_fast(request, target=0x29)
+
+
 class _FakeReadSerial:
     """Answers every READ_MEM (0x06) execute() with a valid zero-filled response.
     Enough to drive read_full/read_memory_range end-to-end without real I/O."""

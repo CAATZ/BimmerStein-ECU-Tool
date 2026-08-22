@@ -20,9 +20,13 @@ compliance with applicable emissions, safety, registration, and other laws.
 - Added a human-readable Coding tab for reviewed GM3 window, lock, and memory
   settings plus exact E46 driver-seat memory settings. Everyday controls are
   shown first; technical references remain behind the Advanced switch.
-- Added a read-only transmission-swap compatibility summary. One-click
-  conversion remains unavailable until every required vehicle-order and module
-  writer is exact and self-contained.
+- Added guided one-click manual/automatic transmission conversion for exact
+  reviewed E39 MS41-family, E46 MS42 AM51, and late E46 MS43 EV51 profiles.
+  It verifies the complete fitted-car state before writing, archives every
+  changed owner, supports finish-or-restore recovery after restart, requires
+  the displayed ignition cycle, and independently verifies the final state.
+  E36 and unknown or inconsistent profiles are identified and refused before
+  coding.
 - Expanded ECU Info with programming history, program lineage, firmware-aware
   transmission state, and clearer identity fields.
 - Added advisory battery-voltage checks before writes. Low or unavailable
@@ -43,6 +47,8 @@ compliance with applicable emissions, safety, registration, and other laws.
   execution checks; renewed physical testing is required.
 - Vehicle diagnostics and coding are restricted to reviewed exact profiles;
   unknown module revisions remain read-only.
+- Transmission conversion and restart recovery passed the complete offline
+  automated test suite. Physical vehicle validation is still required.
 
 **IGNITION CUT HAZARD:** Ignition Cut V9 may suppress spark while injection
 continues at the stock or configured fixed pulse width. Unburned fuel can

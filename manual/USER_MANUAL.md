@@ -262,9 +262,42 @@ Everyday settings are shown by default; **Show advanced options** reveals equipm
 flags and technical references. Writes preserve unrelated bits and require exact
 readback. Unknown module revisions remain read-only.
 
-The transmission-swap panel is advisory. It reports the detected engine-computer
-family, transmission mode, and transmission-computer presence, but does not perform
-a partial conversion.
+### Guided Transmission Conversion
+
+The transmission panel performs a complete guided manual/automatic conversion only
+when the entire connected car matches an exact built-in profile. Current write support
+covers reviewed E39 MS41-family profiles, E46 MS42 vehicle type AM51 using the early
+vehicle-order format, and late E46 MS43 vehicle type EV51 using the version-2 vehicle
+order. E36 is identified but refused because its Concept-1 cluster requires ADS/L-line
+access. Early MS43, M3 sequential-gearbox, unknown revisions, and unreviewed vehicle
+types are also refused before any coding write.
+
+1. Complete the mechanical transmission swap, connect through normal K-Line, keep the
+   engine stopped, choose the target transmission, and select **Check Compatibility**.
+2. The check is read-only. It compares the engine computer, every vehicle-order copy,
+   immobilizer starter coding, instrument cluster, traction/stability control, current
+   transmission state, and the automatic-transmission computer when required. MS41
+   also checks the complete 512-byte EEPROM and its live transmission state.
+3. For a manual target, the automatic-transmission computer must be disconnected. For
+   an automatic target, the exact reviewed transmission computer must be fitted and
+   communicating. Any mismatch stops the process before a write.
+4. Review the plain-English changes, confirm that the physical swap is complete, and
+   select **Convert**. The tool durably archives the original owner data, records each
+   write before sending it, preserves unrelated bytes, and requires exact readback.
+5. When prompted, turn ignition **OFF**, wait at least **10 seconds**, then turn it
+   **ON** with the engine still stopped. Confirm the cycle and select **Verify
+   Conversion**. Success is shown only after every changed owner and the final engine
+   state match the selected transmission.
+
+If the application or computer stops mid-process, keep the recovery files intact.
+Reconnect the same car and use **Recover Interrupted Conversion** to either finish the
+reviewed target or restore the exact archived originals. Other writes remain disabled
+until recovery is verified.
+
+For manual coding, the tool disables the immobilizer's transmission starter-interlock
+input to avoid a no-crank condition. A retained clutch-start switch will therefore no
+longer block cranking. MS42 clears engine adaptations after coding; MS43 resets only
+its learned transmission variant.
 
 ### Live Data
 

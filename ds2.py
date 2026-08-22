@@ -477,6 +477,45 @@ class DS2Interface:
             raise DS2ChecksumError(f"bad checksum on module 0x{resp_addr:02X} response")
         return resp
 
+    def send_bmw_fast(self, body: bytes, target: int, timeout: float = None) -> bytes:
+        """Send one BMW-Fast K-line telegram and return its validated raw reply.
+
+        Wire bodies use ``B8 target source payload_length payload...``; the
+        transport appends the XOR byte. This is the framing used by E46 MK60.
+        """
+        if not self.is_open:
+            raise DS2Error("port not open")
+        if timeout is None:
+            timeout = READ_TIMEOUT
+        body = bytes(body)
+        if (len(body) < 4 or body[0] != 0xB8 or body[1] != target
+                or body[2] != 0xF1 or body[3] != len(body) - 4):
+            raise ValueError("invalid BMW-Fast request body")
+        frame = body + bytes((_xor(body),))
+        self._ser.reset_input_buffer()
+        written = self._ser.write(frame)
+        if written != len(frame):
+            raise DS2Error(
+                f"short BMW-Fast write to 0x{target:02X}: {written}/{len(frame)} bytes")
+        self._ser.flush()
+        self._discard_echo(frame)
+
+        head = self._read_exact(4, timeout)
+        if len(head) != 4:
+            raise DS2Timeout(f"no BMW-Fast response from module 0x{target:02X}")
+        if head[:3] != bytes((0xB8, 0xF1, target)):
+            raise DS2Error(
+                f"unexpected BMW-Fast response header {head.hex(' ')}")
+        rest = self._read_exact(head[3] + 1, INTER_BYTE_TMO + 0.5)
+        response = head + rest
+        if len(rest) != head[3] + 1:
+            raise DS2Timeout(
+                f"short BMW-Fast response from 0x{target:02X}")
+        if _xor(response[:-1]) != response[-1]:
+            raise DS2ChecksumError(
+                f"bad checksum on BMW-Fast module 0x{target:02X} response")
+        return response
+
     def read_dtc(self, specific_fault: int = 1) -> bytes:
         return self.execute(DS2Commands.READ_DTC, bytes([specific_fault & 0xFF]))
 

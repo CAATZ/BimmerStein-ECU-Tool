@@ -87,6 +87,8 @@ import softbsl_service
 import softbsl_install
 import bsl_service
 import ch341a_eeprom_service
+import transmission_conversion
+from transmission_swap_journal import SwapOperationJournal
 from engines.softbsl import eeprom_ram
 from app_paths import install_root, mutable_path
 from definition_registry import (
@@ -964,6 +966,17 @@ class _BootGateBlock:
 # ---------------------------------------------------------------------------
 
 class MS41FlashGUI(QMainWindow):
+    _TRANSMISSION_QUARANTINED_BUTTONS = (
+        "btn_write_full", "btn_write_tune", "btn_reset_adapt",
+        "btn_config_write_ecu", "btn_backup_flash",
+        "btn_eeprom_write", "btn_ch341a_write", "btn_eeprom_seed",
+        "btn_ch341a_restore", "btn_id_vin_apply", "btn_ews_send",
+        "btn_softbsl_install", "btn_softbsl_xbank", "btn_native_recovery",
+        "btn_bsl_arm", "btn_bsl_vpp", "btn_write_gm3_coding",
+        "btn_write_seat_coding", "btn_clear_dtc",
+        "btn_transmission_swap_convert",
+    )
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("BimmerStein ECU Tool")
@@ -1005,6 +1018,15 @@ class MS41FlashGUI(QMainWindow):
         self._native_write_recovery = None  # retained D2XX/session after a post-erase failure
         self._softbsl_write_recovery = None # retained Soft-BSL RAM agent after a post-erase failure
         self._eeprom_write_recovery = None # retained EEPROM agent after an uncertain byte write
+        self._transmission_swap_sessions = {}
+        self._transmission_swap_recovery_token = None
+        self._transmission_swap_journal = SwapOperationJournal(
+            os.path.join(BACKUP_DIR, "transmission"))
+        self._transmission_swap_journal_ids = {}
+        self._transmission_swap_eeprom_context = None
+        self._transmission_recovery_quarantine_id = None
+        self._transmission_recovery_quarantine_token = None
+        self._transmission_recovery_quarantine_error = None
         self._eeprom_task_busy = False    # closes are vetoed across the handoff race window
         self._softbsl_install_recovery = None # retained Phase-1/2 installer transport
         self._softbsl_boot_session = None   # CalGuard key-on entry retained until read/write
@@ -1627,8 +1649,8 @@ class MS41FlashGUI(QMainWindow):
 
         intro = QLabel(
             "Plain-English settings from exact built-in module profiles. "
-            "Technical references are supporting details; all coding profiles "
-            "needed by the app are built in."
+            "The tool reads fitted modules directly over K-Line and changes only "
+            "reviewed settings for recognized module versions."
         )
         intro.setWordWrap(True)
         intro.setStyleSheet("color:#aaa; padding:4px;")
@@ -1750,38 +1772,104 @@ class MS41FlashGUI(QMainWindow):
         seat_lay.addWidget(self.lbl_seat_reference)
         lay.addWidget(seat_group)
 
-        swap_group = QGroupBox("Transmission Swap — Compatibility Status")
+        swap_group = QGroupBox("Transmission Conversion")
         swap_lay = QVBoxLayout(swap_group)
         self.lbl_transmission_swap_status = QLabel()
         self.lbl_transmission_swap_status.setWordWrap(True)
         self.lbl_transmission_swap_status.setStyleSheet("color:#bbb; padding:4px;")
         swap_lay.addWidget(self.lbl_transmission_swap_status)
-        swap_links = QHBoxLayout()
-        for label, tab_name in (
-            ("Open ECU Info", "ECU Info"),
-            ("Open Diagnostics", "Diagnostics"),
-            ("Open ECU Configuration", "ECU Config"),
-            ("Open EEPROM Manager", "EEPROM"),
-        ):
-            button = QPushButton(label)
-            button.clicked.connect(
-                lambda _checked=False, name=tab_name: self._open_named_tab(name))
-            swap_links.addWidget(button)
-        swap_links.addStretch()
-        swap_lay.addLayout(swap_links)
+        target_row = QHBoxLayout()
+        target_row.addWidget(QLabel("Convert the vehicle to:"))
+        self.cb_transmission_swap_target = QComboBox()
+        self.cb_transmission_swap_target.addItem("Manual transmission", "manual")
+        self.cb_transmission_swap_target.addItem("Automatic transmission", "automatic")
+        self.cb_transmission_swap_target.currentIndexChanged.connect(
+            self._on_transmission_swap_target_changed)
+        target_row.addWidget(self.cb_transmission_swap_target)
+        self.btn_transmission_swap_check = self._op_btn(
+            "Check Compatibility", "#1e5080", self._on_prepare_transmission_swap
+        )
+        self.btn_transmission_swap_check.setMaximumWidth(190)
+        target_row.addWidget(self.btn_transmission_swap_check)
+        target_row.addStretch()
+        swap_lay.addLayout(target_row)
+
         swap_note = QLabel(
-            "Full vehicle conversion is not enabled yet because exact vehicle-order "
-            "and EWS/cluster/ASC-DSC coding owners are not implemented. The tool will "
-            "not offer a partial or guessed conversion."
+            "Compatibility checking is read-only. It identifies the fitted modules and "
+            "shows every planned change before anything is written."
         )
         swap_note.setWordWrap(True)
-        swap_note.setStyleSheet("color:#d6a34a; padding:4px;")
+        swap_note.setStyleSheet("color:#aaa; padding:2px 4px;")
         swap_lay.addWidget(swap_note)
+
+        recovery_row = QHBoxLayout()
+        self.btn_transmission_swap_recover = self._op_btn(
+            "Recover Interrupted Conversion…", "#5c4b2c",
+            self._on_recover_transmission_swap,
+        )
+        self.btn_transmission_swap_recover.setMaximumWidth(250)
+        self.btn_transmission_swap_recover.setToolTip(
+            "Loads the newest verified local recovery record for this vehicle, then "
+            "lets you finish the reviewed conversion or restore the original coding."
+        )
+        recovery_row.addWidget(self.btn_transmission_swap_recover)
+        recovery_row.addStretch()
+        swap_lay.addLayout(recovery_row)
+
+        self.transmission_swap_details = QTextEdit()
+        self.transmission_swap_details.setReadOnly(True)
+        self.transmission_swap_details.setMinimumHeight(150)
+        self.transmission_swap_details.setMaximumHeight(230)
+        self.transmission_swap_details.setStyleSheet(
+            "background:#1a1a1a; color:#d4d4d4; border:1px solid #444; padding:4px;"
+        )
+        swap_lay.addWidget(self.transmission_swap_details)
+
+        self.chk_transmission_swap_mechanical = QCheckBox(
+            "I confirm the physical transmission swap is complete and the vehicle is "
+            "safely parked."
+        )
+        self.chk_transmission_swap_mechanical.toggled.connect(
+            self._update_transmission_swap_actions)
+        swap_lay.addWidget(self.chk_transmission_swap_mechanical)
+        self.btn_transmission_swap_convert = self._op_btn(
+            "Convert to Manual", "#7a4f16", self._on_execute_transmission_swap
+        )
+        self.btn_transmission_swap_convert.setMaximumWidth(210)
+        swap_lay.addWidget(self.btn_transmission_swap_convert)
+
+        self.lbl_transmission_swap_cycle = QLabel(
+            "Coding was written and read back. To finish:\n"
+            "1. Turn the ignition OFF.\n"
+            "2. Wait at least 10 seconds.\n"
+            "3. Turn the ignition ON with the engine stopped.\n"
+            "4. Confirm the cycle below, then verify the vehicle."
+        )
+        self.lbl_transmission_swap_cycle.setWordWrap(True)
+        self.lbl_transmission_swap_cycle.setStyleSheet(
+            "color:#d6a34a; font-weight:bold; padding:6px;"
+        )
+        self.chk_transmission_swap_cycle = QCheckBox(
+            "I completed the ignition OFF → 10 seconds → ON cycle."
+        )
+        self.chk_transmission_swap_cycle.toggled.connect(
+            self._update_transmission_swap_actions)
+        self.btn_transmission_swap_verify = self._op_btn(
+            "Verify Conversion", "#27632a", self._on_verify_transmission_swap
+        )
+        self.btn_transmission_swap_verify.setMaximumWidth(210)
+        for widget in (
+                self.lbl_transmission_swap_cycle,
+                self.chk_transmission_swap_cycle,
+                self.btn_transmission_swap_verify):
+            widget.setVisible(False)
+            swap_lay.addWidget(widget)
         lay.addWidget(swap_group)
         lay.addStretch()
         self.tabs.addTab(tab, "  Coding  ")
         self._reset_gm3_coding()
         self._reset_seat_coding()
+        self._reset_transmission_swap_plan()
         self._update_transmission_swap_status()
 
     # ── ECU Info tab ────────────────────────────────────────────────────
@@ -2316,6 +2404,7 @@ class MS41FlashGUI(QMainWindow):
         self._reset_diag_scan(False)
         self._reset_gm3_coding()
         self._reset_seat_coding()
+        self._reset_transmission_swap_plan()
         self.lbl_gm3_coding.setText(
             "Connect in normal K-Line mode, then read the fitted General Module."
         )
@@ -2489,6 +2578,8 @@ class MS41FlashGUI(QMainWindow):
         self._update_softbsl_install_options()
         self._update_config_buttons()
         self._update_eeprom_buttons()
+        self._refresh_transmission_recovery_quarantine(
+            ident, announce=True)
 
     def _set_ds2_buttons_enabled(self):
         """DS2 mode: reads + partial tune write enabled; full write held off."""
@@ -2549,6 +2640,7 @@ class MS41FlashGUI(QMainWindow):
         self._update_eeprom_buttons()
         self._update_diag_actions()
         self._update_coding_actions()
+        self._apply_transmission_recovery_quarantine()
 
     def _set_calguard_boot_buttons_enabled(self):
         """Retained-agent mode exposes only the Flash read/write surface."""
@@ -2569,6 +2661,7 @@ class MS41FlashGUI(QMainWindow):
         self.btn_write_tune.setToolTip(
             "Write a tune only when its Firmware Compatibility ID matches the "
             "identifiable live program. A missing or corrupt program ID blocks it.")
+        self._apply_transmission_recovery_quarantine()
 
     def _fast_read_available(self):
         """Whether the complete normal-mode Soft-BSL entry path is usable.
@@ -3211,7 +3304,7 @@ class MS41FlashGUI(QMainWindow):
                 self._ds2.clear_adaptations(sub1, sub2)
                 return f"'{choice}' cleared — ECU will re-learn on next drive cycle."
 
-            self._run_task(task)
+            self._run_state_changing_task(task)
             return
 
         QMessageBox.information(self, "Not Connected",
@@ -3548,7 +3641,8 @@ class MS41FlashGUI(QMainWindow):
                 "If the write was interrupted mid-way, the ECU may have a partially "
                 "erased tune sector. Re-flash before cycling ignition.")
 
-        self._run_task(task, on_success=on_success, on_failure=on_failure)
+        self._run_state_changing_task(
+            task, on_success=on_success, on_failure=on_failure)
 
     def _ds2_write_full(self, data: bytearray, filename: str, *,
                         require_boot_write=False, preserve_boot_identity=None,
@@ -4081,7 +4175,8 @@ class MS41FlashGUI(QMainWindow):
                 "If write was interrupted mid-way the ECU may be in a partially "
                 "erased state. Review the log and recover or re-flash before cycling ignition.")
 
-        self._run_task(task, on_success=on_success, on_failure=on_failure)
+        self._run_state_changing_task(
+            task, on_success=on_success, on_failure=on_failure)
 
     # ── Live Data tab ────────────────────────────────────────────────────
 
@@ -5301,6 +5396,7 @@ class MS41FlashGUI(QMainWindow):
         self.btn_config_read_ecu.setEnabled(ok and (not file_loaded) and connected)
         self.btn_config_get_file.setEnabled(ok and (not file_loaded) and connected)
         self.btn_config_write_ecu.setEnabled(ok and (not file_loaded) and connected)
+        self._apply_transmission_recovery_quarantine()
 
     def _set_config_combo(self, name, label, profile=None, allow_profile_custom=False):
         """Set one config dropdown to `label`, adding it if it's a custom value.
@@ -5956,7 +6052,8 @@ class MS41FlashGUI(QMainWindow):
                 f"Config write failed:\n{err}\n\nIf interrupted mid-write, re-flash "
                 f"the tune before cycling ignition.")
 
-        self._run_task(task, on_success=on_success, on_failure=on_failure)
+        self._run_state_changing_task(
+            task, on_success=on_success, on_failure=on_failure)
 
     def _config_diff(self, orig, patched, profile=None):
         """(feature, byte, old, new, old_label, new_label) for each changed control bit.
@@ -6305,7 +6402,14 @@ class MS41FlashGUI(QMainWindow):
         pending_recovery = self._pending_eeprom_recovery()
         recovery = self._active_eeprom_recovery()
         _flash_kind, flash_recovery = self._active_write_recovery()
-        idle = not busy and pending_recovery is None and flash_recovery is None
+        transmission_pending = getattr(
+            self, "_transmission_swap_phase", "idle") in {
+                "awaiting_cycle", "recovery"
+            }
+        idle = (
+            not busy and not transmission_pending
+            and pending_recovery is None and flash_recovery is None
+        )
         connected = bool(self._ds2 is not None and self._connection_port)
         identity_ready = (
             len(bytes(getattr(self, "_last_ident_raw", b"") or b""))
@@ -6425,6 +6529,7 @@ class MS41FlashGUI(QMainWindow):
             and eeprom_ram.changed_offsets(capture.image, preseed.image)
             == ch341a_eeprom_service.RECOVERY_OFFSETS)
         self.btn_ch341a_restore.setEnabled(restore_ready)
+        self._apply_transmission_recovery_quarantine()
 
         if ch341a_status is None:
             ch341a_text = (
@@ -6533,7 +6638,9 @@ class MS41FlashGUI(QMainWindow):
         QMessageBox.information(
             self, "EEPROM Image Saved", f"Saved an exact 512-byte copy to:\n{saved}")
 
-    def _run_eeprom_task(self, task, on_success, on_failure=None):
+    def _run_eeprom_task(
+            self, task, on_success, on_failure=None, *,
+            state_changing=False, transmission_recovery=False):
         self._eeprom_task_busy = True
 
         def success(result):
@@ -6545,7 +6652,18 @@ class MS41FlashGUI(QMainWindow):
             (on_failure or self._on_eeprom_failure)(error)
 
         try:
-            self._run_task(task, on_success=success, on_failure=failure)
+            if state_changing:
+                started = self._run_state_changing_task(
+                    task,
+                    on_success=success,
+                    on_failure=failure,
+                    transmission_recovery=transmission_recovery,
+                )
+                if not started:
+                    self._eeprom_task_busy = False
+            else:
+                self._run_task(
+                    task, on_success=success, on_failure=failure)
         except Exception:
             self._eeprom_task_busy = False
             raise
@@ -6659,7 +6777,8 @@ class MS41FlashGUI(QMainWindow):
             )
 
         self._run_eeprom_task(
-            task, on_success, on_failure=self._on_ch341a_failure)
+            task, on_success, on_failure=self._on_ch341a_failure,
+            state_changing=True)
 
     def _on_ch341a_write(self):
         if not self.btn_ch341a_write.isEnabled():
@@ -6719,7 +6838,8 @@ class MS41FlashGUI(QMainWindow):
                 + f"Verified image:\n{result.after.path}")
 
         self._run_eeprom_task(
-            task, on_success, on_failure=self._on_ch341a_failure)
+            task, on_success, on_failure=self._on_ch341a_failure,
+            state_changing=True)
 
     def _on_ch341a_restore(self):
         if not self.btn_ch341a_restore.isEnabled():
@@ -6764,7 +6884,8 @@ class MS41FlashGUI(QMainWindow):
                 f"pre-seed image.\n\nVerified after-image:\n{result.after.path}")
 
         self._run_eeprom_task(
-            task, on_success, on_failure=self._on_ch341a_failure)
+            task, on_success, on_failure=self._on_ch341a_failure,
+            state_changing=True)
 
     def _on_ch341a_failure(self, error):
         if isinstance(error, (
@@ -6941,7 +7062,8 @@ class MS41FlashGUI(QMainWindow):
             )
             self._on_eeprom_failure(error)
 
-        self._run_eeprom_task(task, on_success, on_failure=on_failure)
+        self._run_eeprom_task(
+            task, on_success, on_failure=on_failure, state_changing=True)
 
     def _on_eeprom_resolve(self):
         recovery = self._active_eeprom_recovery()
@@ -7000,15 +7122,74 @@ class MS41FlashGUI(QMainWindow):
                 (f"Bins: {entry.filename}" if entry is not None else
                  f"Verified capture: {recovery.after_path}"),
                 variant=recovery.variant)
+            context = self._transmission_swap_eeprom_context or {}
+            swap_token = context.get(
+                "token", self._transmission_swap_recovery_token)
+            swap_session = self._transmission_swap_sessions.get(swap_token)
+            swap_resolved = bool(
+                swap_session is not None
+                and swap_session.phase == "eeprom_recovery")
+            if swap_resolved:
+                operation_id = context.get(
+                    "journal_id",
+                    self._transmission_swap_journal_ids.get(
+                        swap_token, swap_token),
+                )
+                restoring_original = bool(
+                    context.get("restoring_original", False))
+                swap_session.phase = context.get(
+                    "resume_phase", "modules_written")
+                try:
+                    result = self._finish_transmission_eeprom(
+                        swap_session,
+                        image,
+                        operation_id,
+                        restoring_original=restoring_original,
+                    )
+                except Exception as error:
+                    self._mark_transmission_journal_failed(
+                        operation_id, error, self._log)
+                    self._transmission_swap_phase = "blocked"
+                    self._transmission_swap_eeprom_context = None
+                    self._transmission_swap_recovery_token = None
+                    self._on_eeprom_failure(error)
+                    return
+                if restoring_original:
+                    result["recovery_action"] = "original"
+                self._show_transmission_swap_awaiting_cycle(
+                    swap_token, result)
+                self._transmission_swap_recovery_token = None
+                self._transmission_swap_eeprom_context = None
             self._log("EEPROM retained-session recovery completed.", "ok")
             QMessageBox.information(
                 self,
                 "EEPROM Recovery Complete",
-                "The pending image write was resolved and physically verified. "
-                "Read the EEPROM again before making another change.",
+                ("The transmission record is physically verified. Complete the "
+                 "required OFF → 10 seconds → ON ignition cycle, then return to "
+                 "Coding and verify the conversion."
+                 if swap_resolved else
+                 "The pending image write was resolved and physically verified. "
+                 "Read the EEPROM again before making another change."),
             )
 
-        self._run_eeprom_task(task, on_success)
+        def on_failure(error):
+            context = self._transmission_swap_eeprom_context
+            if context and self._active_eeprom_recovery() is None:
+                self._mark_transmission_journal_failed(
+                    context["journal_id"], error, self._log)
+                self._transmission_swap_phase = "blocked"
+                self._transmission_swap_eeprom_context = None
+                self._transmission_swap_recovery_token = None
+            self._on_eeprom_failure(error)
+
+        self._run_eeprom_task(
+            task,
+            on_success,
+            on_failure=on_failure,
+            state_changing=True,
+            transmission_recovery=bool(
+                self._transmission_swap_eeprom_context),
+        )
 
     def _on_eeprom_failure(self, error):
         self._update_eeprom_buttons()
@@ -7468,6 +7649,7 @@ class MS41FlashGUI(QMainWindow):
         self.btn_id_vin_apply.setEnabled(enabled)
         self.lbl_vin_validation.setText(message)
         self.lbl_vin_validation.setStyleSheet(f"color:{colour};")
+        self._apply_transmission_recovery_quarantine()
 
     def _set_isn(self, isn4, connection_key=None):
         """Set only the fresh live EWS ISN state; BOOT data never calls this."""
@@ -7486,6 +7668,7 @@ class MS41FlashGUI(QMainWindow):
             self.id_ews_isn.clear()
             self.id_ews_frames.setPlainText("Read ISN from the connected DME to begin.")
             self.btn_ews_send.setEnabled(False)
+        self._apply_transmission_recovery_quarantine()
 
     def _ask_identity_backup_choice(self):
         box = QMessageBox(self)
@@ -7810,7 +7993,8 @@ class MS41FlashGUI(QMainWindow):
                 f"{error_msg}{extra}\n\nReview the operation log. If erase began, do not rely on the ECU "
                 "until the identity sector has been recovered and verified.")
 
-        self._run_task(task, on_success=on_done, on_failure=on_failure)
+        self._run_state_changing_task(
+            task, on_success=on_done, on_failure=on_failure)
 
     def _on_ews_send(self):
         isn = self._identity_isn
@@ -7873,7 +8057,8 @@ class MS41FlashGUI(QMainWindow):
             self._log(f"EWS alignment failed: {error_msg}", "error")
             QMessageBox.critical(self, "EWS Alignment Failed", str(error_msg))
 
-        self._run_task(task, on_success=on_done, on_failure=on_failure)
+        self._run_state_changing_task(
+            task, on_success=on_done, on_failure=on_failure)
 
     # ── Soft-BSL tab ─────────────────────────────────────────────────────
     def _build_softbsl_tab(self):
@@ -8061,6 +8246,7 @@ class MS41FlashGUI(QMainWindow):
         else:
             read_reason = "Enter the RAM agent from BOTTOM, flip A17, and CRC-read the full TOP base."
         self.btn_softbsl_xbank_read.setToolTip(read_reason)
+        self._apply_transmission_recovery_quarantine()
 
     def _clear_softbsl_crossbank_target(self, message=""):
         self._softbsl_image = None
@@ -8769,7 +8955,8 @@ class MS41FlashGUI(QMainWindow):
                 "connection/state before starting another operation.",
             )
 
-        self._run_task(task, on_success=on_success, on_failure=on_failure)
+        self._run_state_changing_task(
+            task, on_success=on_success, on_failure=on_failure)
 
     def _start_softbsl_flash_recovery(self, confirmed=False):
         """Resume the same target through the retained Soft-BSL RAM-agent session."""
@@ -8859,7 +9046,8 @@ class MS41FlashGUI(QMainWindow):
                     f"{error_msg}\n\nInspect the ECU connection/state before another operation.",
                 )
 
-        self._run_task(task, on_success=on_success, on_failure=on_failure)
+        self._run_state_changing_task(
+            task, on_success=on_success, on_failure=on_failure)
 
     def _start_native_flash_recovery(self, confirmed=False):
         """Resume the same corrected target on the retained D2XX session."""
@@ -8946,7 +9134,8 @@ class MS41FlashGUI(QMainWindow):
                     f"Retained recovery replay failed:\n{error_msg}"
                 )
 
-        self._run_task(task, on_success=on_success, on_failure=on_failure)
+        self._run_state_changing_task(
+            task, on_success=on_success, on_failure=on_failure)
 
     def _mark_ds2_reconnect_failed(self):
         """Expose a failed handoff restore as a real, reusable disconnection.
@@ -9064,11 +9253,14 @@ class MS41FlashGUI(QMainWindow):
         def task(log_fn, progress_fn):
             softbsl_service.run_cross_bank(
                 port, image, prompt, log_fn, chip_family=chip_family)
-        self._run_task(task,
+        started = self._run_state_changing_task(
+                       task,
                        on_success=lambda _r: (self._port_owner.release("softbsl"),
                                               self._log("Cross-bank TOP write complete and verified; "
                                                         "A17 returned to LOWER and the ECU reset", "ok")),
                        on_failure=self._on_softbsl_crossbank_failure)
+        if not started:
+            self._port_owner.release("softbsl")
 
     def _on_softbsl_crossbank_failure(self, error):
         """Make the required safe A17 recovery state impossible to miss in the log."""
@@ -9335,9 +9527,12 @@ class MS41FlashGUI(QMainWindow):
                 raise
             if rc != 0:
                 raise RuntimeError(f"installation returned status {rc}")
-        self._run_task(task,
-                       on_success=lambda _r: self._on_softbsl_install_success(port),
-                       on_failure=lambda error: self._on_softbsl_install_failure(port, error))
+        started = self._run_state_changing_task(
+            task,
+            on_success=lambda _r: self._on_softbsl_install_success(port),
+            on_failure=lambda error: self._on_softbsl_install_failure(port, error))
+        if not started:
+            self._release_softbsl_port(port)
 
     def _on_softbsl_install_success(self, port):
         """Leave the app disconnected after a verified persistent installation."""
@@ -9645,6 +9840,7 @@ class MS41FlashGUI(QMainWindow):
         self.cb_bsl_half.setEnabled(enabled and self.cb_bsl_chip.currentData() == "29f400")
         self._update_bsl_vpp_control(enabled)
         self.btn_bsl_arm.setEnabled(enabled and self._bsl_plan is not None)
+        self._apply_transmission_recovery_quarantine()
 
     def _on_bsl_pick_ref(self):
         path, _ = QFileDialog.getOpenFileName(self, "Reference Image", "", "Binary (*.bin);;All Files (*)")
@@ -9742,7 +9938,8 @@ class MS41FlashGUI(QMainWindow):
             rc = bsl_service.flash_arm(plan, log_fn, progress_fn)
             if rc != 0:
                 raise RuntimeError(f"flash failed with code {rc}")
-        self._run_task(task,
+        started = self._run_state_changing_task(
+                       task,
                        on_success=lambda _r: (self._port_owner.release("bsl"),
                                               self._invalidate_bsl_plan(),
                                               self._log(f"BSL flash of '{region}' complete", "ok"),
@@ -9756,8 +9953,11 @@ class MS41FlashGUI(QMainWindow):
                                                  self, "BSL Flash Failed",
                                                  f"{e}\n\nKeep the BSL entry wiring available. Do not assume the written region is valid; "
                                                  "review the log and retry recovery as needed.")))
+        if not started:
+            self._port_owner.release("bsl")
 
-    def _run_bsl_diag(self, fn, *extra_args, label):
+    def _run_bsl_diag(
+            self, fn, *extra_args, label, state_changing=False):
         port = self._acquire_bsl_port()
         if not port:
             return
@@ -9770,10 +9970,20 @@ class MS41FlashGUI(QMainWindow):
                 baud=baud, reset_line="dtr", progress=progress_fn)
             if rc != 0:
                 raise RuntimeError(f"{label} exited with code {rc}")
-        self._run_task(task,
-                       on_success=lambda _r: (self._port_owner.release("bsl"), self._log(f"{label} complete")),
-                       on_failure=lambda e: (self._port_owner.release("bsl"),
-                                             self._log(f"{label} failed: {e}", "error")))
+        run = (
+            self._run_state_changing_task
+            if state_changing else self._run_task
+        )
+        started = run(
+            task,
+            on_success=lambda _r: (
+                self._port_owner.release("bsl"), self._log(f"{label} complete")),
+            on_failure=lambda e: (
+                self._port_owner.release("bsl"),
+                self._log(f"{label} failed: {e}", "error")),
+        )
+        if state_changing and not started:
+            self._port_owner.release("bsl")
 
     def _on_bsl_sync(self):
         self._run_bsl_diag(bsl_service.sync, label="BSL sync")
@@ -9795,7 +10005,8 @@ class MS41FlashGUI(QMainWindow):
                 "next hardware-BSL command or ECU reset turns it off.",
                 QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel) != QMessageBox.Yes:
             return
-        self._run_bsl_diag(bsl_service.vpp_on, label="BSL VPP-on")
+        self._run_bsl_diag(
+            bsl_service.vpp_on, label="BSL VPP-on", state_changing=True)
 
     def _on_bsl_read_full(self):
         self._on_bsl_dump("full")
@@ -11077,6 +11288,7 @@ class MS41FlashGUI(QMainWindow):
         self.btn_backup_eeprom.setEnabled(idle and is_eeprom)
         self.btn_backup_notes.setEnabled(idle and single)
         self.btn_backup_del.setEnabled(idle and single)
+        self._apply_transmission_recovery_quarantine()
 
     def _on_check_file(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -11150,6 +11362,1034 @@ class MS41FlashGUI(QMainWindow):
                 self.tabs.setCurrentIndex(index)
                 return
 
+    def _refresh_transmission_recovery_quarantine(
+            self, identity=None, *, announce=False):
+        """Bind the newest incomplete journal only to its exact connected DME."""
+        identity = bytes(
+            self._last_ident_raw if identity is None else identity
+        )
+        if not identity:
+            return bool(self._transmission_recovery_quarantine_id)
+        previous = self._transmission_recovery_quarantine_id
+        match = None
+        try:
+            for record in transmission_conversion.recoverable_connected_swaps(
+                    self._transmission_swap_journal):
+                session = transmission_conversion.load_connected_swap_journal(
+                    record)
+                if session.dme_ident == identity:
+                    match = record, session
+                    break
+        except Exception as error:
+            message = str(error)
+            changed = message != self._transmission_recovery_quarantine_error
+            self._transmission_recovery_quarantine_error = message
+            if changed or announce:
+                self._log(
+                    f"Could not inspect transmission recovery records: {error}",
+                    "error",
+                )
+                if hasattr(self, "transmission_swap_details"):
+                    self.transmission_swap_details.setPlainText(
+                        "Transmission recovery records could not be verified, so "
+                        "ECU writes are disabled. Read-only diagnostics remain "
+                        "available.\n\nKeep the recovery files intact and correct "
+                        f"the reported problem in:\n"
+                        f"{self._transmission_swap_journal.directory}\n\n"
+                        f"Details: {error}"
+                    )
+            if hasattr(self, "btn_transmission_swap_check"):
+                self._update_transmission_swap_actions()
+            self._apply_transmission_recovery_quarantine()
+            return True
+
+        self._transmission_recovery_quarantine_error = None
+        if match is None:
+            self._transmission_recovery_quarantine_id = None
+            self._transmission_recovery_quarantine_token = None
+            if hasattr(self, "btn_transmission_swap_check"):
+                self._update_transmission_swap_actions()
+            return False
+
+        record, session = match
+        self._transmission_recovery_quarantine_id = record.operation_id
+        self._transmission_recovery_quarantine_token = session.token
+        if announce and previous != record.operation_id:
+            self._log(
+                "An unfinished transmission conversion matches this engine "
+                "computer. Other writes are quarantined until guided recovery "
+                "finishes.",
+                "warn",
+            )
+            if (hasattr(self, "transmission_swap_details")
+                    and getattr(self, "_transmission_swap_phase", "idle")
+                    not in {"awaiting_cycle", "recovery"}):
+                self.transmission_swap_details.setPlainText(
+                    "Interrupted transmission conversion found for this engine "
+                    "computer.\n\nOther ECU writes are disabled. Read-only "
+                    "diagnostics remain available. Use Recover Interrupted "
+                    "Conversion to finish the reviewed conversion or restore the "
+                    "archived original coding."
+                )
+        if hasattr(self, "btn_transmission_swap_check"):
+            self._update_transmission_swap_actions()
+        self._apply_transmission_recovery_quarantine()
+        return True
+
+    def _transmission_recovery_quarantined(self):
+        return bool(
+            self._transmission_recovery_quarantine_id
+            or self._transmission_recovery_quarantine_error
+            or getattr(self, "_transmission_swap_phase", "idle")
+            in {"awaiting_cycle", "recovery"}
+        )
+
+    def _apply_transmission_recovery_quarantine(self):
+        if not self._transmission_recovery_quarantined():
+            return
+        for name in self._TRANSMISSION_QUARANTINED_BUTTONS:
+            button = getattr(self, name, None)
+            if button is not None:
+                button.setEnabled(False)
+        resolve = getattr(self, "btn_eeprom_resolve", None)
+        if (resolve is not None
+                and not self._transmission_swap_eeprom_context):
+            resolve.setEnabled(False)
+
+    def _run_state_changing_task(
+            self, task_fn, on_success=None, on_failure=None, *,
+            transmission_recovery=False):
+        """Recheck durable recovery state immediately before any ECU mutation."""
+        self._refresh_transmission_recovery_quarantine(announce=True)
+        if (self._transmission_recovery_quarantined()
+                and (not transmission_recovery
+                     or self._transmission_recovery_quarantine_error)):
+            self._apply_transmission_recovery_quarantine()
+            if self._transmission_recovery_quarantine_error:
+                detail = (
+                    "Transmission recovery records could not be verified, so ECU "
+                    "writes are disabled. Keep the recovery files intact and correct "
+                    "the reported problem in:\n"
+                    f"{self._transmission_swap_journal.directory}\n\n"
+                    f"Details: {self._transmission_recovery_quarantine_error}"
+                )
+            else:
+                detail = (
+                    "An unfinished transmission conversion matches this engine "
+                    "computer. Other writes are disabled until it is resolved.\n\n"
+                    "Read-only diagnostics remain available. Open Coding and use "
+                    "Recover Interrupted Conversion."
+                )
+            QMessageBox.warning(
+                self,
+                "Transmission Recovery Required",
+                detail,
+            )
+            return False
+        self._run_task(
+            task_fn, on_success=on_success, on_failure=on_failure)
+        return True
+
+    def _mark_transmission_journal_failed(self, operation_id, error, log_fn):
+        """Keep the original operation error authoritative if journaling also fails."""
+        try:
+            record = self._transmission_swap_journal.load(operation_id)
+            if record.phase in {"writing", "awaiting_cycle"}:
+                message = f"{type(error).__name__}: {error}"[:4096]
+                self._transmission_swap_journal.mark_failed(
+                    operation_id, message)
+        except Exception as journal_error:
+            log_fn(
+                f"Could not update the transmission recovery record: {journal_error}",
+                "error",
+            )
+
+    def _resume_transmission_journal(self, operation_id, expected_phase):
+        record = self._transmission_swap_journal.load(operation_id)
+        if record.phase == "failed":
+            if record.failed_from != expected_phase:
+                raise RuntimeError(
+                    "The recovery record is not at the expected conversion stage.")
+            record = self._transmission_swap_journal.resume(operation_id)
+        if record.phase != expected_phase:
+            raise RuntimeError(
+                "The recovery record no longer matches this conversion stage.")
+
+    def _finish_transmission_eeprom(
+            self, session, image, operation_id, *, restoring_original=False):
+        if restoring_original:
+            return transmission_conversion.mark_original_eeprom_written(
+                session,
+                image,
+                journal=self._transmission_swap_journal,
+                journal_id=operation_id,
+            )
+        return transmission_conversion.mark_eeprom_written(
+            session,
+            image,
+            journal=self._transmission_swap_journal,
+            journal_id=operation_id,
+        )
+
+    @staticmethod
+    def _verified_transmission_eeprom_after(backup_path, expected, warning):
+        after_path = eeprom_ram._after_capture_path(backup_path)
+        try:
+            after = after_path.read_bytes()
+        except OSError as error:
+            raise RuntimeError(
+                "The DME reported a verified EEPROM target, but its local "
+                f"after-image could not be reopened: {error}"
+            ) from warning
+        if after != expected:
+            raise RuntimeError(
+                "The archived DME EEPROM after-image does not match the reviewed "
+                "recovery target. Do not assume the coding state."
+            ) from warning
+        return after
+
+    def _prepare_transmission_swap_core(self, target, log_fn, progress_fn):
+        """Build one live, zero-write conversion plan from all fitted owners."""
+        if self._ds2 is None:
+            raise RuntimeError("A normal K-Line connection is required.")
+        identity_bytes = bytes(self._ds2.identify())
+        for record in transmission_conversion.recoverable_connected_swaps(
+                self._transmission_swap_journal):
+            pending = transmission_conversion.load_connected_swap_journal(record)
+            if pending.dme_ident == identity_bytes:
+                raise RuntimeError(
+                    "An interrupted transmission conversion exists for this engine "
+                    "computer. Use Recover Interrupted Conversion before starting "
+                    "another plan.")
+        _program, family = transmission_conversion.classify_dme_ident(
+            identity_bytes)
+        eeprom_image = None
+        if family.startswith("MS41"):
+            progress_fn(0, 0, "Reading the complete DME EEPROM")
+            capture = self._run_via_eeprom(
+                lambda port, _pf, lf: eeprom_ram.read_eeprom(
+                    port, baud="auto", log=lf),
+                log_fn,
+                progress_fn,
+            )
+            if self._ds2 is None:
+                raise RuntimeError(
+                    "Normal K-Line did not reconnect after the EEPROM read.")
+            eeprom_image = capture.image
+        progress_fn(0, 0, "Reading the fitted coding modules")
+        session = transmission_conversion.prepare_connected_swap(
+            self._ds2, target, eeprom_image=eeprom_image)
+        if session.ready:
+            self._transmission_swap_sessions[session.token] = session
+            log_fn("Every required coding owner agrees with the source vehicle.", "ok")
+        return session.wire()
+
+    def _execute_transmission_swap_core(
+            self, token, mechanical_confirmed, log_fn, progress_fn):
+        """Write or verify one previously admitted conversion transaction."""
+        session = self._transmission_swap_sessions.get(token)
+        if session is None:
+            raise RuntimeError(
+                "This compatibility result is no longer active. Check again.")
+        if not mechanical_confirmed:
+            raise RuntimeError("Confirm the completed mechanical swap before coding.")
+        if self._ds2 is None:
+            raise RuntimeError("A normal K-Line connection is required.")
+        operation_id = self._transmission_swap_journal_ids.get(token, token)
+
+        if session.phase == "prepared":
+            self._transmission_swap_journal_ids[token] = operation_id
+            eeprom_current = None
+            if session.family.startswith("MS41"):
+                progress_fn(0, 0, "Rechecking the complete DME EEPROM")
+                capture = self._run_via_eeprom(
+                    lambda port, _pf, lf: eeprom_ram.read_eeprom(
+                        port, baud="auto", log=lf),
+                    log_fn,
+                    progress_fn,
+                )
+                if self._ds2 is None:
+                    raise RuntimeError(
+                        "Normal K-Line did not reconnect after the EEPROM check.")
+                eeprom_current = capture.image
+            progress_fn(0, 0, "Archiving and writing the fitted coding modules")
+            try:
+                result = transmission_conversion.write_connected_modules(
+                    self._ds2,
+                    session,
+                    archive_dir=os.path.join(BACKUP_DIR, "transmission"),
+                    journal=self._transmission_swap_journal,
+                    journal_id=operation_id,
+                    eeprom_current=eeprom_current,
+                )
+            except Exception as error:
+                self._mark_transmission_journal_failed(
+                    operation_id, error, log_fn)
+                if not session.written or session.phase == "rolled_back":
+                    self._transmission_swap_sessions.pop(token, None)
+                raise
+            if not session.family.startswith("MS41"):
+                return result
+
+            backup_path = self._automatic_eeprom_path(
+                "transmission_swap_before")
+            progress_fn(0, 0, "Writing the reviewed DME EEPROM record")
+            try:
+                transmission_conversion.mark_eeprom_write_intent(
+                    session,
+                    self._transmission_swap_journal,
+                    journal_id=operation_id,
+                    backup_path=backup_path,
+                )
+                capture = self._run_via_eeprom(
+                    lambda port, _pf, lf: eeprom_ram.write_transmission(
+                        port,
+                        "at" if session.target is transmission_conversion.Transmission.AUTOMATIC
+                        else "mt",
+                        backup_path=backup_path,
+                        confirm=lambda _message: True,
+                        expected_before=session.eeprom_before,
+                        baud="auto",
+                        log=lf,
+                    ),
+                    log_fn,
+                    progress_fn,
+                )
+            except (
+                    eeprom_ram.EepromCommitUnknown,
+                    eeprom_ram.EepromWriteRecoveryRequired,
+            ):
+                session.phase = "eeprom_recovery"
+                session.status = "action_required"
+                session.title = "Resolve the pending EEPROM write before continuing"
+                self._transmission_swap_recovery_token = token
+                self._transmission_swap_eeprom_context = {
+                    "token": token,
+                    "journal_id": operation_id,
+                    "restoring_original": False,
+                    "resume_phase": "modules_written",
+                }
+                raise
+            except (
+                    eeprom_ram.EepromResetRequired,
+                    eeprom_ram.EepromAuditError,
+            ) as warning:
+                after = self._verified_transmission_eeprom_after(
+                    backup_path, session.eeprom_target, warning)
+                session.warnings += (
+                    f"The DME transmission record is verified, but normal K-Line "
+                    f"cleanup needs the required ignition cycle: {warning}",
+                )
+                log_fn(str(warning), "warn")
+                return self._finish_transmission_eeprom(
+                    session, after, operation_id)
+            except Exception as error:
+                if self._ds2 is None:
+                    self._mark_transmission_journal_failed(
+                        operation_id, error, log_fn)
+                    raise RuntimeError(
+                        "The DME EEPROM write did not complete and normal K-Line did "
+                        "not reconnect. Do not assume the conversion state; preserve "
+                        f"the backup at {backup_path}. Original error: {error}"
+                    ) from error
+                try:
+                    transmission_conversion.rollback_connected_modules(
+                        self._ds2, session)
+                except Exception as rollback_error:
+                    combined = RuntimeError(
+                        f"DME EEPROM write failed ({error}); module rollback also "
+                        f"needs recovery ({rollback_error}). Archive: "
+                        f"{session.archive_path}"
+                    )
+                    self._mark_transmission_journal_failed(
+                        operation_id, combined, log_fn)
+                    raise combined from error
+                self._mark_transmission_journal_failed(
+                    operation_id, error, log_fn)
+                self._transmission_swap_sessions.pop(token, None)
+                raise
+            log_fn(f"DME EEPROM before-image: {backup_path}", "ok")
+            return self._finish_transmission_eeprom(
+                session, capture.image, operation_id)
+
+        if session.phase not in {"awaiting_cycle", "rollback_awaiting_cycle"}:
+            raise RuntimeError(
+                "This conversion cannot continue until its pending recovery is resolved.")
+        self._resume_transmission_journal(operation_id, "awaiting_cycle")
+        try:
+            if bytes(self._ds2.identify()) != session.dme_ident:
+                raise RuntimeError(
+                    "The connected engine computer differs from the conversion plan.")
+        except DS2Error:
+            port = self._connection_port
+            try:
+                self._ds2.close()
+            except Exception:
+                pass
+            self._ds2 = None
+            if not port or not self._reopen_ds2_with_retry(
+                    port, log_fn, expected_identity=session.dme_ident):
+                raise RuntimeError(
+                    "Normal K-Line did not return after the ignition cycle.")
+        try:
+            eeprom_after = None
+            if session.family.startswith("MS41"):
+                progress_fn(0, 0, "Reading the DME EEPROM after the ignition cycle")
+                capture = self._run_via_eeprom(
+                    lambda port, _pf, lf: eeprom_ram.read_eeprom(
+                        port, baud="auto", log=lf),
+                    log_fn,
+                    progress_fn,
+                )
+                if self._ds2 is None:
+                    raise RuntimeError(
+                        "Normal K-Line did not reconnect after the EEPROM "
+                        "verification read.")
+                eeprom_after = capture.image
+            progress_fn(0, 0, "Independently verifying every changed module")
+            verify = (
+                transmission_conversion.verify_connected_original
+                if session.phase == "rollback_awaiting_cycle"
+                else transmission_conversion.verify_connected_swap
+            )
+            result = verify(
+                self._ds2,
+                session,
+                eeprom_after=eeprom_after,
+                journal=self._transmission_swap_journal,
+                journal_id=operation_id,
+            )
+        except Exception as error:
+            self._mark_transmission_journal_failed(
+                operation_id, error, log_fn)
+            raise
+        try:
+            transmission_conversion.settle_superseded_connected_swaps(
+                self._transmission_swap_journal, operation_id)
+        except Exception as error:
+            log_fn(
+                "The vehicle passed final verification, but older local recovery "
+                f"records could not be settled: {error}",
+                "warn",
+            )
+        self._transmission_swap_sessions.pop(token, None)
+        self._transmission_swap_journal_ids.pop(token, None)
+        return result
+
+    def _recover_transmission_swap_core(
+            self, record, session, action, log_fn, progress_fn):
+        """Run one explicit finish-or-restore recovery from its durable archive."""
+        if self._ds2 is None:
+            raise RuntimeError("A normal K-Line connection is required.")
+        operation_id = f"{session.token}-{action}-{uuid.uuid4().hex[:8]}"
+        self._transmission_swap_sessions[session.token] = session
+        self._transmission_swap_journal_ids[session.token] = operation_id
+        eeprom_current = None
+        if session.family.startswith("MS41"):
+            progress_fn(0, 0, "Checking the complete DME EEPROM before recovery")
+            capture = self._run_via_eeprom(
+                lambda port, _pf, lf: eeprom_ram.read_eeprom(
+                    port, baud="auto", log=lf),
+                log_fn,
+                progress_fn,
+            )
+            if self._ds2 is None:
+                raise RuntimeError(
+                    "Normal K-Line did not reconnect after the EEPROM recovery check.")
+            eeprom_current = capture.image
+        progress_fn(0, 0, "Restoring a known baseline before recovery coding")
+        try:
+            result = transmission_conversion.recover_connected_modules(
+                self._ds2,
+                session,
+                action,
+                journal=self._transmission_swap_journal,
+                journal_id=operation_id,
+                supersedes=record.operation_id,
+                eeprom_current=eeprom_current,
+            )
+        except Exception as error:
+            self._mark_transmission_journal_failed(
+                operation_id, error, log_fn)
+            raise
+        if result.get("completed"):
+            self._transmission_swap_sessions.pop(session.token, None)
+            self._transmission_swap_journal_ids.pop(session.token, None)
+            result["recovery_action"] = action
+            return result
+        if not session.family.startswith("MS41"):
+            result["recovery_action"] = action
+            return result
+        if session.phase == "rollback_awaiting_cycle":
+            result["recovery_action"] = action
+            return result
+
+        restoring_original = action == "original"
+        target = (
+            session.eeprom_before if restoring_original else session.eeprom_target)
+        backup_path = self._automatic_eeprom_path(
+            "transmission_recovery_original_before"
+            if restoring_original else "transmission_recovery_target_before")
+        progress_fn(0, 0, "Writing the archived DME EEPROM image")
+        try:
+            transmission_conversion.mark_eeprom_write_intent(
+                session,
+                self._transmission_swap_journal,
+                journal_id=operation_id,
+                backup_path=backup_path,
+                restoring_original=restoring_original,
+            )
+            capture = self._run_via_eeprom(
+                lambda port, _pf, lf: eeprom_ram.write_image(
+                    port,
+                    target,
+                    variant=session.eeprom_variant,
+                    backup_path=backup_path,
+                    confirm=lambda _message: True,
+                    expected_before=eeprom_current,
+                    baud="auto",
+                    log=lf,
+                ),
+                log_fn,
+                progress_fn,
+            )
+        except (
+                eeprom_ram.EepromCommitUnknown,
+                eeprom_ram.EepromWriteRecoveryRequired,
+        ):
+            self._transmission_swap_eeprom_context = {
+                "token": session.token,
+                "journal_id": operation_id,
+                "restoring_original": restoring_original,
+                "resume_phase": (
+                    "rollback_modules_written"
+                    if restoring_original else "modules_written"),
+            }
+            self._transmission_swap_recovery_token = session.token
+            session.phase = "eeprom_recovery"
+            session.status = "action_required"
+            session.title = "Resolve the pending EEPROM write before continuing"
+            raise
+        except (
+                eeprom_ram.EepromResetRequired,
+                eeprom_ram.EepromAuditError,
+        ) as warning:
+            try:
+                after = self._verified_transmission_eeprom_after(
+                    backup_path, target, warning)
+                session.warnings += (
+                    "The archived DME EEPROM image is verified, but normal K-Line "
+                    f"cleanup needs the required ignition cycle: {warning}",
+                )
+                log_fn(str(warning), "warn")
+                result = self._finish_transmission_eeprom(
+                    session,
+                    after,
+                    operation_id,
+                    restoring_original=restoring_original,
+                )
+            except Exception as error:
+                self._mark_transmission_journal_failed(
+                    operation_id, error, log_fn)
+                raise
+        except Exception as error:
+            self._mark_transmission_journal_failed(
+                operation_id, error, log_fn)
+            raise
+        else:
+            result = self._finish_transmission_eeprom(
+                session,
+                capture.image,
+                operation_id,
+                restoring_original=restoring_original,
+            )
+        result["recovery_action"] = action
+        return result
+
+    def _show_transmission_swap_awaiting_cycle(self, token, result):
+        self._transmission_swap_token = token
+        self._transmission_swap_phase = "awaiting_cycle"
+        self.chk_transmission_swap_cycle.setChecked(False)
+        self.transmission_swap_details.setPlainText(
+            self._format_transmission_swap_result(result))
+        for widget in (
+                self.lbl_transmission_swap_cycle,
+                self.chk_transmission_swap_cycle,
+                self.btn_transmission_swap_verify):
+            widget.setVisible(True)
+        self._update_transmission_swap_actions()
+
+    def _choose_transmission_recovery_action(self, session):
+        prompt = QMessageBox(self)
+        prompt.setIcon(QMessageBox.Warning)
+        prompt.setWindowTitle("Recover Interrupted Conversion")
+        prompt.setText(
+            "A checked local recovery record matches the connected engine computer.")
+        prompt.setInformativeText(
+            "Choose Finish reviewed conversion to apply the archived target, or "
+            "Restore original coding to return every reviewed owner to its archived "
+            "before-state.\n\nKeep ignition ON and the engine OFF until the tool asks "
+            "for the ignition cycle."
+        )
+        finish = prompt.addButton(
+            "Finish Reviewed Conversion", QMessageBox.AcceptRole)
+        restore = prompt.addButton(
+            "Restore Original Coding", QMessageBox.ActionRole)
+        prompt.addButton(QMessageBox.Cancel)
+        prompt.exec_()
+        if prompt.clickedButton() is finish:
+            return "target"
+        if prompt.clickedButton() is restore:
+            return "original"
+        return None
+
+    def _on_recover_transmission_swap(self):
+        if self._ds2 is None:
+            return
+
+        def task(log_fn, progress_fn):
+            progress_fn(0, 0, "Checking durable transmission recovery records")
+            records = transmission_conversion.recoverable_connected_swaps(
+                self._transmission_swap_journal)
+            if not records:
+                return None
+            identity = bytes(self._ds2.identify())
+            match = None
+            for record in records:
+                session = transmission_conversion.load_connected_swap_journal(
+                    record)
+                if session.dme_ident == identity:
+                    match = record, session
+                    break
+            if match is None:
+                raise RuntimeError(
+                    "No unfinished transmission conversion matches the connected "
+                    "engine computer. No coding was changed.")
+            record, session = match
+            if "awaiting_cycle" in session.phase:
+                self._resume_transmission_journal(
+                    record.operation_id, "awaiting_cycle")
+            return record, session
+
+        def on_success(loaded):
+            if loaded is None:
+                QMessageBox.information(
+                    self,
+                    "No Interrupted Conversion",
+                    "No unfinished transmission conversion was found.",
+                )
+                return
+            record, session = loaded
+            if "awaiting_cycle" in session.phase:
+                self._transmission_swap_sessions[session.token] = session
+                self._transmission_swap_journal_ids[
+                    session.token] = record.operation_id
+                self._show_transmission_swap_awaiting_cycle(
+                    session.token, session.wire(requires_key_cycle=True))
+                self._log(
+                    "Restored the interrupted conversion at its ignition-cycle "
+                    "verification step.",
+                    "warn",
+                )
+                return
+            action = self._choose_transmission_recovery_action(session)
+            if action is None:
+                return
+
+            def recover_task(log_fn, progress_fn):
+                return self._recover_transmission_swap_core(
+                    record, session, action, log_fn, progress_fn)
+
+            def recovery_success(result):
+                completed = bool(
+                    self._transmission_swap_value(result, "completed", False))
+                restored = bool(
+                    self._transmission_swap_value(result, "restored", False))
+                if completed or restored:
+                    self._transmission_swap_sessions.pop(session.token, None)
+                    self._transmission_swap_journal_ids.pop(session.token, None)
+                    self._transmission_swap_token = None
+                    self._transmission_swap_phase = "complete"
+                    self.transmission_swap_details.setPlainText(
+                        self._format_transmission_swap_result(result))
+                    for widget in (
+                            self.lbl_transmission_swap_cycle,
+                            self.chk_transmission_swap_cycle,
+                            self.btn_transmission_swap_verify):
+                        widget.setVisible(False)
+                    self._show_verified_transmission_mode(result)
+                    self._update_transmission_swap_actions()
+                    self._log(
+                        "Original transmission coding restored and verified."
+                        if restored else
+                        "Interrupted transmission conversion finished and verified.",
+                        "ok",
+                    )
+                    QMessageBox.information(
+                        self,
+                        "Transmission Recovery Complete",
+                        "Every fitted module passed final verification.",
+                    )
+                    return
+                self._show_transmission_swap_awaiting_cycle(
+                    session.token, result)
+                self._log(
+                    "Recovery coding passed readback; the ignition cycle and final "
+                    "verification are still required.",
+                    "warn",
+                )
+
+            def recovery_failure(error):
+                retained = self._active_eeprom_recovery() is not None
+                if (not retained
+                        and session.token in self._transmission_swap_journal_ids):
+                    self._mark_transmission_journal_failed(
+                        self._transmission_swap_journal_ids[session.token],
+                        error,
+                        self._log,
+                    )
+                self._transmission_swap_token = session.token
+                self._transmission_swap_phase = (
+                    "recovery" if retained else "blocked")
+                self.transmission_swap_details.setPlainText(
+                    "Recovery did not complete. No success is assumed.\n\n"
+                    f"{error}\n\nUse Recover Interrupted Conversion to resume from "
+                    "the newest durable record."
+                )
+                self._update_transmission_swap_actions()
+                if retained:
+                    self._on_eeprom_failure(error)
+                else:
+                    QMessageBox.critical(
+                        self, "Transmission Recovery Failed", str(error))
+
+            self._run_state_changing_task(
+                recover_task,
+                on_success=recovery_success,
+                on_failure=recovery_failure,
+                transmission_recovery=True,
+            )
+
+        def on_failure(error):
+            QMessageBox.critical(
+                self, "Transmission Recovery Unavailable", str(error))
+
+        self._run_task(task, on_success=on_success, on_failure=on_failure)
+
+    @staticmethod
+    def _transmission_swap_value(result, key, default=None):
+        if isinstance(result, dict):
+            return result.get(key, default)
+        return getattr(result, key, default)
+
+    def _show_verified_transmission_mode(self, result):
+        self._refresh_transmission_recovery_quarantine()
+        restored = bool(
+            self._transmission_swap_value(result, "restored", False))
+        value = self._transmission_swap_value(
+            result, "source" if restored else "target")
+        value = getattr(value, "value", value)
+        label = getattr(self, "_info_labels", {}).get("Transmission Mode")
+        if label is not None and value:
+            label.setText(str(value).title())
+        self._update_transmission_swap_status()
+
+    def _format_transmission_swap_result(self, result):
+        value = self._transmission_swap_value
+        title = value(result, "title") or "Compatibility check complete"
+        lines = [str(title)]
+        family = value(result, "family")
+        chassis = value(result, "chassis")
+        source = value(result, "source")
+        target = value(result, "target")
+        recovery_action = value(result, "recovery_action")
+        restored = bool(value(result, "restored", False))
+        identity = " / ".join(str(item) for item in (chassis, family) if item)
+        if identity:
+            lines.extend(("", f"Vehicle: {identity}"))
+        if recovery_action == "original" or restored:
+            lines.append(
+                f"Recovery choice: restore the original "
+                f"{str(source or 'transmission').title()} coding"
+            )
+        elif source or target:
+            lines.append(
+                f"Transmission: {str(source or 'unknown').title()} → "
+                f"{str(target or 'unknown').title()}"
+            )
+        for key, heading in (
+                ("reasons", "Why it cannot continue"),
+                ("warnings", "Important before continuing"),
+                ("changes", "Changes the tool will make")):
+            items = value(result, key, ()) or ()
+            if isinstance(items, str):
+                items = (items,)
+            if items:
+                lines.extend(("", f"{heading}:"))
+                lines.extend(f"• {item}" for item in items)
+        return "\n".join(lines)
+
+    def _reset_transmission_swap_plan(self, message=None):
+        old_token = getattr(self, "_transmission_swap_token", None)
+        if old_token and old_token != self._transmission_swap_recovery_token:
+            self._transmission_swap_sessions.pop(old_token, None)
+            self._transmission_swap_journal_ids.pop(old_token, None)
+        self._transmission_swap_token = None
+        self._transmission_swap_phase = "idle"
+        if not hasattr(self, "transmission_swap_details"):
+            return
+        self.transmission_swap_details.setPlainText(
+            message or "Choose the intended transmission, then check compatibility."
+        )
+        self.chk_transmission_swap_mechanical.setChecked(False)
+        self.chk_transmission_swap_cycle.setChecked(False)
+        for widget in (
+                self.lbl_transmission_swap_cycle,
+                self.chk_transmission_swap_cycle,
+                self.btn_transmission_swap_verify):
+            widget.setVisible(False)
+        self._update_transmission_swap_actions()
+
+    def _on_transmission_swap_target_changed(self, _index=None):
+        if not hasattr(self, "btn_transmission_swap_convert"):
+            return
+        target = self.cb_transmission_swap_target.currentData() or "manual"
+        self.btn_transmission_swap_convert.setText(
+            f"Convert to {str(target).title()}"
+        )
+        self._reset_transmission_swap_plan(
+            "Target changed. Run the compatibility check again before conversion."
+        )
+
+    def _update_transmission_swap_actions(self, *_args):
+        if not hasattr(self, "btn_transmission_swap_check"):
+            return
+        available = bool(
+            self._ds2 is not None and not self._task_busy
+        )
+        phase = getattr(self, "_transmission_swap_phase", "idle")
+        awaiting_cycle = phase == "awaiting_cycle"
+        locked = phase in {"awaiting_cycle", "recovery"}
+        quarantined = bool(
+            self._transmission_recovery_quarantine_id
+            or self._transmission_recovery_quarantine_error)
+        self.cb_transmission_swap_target.setEnabled(
+            available and not locked and not quarantined)
+        self.btn_transmission_swap_check.setEnabled(
+            available and not locked and not quarantined)
+        self.btn_transmission_swap_recover.setEnabled(available and not locked)
+        self.chk_transmission_swap_mechanical.setEnabled(
+            available and phase == "prepared" and not quarantined
+        )
+        self.btn_transmission_swap_convert.setEnabled(bool(
+            available
+            and phase == "prepared"
+            and not quarantined
+            and self._transmission_swap_token
+            and self.chk_transmission_swap_mechanical.isChecked()
+        ))
+        self.chk_transmission_swap_cycle.setEnabled(available and awaiting_cycle)
+        self.btn_transmission_swap_verify.setEnabled(bool(
+            available
+            and awaiting_cycle
+            and self._transmission_swap_token
+            and self.chk_transmission_swap_cycle.isChecked()
+        ))
+
+    def _show_transmission_swap_plan(self, result):
+        status = str(
+            self._transmission_swap_value(result, "status", "unsupported")
+        ).lower()
+        token = (
+            self._transmission_swap_value(result, "token")
+            or self._transmission_swap_value(result, "plan_token")
+        )
+        ready = status == "ready" and bool(token)
+        self._transmission_swap_token = token if ready else None
+        self._transmission_swap_phase = "prepared" if ready else "blocked"
+        self.transmission_swap_details.setPlainText(
+            self._format_transmission_swap_result(result)
+        )
+        self.chk_transmission_swap_mechanical.setChecked(False)
+        self._update_transmission_swap_actions()
+
+    def _on_prepare_transmission_swap(self):
+        if not self._ds2:
+            return
+        target = self.cb_transmission_swap_target.currentData() or "manual"
+
+        def task(log_fn, progress_fn):
+            log_fn("Checking vehicle compatibility for transmission conversion…")
+            return self._prepare_transmission_swap_core(
+                target, log_fn, progress_fn
+            )
+
+        def on_success(result):
+            self._show_transmission_swap_plan(result)
+            if self._transmission_swap_phase == "prepared":
+                self._log("Transmission conversion compatibility check passed.", "ok")
+            else:
+                self._log("Transmission conversion is not available for this vehicle.", "warn")
+
+        def on_failure(error):
+            self._reset_transmission_swap_plan(
+                f"Compatibility check failed:\n{error}"
+            )
+            QMessageBox.critical(self, "Compatibility Check Failed", str(error))
+
+        self._reset_transmission_swap_plan("Checking the fitted vehicle modules…")
+        self._run_task(task, on_success=on_success, on_failure=on_failure)
+
+    def _on_execute_transmission_swap(self):
+        if (not self._transmission_swap_token
+                or not self.chk_transmission_swap_mechanical.isChecked()):
+            return
+        target = self.cb_transmission_swap_target.currentData() or "manual"
+        answer = QMessageBox.question(
+            self,
+            f"Convert to {str(target).title()}?",
+            "The compatibility check passed and the physical swap was confirmed.\n\n"
+            "Keep the ignition ON and the engine OFF. Do not cycle the ignition until "
+            "the tool explicitly asks you to.\n\nBegin the conversion?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self._run_transmission_swap_execute(verify=False)
+
+    def _on_verify_transmission_swap(self):
+        if (not self._transmission_swap_token
+                or not self.chk_transmission_swap_cycle.isChecked()):
+            return
+        self._run_transmission_swap_execute(verify=True)
+
+    def _run_transmission_swap_execute(self, *, verify):
+        token = self._transmission_swap_token
+
+        def task(log_fn, progress_fn):
+            log_fn(
+                "Verifying the completed transmission conversion…"
+                if verify else "Writing the verified transmission conversion…"
+            )
+            return self._execute_transmission_swap_core(
+                token, True, log_fn, progress_fn
+            )
+
+        def on_success(result):
+            next_token = (
+                self._transmission_swap_value(result, "token")
+                or self._transmission_swap_value(result, "plan_token")
+                or token
+            )
+            completed = bool(
+                self._transmission_swap_value(result, "completed", False)
+            )
+            requires_cycle = bool(
+                self._transmission_swap_value(
+                    result, "requires_key_cycle", False
+                )
+            )
+            self.transmission_swap_details.setPlainText(
+                self._format_transmission_swap_result(result)
+            )
+            if completed:
+                restored = bool(
+                    self._transmission_swap_value(result, "restored", False))
+                self._transmission_swap_token = None
+                self._transmission_swap_phase = "complete"
+                for widget in (
+                        self.lbl_transmission_swap_cycle,
+                        self.chk_transmission_swap_cycle,
+                        self.btn_transmission_swap_verify):
+                    widget.setVisible(False)
+                self.chk_transmission_swap_mechanical.setChecked(False)
+                self._show_verified_transmission_mode(result)
+                self._log(
+                    "Original transmission coding restored and verified."
+                    if restored else
+                    "Transmission conversion completed and verified.",
+                    "ok",
+                )
+                QMessageBox.information(
+                    self,
+                    ("Original Coding Restored" if restored else
+                     "Transmission Conversion Complete"),
+                    ("The archived original coding was restored and every fitted "
+                     "module passed final verification."
+                     if restored else
+                     "The vehicle was converted and the fitted modules passed final "
+                     "verification."),
+                )
+            elif requires_cycle:
+                self._show_transmission_swap_awaiting_cycle(
+                    next_token, result)
+                self._log(
+                    "Transmission coding readback passed; ignition cycle and final "
+                    "verification are still required.", "warn"
+                )
+            else:
+                self._transmission_swap_token = None
+                self._transmission_swap_phase = "blocked"
+            self._update_transmission_swap_actions()
+
+        def on_failure(error):
+            session = self._transmission_swap_sessions.get(token)
+            retained = bool(
+                session is not None
+                and self._transmission_swap_recovery_token == token
+                and self._active_eeprom_recovery() is not None
+            )
+            retry_verification = bool(
+                session is not None and session.phase in {
+                    "awaiting_cycle", "rollback_awaiting_cycle"})
+            if not retained and token in self._transmission_swap_journal_ids:
+                self._mark_transmission_journal_failed(
+                    self._transmission_swap_journal_ids[token], error, self._log)
+            if retained:
+                self._transmission_swap_token = token
+                self._transmission_swap_phase = "recovery"
+                self.transmission_swap_details.setPlainText(
+                    "The DME EEPROM result is not yet known. Keep ignition ON and "
+                    "use EEPROM → Resolve Pending Write. Do not disconnect or cycle "
+                    f"the ignition.\n\n{error}"
+                )
+            elif retry_verification:
+                self._transmission_swap_token = token
+                self._transmission_swap_phase = "awaiting_cycle"
+                for widget in (
+                        self.lbl_transmission_swap_cycle,
+                        self.chk_transmission_swap_cycle,
+                        self.btn_transmission_swap_verify):
+                    widget.setVisible(True)
+                self.transmission_swap_details.setPlainText(
+                    "The written conversion has not passed final verification. "
+                    "Correct the reported connection/module issue, then verify again.\n\n"
+                    f"{error}"
+                )
+            else:
+                self._transmission_swap_token = None
+                self._transmission_swap_phase = "blocked"
+                self._transmission_swap_journal_ids.pop(token, None)
+                self.transmission_swap_details.setPlainText(
+                    "Conversion did not complete. No success is assumed.\n\n"
+                    f"{error}\n\nRun the compatibility check again before retrying."
+                )
+            self._update_transmission_swap_actions()
+            if retained:
+                self._on_eeprom_failure(error)
+            else:
+                QMessageBox.critical(
+                    self, "Transmission Conversion Failed", str(error)
+                )
+
+        self._run_state_changing_task(
+            task,
+            on_success=on_success,
+            on_failure=on_failure,
+            transmission_recovery=verify,
+        )
+
     def _update_transmission_swap_status(self):
         if not hasattr(self, "lbl_transmission_swap_status"):
             return
@@ -11164,11 +12404,22 @@ class MS41FlashGUI(QMainWindow):
             egs = "Responded (compatibility not identified)"
         else:
             egs = "Not observed in the current scan"
+        connection = (
+            "Normal K-Line ready"
+            if self._ds2 is not None
+            else "Normal K-Line required"
+        )
+        if self._transmission_recovery_quarantine_error:
+            connection += " — recovery records need attention"
+        elif self._transmission_recovery_quarantine_id:
+            connection += " — interrupted conversion recovery required"
         self.lbl_transmission_swap_status.setText(
+            f"Connection: {connection}\n"
             f"Engine computer: {family}\n"
             f"Engine-reported transmission mode: {transmission}\n"
             f"Automatic-transmission computer: {egs}"
         )
+        self._update_transmission_swap_actions()
 
     def _apply_coding_filter(self, *_args):
         if not hasattr(self, "_coding_rows"):
@@ -11250,6 +12501,7 @@ class MS41FlashGUI(QMainWindow):
                     "the Engine ECU only."
                 )
         self._update_transmission_swap_status()
+        self._apply_transmission_recovery_quarantine()
 
     def _show_gm3_state(self, state: GM3CodingState):
         self._gm3_coding_state = state
@@ -11338,7 +12590,8 @@ class MS41FlashGUI(QMainWindow):
             )
             QMessageBox.critical(self, "Vehicle Coding Failed", str(error))
 
-        self._run_task(task, on_success=on_success, on_failure=on_failure)
+        self._run_state_changing_task(
+            task, on_success=on_success, on_failure=on_failure)
 
     def _show_seat_state(self, state: ModuleCodingState):
         self._seat_coding_state = state
@@ -11434,7 +12687,8 @@ class MS41FlashGUI(QMainWindow):
             )
             QMessageBox.critical(self, "Vehicle Coding Failed", str(error))
 
-        self._run_task(task, on_success=on_success, on_failure=on_failure)
+        self._run_state_changing_task(
+            task, on_success=on_success, on_failure=on_failure)
 
     def _reset_diag_scan(self, connected: bool):
         self.cb_diag_module.blockSignals(True)
@@ -11493,6 +12747,7 @@ class MS41FlashGUI(QMainWindow):
             self.lbl_diag_module.setText(
                 "This module responded to identification. Its fault format and text "
                 "table are not embedded yet, so fault reading and clearing stay unavailable.")
+        self._apply_transmission_recovery_quarantine()
 
     def _on_diag_module_changed(self, _index=None):
         module_key = self._selected_diag_key()
@@ -11666,7 +12921,7 @@ class MS41FlashGUI(QMainWindow):
             self.dtc_detail.clear()
             self._log(msg, "ok")
 
-        self._run_task(task, on_success=on_success)
+        self._run_state_changing_task(task, on_success=on_success)
 
     def _on_export_dtc(self):
         if not self._dtcs:
@@ -12121,6 +13376,10 @@ class MS41FlashGUI(QMainWindow):
             self.btn_scan_modules, self.btn_read_dtc,
             self.btn_clear_dtc, self.btn_export_dtc,
             self.btn_read_gm3_coding, self.btn_write_gm3_coding,
+            self.btn_transmission_swap_check,
+            self.btn_transmission_swap_recover,
+            self.btn_transmission_swap_convert,
+            self.btn_transmission_swap_verify,
             self.btn_info, self.btn_reset_adapt,
             self.btn_read_adaptations,
             self.btn_id_read_flash_ecu, self.btn_id_read_ecu,
@@ -12144,6 +13403,8 @@ class MS41FlashGUI(QMainWindow):
         self._update_eeprom_buttons()
 
     def _set_all_buttons_enabled(self, enabled: bool):
+        if enabled:
+            self._refresh_transmission_recovery_quarantine()
         for button in (
                 self.rb_recovery_auto, self.chk_force_slow_ds2,
                 self.chk_force_softbsl, self.rb_recovery_boot):
@@ -12194,6 +13455,17 @@ class MS41FlashGUI(QMainWindow):
         self._update_eeprom_buttons()
         self._update_diag_actions()
         self._update_coding_actions()
+        transmission_phase = getattr(
+            self, "_transmission_swap_phase", "idle")
+        if transmission_phase in {"awaiting_cycle", "recovery"}:
+            self._update_transmission_swap_actions()
+            reconnect_needed = (
+                transmission_phase == "awaiting_cycle" and self._ds2 is None)
+            if reconnect_needed:
+                self.btn_connect.setEnabled(True)
+                self.cb_port.setEnabled(True)
+                self.chk_direct_tap.setEnabled(True)
+        self._apply_transmission_recovery_quarantine()
 
     def closeEvent(self, event):
         # Don't silently close over a running read/write/flash — a half-written flash can need
