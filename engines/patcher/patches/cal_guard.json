@@ -1,12 +1,12 @@
 {
   "id": "cal_guard",
-  "label": "V4 boot recovery guard",
-  "version": "V4",
+  "label": "V5 AIF-safe boot guard",
+  "version": "V5",
   "title": "CalGuard compatibility + recovery guard",
-  "user_description": "Fast compatibility guard with a short K-Line boot-recovery window, proven on a physical bench ECU.",
-  "description": "E740-first exact-ID gate plus a bounded 0x5A/0x9C/0x9C recovery poll.",
-  "status": "BENCH PROVEN",
-  "tested": true,
+  "user_description": "Exact compatibility guard with a short K-Line boot-recovery window, relocated outside BMW AIF programming history.",
+  "description": "The untouched stock E740 branch runs first. A boot-local marker trampoline bypasses a missing program-side guard after ordinary program replacement; the exact-ID gate and bounded recovery poll live in a common program-high cave.",
+  "status": "EMULATOR VERIFIED - BENCH TEST REQUIRED",
+  "tested": false,
   "target": "MS41.3",
   "targets": [
     "MS41.0",
@@ -15,39 +15,51 @@
     "MS41.3"
   ],
   "recompute": [
-    "boot_crc"
+    "boot_crc",
+    "program"
   ],
   "requires": [
     "softbsl_loader"
   ],
   "conflicts": [],
+  "revert_superseded": true,
   "supersedes": [
     "cal_guard_v1",
-    "cal_guard_v2"
+    "cal_guard_v2",
+    "cal_guard_v4"
   ],
   "cave": {
     "region": "sa1",
-    "base": 24080,
-    "splice_off": 18746,
-    "splice_op": "jmpa",
+    "base": 23670,
+    "splice_off": 18754,
+    "splice_op": "jmps",
     "relocatable": false
   },
   "edits": [
     {
-      "off": 18746,
-      "expect": "f3fa40e749a12d04",
-      "upgrade_expect": "ea00101ecc00cc00",
-      "data": "ea00101ecc00cc00"
+      "off": 18754,
+      "expect": "e00cda002007",
+      "data": "fa00761ccc00"
     },
     {
-      "off": 24080,
-      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-      "upgrade_expect": [
-        "f3fa40e749a1ea204a09e6000400e6f4bb33a9a447fa53003d260841a9a447fa53003d210841a9a447fa31003d1c0841a9a447fa76003d170841a9a447fa32003d12e6020f00f2f59a9af2f49c9ae602000046f59a11ea304a0946f46390ea304a09ea004209e0e4a9a447fa31003d240841a9a447fa32003d1fe6020f00f2f59a9ae602000046f59a11ea204a09e6f427a0a9a447fa3000ea304a090841a9a447fa3600ea304a090841a9a447fa3400ea304a09ea004209e0e4a9a447fa36003d250841a9a447fa30003d20e6f427a0a9a447fa3300ea304a090841a9a447fa37002d0c47fa3800ea304a090841a9a447fa3000ea204209ea004a090841a9a447fa3800ea204209ea004a09e0e4a9a40841a9b447fa34003d0847fb31002d1547fb32002d12ea004a0947fa35003d0547fb39002d0aea004a0947fa3800ea304a0947fb3500ea304a09e6f427a0a9a447fa32002d1d47fa3300ea304a090841a9a447fa32002d0c47fa3800ea304a090841a9a447fa3100ea204209ea004a090841a9a447fa3400ea204209ea004a090841a9a447fa3900ea304a090841a9a447fa3800ea20420947fa3300ea204209ea004a09",
-        "f3fa40e747fa0100ea204a09e6000400f3fabb3347fa53003d25f3fabc3347fa53003d20f3fabd3347fa31003d1bf3fabe3347fa76003d16f3fabf3347fa32003d11e6020f00f2f49a9af2f59c9ae602000046f49a11ea304a0946f56390ea304a090d25e6020f00f2f49a9af2f59c9ae602000046f49a113d0446f56390ea204a09f2f40e0046f431322d1146f436302d0e46f434312d0b46f434322d0846f435392d0546f438352d02ea004a09ecf2ecf3f2f20c00f2f30e00f2f407a0f2f509a040243d0640353d04fcf3fcf2ea004209fcf3fcf2ea004a09ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-        "f3fa40e747fa0100ea204a09e6000400f3fabb3347fa53003d25f3fabc3347fa53003d20f3fabd3347fa31003d1bf3fabe3347fa76003d16f3fabf3347fa32003d11e6020f00f2f49a9af2f59c9ae602000046f49a11ea304a0946f56390ea304a090d25e6020f00f2f49a9af2f59c9ae602000046f49a113d0446f56390ea204a09f2f40e0046f431322d1146f436302d0e46f434312d0b46f434322d0846f435392d0546f438352d02ea004a09f3f80c00f3fa07a0418a3d14f3f80d00f3fa08a0418a3d0ef3f80e00f3fa09a0418a3d08f3f80f00f3fa0aa0418a3d02ea004209ea004a09ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-      ],
-      "data": "f3fa40e747fa0100ea204a09e6000400f3fabb3347fa53003d25f3fabc3347fa53003d20f3fabd3347fa31003d1bf3fabe3347fa76003d16f3fabf3347fa32003d11e6020f00f2f49a9af2f59c9ae602000046f49a11ea304a0946f56390ea304a090d25e6020f00f2f49a9af2f59c9ae602000046f49a113d0446f56390ea204a09f2f40e0046f431322d1146f436302d0e46f434312d0b46f434322d0846f435392d0546f438352d02ea004a09f3f80c00f3fa07a0418a3d13f3f80d00f3fa08a0418a3d0df3f80e00f3fa09a0418a3d07f3f80f00f3fa0aa0418a3d010d02ea004a09f2f7b4fef2f8b0fff2f96effe65a2600e6d8f7807eb7e10ce6fc0030a758a7a728c12d038ab709700df9f6f8b0fff6f7b4fef6f96effea004209f3f8b2fe7eb747fc00002d0747fc01002d0947f89c002d0d0d0a47f85a003de1e11c0ddf47f89c003d02e12c0ddae10c0dd8e168da00d81fea004a09ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      "off": 23670,
+      "expect": "ffffffffffffffffffff",
+      "data": "e6020f00f2f47ebf0d06"
+    },
+    {
+      "off": 23692,
+      "expect": "ffffffffffffffffffffffffffff",
+      "data": "e60200004841ea302604fa0300fe"
+    },
+    {
+      "off": 17446,
+      "expect": "ffffffffffffffff",
+      "data": "e00cda002007db00"
+    },
+    {
+      "off": 245248,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "e6000400f3fabb3347fa53003d23f3fabc3347fa53003d1ef3fabd3347fa31003d19f3fabe3347fa76003d14f3fabf3347fa32003d0fe6020f00f2f49a9af2f59c9ae602000046f49a113d2646f563903d230d24e6020f00f2f49a9af2f59c9ae602000046f49a113d0346f563902d14f2f40e0046f431322d1146f436302d0e46f434312d0b46f434322d0846f435392d0546f438352d02fa004a09f3f80c00f3fa07a0418a3d13f3f80d00f3fa08a0418a3d0df3f80e00f3fa09a0418a3d07f3f80f00f3fa0aa0418a3d010d02fa004a09f2f7b4fef2f8b0fff2f96effe65a2600e6d8f7807eb7e10ce6fc0030a758a7a728c12d038ab709700df9f6f8b0fff6f7b4fef6f96efffa002604f3f8b2fe7eb747fc00002d0747fc01002d0947f89c002d0d0d0a47f85a003de1e11c0ddf47f89c003d02e12c0ddae10c0dd8e168da00a01cfa004a09ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0100"
     }
   ]
 }

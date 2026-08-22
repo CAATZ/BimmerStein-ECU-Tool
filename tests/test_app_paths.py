@@ -20,3 +20,9 @@ def test_user_data_path_uses_local_app_data(tmp_path, monkeypatch):
     assert app_paths.user_data_path("definitions") == (
         tmp_path / "BimmerStein ECU Tool" / "definitions"
     )
+
+
+def test_mobile_data_override_routes_every_mutable_path(tmp_path, monkeypatch):
+    monkeypatch.setenv(app_paths.DATA_DIR_ENV, str(tmp_path))
+    assert app_paths.mutable_path("journals") == tmp_path / "journals"
+    assert app_paths.user_data_path("definitions") == tmp_path / "definitions"

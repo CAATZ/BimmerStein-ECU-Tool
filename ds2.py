@@ -128,6 +128,7 @@ ERASE_TIMEOUT             = 20.0   # max wait for an erase ACK (generous safety 
 class DS2Commands(IntEnum):
     IDENTIFY      = 0x00
     READ_DTC      = 0x04
+    READ_SHADOW_DTC = 0x14
     CLEAR_DTC     = 0x05
     READ_MEM      = 0x06
     FLASH_OP      = 0x07
@@ -199,18 +200,23 @@ class DS2Interface:
     """DS2 over an FTDI D2XX or pyserial K-Line transport. 9600 8E2, no init."""
 
     def __init__(self, port: str, ecu_addr: int = ECU_ADDR, baud: int = 9600,
-                 verbose: bool = False, echo: bool = True):
+                 verbose: bool = False, echo: bool = True, serial_factory=None):
         self.port     = port
         self.baud     = baud
         self.ecu_addr = ecu_addr
         self.verbose  = verbose
         self.echo     = echo
+        self.serial_factory = serial_factory
         self._ser     = None
         self.transport_name = None
 
     @property
     def uses_d2xx(self):
         return self.transport_name == "d2xx"
+
+    @property
+    def native_fast_capable(self):
+        return bool(getattr(self._ser, "native_fast_capable", False))
 
     # ── connection ───────────────────────────────────────────────────────────
     def open(self):
@@ -221,7 +227,18 @@ class DS2Interface:
         self._ser = None
         self.transport_name = None
         d2xx_error = None
-        if d2xx_pref:
+        if self.serial_factory is not None:
+            self._ser = self.serial_factory(
+                port=self.port, baudrate=self.baud,
+                timeout=READ_TIMEOUT, write_timeout=3.0, two_stop=True)
+            if self._ser is None:
+                raise DS2Error("injected serial factory returned no transport")
+            self.transport_name = getattr(
+                self._ser, "transport_name", None) or "injected"
+            log.debug(
+                "DS2 port %s open via %s (%d 8E2)",
+                self.port, self.transport_name, self.baud)
+        elif d2xx_pref:
             try:
                 D2XXSerial = _import_d2xx_serial()
                 self._ser = D2XXSerial(port=self.port, baudrate=self.baud,
@@ -232,7 +249,7 @@ class DS2Interface:
                 d2xx_error = e
                 log.debug("D2XX transport unavailable (%s); falling back to pyserial", e)
                 self._ser = None
-        if self._ser is None:
+        if self._ser is None and self.serial_factory is None:
             if serial is None:
                 detail = f"; D2XX unavailable: {d2xx_error}" if d2xx_error else ""
                 raise ImportError(
@@ -311,7 +328,8 @@ class DS2Interface:
         tx_time = len(frame) * self._BITS_PER_CHAR / self.baud
         time.sleep(tx_time)
         # Read and discard exactly len(frame) echo bytes
-        return self._read_exact(len(frame), self._ECHO_READ_TMO)
+        timeout = getattr(self._ser, "echo_read_timeout", self._ECHO_READ_TMO)
+        return self._read_exact(len(frame), timeout)
 
     def _command_frame(self, command: int, args: bytes = b"") -> bytes:
         """Build one complete DME-addressed DS2 command frame."""
@@ -432,7 +450,11 @@ class DS2Interface:
             timeout = READ_TIMEOUT
         frame = bytes(frame)
         self._ser.reset_input_buffer()
-        self._ser.write(frame)
+        written = self._ser.write(frame)
+        if written != len(frame):
+            raise DS2Error(
+                f"short write to module 0x{resp_addr:02X}: "
+                f"{written}/{len(frame)} bytes")
         self._ser.flush()
         self._discard_echo(frame)
 
@@ -444,7 +466,7 @@ class DS2Interface:
             raise DS2Error(f"unexpected response address 0x{head[0]:02X} "
                            f"(expected 0x{resp_addr:02X})")
         resp_len = head[1]
-        if resp_len < 3:
+        if resp_len < 4:
             raise DS2Error(f"implausible response length {resp_len}")
         rest = self._read_exact(resp_len - 2, INTER_BYTE_TMO + 0.5)
         resp = head + rest
@@ -457,6 +479,9 @@ class DS2Interface:
 
     def read_dtc(self, specific_fault: int = 1) -> bytes:
         return self.execute(DS2Commands.READ_DTC, bytes([specific_fault & 0xFF]))
+
+    def read_shadow_dtc(self) -> bytes:
+        return self.execute(DS2Commands.READ_SHADOW_DTC, b"\x01")
 
     def clear_dtc(self) -> bytes:
         return self.execute(DS2Commands.CLEAR_DTC)
@@ -614,22 +639,35 @@ class DS2Interface:
     #   sub1=0x04 sub2=0x00 → clear lambda/fuel trim adaptation
     #   sub1=0x08 sub2=0x00 → clear throttle adaptation
     ADAPT_ALL      = (0xFF, 0xFF)
+    ADAPT_ALL_MS410 = (0xFF, None)
     ADAPT_IDLE     = (0x02, 0x00)
     ADAPT_KNOCK    = (0x01, 0x00)
     ADAPT_LAMBDA   = (0x04, 0x00)
     ADAPT_THROTTLE = (0x08, 0x00)
 
-    def clear_adaptations(self, sub1: int = 0xFF, sub2: int = 0xFF) -> bytes:
+    def clear_adaptations(self, sub1: int = 0xFF, sub2: int | None = 0xFF) -> bytes:
         """Clear learned adaptations (DS2 command 0x43).
 
         sub1, sub2 select which adaptation to clear — use the ADAPT_* class
-        constants for convenience.  ECU responds with a 0xA0 ACK (empty payload).
+        constants for convenience. MS41.0's factory clear-all job sends only
+        one 0xFF sub-byte, represented by ``sub2=None``. ECU responds with a
+        0xA0 ACK (empty payload).
         """
-        return self.execute(DS2Commands.CLEAR_ADAPT, bytes([sub1, sub2]))
+        payload = bytes([sub1]) if sub2 is None else bytes([sub1, sub2])
+        return self.execute(DS2Commands.CLEAR_ADAPT, payload)
 
     def status(self) -> bytes:
         """0x0D status command — returns 69-byte ECU status payload."""
         return self.execute(DS2Commands.STATUS)
+
+    def read_battery_voltage(self) -> float:
+        """Read supply voltage through BMW's universal STATUS_UBATT telegram."""
+        payload = self.execute(
+            DS2Commands.TELEGRAM, b"\x02\x0E\x00\x00\x07")
+        if len(payload) != 2:
+            raise DS2Error(
+                f"unexpected battery-voltage payload length {len(payload)}")
+        return int.from_bytes(payload, "big") * 0.101
 
     # VIN encoding: BMW MS4x stores the VIN as 13 bytes using 6-bit packing
     # (4 VIN chars per 3 bytes, CHAR_MAP = digits + uppercase).

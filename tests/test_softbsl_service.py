@@ -36,6 +36,53 @@ def test_service_uses_the_app_ds2_transport():
     assert softbsl_service._sbds2 is app_ds2
 
 
+def test_open_session_forwards_qualified_injected_serial_factory(monkeypatch):
+    serial_factory = object()
+    captured = {}
+
+    class FakeDS2:
+        native_fast_capable = True
+        transport_name = "android_usb"
+
+        def open(self):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeSoftBSL:
+        def __init__(self, _ds2, log=None):
+            pass
+
+        def ensure_flash_mode(self, **_kwargs):
+            pass
+
+        def enter_staged(self, agent, tier, trigger):
+            captured["entry"] = (agent, tier, trigger)
+
+    def ds2_factory(_port, **kwargs):
+        captured["ds2_kwargs"] = kwargs
+        return FakeDS2()
+
+    monkeypatch.setattr(
+        softbsl_service, "_sbds2", type("M", (), {"DS2Interface": ds2_factory}))
+    monkeypatch.setattr(
+        softbsl_service, "_sb", type("M", (), {"SoftBSL": FakeSoftBSL}))
+
+    ds2, _agent = softbsl_service._open_session(
+        "usb:0403:6001",
+        lambda *_args: None,
+        require_d2xx=True,
+        baud_tier="high",
+        agent_payload=b"agent",
+        serial_factory=serial_factory,
+    )
+
+    assert isinstance(ds2, FakeDS2)
+    assert captured["ds2_kwargs"]["serial_factory"] is serial_factory
+    assert captured["entry"] == (b"agent", "high", "5a")
+
+
 def test_agent_log_downgrades_mechanics_but_preserves_actionable_messages():
     events = []
     log = softbsl_service._agent_log(
@@ -190,6 +237,14 @@ def test_marker_detects_top_bottom_none():
     assert softbsl_service.marker(BLANK) is None
 
 
+def test_top_full_write_requires_softbsl_for_live_or_target_bank():
+    top = bytearray(BLANK)
+    top[0x5FFC:0x6000] = bytes([0xA5, 0x5A, 0x54, 0x54 ^ 0xFF])
+    assert softbsl_service.full_write_requires_softbsl("T", BLANK)
+    assert softbsl_service.full_write_requires_softbsl("B", top)
+    assert not softbsl_service.full_write_requires_softbsl("B", BLANK)
+
+
 def test_run_flash_forwards_progress_do_verify_write_bootloader(monkeypatch):
     captured = {}
 
@@ -265,6 +320,7 @@ def _install_fakes(
         driver_signature=bytes.fromhex("e6f45000b84c6fe0")):
     class FakeDS2:
         uses_d2xx = True
+        native_fast_capable = True
         transport_name = "d2xx"
         def __init__(self): self.is_open = False
         def open(self): self.is_open = True
@@ -926,6 +982,72 @@ def test_open_session_recovers_and_closes_when_entry_fails_after_the_door(monkey
 
     assert "reset" in sb.calls                    # running agent finalizes marker 0 when available
     assert events == [True]                        # port closed, not leaked
+
+
+def test_staged_entry_failure_uses_same_handle_to_restore_and_prove_marker0(monkeypatch):
+    events = []
+
+    class FakeDS2:
+        native_fast_capable = True
+        transport_name = "test"
+
+        def __init__(self):
+            self.markers = iter((b"\x01", b"\x00"))
+
+        def open(self): events.append("open")
+        def close(self): events.append("close")
+        def read_mem(self, address, length):
+            assert (address, length) == (0xE740, 1)
+            events.append("marker")
+            return next(self.markers)
+        def verify_program_region(self, log_fn=None):
+            events.append("verify")
+            return True, 0x01
+
+    class FakeSoftBSL:
+        def __init__(self, _ds2, log=None): pass
+        def ensure_flash_mode(self, poll_ready=True): events.append("door")
+        def enter_staged(self, _agent, tier, trigger):
+            events.append(("enter", tier, trigger))
+            raise softbsl_service.SoftBSLError("trigger ACK timeout")
+
+    ds2 = FakeDS2()
+    monkeypatch.setattr(
+        softbsl_service, "_sbds2",
+        type("M", (), {"DS2Interface": lambda *_args, **_kwargs: ds2}),
+    )
+    monkeypatch.setattr(
+        softbsl_service, "_sb",
+        type("M", (), {"SoftBSL": FakeSoftBSL}),
+    )
+
+    with pytest.raises(softbsl_service.SoftBSLError, match="trigger ACK timeout"):
+        softbsl_service._open_session(
+            "COM1", lambda *_args: None, baud_tier="high",
+            agent_payload=b"agent",
+        )
+
+    assert events == [
+        "open", "door", ("enter", "high", "5a"),
+        "marker", "verify", "marker", "close",
+    ]
+
+
+def test_unproven_staged_recovery_blocks_the_baud_fallback():
+    attempts = []
+
+    def attempt(tier):
+        attempts.append(tier)
+        raise softbsl_service.SoftBSLRecoveryStateError("marker 0 not proven")
+
+    with pytest.raises(
+        softbsl_service.SoftBSLRecoveryStateError,
+        match="marker 0 not proven",
+    ):
+        softbsl_service._with_baud_fallback(
+            attempt, "high", lambda *_args: None, "Fast read")
+
+    assert attempts == ["high"]
 
 
 def test_open_session_selects_the_intel_agent_for_a_28f200(monkeypatch):

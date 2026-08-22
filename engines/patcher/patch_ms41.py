@@ -20,6 +20,7 @@ import glob
 import json
 import os
 import sys
+from pathlib import Path
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -74,7 +75,7 @@ def recompute_flags(patch, target):
 def load_patches():
     out = {}
     for p in sorted(glob.glob(os.path.join(PATCH_DIR, "*.json"))):
-        d = json.load(open(p, encoding="utf-8"))
+        d = json.loads(Path(p).read_text(encoding="utf-8"))
         out[d["id"]] = d
     return out
 
@@ -166,6 +167,15 @@ def is_applied(data, patch):
         if bytes(data[off:off + len(dat)]) != dat:
             return False
     return True
+
+
+def is_absent(data, patch):
+    """True if every edit still contains the descriptor's pre-patch bytes."""
+    return all(
+        bytes(data[e["off"]:e["off"] + len(bytes.fromhex(e["expect"]))])
+        == bytes.fromhex(e["expect"])
+        for e in patch["edits"]
+    )
 
 
 # File range of the SA1 / boot region (== DS2 addr 0x0000-0x1FFF via the XOR-0x4000 block
@@ -359,6 +369,32 @@ def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=F
     log.append(f"base OK: {target}, {len(data)} B")
 
     _all = patches
+    # Geometry-changing successors cannot use an in-place upgrade_expect. If
+    # an exact predecessor is present, restore its declared stock bytes first;
+    # partial predecessors still fail closed in the normal expect checks.
+    for patch in chosen:
+        if not patch.get("revert_superseded"):
+            continue
+        supersedes = patch.get("supersedes", [])
+        if isinstance(supersedes, str):
+            supersedes = [supersedes]
+        for old_id in supersedes:
+            old = _all.get(old_id)
+            if old and old_id not in patch_ids and is_applied(data, old):
+                for dependent in _all.values():
+                    if (dependent["id"] in patch_ids
+                            or old_id not in dependent.get("requires", [])):
+                        continue
+                    if is_applied(data, dependent):
+                        data[:] = revert(data, dependent)
+                        log.append(f"removed exact dependent {dependent['id']}")
+                    elif not is_absent(data, dependent):
+                        raise PatchError(
+                            f"PARTIAL predecessor dependency '{dependent['id']}' must be "
+                            "restored from a known-good backup before migration")
+                data[:] = revert(data, old)
+                log.append(f"removed exact predecessor {old_id}")
+
     for p in chosen:
         for req in p.get("requires", []):
             # satisfied if the dependency is in this selection OR already applied on the base
@@ -441,7 +477,7 @@ def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=F
 
 
 def cmd_apply(patches, args):
-    base_data = open(args.base, "rb").read()
+    base_data = Path(args.base).read_bytes()
     try:
         out, log = build(base_data, args.patch, patches, marker=getattr(args, "marker", None))
     except PatchError as e:

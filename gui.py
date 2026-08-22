@@ -3,8 +3,9 @@ gui.py — PyQt5 graphical interface for BimmerStein ECU Tool.
 
 Tabs:
   1. Flash       — Read/Write full ROM (256KB) or tune region (24KB)
-  2. DTC         — Read, display, and clear Diagnostic Trouble Codes
-  3. ECU Info    — Firmware ID, part numbers, chip identification
+  2. Diagnostics — Discover compatible modules and manage MS41 fault memory
+  3. Coding      — Human-readable exact module settings
+  4. ECU Info    — Firmware ID, part numbers, chip identification
 
 Connection bar is shared across all tabs.
 """
@@ -12,13 +13,12 @@ Connection bar is shared across all tabs.
 import sys
 import os
 import json
+import hashlib
 import tempfile
 import threading
 import datetime
 import time
 import traceback
-import glob
-import zipfile
 import uuid
 from dataclasses import replace
 from pathlib import Path
@@ -39,6 +39,7 @@ from PyQt5.QtGui import (
 )
 
 from ms41 import (
+    FIRMWARE_COMPAT_CAL_ADDRS,
     FIRMWARE_COMPAT_PROGRAM_ADDRS,
     MS41ECU,
     SS1V2_PROG_SIG,
@@ -47,12 +48,35 @@ from ms41 import (
 from ds2 import DS2Interface, DS2Error
 from checksum import verify_checksum, correct_checksums
 from dtc import format_dtc_table, parse_ds2_dtc_response, DS2DTCRecord
+from vehicle_diagnostics import (
+    FAULT_PROFILES,
+    MODULE_PROFILES,
+    PROFILE_BY_FAULT_KEY,
+    ModuleFault,
+    clear_module_faults,
+    read_module_faults,
+    scan_modules,
+)
+from vehicle_coding import (
+    GM3_PROFILES,
+    GM3CodingState,
+    ModuleCodingState,
+    SM_E46_PROFILES,
+    read_gm3_coding,
+    read_module_coding,
+    write_gm3_coding,
+    write_module_coding,
+)
 import ecu_info
 from live_data import (LiveDataPoller, PROFILE_DISPLAY_NAMES,
                        TELEGRAM_PARAM_NAMES, display_rows, read_adaptations)
 from rom_analyzer import analyze as analyze_rom
 from backup_manager import BackupManager, BACKUP_DIR
 import bin_compare
+from support_bundle import (
+    create_support_bundle as _create_support_bundle,
+    latest_file as _latest_file,
+)
 from port_owner import PortOwner, PortBusyError
 import patch_service
 import identity
@@ -80,6 +104,7 @@ LOG_DIR = str(mutable_path("logs"))
 VERIFY_OFF_MESSAGE = (
     "Read-back verification skipped (Verify off). ECU-side finalization completed."
 )
+LOW_BATTERY_WARNING_V = 12.0
 MAIN_WINDOW_WIDTH = 980
 MAIN_WINDOW_PREFERRED_HEIGHT = 960
 MAIN_CANVAS_MIN_HEIGHT = 700
@@ -163,73 +188,6 @@ def _release_build_info():
     return label, " / ".join(summary_parts), "\n".join(details)
 
 
-def _latest_file(directory, patterns):
-    paths = []
-    for pattern in patterns:
-        paths.extend(glob.glob(os.path.join(str(directory), pattern)))
-    files = [path for path in paths if os.path.isfile(path)]
-    try:
-        return max(files, key=os.path.getmtime) if files else ""
-    except OSError:
-        return ""
-
-
-def _create_support_bundle(
-        destination, build_info, *, bin_metadata=None, live_csv="",
-        native_journal="", session_log=""):
-    """Write a privacy-scoped support ZIP atomically and return its member names."""
-    destination = os.path.abspath(destination)
-    os.makedirs(os.path.dirname(destination), exist_ok=True)
-    temp = tempfile.NamedTemporaryFile(
-        prefix=".bimmerstein-support-", suffix=".tmp",
-        dir=os.path.dirname(destination), delete=False)
-    temp_path = temp.name
-    temp.close()
-    members = ["build-info.txt"]
-    try:
-        with zipfile.ZipFile(
-                temp_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr("build-info.txt", build_info.rstrip() + "\n")
-            if bin_metadata is not None:
-                archive.writestr(
-                    "selected-bin.json",
-                    json.dumps(bin_metadata, indent=2, sort_keys=True) + "\n")
-                members.append("selected-bin.json")
-            for source, member in (
-                    (live_csv, "live-data.csv"),
-                    (native_journal, "native-fast-journal.jsonl"),
-                    (session_log, "session-log.txt")):
-                if source and os.path.isfile(source):
-                    archive.write(source, member)
-                    members.append(member)
-            manifest = {
-                "schema": 1,
-                "created_utc": (
-                    datetime.datetime.now(datetime.timezone.utc)
-                    .replace(microsecond=0).isoformat().replace("+00:00", "Z")
-                ),
-                "contents": members + ["manifest.json"],
-                "raw_rom_included": False,
-                "session_log_included": "session-log.txt" in members,
-                "privacy": (
-                    "Raw ROMs, Bin filenames, VIN, ISN, notes, and ECU identifiers "
-                    "are excluded. Session logs are included only by explicit opt-in."
-                ),
-            }
-            archive.writestr(
-                "manifest.json",
-                json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-            members.append("manifest.json")
-        os.replace(temp_path, destination)
-    finally:
-        if os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except OSError:
-                pass
-    return members
-
-
 def configure_high_dpi():
     """Set one DPI policy before QApplication is constructed."""
     if sys.platform == "win32":
@@ -270,6 +228,7 @@ def configure_application(app):
         app.setWindowIcon(QIcon(APP_ICON_PATH))
 
     app.setStyle("Fusion")
+    app.setFont(QFont("Segoe UI", 10))
     dark = QPalette()
     dark.setColor(QPalette.Window,          QColor("#2b2b2b"))
     dark.setColor(QPalette.WindowText,      QColor("#d4d4d4"))
@@ -922,14 +881,7 @@ _ECU_VARIANT_MAP = {
 # ---------------------------------------------------------------------------
 
 def _populate_ecu_info(ident: bytes, labels: dict) -> tuple:
-    """Parse the DS2 identify response and fill the ECU ID / Detected Variant labels.
-
-    ECU ID is the first 7 ASCII bytes of the identify() response, e.g. "1437806"
-    or "SHINDE1". Variant is determined from the ECU ID (authoritative), with the
-    ID prefix (ID60, ID12, etc.) derived from the variant. The remaining identify()
-    bytes (HW/SW/coding fields) aren't independently confirmed field-for-field, so
-    they're not decoded here — the exact bytes are available via the "Show Raw
-    Identification Response" button instead.
+    """Decode BMW's normal 42-byte IDENT result into the ECU Info labels.
 
     Returns (ecu_id, variant) — e.g. ('1437806', 'MS41.1').
     Both values are None if the relevant field couldn't be parsed.
@@ -937,21 +889,54 @@ def _populate_ecu_info(ident: bytes, labels: dict) -> tuple:
     ecu_id  = None
     variant = None
     try:
-        def _ascii(b: bytes) -> str:
-            return "".join(chr(x) if 32 <= x < 127 else "?" for x in b).strip()
+        decoded = ecu_info.decode_identification(ident)
+        ecu_id = decoded["reported_identifier"]
+        if ecu_id:
+            labels["Reported ECU Identifier"].setText(ecu_id)
 
-        if len(ident) >= 7:
-            ecu_id = _ascii(ident[0:7])
-            labels["ECU ID"].setText(ecu_id)
+        detail_labels = {
+            "BMW Hardware Number": "bmw_hardware_number",
+            "Coding Index": "coding_index",
+            "Diagnostic Index": "diagnostic_index",
+            "Bus Index": "bus_index",
+            "Software Index": "software_index",
+            "Change Index": "change_index",
+            "Supplier Number": "supplier_number",
+            "DME Production Serial": "dme_production_serial",
+        }
+        for label, key in detail_labels.items():
+            if decoded[key]:
+                labels[label].setText(decoded[key])
+        week, year = decoded["manufacturing_week"], decoded["manufacturing_year"]
+        if week and year:
+            labels["Manufacturing Week / Year"].setText(f"{week} / {year}")
 
-        # Variant from ECU ID (authoritative — CAL ID prefix varies by firmware rev)
+        # Initial family hint; connect-time independent program/calibration evidence
+        # replaces it below when available.
         if ecu_id and ecu_id in _ECU_VARIANT_MAP:
             variant, id_prefix = _ECU_VARIANT_MAP[ecu_id]
-            labels["Detected Variant"].setText(f"{variant}  (ID{id_prefix})")
+            labels["ECU Family"].setText(f"{variant}  (ID{id_prefix})")
 
     except Exception:
         pass
     return ecu_id, variant
+
+
+def _populate_aif_info(raw: bytes, family: str, program_part: str, labels: dict) -> None:
+    history = ecu_info.decode_aif_history(raw or b"", family)
+    values = {
+        "Recorded ZB / ZUSB": history.get("recorded_zb_zusb") or "Unavailable",
+        "Programming Date": history.get("programming_date") or "Unavailable",
+        "Recorded Software Number": (
+            history.get("recorded_software_number") or "Unavailable"
+        ),
+        "Programming Count": str(history["programming_count"]) if history else "Unavailable",
+        "BMW Program Lineage": ecu_info.format_program_lineage(
+            history.get("recorded_zb_zusb"), program_part
+        ),
+    }
+    for key, value in values.items():
+        labels[key].setText(value)
 
 
 def _is_firmware_conversion(
@@ -991,6 +976,7 @@ class MS41FlashGUI(QMainWindow):
         self._ds2                 = None
         self._worker              = None
         self._dtcs                = []
+        self._gm3_coding_state    = None
         self._ecu_variant         = None
         self._ecu_program_variant = None   # confirmed from full ROM read; resolves MS41.2/MS41.3 ambiguity
         self._softbsl_last_is_ms41_3 = False   # backward-compatible sticky used by older UI tests
@@ -1002,7 +988,7 @@ class MS41FlashGUI(QMainWindow):
         self._session_backup_read = False
         self._last_full_read      = None   # bytes of the last full ROM read THIS connection;
                                             # reused for boot gates and identity grafting
-        self._ecu_identity_source = None   # small live DS2 snapshot: serial/ISN + packed VIN
+        self._ecu_identity_source = None   # live DS2 production identity + AIF snapshot
         self._task_busy           = False
         self._connect_attempt     = None   # token while a provisional DS2 handle is worker-owned
         self._connection_echo     = True
@@ -1288,7 +1274,8 @@ class MS41FlashGUI(QMainWindow):
         # Build tabs in display order.
         self._build_flash_tab()        # Flash
         self._build_info_tab()         # ECU Info
-        self._build_dtc_tab()          # DTC Codes
+        self._build_dtc_tab()          # Diagnostics
+        self._build_coding_tab()       # Coding
         self._build_live_data_tab()    # Live Data
         self._build_adaptations_tab()  # Adaptations
         self._build_eeprom_tab()       # EEPROM
@@ -1432,7 +1419,7 @@ class MS41FlashGUI(QMainWindow):
             "loader directly with staged command 0x5A. Never sends 0x2A or falls back to DS2. "
             "Requires a known flash-driver family; a rejected trigger stops before erase.")
         self.rb_recovery_boot.setToolTip(
-            "Connect with ignition OFF, repeatedly send CalGuard V4's key-on token, then "
+            "Connect with ignition OFF, repeatedly send CalGuard V5's key-on token, then "
             "retain the acknowledged Soft-BSL RAM-agent session for a full/tune read or "
             "boot-preserving write. The preserved boot driver identifies the flash family "
             "before the RAM agent is selected. Requires D2XX.")
@@ -1487,20 +1474,57 @@ class MS41FlashGUI(QMainWindow):
 
         self._flash_tab_index = self.tabs.addTab(tab, "  Flash  ")
 
-    # ── DTC tab ─────────────────────────────────────────────────────────
+    # ── Diagnostics tab ─────────────────────────────────────────────────
 
     def _build_dtc_tab(self):
         tab = QWidget()
         lay = QVBoxLayout(tab)
 
+        scan_group = QGroupBox("Vehicle Module Scan")
+        scan_lay = QVBoxLayout(scan_group)
+        scan_row = QHBoxLayout()
+        self.btn_scan_modules = self._op_btn(
+            "🔎  Scan Vehicle", "#1e5080", self._on_scan_modules
+        )
+        self.btn_scan_modules.setMaximumWidth(180)
+        self.btn_scan_modules.setToolTip(
+            "Read-only identification scan of six verified DS2 module addresses. "
+            "Requires the normal K-Line connection, not Direct Tap.")
+        self.cb_diag_module = QComboBox()
+        self.cb_diag_module.setMinimumWidth(230)
+        self.cb_diag_module.currentIndexChanged.connect(
+            self._on_diag_module_changed)
+        self.cb_diag_profile = QComboBox()
+        self.cb_diag_profile.setMinimumWidth(220)
+        self.cb_diag_profile.currentIndexChanged.connect(
+            self._on_diag_profile_changed)
+        scan_row.addWidget(self.btn_scan_modules)
+        scan_row.addWidget(QLabel("Module:"))
+        scan_row.addWidget(self.cb_diag_module)
+        scan_row.addWidget(QLabel("System:"))
+        scan_row.addWidget(self.cb_diag_profile)
+        scan_row.addStretch()
+        scan_lay.addLayout(scan_row)
+        self.lbl_diag_scan = QLabel("Connect, then scan the vehicle.")
+        self.lbl_diag_scan.setWordWrap(True)
+        self.lbl_diag_scan.setStyleSheet("color:#aaa; padding:2px 4px;")
+        scan_lay.addWidget(self.lbl_diag_scan)
+        self.lbl_diag_module = QLabel(
+            "Decoded fault memory is currently available for the Engine ECU.")
+        self.lbl_diag_module.setWordWrap(True)
+        self.lbl_diag_module.setStyleSheet("color:#888; padding:2px 4px;")
+        scan_lay.addWidget(self.lbl_diag_module)
+        lay.addWidget(scan_group)
+        self._reset_diag_scan(False)
+
         # Button bar
         btn_bar = QHBoxLayout()
         self.btn_read_dtc = self._op_btn(
-            "🔎  Read DTCs", "#1e5080", self._on_read_dtc
+            "🔎  Read Faults", "#1e5080", self._on_read_dtc
         )
         self.btn_read_dtc.setMaximumWidth(180)
         self.btn_clear_dtc = self._op_btn(
-            "🗑  Clear DTCs", "#7a1f1f", self._on_clear_dtc
+            "🗑  Clear Faults", "#7a1f1f", self._on_clear_dtc
         )
         self.btn_clear_dtc.setMaximumWidth(180)
         self.btn_export_dtc = self._op_btn(
@@ -1520,7 +1544,7 @@ class MS41FlashGUI(QMainWindow):
         # DTC table
         self.dtc_table = QTableWidget(0, 5)
         self.dtc_table.setHorizontalHeaderLabels(
-            ["BMW Code", "SAE Code", "System", "Status", "Description"]
+            ["Fault Code", "Reference", "System", "Status", "Description"]
         )
         self.dtc_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
         self.dtc_table.horizontalHeader().setDefaultSectionSize(110)
@@ -1557,7 +1581,7 @@ class MS41FlashGUI(QMainWindow):
         lay.addWidget(self.dtc_table, 1)
 
         # Detail panel
-        detail_group = QGroupBox("Selected DTC — Detail")
+        detail_group = QGroupBox("Selected Fault — Detail")
         detail_group.setStyleSheet("""
             QGroupBox {
                 color: #aaa;
@@ -1585,13 +1609,195 @@ class MS41FlashGUI(QMainWindow):
         lay.addWidget(detail_group)
 
         self.dtc_table.itemSelectionChanged.connect(self._on_dtc_selected)
-        self.tabs.addTab(tab, "  DTC Codes  ")
+        self.tabs.addTab(tab, "  Diagnostics  ")
+
+    # ── Coding tab ──────────────────────────────────────────────────────
+
+    def _build_coding_tab(self):
+        tab = QWidget()
+        tab_lay = QVBoxLayout(tab)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        scroll.setWidget(body)
+        tab_lay.addWidget(scroll)
+
+        intro = QLabel(
+            "Plain-English settings from exact built-in module profiles. "
+            "Technical references are supporting details; all coding profiles "
+            "needed by the app are built in."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color:#aaa; padding:4px;")
+        lay.addWidget(intro)
+
+        filter_row = QHBoxLayout()
+        filter_title = QLabel("Everyday settings")
+        filter_title.setStyleSheet("font-weight:bold;")
+        self.chk_coding_advanced = QCheckBox("Show advanced options")
+        self.chk_coding_advanced.setChecked(False)
+        self.chk_coding_advanced.setToolTip(
+            "Shows reviewed equipment-specific settings and their BMW references. "
+            "It does not enable raw-byte editing or unknown module versions."
+        )
+        self.chk_coding_advanced.toggled.connect(self._apply_coding_filter)
+        filter_row.addWidget(filter_title)
+        filter_row.addStretch()
+        filter_row.addWidget(self.chk_coding_advanced)
+        lay.addLayout(filter_row)
+
+        module_group = QGroupBox("Windows, Locks and Memory — General Module")
+        module_lay = QVBoxLayout(module_group)
+        action_row = QHBoxLayout()
+        self.btn_read_gm3_coding = self._op_btn(
+            "🔎  Read Window & Lock Settings", "#1e5080", self._on_read_gm3_coding
+        )
+        self.btn_write_gm3_coding = self._op_btn(
+            "Write Changes", "#7a4f16", self._on_write_gm3_coding
+        )
+        self.btn_read_gm3_coding.setMaximumWidth(210)
+        self.btn_write_gm3_coding.setMaximumWidth(180)
+        action_row.addWidget(self.btn_read_gm3_coding)
+        action_row.addWidget(self.btn_write_gm3_coding)
+        action_row.addStretch()
+        module_lay.addLayout(action_row)
+
+        self.lbl_gm3_coding = QLabel(
+            "Connect in normal K-Line mode, then read the fitted General Module."
+        )
+        self.lbl_gm3_coding.setWordWrap(True)
+        self.lbl_gm3_coding.setStyleSheet("color:#aaa; padding:4px;")
+        module_lay.addWidget(self.lbl_gm3_coding)
+
+        features = {}
+        for profile in GM3_PROFILES:
+            for feature in profile.features:
+                features.setdefault(feature.key, feature)
+
+        self._gm3_checks = {}
+        self._coding_rows = {}
+        self._coding_notes = {}
+        self._coding_section_groups = {}
+        for section in dict.fromkeys(feature.section for feature in features.values()):
+            section_group = QGroupBox(section)
+            section_lay = QVBoxLayout(section_group)
+            self._coding_section_groups[section] = section_group
+            for feature in (item for item in features.values()
+                            if item.section == section):
+                row = QWidget()
+                row_lay = QVBoxLayout(row)
+                row_lay.setContentsMargins(0, 0, 0, 2)
+                check = QCheckBox(feature.label)
+                note = QLabel(
+                    f"{feature.description}  ·  Reference: {feature.reference}"
+                )
+                note.setWordWrap(True)
+                note.setStyleSheet("color:#888; padding:0 0 5px 24px;")
+                check.setToolTip(
+                    f"{feature.description}\nReference: {feature.reference}"
+                )
+                row_lay.addWidget(check)
+                row_lay.addWidget(note)
+                section_lay.addWidget(row)
+                self._gm3_checks[feature.key] = check
+                self._coding_rows[feature.key] = (row, feature)
+                self._coding_notes[feature.key] = note
+            module_lay.addWidget(section_group)
+
+        lay.addWidget(module_group)
+
+        seat_profile = SM_E46_PROFILES[0]
+        seat_group = QGroupBox("Driver Seat Memory — E46")
+        seat_lay = QVBoxLayout(seat_group)
+        seat_actions = QHBoxLayout()
+        self.btn_read_seat_coding = self._op_btn(
+            "🔎  Read Seat Settings", "#1e5080", self._on_read_seat_coding
+        )
+        self.btn_write_seat_coding = self._op_btn(
+            "Write Changes", "#7a4f16", self._on_write_seat_coding
+        )
+        self.btn_read_seat_coding.setMaximumWidth(210)
+        self.btn_write_seat_coding.setMaximumWidth(180)
+        seat_actions.addWidget(self.btn_read_seat_coding)
+        seat_actions.addWidget(self.btn_write_seat_coding)
+        seat_actions.addStretch()
+        seat_lay.addLayout(seat_actions)
+        self.lbl_seat_coding = QLabel(
+            "For supported E46 driver-seat memory modules on normal K-Line."
+        )
+        self.lbl_seat_coding.setWordWrap(True)
+        self.lbl_seat_coding.setStyleSheet("color:#aaa; padding:4px;")
+        seat_lay.addWidget(self.lbl_seat_coding)
+
+        timing = seat_profile.features[0]
+        seat_lay.addWidget(QLabel(timing.label))
+        self.cb_seat_timing = QComboBox()
+        for choice in timing.choices:
+            self.cb_seat_timing.addItem(choice.label, choice.value)
+        self.cb_seat_timing.setToolTip(timing.description)
+        seat_lay.addWidget(self.cb_seat_timing)
+        self.chk_seat_one_touch = QCheckBox(seat_profile.features[1].label)
+        self.chk_seat_one_touch.setToolTip(seat_profile.features[1].description)
+        seat_lay.addWidget(self.chk_seat_one_touch)
+        self.lbl_seat_reference = QLabel(
+            "References: AUT_SITZVERSTELLUNG · MEMORY_TIPP_BETRIEB · SM_E46.C01"
+        )
+        self.lbl_seat_reference.setWordWrap(True)
+        self.lbl_seat_reference.setStyleSheet("color:#888; padding:2px 0;")
+        seat_lay.addWidget(self.lbl_seat_reference)
+        lay.addWidget(seat_group)
+
+        swap_group = QGroupBox("Transmission Swap — Compatibility Status")
+        swap_lay = QVBoxLayout(swap_group)
+        self.lbl_transmission_swap_status = QLabel()
+        self.lbl_transmission_swap_status.setWordWrap(True)
+        self.lbl_transmission_swap_status.setStyleSheet("color:#bbb; padding:4px;")
+        swap_lay.addWidget(self.lbl_transmission_swap_status)
+        swap_links = QHBoxLayout()
+        for label, tab_name in (
+            ("Open ECU Info", "ECU Info"),
+            ("Open Diagnostics", "Diagnostics"),
+            ("Open ECU Configuration", "ECU Config"),
+            ("Open EEPROM Manager", "EEPROM"),
+        ):
+            button = QPushButton(label)
+            button.clicked.connect(
+                lambda _checked=False, name=tab_name: self._open_named_tab(name))
+            swap_links.addWidget(button)
+        swap_links.addStretch()
+        swap_lay.addLayout(swap_links)
+        swap_note = QLabel(
+            "Full vehicle conversion is not enabled yet because exact vehicle-order "
+            "and EWS/cluster/ASC-DSC coding owners are not implemented. The tool will "
+            "not offer a partial or guessed conversion."
+        )
+        swap_note.setWordWrap(True)
+        swap_note.setStyleSheet("color:#d6a34a; padding:4px;")
+        swap_lay.addWidget(swap_note)
+        lay.addWidget(swap_group)
+        lay.addStretch()
+        self.tabs.addTab(tab, "  Coding  ")
+        self._reset_gm3_coding()
+        self._reset_seat_coding()
+        self._update_transmission_swap_status()
 
     # ── ECU Info tab ────────────────────────────────────────────────────
 
     def _build_info_tab(self):
         tab = QWidget()
-        lay = QVBoxLayout(tab)
+        tab_lay = QVBoxLayout(tab)
+        tab_lay.setContentsMargins(0, 0, 0, 0)
+        self._info_scroll = QScrollArea()
+        self._info_scroll.setWidgetResizable(True)
+        self._info_scroll.setFrameShape(QScrollArea.NoFrame)
+        self._info_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._info_body = QWidget()
+        lay = QVBoxLayout(self._info_body)
+        self._info_scroll.setWidget(self._info_body)
+        tab_lay.addWidget(self._info_scroll)
 
         self.btn_info = self._op_btn(
             "📋  Read ECU Firmware Info", "#1e5080", self._on_read_info
@@ -1599,32 +1805,57 @@ class MS41FlashGUI(QMainWindow):
         self.btn_info.setMaximumWidth(240)
         lay.addWidget(self.btn_info)
 
-        self.info_grid = QGridLayout()
-        self.info_grid.setColumnStretch(1, 1)
         self._info_labels = {}
-        fields = [
-            "ECU ID", "CAL ID", "Detected Variant", "Firmware Version",
-            "VIN", "ISN", "Flash Chip", "Transmission",
-        ]
-        for row, f in enumerate(fields):
-            lbl_key = QLabel(f"{f}:")
-            lbl_key.setStyleSheet("font-weight:bold; color:#aaa; min-width:160px;")
-            lbl_val = QLabel("—")
-            lbl_val.setWordWrap(True)
-            lbl_val.setTextFormat(Qt.RichText)
-            lbl_val.setStyleSheet("color:#e0e0e0;")
-            self.info_grid.addWidget(lbl_key, row, 0, Qt.AlignTop)
-            self.info_grid.addWidget(lbl_val, row, 1, Qt.AlignTop)
-            self._info_labels[f] = lbl_val
+        def add_group(title, fields):
+            group = QGroupBox(title)
+            grid = QGridLayout(group)
+            grid.setColumnStretch(1, 1)
+            for row, field in enumerate(fields):
+                key = QLabel(f"{field}:")
+                key.setStyleSheet("font-weight:bold; color:#aaa; min-width:190px;")
+                value = QLabel("—")
+                value.setWordWrap(True)
+                value.setTextFormat(Qt.RichText)
+                value.setStyleSheet("color:#e0e0e0;")
+                grid.addWidget(key, row, 0, Qt.AlignTop)
+                grid.addWidget(value, row, 1, Qt.AlignTop)
+                self._info_labels[field] = value
+            lay.addWidget(group)
+            return group
 
-        info_inner = QWidget()
-        info_inner.setLayout(self.info_grid)
-        lay.addWidget(info_inner)
+        add_group("Software", [
+            "ECU Family", "Reported ECU Identifier", "BMW Program Part Number",
+            "Calibration ID", "Program / Calibration Match",
+        ])
+        add_group("BMW Programming Record", [
+            "Recorded ZB / ZUSB", "Programming Date", "Recorded Software Number",
+            "Programming Count", "BMW Program Lineage",
+        ])
+        add_group("DME Identity", [
+            "VIN", "DME Production Serial", "EWS2 ISN", "Transmission Mode",
+        ])
+
+        self.btn_show_technical_info = QPushButton("Show Technical Details")
+        self.btn_show_technical_info.setCheckable(True)
+        self.btn_show_technical_info.setMaximumWidth(240)
+        lay.addWidget(self.btn_show_technical_info)
+        self.technical_info_group = add_group("Technical Details", [
+            "BMW Hardware Number", "Coding Index", "Diagnostic Index", "Bus Index",
+            "Software Index", "Change Index", "Manufacturing Week / Year",
+            "Supplier Number", "Flash Command-Set Driver",
+        ])
+        self.technical_info_group.hide()
+        def toggle_technical_info(shown):
+            self.technical_info_group.setVisible(shown)
+            self.btn_show_technical_info.setText(
+                "Hide Technical Details" if shown else "Show Technical Details")
+        self.btn_show_technical_info.toggled.connect(toggle_technical_info)
 
         self.btn_show_raw_ident = QPushButton("Show Raw Identification Response")
         self.btn_show_raw_ident.setMaximumWidth(260)
         self.btn_show_raw_ident.clicked.connect(self._on_show_raw_ident)
-        lay.addWidget(self.btn_show_raw_ident)
+        self.technical_info_group.layout().addWidget(
+            self.btn_show_raw_ident, self.technical_info_group.layout().rowCount(), 0, 1, 2)
 
         self.raw_ident_view = QTextEdit()
         self.raw_ident_view.setReadOnly(True)
@@ -1635,7 +1866,8 @@ class MS41FlashGUI(QMainWindow):
             "shown as-is, with no assumed field meaning."
         )
         self.raw_ident_view.hide()
-        lay.addWidget(self.raw_ident_view)
+        self.technical_info_group.layout().addWidget(
+            self.raw_ident_view, self.technical_info_group.layout().rowCount(), 0, 1, 2)
 
         lay.addStretch()
         self.tabs.addTab(tab, "  ECU Info  ")
@@ -1755,9 +1987,8 @@ class MS41FlashGUI(QMainWindow):
                 ident = ds2.identify()
                 cal_id = ""
                 try:
-                    raw = ds2.read_mem(0x1000E, 2)  # cal_base+0x0E per RomRaider defs
-                    cal_id = "".join(
-                        chr(b) if 32 <= b < 127 else "?" for b in raw).strip()
+                    raw = bytes(ds2.read_mem(ecu_info.CAL_ID_ADDR, ecu_info.CAL_ID_LEN))
+                    cal_id = raw.decode("ascii") if raw.isdigit() else ""
                 except Exception:
                     pass
                 program_compatibility_id = ""
@@ -1771,6 +2002,17 @@ class MS41FlashGUI(QMainWindow):
                         program_compatibility_id = program_ids[0].decode("ascii")
                 except Exception:
                     pass
+                calibration_compatibility_id = ""
+                try:
+                    calibration_ids = [
+                        bytes(ds2.read_mem(address ^ 0x4000, 4))
+                        for address in FIRMWARE_COMPAT_CAL_ADDRS
+                    ]
+                    if (all(len(value) == 4 and value.isdigit() for value in calibration_ids)
+                            and len(set(calibration_ids)) == 1):
+                        calibration_compatibility_id = calibration_ids[0].decode("ascii")
+                except Exception:
+                    pass
                 vin = ""
                 try:
                     vin = ds2.read_vin()
@@ -1778,12 +2020,22 @@ class MS41FlashGUI(QMainWindow):
                     pass
                 # Detect MS41.3 from the PROGRAM-region SS1v2 signature (survives a tune/cal
                 # reflash), NOT the cal-resident ABHISHEK marker a custom tune wipes.
-                prog_is_ms41_3 = self._program_is_ms41_3(ds2)
                 ecu_id = bytes(ident[:7]).decode("ascii", errors="ignore")
-                program_variant = (
-                    "MS41.3" if prog_is_ms41_3 else
-                    _ECU_VARIANT_MAP.get(ecu_id, (None, None))[0]
+                try:
+                    program_signature = bytes(ds2.read_mem(
+                        SS1V2_PROG_SIG_ADDR ^ 0x4000, len(SS1V2_PROG_SIG)))
+                except Exception:
+                    program_signature = b""
+                live_variants = ecu_info.resolve_live_variants(
+                    ecu_id,
+                    cal_id=cal_id,
+                    program_part=ecu_id,
+                    program_compat=program_compatibility_id,
+                    calibration_compat=calibration_compatibility_id,
+                    program_signature=program_signature,
                 )
+                prog_is_ms41_3 = live_variants[1] == "MS41.3"
+                program_variant = live_variants[1]
                 # Soft-BSL bank marker + flash chip signature — read-only, no agent, safe on a
                 # normally-running ECU. Used to decide whether the Fast checkbox can be offered
                 # and to render an accurate chip label.
@@ -1821,12 +2073,14 @@ class MS41FlashGUI(QMainWindow):
                         ecu_info.DRV_SIG_ADDR, ecu_info.DRV_SIG_LEN)
                 except Exception:
                     pass
-                new_fields = self._read_new_info_fields(ds2, log_fn)
+                new_fields = self._read_new_info_fields(
+                    ds2, log_fn, ident, program_variant)
                 identity_source = self._read_live_identity_source(ds2, log_fn)
                 return (ds2, ident, cal_id, vin, prog_is_ms41_3, new_fields,
                         softbsl_marker_raw, chip_sig_for_fast, identity_source,
                         softbsl_hook_present, program_compatibility_id,
-                        calguard_recovery_ready)
+                        calibration_compatibility_id, calguard_recovery_ready,
+                        live_variants)
             except Exception:
                 # The provisional transport belongs to this worker until every
                 # connect-time probe succeeds. Keep PortOwner held while close()
@@ -1923,7 +2177,7 @@ class MS41FlashGUI(QMainWindow):
         self._connection_echo = True
         self._connection_port = port
         self._log(
-            f"Arming CalGuard V4 boot recovery on {port}; keep ignition OFF "
+            f"Arming CalGuard V5 boot recovery on {port}; keep ignition OFF "
             "until prompted in the log.",
             "warn",
         )
@@ -2059,6 +2313,15 @@ class MS41FlashGUI(QMainWindow):
         self._identity_isn_key = None
         if hasattr(self, "id_vin_current"):
             self._clear_identity_tab_state()
+        self._reset_diag_scan(False)
+        self._reset_gm3_coding()
+        self._reset_seat_coding()
+        self.lbl_gm3_coding.setText(
+            "Connect in normal K-Line mode, then read the fitted General Module."
+        )
+        self.lbl_seat_coding.setText(
+            "For supported E46 driver-seat memory modules on normal K-Line."
+        )
         self._on_live_stop()
         if not keep_session_log:
             self._end_session_log()
@@ -2116,32 +2379,41 @@ class MS41FlashGUI(QMainWindow):
 
     @staticmethod
     def _read_live_identity_source(ds2, log_fn):
-        """Read only the live per-unit identity bytes needed for a base-image graft.
+        """Read the live production identity and AIF bytes needed for a graft.
 
-        These two small stock-DS2 reads replace the old requirement for a complete
-        256 KB ROM read. File 0x5CE0/0x5D07 map to DS2 0x1CE0/0x1D07.
+        These stock-DS2 reads replace the need for a complete 256 KB ROM read.
         """
         try:
-            serial_block = ds2.read_mem(0x1CE0, 15)  # marker + gap + 9-digit serial + NUL
-            packed_vin = ds2.read_mem(0x1D07, identity.VIN_LEN)
-            if len(serial_block) != 15 or len(packed_vin) != identity.VIN_LEN:
+            production = ds2.read_mem(
+                identity.PRODUCTION_OFF ^ 0x4000,
+                identity.PRODUCTION_END - identity.PRODUCTION_OFF,
+            )
+            aif = ds2.read_memory_range(
+                identity.AIF_OFF ^ 0x4000,
+                identity.AIF_END - identity.AIF_OFF,
+            )
+            if (len(production) != identity.PRODUCTION_END - identity.PRODUCTION_OFF
+                    or len(aif) != identity.AIF_END - identity.AIF_OFF):
                 raise ValueError("short identity read")
             source = bytearray(b"\xFF" * 0x6100)
-            source[identity.MARK_1585_OFF:identity.MARK_1585_OFF + 15] = serial_block
-            source[identity.VIN_OFF:identity.VIN_OFF + identity.VIN_LEN] = packed_vin
+            source[identity.PRODUCTION_OFF:identity.PRODUCTION_END] = production
+            source[identity.AIF_OFF:identity.AIF_END] = aif
             info = identity.decode_identity(bytes(source))
             if not info.serial or not info.isn4:
                 raise ValueError("live serial/ISN is invalid")
             return bytes(source)
         except Exception as error:
-            log_fn(f"Live VIN/ISN preservation snapshot failed: {error}", "warn")
+            log_fn(f"Live identity/AIF preservation snapshot failed: {error}", "warn")
             return None
 
     def _on_connected(self, ident=b"", cal_id="", vin="", prog_is_ms41_3=False, new_fields=None,
                      softbsl_marker_raw=b"", chip_sig=b"", identity_source=None,
                      softbsl_hook_present=False, program_compatibility_id="",
-                     calguard_recovery_ready=False):
+                     calibration_compatibility_id="", calguard_recovery_ready=False,
+                     live_variants=None):
         self._reset_live_config_state()
+        for label in self._info_labels.values():
+            label.setText("—")
         self._d2xx_checked = True
         self._d2xx_ok = bool(self._ds2 and getattr(self._ds2, "uses_d2xx", False))
         self._update_d2xx_warning()
@@ -2170,11 +2442,25 @@ class MS41FlashGUI(QMainWindow):
                 self._log(f"ECU ID: {parsed_id}", "ok")
             if cal_id:
                 self._ecu_cal_id = cal_id
-                self._info_labels["CAL ID"].setText(cal_id)
+                self._info_labels["Calibration ID"].setText(
+                    ecu_info.format_calibration_id(cal_id))
             self._ecu_program_compatibility_id = program_compatibility_id or None
+            cal_variant, program_variant, consistent = live_variants or (None, None, False)
+            if cal_variant or program_variant:
+                self._info_labels["ECU Family"].setText(
+                    ecu_info.format_family(cal_variant, program_variant, consistent))
+            self._info_labels["Program / Calibration Match"].setText(
+                ecu_info.format_program_calibration_match(
+                    program_compatibility_id, calibration_compatibility_id))
+            if program_variant:
+                self._ecu_program_variant = program_variant
+            if cal_variant and program_variant and not consistent:
+                parsed_variant = None
+            elif cal_variant or program_variant:
+                parsed_variant = program_variant or cal_variant
             # MS41.3 program marker — resolves the MS41.2 / MS41.3 ambiguity that
             # ECU ID alone can't handle (some MS41.3 ECUs still report "1406464").
-            if prog_is_ms41_3:
+            if prog_is_ms41_3 and live_variants is None:
                 self._ecu_program_variant = "MS41.3"
                 parsed_variant = "MS41.3"
                 self._log("MS41.3 program firmware detected (SS1v2 program signature).", "ok")
@@ -2190,18 +2476,29 @@ class MS41FlashGUI(QMainWindow):
         else:
             self._info_labels["VIN"].setText("Not programmed in ECU")
         self._last_ident_raw = ident
+        self._reset_diag_scan(True)
         for key, val in (new_fields or {}).items():
             self._info_labels[key].setText(val)
+        family = self._ecu_variant or (live_variants or (None, None, False))[1]
+        _populate_aif_info(
+            self._ecu_identity_source,
+            family,
+            (new_fields or {}).get("BMW Program Part Number", ""),
+            self._info_labels,
+        )
         self._update_softbsl_install_options()
         self._update_config_buttons()
         self._update_eeprom_buttons()
 
     def _set_ds2_buttons_enabled(self):
         """DS2 mode: reads + partial tune write enabled; full write held off."""
-        for b in (self.btn_read_dtc, self.btn_clear_dtc, self.btn_export_dtc,
+        for b in (self.btn_scan_modules, self.btn_read_dtc, self.btn_clear_dtc,
+                  self.btn_export_dtc,
                   self.btn_info, self.btn_read_tune, self.btn_read_full,
                   self.btn_id_read_ecu, self.btn_softbsl_install):
             b.setEnabled(True)
+        self.cb_diag_module.setEnabled(True)
+        self.cb_diag_profile.setEnabled(True)
         self.btn_id_read_flash_ecu.setEnabled(self._fast_read_available())
         self.btn_id_read_flash_ecu.setToolTip(
             "Requires the installed Soft-BSL loader and its normal-mode 0x2A hook. "
@@ -2250,6 +2547,8 @@ class MS41FlashGUI(QMainWindow):
                 and self._identity_isn_key == self._identity_connection_key()
                 and not self._task_busy))
         self._update_eeprom_buttons()
+        self._update_diag_actions()
+        self._update_coding_actions()
 
     def _set_calguard_boot_buttons_enabled(self):
         """Retained-agent mode exposes only the Flash read/write surface."""
@@ -2455,8 +2754,8 @@ class MS41FlashGUI(QMainWindow):
     def _identity_graft_source(self):
         """Return the best current ECU identity snapshot and its decoded fields.
 
-        A cached full read is preferred, but connection setup already captures the only bytes
-        graft_identity() needs, so a slow 256 KB read is not required for a conversion.
+        A cached full read is preferred, but connection setup already captures the exact
+        graft ranges, so a slow 256 KB read is not required for a conversion.
         """
         cached = getattr(self, "_last_full_read", None)
         source = (bytes(cached)
@@ -2632,8 +2931,8 @@ class MS41FlashGUI(QMainWindow):
     # ECU Info
     # -------------------------------------------------------------------
 
-    def _read_new_info_fields(self, ds2, log_fn) -> dict:
-        """Read the 4 new/fixed ECU Info fields over DS2 (read-only, safe on
+    def _read_new_info_fields(self, ds2, log_fn, ident=b"", program_family=None) -> dict:
+        """Read the shared ECU Info fields over DS2 (read-only, safe on
         a normally-running ECU) and decode them via ecu_info.py. Each read is
         independently wrapped so one failure (e.g. an older MS41 variant
         missing a field) never blocks the others."""
@@ -2662,12 +2961,17 @@ class MS41FlashGUI(QMainWindow):
             log_fn(f"Flash chip signature read failed: {e}", "warn")
 
         trans_raw = b""
-        try:
-            trans_raw = ds2.read_mem(ecu_info.TRANS_FLAG_ADDR, 1)
-        except Exception as e:
-            log_fn(f"Transmission flag read failed: {e}", "warn")
+        trans_addr = ecu_info.transmission_flag_address(program_family)
+        if trans_addr is None:
+            log_fn("Transmission flag read skipped: exact program family unavailable", "warn")
+        else:
+            try:
+                trans_raw = ds2.read_mem(trans_addr, 1)
+            except Exception as e:
+                log_fn(f"Transmission flag read failed: {e}", "warn")
 
-        return ecu_info.format_new_fields(fw_raw, isn_block, isn4_live, chip_sig, trans_raw)
+        return ecu_info.format_new_fields(
+            fw_raw, isn_block, isn4_live, chip_sig, trans_raw, ident)
 
     def _on_read_info(self):
         if not self._ds2: return
@@ -2677,24 +2981,41 @@ class MS41FlashGUI(QMainWindow):
             ident = self._ds2.identify()
             cal_id = ""
             try:
-                raw = self._ds2.read_mem(0x1000E, 2)
-                cal_id = "".join(chr(b) if 32 <= b < 127 else "?" for b in raw).strip()
+                raw = bytes(self._ds2.read_mem(
+                    ecu_info.CAL_ID_ADDR, ecu_info.CAL_ID_LEN))
+                cal_id = raw.decode("ascii") if raw.isdigit() else ""
                 log_fn(f"CAL ID: {cal_id}")
             except Exception as e:
                 log_fn(f"CAL ID read failed: {e}", "warn")
+            program_compatibility_id = b""
+            calibration_compatibility_id = b""
+            try:
+                program_compatibility_id = self._ds2.read_mem(
+                    ecu_info.PROGRAM_COMPAT_ADDR, 4)
+                calibration_compatibility_id = self._ds2.read_mem(
+                    ecu_info.CALIBRATION_COMPAT_ADDR, 4)
+            except Exception as e:
+                log_fn(f"Compatibility ID read failed: {e}", "warn")
             vin = ""
             try:
                 vin = self._ds2.read_vin()
             except Exception as e:
                 log_fn(f"VIN read failed: {e}", "warn")
-            new_fields = self._read_new_info_fields(self._ds2, log_fn)
-            return ident, cal_id, vin, new_fields
+            new_fields = self._read_new_info_fields(
+                self._ds2, log_fn, ident,
+                self._ecu_program_variant or self._ecu_variant,
+            )
+            identity_source = self._read_live_identity_source(self._ds2, log_fn)
+            return (ident, cal_id, vin, new_fields, identity_source,
+                    program_compatibility_id, calibration_compatibility_id)
 
         def on_done(result):
-            ident, cal_id, vin, new_fields = result
+            (ident, cal_id, vin, new_fields, identity_source,
+             program_compatibility_id, calibration_compatibility_id) = result
             self._info_labels["VIN"].setText(vin if vin else "Not programmed in ECU")
             if cal_id:
-                self._info_labels["CAL ID"].setText(cal_id)
+                self._info_labels["Calibration ID"].setText(
+                    ecu_info.format_calibration_id(cal_id))
             parsed_id, parsed_variant = _populate_ecu_info(ident, self._info_labels)
             if parsed_id:
                 self._ecu_id = parsed_id
@@ -2703,6 +3024,18 @@ class MS41FlashGUI(QMainWindow):
             self._last_ident_raw = ident
             for key, val in new_fields.items():
                 self._info_labels[key].setText(val)
+            self._info_labels["Program / Calibration Match"].setText(
+                ecu_info.format_program_calibration_match(
+                    program_compatibility_id, calibration_compatibility_id))
+            if identity_source:
+                self._ecu_identity_source = bytes(identity_source)
+            _populate_aif_info(
+                self._ecu_identity_source,
+                self._ecu_variant or parsed_variant,
+                new_fields.get("BMW Program Part Number", ""),
+                self._info_labels,
+            )
+            self._update_transmission_swap_status()
             self._log("ECU identify (DS2) read OK", "ok")
 
         self._run_task(task, on_success=on_done)
@@ -2834,13 +3167,17 @@ class MS41FlashGUI(QMainWindow):
     def _on_reset_adaptations(self):
         # DS2 path
         if self._ds2:
+            if self._ecu_variant is None:
+                QMessageBox.information(
+                    self, "ECU Profile Required",
+                    "The exact MS41 family must be resolved before clearing adaptations "
+                    "because MS41.0 uses a different factory telegram.",
+                )
+                return
             from PyQt5.QtWidgets import QInputDialog
-            choices = [
-                "All adaptations",
-                "Idle adaptation",
-                "Knock adaptation",
-                "Lambda / fuel trim adaptation",
-                "Throttle adaptation",
+            choices = ["All adaptations"] if self._ecu_variant == "MS41.0" else [
+                "All adaptations", "Idle adaptation", "Knock adaptation",
+                "Lambda / fuel trim adaptation", "Throttle adaptation",
             ]
             choice, ok = QInputDialog.getItem(
                 self, "Clear Adaptations",
@@ -2849,7 +3186,10 @@ class MS41FlashGUI(QMainWindow):
             if not ok: return
 
             sub_map = {
-                "All adaptations":                self._ds2.ADAPT_ALL,
+                "All adaptations":                (
+                    self._ds2.ADAPT_ALL_MS410
+                    if self._ecu_variant == "MS41.0" else self._ds2.ADAPT_ALL
+                ),
                 "Idle adaptation":                self._ds2.ADAPT_IDLE,
                 "Knock adaptation":               self._ds2.ADAPT_KNOCK,
                 "Lambda / fuel trim adaptation":  self._ds2.ADAPT_LAMBDA,
@@ -2866,7 +3206,8 @@ class MS41FlashGUI(QMainWindow):
             if ans != QMessageBox.Yes: return
 
             def task(log_fn, progress_fn):
-                log_fn(f"Clearing '{choice}' (DS2 0x43 sub={sub1:02X} {sub2:02X})…")
+                suffix = f" {sub2:02X}" if sub2 is not None else ""
+                log_fn(f"Clearing '{choice}' (DS2 0x43 sub={sub1:02X}{suffix})…")
                 self._ds2.clear_adaptations(sub1, sub2)
                 return f"'{choice}' cleared — ECU will re-learn on next drive cycle."
 
@@ -2979,6 +3320,33 @@ class MS41FlashGUI(QMainWindow):
             "Wait at least 10 seconds.\n"
             "Turn ignition ON.",
         )
+
+    def _prewrite_battery_notice(self):
+        """Return an advisory voltage line; a failed reading never blocks a write."""
+        if self._poller is not None:
+            self._on_live_stop()
+        try:
+            if self._ds2 is None:
+                raise DS2Error("application diagnostics are not active")
+            voltage = self._ds2.read_battery_voltage()
+        except Exception as error:
+            self._log(f"Pre-write battery voltage unavailable: {error}", "warn")
+            return (
+                "Battery voltage: unavailable — confirm stable battery support. "
+                "Programming remains available."
+            )
+        if voltage < LOW_BATTERY_WARNING_V:
+            self._log(
+                f"Pre-write battery voltage LOW: {voltage:.2f} V "
+                f"(< {LOW_BATTERY_WARNING_V:.1f} V).",
+                "warn",
+            )
+            return (
+                f"Battery voltage: {voltage:.2f} V — LOW\n"
+                "Use a stable battery support supply. This warning does not block programming."
+            )
+        self._log(f"Pre-write battery voltage: {voltage:.2f} V.", "info")
+        return f"Battery voltage: {voltage:.2f} V"
 
     def _finish_flash_success(self, title: str, message: str):
         """Persist the terminal success result before opening the modal instructions."""
@@ -3104,13 +3472,15 @@ class MS41FlashGUI(QMainWindow):
             transport = "Native DS2 at 187,500 baud (direct; pre-erase 9600 fallback)"
         else:
             transport = "DS2 at 9600 baud"
+        battery_notice = self._prewrite_battery_notice()
         ans = QMessageBox.question(
             self, "Confirm Calibration Write",
             f"Writing the 24 KB calibration/tune partition.\n\n"
             f"File : {filename}\n\n"
             f"Transport: {transport}\n"
             f"Pre-write backup: {'single read' if backup_before_write else 'disabled'}\n"
-            f"Read-back verification: {'enabled' if verify_write else 'disabled'}\n\n"
+            f"Read-back verification: {'enabled' if verify_write else 'disabled'}\n"
+            f"{battery_notice}\n\n"
             f"• This will ERASE the existing tune sector, then write the new data.\n"
             f"• Keep ignition ON throughout. Engine must be OFF.\n"
             f"• Do NOT disconnect the adapter or cut power during write.\n"
@@ -3221,7 +3591,7 @@ class MS41FlashGUI(QMainWindow):
             return
 
         # Resolve the transfer/boot policy before the conversion warning. DS2 and ordinary
-        # Soft-BSL writes preserve file 0x4000-0x5FFF (including serial/ISN/VIN); only the
+        # Soft-BSL writes preserve file 0x4000-0x5FFF (including identity/AIF); only the
         # explicitly armed Soft-BSL path overwrites it.
         transfer_route = self._auto_transfer_route()
         fast_route = transfer_route == "softbsl"
@@ -3258,6 +3628,25 @@ class MS41FlashGUI(QMainWindow):
             and (require_boot_write or boot_checkbox_requested)
         )
         target_half = softbsl_service.marker(image) or "B"
+        if (
+            softbsl_service.full_write_requires_softbsl(
+                getattr(self, "_ecu_softbsl_marker", None), image
+            )
+            and not fast_route
+        ):
+            QMessageBox.critical(
+                self,
+                "TOP Full Write Requires Soft-BSL",
+                "A TOP-bank full write cannot use the resident DS2 flash driver because "
+                "TOP file 0x0000-0xFFFF is one fused 64 KB SA7 erase sector containing "
+                "that running driver. Use Automatic with the installed Soft-BSL RAM agent. "
+                "Tune-only writes remain available over DS2.",
+            )
+            self._log(
+                "Full write blocked before erase — TOP geometry requires Soft-BSL.",
+                "error",
+            )
+            return
         connected_chip_family = self._fast_chip_family()
         try:
             softbsl_service.validate_flash_image_family(
@@ -3279,9 +3668,9 @@ class MS41FlashGUI(QMainWindow):
             identity_source, identity_info = self._identity_graft_source()
             if identity_source is None:
                 QMessageBox.critical(
-                    self, "VIN / ISN Preservation Unavailable",
-                    "Preserve ECU VIN / ISN is checked, but no valid live identity snapshot "
-                    "is available. Reconnect and retry so the ECU's serial/ISN and VIN can be "
+                    self, "ECU Identity Preservation Unavailable",
+                    "Preserve ECU identity / AIF history is checked, but no valid live snapshot "
+                    "is available. Reconnect and retry so the production identity and programming history can be "
                     "read, or explicitly uncheck identity preservation if you intend to write "
                     "the identity contained in the selected ROM file.")
                 self._log("Full write blocked — boot-region identity preservation was requested "
@@ -3317,16 +3706,16 @@ class MS41FlashGUI(QMainWindow):
             if will_write_boot:
                 if preserve_boot_identity:
                     identity_note = (
-                        "The connected ECU's serial/ISN and VIN were grafted onto the target "
-                        "image and will be preserved.")
+                        "The connected ECU's production identity and AIF programming history "
+                        "were grafted onto the target image and will be preserved.")
                 else:
                     identity_note = (
-                        "VIN/ISN preservation is DISABLED. The serial/ISN/VIN contained in the "
+                        "Identity preservation is DISABLED. The identity/AIF data contained in the "
                         "selected ROM file will be written.")
                 boot_note = "The target boot/parameter region will also be overwritten."
             else:
                 identity_note = (
-                    "The ECU's existing serial/ISN and VIN are in the preserved boot/parameter "
+                    "The ECU's existing production identity and AIF history are in the preserved boot/parameter "
                     "region and will remain untouched; no full read is required.")
                 boot_note = "The ECU's existing boot/parameter region will be preserved."
 
@@ -3413,7 +3802,7 @@ class MS41FlashGUI(QMainWindow):
 
         if preserve_boot_identity:
             image = identity.graft_identity(image, identity_source)
-            self._log(f"Identity grafted from the connected ECU "
+            self._log(f"Identity and AIF history grafted from the connected ECU "
                       f"(serial {identity_info.serial or '?'}).", "ok")
 
         if self.chk_correct_cksum.isChecked() or family_changed:
@@ -3515,11 +3904,12 @@ class MS41FlashGUI(QMainWindow):
                        if target_half == "T" else
                        "BOTTOM SA1 (file 0x4000-0x5FFF)")
         identity_action = (
-            "connected ECU VIN/ISN grafted"
+            "connected ECU identity/AIF history grafted"
             if preserve_boot_identity else
-            "ROM-file VIN/ISN will be written"
+            "ROM-file identity/AIF history will be written"
             if will_write_boot else
-            "connected ECU VIN/ISN preserved in place")
+            "connected ECU identity/AIF history preserved in place")
+        battery_notice = self._prewrite_battery_notice()
         ans = QMessageBox.question(
             self, "Confirm Full ROM Write",
             f"Writing a full 256 KB ROM image.\n\n"
@@ -3528,7 +3918,8 @@ class MS41FlashGUI(QMainWindow):
             f"Transport: {transport}\n"
             f"Pre-write backup: {backup_description}\n"
             f"Read-back verification: {'enabled' if verify_write else 'disabled'}\n"
-            f"Boot/parameter region - {boot_region}: {boot_action}.\n\n"
+            f"Boot/parameter region - {boot_region}: {boot_action}.\n"
+            f"{battery_notice}\n\n"
             f"Identity: {identity_action}.\n\n"
             f"• Program and calibration sectors will be erased and rewritten.\n"
             f"• Keep ignition ON throughout. Engine must be OFF.\n"
@@ -5521,10 +5912,12 @@ class MS41FlashGUI(QMainWindow):
         lines = "".join(
             f"  • {f}: {ol} → {nl}   (Byte {byte}: 0x{old:02X} → 0x{new:02X})\n"
             for (f, byte, old, new, ol, nl) in diff)
+        battery_notice = self._prewrite_battery_notice()
         if QMessageBox.warning(self, "Confirm Config Write",
             "These control-bit changes will be flashed to the ECU:\n\n" + lines +
             "\nThis ERASES and rewrites the 24 KB tune sector.\n"
-            "Ignition ON, engine OFF. Do not cut power during the write.\n\nProceed?",
+            "Ignition ON, engine OFF. Do not cut power during the write.\n\n" +
+            battery_notice + "\n\nProceed?",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
             self._log("Config write cancelled.", "warn")
             return
@@ -7295,6 +7688,7 @@ class MS41FlashGUI(QMainWindow):
             "Switch to the intact BOTTOM bank and recover over Soft-BSL."
             if half == "T" else
             "Recover over Soft-BSL if the loader remains reachable; hardware BSL is the backstop.")
+        battery_notice = self._prewrite_battery_notice()
         typed, accepted = QInputDialog.getText(
             self, "BRICK-CLASS — Write VIN",
             f"Current VIN: {current_vin or '<not programmed>'}\n"
@@ -7305,7 +7699,8 @@ class MS41FlashGUI(QMainWindow):
             f"match, save a {expected_sector_size // 1024} KB recovery snapshot, and verify the complete "
             "sector afterward.\n\n"
             "Loss of ECU power or communication can leave this bank unbootable. "
-            f"{recovery_route}{hardware_note}\n\nType  WRITE VIN  to proceed:")
+            f"{recovery_route}{hardware_note}\n\n"
+            f"{battery_notice}\n\nType  WRITE VIN  to proceed:")
         if not accepted or typed.strip() != "WRITE VIN":
             self._log("VIN write cancelled at the brick-class confirmation.", "warn")
             return
@@ -7511,7 +7906,7 @@ class MS41FlashGUI(QMainWindow):
         inst_help = QLabel(
             "By default, reads the connected ECU and prepares the required Soft-BSL image in memory. "
             "You cycle the ignition once when prompted.\n"
-            "• Use base .bin skips the slow full-ROM read; VIN/ISN can still be preserved from the "
+            "• Use base .bin skips the slow full-ROM read; identity/AIF history can still be preserved from the "
             "identity data captured at connection.\n"
             "• Calibration is preserved when the connected ECU and patch base are the same consistent MS41 version.\n"
             "• Cross-version conversion replaces the calibration and requires explicit full-write confirmation.")
@@ -7529,11 +7924,11 @@ class MS41FlashGUI(QMainWindow):
         r3.addStretch()
         ig.addLayout(r3)
         r4 = QHBoxLayout()
-        self.chk_install_preserve_identity = QCheckBox("Preserve VIN / ISN")
+        self.chk_install_preserve_identity = QCheckBox("Preserve ECU identity / AIF history")
         self.chk_install_preserve_identity.setChecked(True)
         self.chk_install_preserve_identity.setToolTip(
-            "When a base .bin is used, read only the connected ECU's serial/ISN and packed VIN "
-            "and graft them into the base before composing the install images.")
+            "When a base .bin is used, read the connected ECU's production identity and AIF "
+            "programming history and graft them into the base before composing the install images.")
         r4.addWidget(self.chk_install_preserve_identity)
         self.chk_install_preserve_cal = QCheckBox("Preserve calibration (matching MS41 version)")
         self.chk_install_preserve_cal.setChecked(True)
@@ -7565,10 +7960,10 @@ class MS41FlashGUI(QMainWindow):
         self.chk_xbank_calguard.setChecked(True)
         self.chk_xbank_calguard.stateChanged.connect(self._on_softbsl_xbank_options_changed)
         opts.addWidget(self.chk_xbank_calguard)
-        self.chk_xbank_preserve_identity = QCheckBox("Preserve VIN / ISN for a file base")
+        self.chk_xbank_preserve_identity = QCheckBox("Preserve ECU identity / AIF for a file base")
         self.chk_xbank_preserve_identity.setChecked(True)
         self.chk_xbank_preserve_identity.setToolTip(
-            "For a selected file, graft the connected ECU's serial/ISN and packed VIN before composing. "
+            "For a selected file, graft the connected ECU's production identity and AIF history before composing. "
             "A base read from TOP already preserves its own identity inherently.")
         self.chk_xbank_preserve_identity.stateChanged.connect(self._on_softbsl_xbank_options_changed)
         opts.addWidget(self.chk_xbank_preserve_identity)
@@ -7703,16 +8098,18 @@ class MS41FlashGUI(QMainWindow):
                     self._clear_softbsl_crossbank_target(
                         "Identity preservation requested, but no live ECU identity snapshot is available.")
                     QMessageBox.critical(
-                        self, "VIN / ISN Unavailable",
+                        self, "ECU Identity Unavailable",
                         "Connect to the working BOTTOM bank and reload/recompose the file base so its "
-                        "serial/ISN and VIN can be grafted, or explicitly uncheck identity preservation.")
+                        "production identity and AIF history can be grafted, or explicitly uncheck identity preservation.")
                     return False
                 self._softbsl_xbank_identity_source = bytes(source)
                 base = identity.graft_identity(base, source)
                 info = identity.decode_identity(source)
-                identity_note = f"grafted serial {info.serial or '—'} / VIN {info.vin or '—'}"
+                identity_note = (
+                    f"grafted identity/AIF history (serial {info.serial or '—'} / VIN {info.vin or '—'})"
+                )
             else:
-                identity_note = "WARNING: file identity retained (VIN/ISN not grafted)"
+                identity_note = "WARNING: file identity/AIF history retained"
         try:
             image, patch_ids, build_log = softbsl_install.compose_persistent_target(
                 base, self.chk_xbank_calguard.isChecked(), marker="T", chip="29f400")
@@ -7906,17 +8303,24 @@ class MS41FlashGUI(QMainWindow):
         if not getattr(recovery, "retry_supported", True):
             self.btn_native_recovery.setVisible(False)
             self.btn_native_recovery.setEnabled(False)
+            next_step = (
+                "Keep the application and adapter open. Turn ignition OFF for at least "
+                "10 seconds, turn it ON, then close the application to release this "
+                "session and reconnect with Force DS2 (slow). If DS2 is unavailable, "
+                "use hardware BSL recovery."
+                if getattr(recovery, "power_cycle_required", False)
+                else
+                "The flash result is still unknown. Keep ECU power on, export a Support "
+                "Bundle, and contact support before any ignition cycle."
+            )
             QMessageBox.critical(
                 self,
                 "FLASH INCOMPLETE — RETRY DISABLED",
                 f"{failure_summary}\n\n"
-                "The write had already entered finalization. That changes the ECU "
-                "handler state, so another erase/write command cannot be safely sent "
-                "through this retained session.\n\n"
-                "The adapter remains open for safety. When you are ready to abandon "
-                "this session, close the application, turn ignition OFF for at least "
-                "10 seconds, turn it ON, and reconnect with Force DS2 (slow). "
-                "If DS2 is unavailable, use hardware BSL recovery.",
+                "The retained ECU handler is no longer qualified for another "
+                "erase/write replay, so no further destructive command will be sent "
+                "through this session.\n\n"
+                f"The adapter remains open for safety. {next_step}",
             )
             return True
         self.btn_native_recovery.setVisible(True)
@@ -8293,6 +8697,12 @@ class MS41FlashGUI(QMainWindow):
                 "No live Soft-BSL installer recovery session is available.",
             )
             return
+        if not recovery.retry_supported:
+            self._offer_active_flash_recovery(
+                "The retained installer handler is no longer qualified for another "
+                "erase/write replay."
+            )
+            return
         phase_name = (
             "temporary program-only bootstrap"
             if recovery.phase == "bootstrap"
@@ -8334,10 +8744,11 @@ class MS41FlashGUI(QMainWindow):
         def on_failure(error):
             current = self._softbsl_install_recovery
             still_live = current is not None and current.is_open
-            self.btn_native_recovery.setVisible(still_live)
-            self.btn_native_recovery.setEnabled(still_live)
+            retry_supported = still_live and current.retry_supported
+            self.btn_native_recovery.setVisible(retry_supported)
+            self.btn_native_recovery.setEnabled(retry_supported)
             self._log(f"Soft-BSL installer recovery failed: {error}", "error")
-            if still_live:
+            if retry_supported:
                 QMessageBox.critical(
                     self,
                     "INSTALL RECOVERY INCOMPLETE - KEEP IGNITION ON",
@@ -8345,6 +8756,9 @@ class MS41FlashGUI(QMainWindow):
                     "DO NOT TURN IGNITION OFF or disconnect the adapter. The same "
                     "installer recovery session remains open and can be retried.",
                 )
+                return
+            if still_live:
+                self._offer_active_flash_recovery(f"Recovery failed again:\n{error}")
                 return
             self._softbsl_install_recovery = None
             self._release_softbsl_port(recovery.port)
@@ -8464,15 +8878,9 @@ class MS41FlashGUI(QMainWindow):
             )
             return
         if not recovery.retry_supported:
-            self.btn_native_recovery.setVisible(False)
-            self.btn_native_recovery.setEnabled(False)
-            QMessageBox.warning(
-                self,
-                "Native Recovery Replay Disabled",
-                "The failed write had already entered finalization, so the retained "
-                "ECU handler is not qualified for another erase/write replay.\n\n"
-                "Close only when you are ready to cycle ignition and attempt Force "
-                "Slow DS2 (ECU Recovery), or hardware BSL recovery if needed.",
+            self._offer_active_flash_recovery(
+                "The retained native-fast handler is no longer qualified for another "
+                "erase/write replay."
             )
             return
         verify_note = (
@@ -8534,13 +8942,8 @@ class MS41FlashGUI(QMainWindow):
                     "session remains open and can be retried.",
                 )
             else:
-                QMessageBox.critical(
-                    self,
-                    "RECOVERY REPLAY DISABLED",
-                    f"Recovery failed during or after finalization:\n{error_msg}\n\n"
-                    "The retained ECU handler is no longer qualified for another "
-                    "erase/write replay. Close only when ready to cycle ignition and "
-                    "attempt Force DS2 (slow), or hardware BSL recovery.",
+                self._offer_active_flash_recovery(
+                    f"Retained recovery replay failed:\n{error_msg}"
                 )
 
         self._run_task(task, on_success=on_success, on_failure=on_failure)
@@ -8710,9 +9113,9 @@ class MS41FlashGUI(QMainWindow):
             self.chk_install_preserve_cal.setEnabled(False)
 
     def _graft_softbsl_target(self, target_path):
-        """Graft this ECU's serial/ISN/VIN into a selected full base image.
+        """Graft this ECU's production identity/AIF into a selected full base image.
 
-        Prefer a cached full ROM when present; otherwise use the two-field identity
+        Prefer a cached full ROM when present; otherwise use the exact-range identity
         snapshot captured during connection. No 256 KB ECU read is required.
         """
         source, info = self._identity_graft_source()
@@ -8760,6 +9163,7 @@ class MS41FlashGUI(QMainWindow):
 
     def _on_softbsl_install(self):
         current_full_read = self._current_full_read_for_connection()
+        battery_notice = self._prewrite_battery_notice()
         port = self._acquire_softbsl_port(allow_handoff=True)
         if not port:
             return
@@ -8790,13 +9194,13 @@ class MS41FlashGUI(QMainWindow):
                 except Exception as error:
                     self._release_softbsl_port(port)
                     QMessageBox.critical(self, "Identity Preservation Failed",
-                                         f"Could not preserve the connected ECU's VIN/ISN:\n{error}")
+                                         f"Could not preserve the connected ECU's identity/AIF history:\n{error}")
                     return
                 if not forced_info:
                     self._release_softbsl_port(port)
                     QMessageBox.critical(
                         self, "Identity Data Unavailable",
-                        "Preserve VIN / ISN is checked, but no valid live identity snapshot is "
+                        "Preserve ECU identity / AIF history is checked, but no valid live snapshot is "
                         "available. Reconnect and retry, or explicitly uncheck identity preservation.")
                     return
         preserve_cal = (self.chk_install_preserve_cal.isChecked()
@@ -8826,14 +9230,15 @@ class MS41FlashGUI(QMainWindow):
                          "reuses this session's cached full read"
                          if cached_base is not None else
                          "reads this ECU once as the patch base")
-            identity_note = ("The connected ECU's VIN and ISN will be preserved."
+            identity_note = ("The connected ECU's production identity and AIF history will be preserved."
                              if (preserve_identity or not force_base) else
-                             "VIN/ISN preservation is disabled; identity data from the base may be written.")
+                             "Identity preservation is disabled; identity/AIF data from the base may be written.")
             if QMessageBox.warning(
                     self, "Confirm Soft-BSL Installation",
                     f"Port: {port}\nSource: {base_note}.\n\n"
                     f"Calibration: {'preserved from this ' + target_version + ' ECU' if preserve_cal else 'replaced from the base image'}.\n"
                     f"Identity: {identity_note}\n\n"
+                    f"Pre-install snapshot — {battery_notice}\n\n"
                     "Installation requires one ignition cycle and writes the ECU's boot/parameter "
                     "and program regions. Keep stable power connected. An interrupted boot-region "
                     "write may require hardware BSL recovery.\n\nContinue?",
@@ -8855,6 +9260,7 @@ class MS41FlashGUI(QMainWindow):
                     f"Conversion erases and replaces the current calibration "
                     "and writes the target boot/parameter region.\n\n"
                     f"{conversion_risk}\n\n"
+                    f"Pre-install snapshot — {battery_notice}\n\n"
                     f"{'Continue with the selected base image?' if force_base else 'Continue and pick a consistent MS41.0-MS41.3 base image?'}",
                     QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel) != QMessageBox.Yes:
                 self._release_softbsl_port(port)
@@ -8891,15 +9297,16 @@ class MS41FlashGUI(QMainWindow):
                     self._release_softbsl_port(port)
                     QMessageBox.critical(
                         self, "Identity Data Unavailable",
-                        "Preserve VIN / ISN is checked, but no valid live identity snapshot is "
+                        "Preserve ECU identity / AIF history is checked, but no valid live snapshot is "
                         "available. Reconnect and retry, or explicitly uncheck identity preservation.")
                     return
             else:
                 base_path, allow_convert = path, True
                 if QMessageBox.warning(
                         self, "Confirm Identity Replacement",
-                        "Preserve VIN / ISN is unchecked. The selected base image's serial/ISN/VIN "
-                        "will be written and EWS may require re-alignment. Continue?",
+                        "Preserve ECU identity / AIF history is unchecked. The selected base image's "
+                        "identity and programming history will be written, and EWS may require "
+                        "re-alignment. Continue?",
                         QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel) != QMessageBox.Yes:
                     self._release_softbsl_port(port)
                     return
@@ -9487,6 +9894,8 @@ class MS41FlashGUI(QMainWindow):
         self._patch_rows = {}
         self._patch_installed_ids = set()
         self._patch_entries = {}
+        self._patch_parameter_groups = {}
+        self._patch_parameter_changes = []
         self._patch_removed_ids = set()
         self._patch_change_base = None
         self._patch_dependency_sync = False
@@ -9545,6 +9954,7 @@ class MS41FlashGUI(QMainWindow):
         self._patch_base_source = source
         if reset_changes:
             self._patch_removed_ids.clear()
+            self._patch_parameter_changes.clear()
             self._patch_change_base = data
         txt = f"Base: {source}  —  program {r['program'] or '?'} / cal {r['cal'] or '?'}"
         if r["hybrid"]:
@@ -9562,6 +9972,7 @@ class MS41FlashGUI(QMainWindow):
                 self, "Remove Patch",
                 f"Remove '{patch_id}' from the loaded base?\n\n{title}\n\n"
                 "This restores the original stock bytes at every offset this patch touched. "
+                "Declared parameter values remain in calibration but become inactive. "
                 "It edits the in-memory base only — use Build Patched Image to archive it, or "
                 "Flash to ECU from the Backups tab once you've re-applied whatever you want.",
                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
@@ -9594,19 +10005,28 @@ class MS41FlashGUI(QMainWindow):
         self._patch_checkboxes = {}
         self._patch_installed_ids = set()
         self._patch_entries = {}
+        self._patch_parameter_groups = {}
         avail = patch_service.available_patches(self._patch_base) if self._patch_base else []
         if not avail:
             self._patch_placeholder.setText("No patches match this base's version.")
             self._patch_placeholder.setVisible(True)
             pending_removals = bool(self._patch_removed_ids)
+            pending_parameters = bool(self._patch_parameter_changes)
             self.btn_patches_build.setEnabled(
-                pending_removals and self._patch_base is not None)
-            if pending_removals:
+                (pending_removals or pending_parameters) and self._patch_base is not None)
+            if pending_removals or pending_parameters:
                 self.btn_patches_build.setToolTip(
-                    "Build and archive the image with the pending patch removals.")
+                    "Build and archive the image with pending patch changes.")
             return
         self._patch_placeholder.setVisible(False)
         self._patch_entries = {patch["id"]: patch for patch in avail}
+        try:
+            self._patch_parameter_groups = {
+                group["patch_id"]: group
+                for group in patch_service.editable_parameters(self._patch_base)
+            }
+        except patch_service.PatchError:
+            self._patch_parameter_groups = {}
         definitions = patch_service.definitions()
         short_names = {
             "softbsl_loader": "Soft-BSL",
@@ -9674,6 +10094,18 @@ class MS41FlashGUI(QMainWindow):
                 rlay.addWidget(bb)
             if p["installed"]:
                 rlay.addWidget(self._badge("✓ INSTALLED", "#1e4d2b", "#9ece6a"))
+                parameter_group = self._patch_parameter_groups.get(p["id"])
+                if parameter_group is not None:
+                    btn_configure = QPushButton("Configure")
+                    btn_configure.setEnabled(parameter_group["editable"])
+                    btn_configure.setToolTip(
+                        parameter_group["blocked_reason"]
+                        or "Edit only the declared parameters owned by this patch."
+                    )
+                    btn_configure.clicked.connect(
+                        lambda _=False, pid=p["id"]: self._on_patch_configure(pid)
+                    )
+                    rlay.addWidget(btn_configure)
                 btn_rm = QPushButton("✕ Remove")
                 btn_rm.setStyleSheet(
                     "QPushButton{background:#3d2020;color:#f0a0a0;border:1px solid #5a1a1a;"
@@ -9752,6 +10184,160 @@ class MS41FlashGUI(QMainWindow):
             self._patch_checkboxes[p["id"]] = cb
         self._on_patch_selection_changed()
 
+    def _on_patch_configure(self, patch_id):
+        if self._patch_base is None:
+            return
+        group = self._patch_parameter_groups.get(patch_id)
+        if group is None or not group.get("editable"):
+            QMessageBox.warning(
+                self,
+                "Parameters Unavailable",
+                (group or {}).get("blocked_reason")
+                or "This exact installed patch has no editable parameters.",
+            )
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Configure {group['title']} {group['version']}".strip())
+        dialog.resize(680, 620)
+        layout = QVBoxLayout(dialog)
+        intro = QLabel(
+            "Only parameters declared by this exact installed patch can be changed. "
+            "The source image remains unchanged until you build the result."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        body = QWidget()
+        grid = QGridLayout(body)
+        editors = {}
+        for row, parameter in enumerate(group["parameters"]):
+            label = QLabel(parameter["label"])
+            label.setToolTip(parameter["description"])
+            editor = QComboBox()
+            editor.setToolTip(parameter["description"])
+            if parameter["kind"] == "choice":
+                for option in parameter["choices"]:
+                    editor.addItem(option["label"], option["value"])
+                current_index = editor.findData(parameter["current"])
+                if current_index < 0:
+                    editor.insertItem(0, parameter["current_display"], parameter["current"])
+                    current_index = 0
+                editor.setCurrentIndex(current_index)
+            else:
+                editor.setEditable(True)
+                current_text = (
+                    parameter["current_display"]
+                    if parameter["current"].startswith("@")
+                    else parameter["current"]
+                )
+                editor.addItem(current_text, parameter["current"])
+                for option in parameter["specials"]:
+                    if option["value"] != parameter["current"]:
+                        editor.addItem(option["label"], option["value"])
+                editor.setCurrentIndex(0)
+            details = parameter["current_display"] + f"  ·  raw {parameter['raw_hex']}"
+            if parameter.get("minimum") is not None:
+                details += (
+                    f"  ·  storage range {parameter['minimum']}–{parameter['maximum']}"
+                    f" {parameter.get('units', '')}  ·  step {parameter['step']}"
+                )
+            current = QLabel(details)
+            current.setStyleSheet("color:#888;font-size:9px;")
+            current.setWordWrap(True)
+            grid.addWidget(label, row * 2, 0)
+            grid.addWidget(editor, row * 2, 1)
+            grid.addWidget(current, row * 2 + 1, 0, 1, 2)
+            editors[parameter["id"]] = (parameter, editor)
+        grid.setColumnStretch(1, 1)
+        scroll.setWidget(body)
+        layout.addWidget(scroll)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(dialog.reject)
+        apply_button = QPushButton("Review Changes")
+        apply_button.clicked.connect(dialog.accept)
+        buttons.addWidget(cancel)
+        buttons.addWidget(apply_button)
+        layout.addLayout(buttons)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        changes = {}
+        for parameter_id, (parameter, editor) in editors.items():
+            if parameter["kind"] == "choice":
+                value = str(editor.currentData())
+            else:
+                index = editor.currentIndex()
+                selected_label = editor.itemText(index) if index >= 0 else ""
+                value = (
+                    str(editor.currentData())
+                    if index >= 0 and editor.currentText() == selected_label
+                    else editor.currentText().strip()
+                )
+            if value != parameter["current"]:
+                changes[parameter_id] = value
+        if not changes:
+            QMessageBox.information(self, "No Changes", "No patch parameters were changed.")
+            return
+
+        try:
+            output, report = patch_service.apply_parameter_changes(
+                self._patch_base,
+                patch_id,
+                changes,
+                expected_sha256=hashlib.sha256(self._patch_base).hexdigest(),
+                expected_descriptor_token=group["descriptor_token"],
+            )
+        except patch_service.PatchError as error:
+            QMessageBox.critical(self, "Parameter Change Rejected", str(error))
+            self.patches_log.append(f"PARAMETER CHANGE REJECTED: {error}")
+            return
+
+        review = "\n".join(
+            f"  • {change['label']}: {change['before']} → {change['after']}"
+            for change in report["changes"]
+        )
+        definition = patch_service.definitions().get(patch_id, {})
+        untested_warning = (
+            "\n\nWARNING: This patch is marked untested on a vehicle. Parameter validation "
+            "does not prove the physical behavior is safe."
+            if definition.get("tested") is False else ""
+        )
+        prompt = (
+            QMessageBox.warning
+            if definition.get("tested") is False else QMessageBox.question
+        )
+        if prompt(
+                self,
+                "Apply Parameter Changes?",
+                f"{group['title']} {group['version']}\n\n{review}\n\n"
+                f"Result SHA-256: {report['result_sha256']}"
+                f"{untested_warning}\n\n"
+                "Apply these settings to the loaded working image?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No) != QMessageBox.Yes:
+            return
+
+        self._patch_parameter_changes.extend(
+            f"{group['title']}: {change['label']} {change['before']} → {change['after']}"
+            for change in report["changes"]
+        )
+        self._set_patch_base(
+            output,
+            f"{self._patch_base_source} (parameters configured)",
+            reset_changes=False,
+        )
+        for line in report["changes"]:
+            self.patches_log.append(
+                f"Configured {patch_id} {line['parameter_id']}: "
+                f"{line['before']} -> {line['after']}"
+            )
+
     def _on_patch_selection_changed(self):
         # already-installed patches are checked+disabled (status display only) and must not
         # be re-applied, since their bytes no longer match the pre-patch `expect` values.
@@ -9803,8 +10389,9 @@ class MS41FlashGUI(QMainWindow):
             if required_id not in selected_or_installed
         }
         pending_removals = bool(self._patch_removed_ids)
+        pending_parameters = bool(self._patch_parameter_changes)
         self.btn_patches_build.setEnabled(
-            bool(selected or pending_removals)
+            bool(selected or pending_removals or pending_parameters)
             and self._patch_base is not None
             and not missing)
         if missing:
@@ -9815,9 +10402,9 @@ class MS41FlashGUI(QMainWindow):
             ]
             self.btn_patches_build.setToolTip(
                 "Required patch unavailable or blocked by a conflict: " + ", ".join(names))
-        elif pending_removals:
+        elif pending_removals or pending_parameters:
             self.btn_patches_build.setToolTip(
-                "Build and archive the selected additions and pending patch removals.")
+                "Build and archive the selected additions, removals, and parameter changes.")
         else:
             self.btn_patches_build.setToolTip(
                 "Build and archive the selected patches. Available required patches are "
@@ -9887,7 +10474,8 @@ class MS41FlashGUI(QMainWindow):
         selected = [pid for pid, cb in self._patch_checkboxes.items()
                     if cb.isChecked() and pid not in self._patch_installed_ids]
         removed = sorted(self._patch_removed_ids)
-        if (not selected and not removed) or not self._patch_base:
+        configured = list(self._patch_parameter_changes)
+        if (not selected and not removed and not configured) or not self._patch_base:
             return
         loaded = patch_service.definitions()
         untested = [
@@ -9900,14 +10488,15 @@ class MS41FlashGUI(QMainWindow):
             ]
             ignition_cut_warning = ""
             if any(
-                    (loaded.get(pid, {}).get("family_id") or pid)
-                    == "ignition_cut_v7"
+                    str(loaded.get(pid, {}).get("family_id") or pid)
+                    .startswith("ignition_cut")
                     for pid in untested):
                 ignition_cut_warning = (
-                    "\n\nIgnition Cut is in a very early stage. It will cause "
-                    "fuel-related, misfire, and coil-related DTCs and fuel-trim issues, "
-                    "and the cut is extremely aggressive. Never use it on a car "
-                    "with catalytic converters; unburned fuel can destroy them."
+                    "\n\nIgnition Cut V9 is experimental. It may suppress spark while "
+                    "injection continues at the stock or configured fixed pulse width. "
+                    "Unburned fuel can damage catalytic converters and exhaust components. "
+                    "Its fuel-adaptation and diagnostic guards are emulator-verified but "
+                    "not vehicle-validated. Never use it on a car with catalytic converters."
                 )
             if QMessageBox.warning(
                     self, "Untested Patch",
@@ -9934,12 +10523,16 @@ class MS41FlashGUI(QMainWindow):
             change_parts.append("added " + ", ".join(selected))
         if removed:
             change_parts.append("removed " + ", ".join(removed))
+        if configured:
+            change_parts.append(f"configured {len(configured)} parameter(s)")
         change_summary = "; ".join(change_parts)
 
         # Auto-archive the built image to the Bins catalogue (traceable, and no path to pick). add_data
         # derives the variant / CAL ID / ECU ID / VIN / checksum straight from the patched image.
         ts   = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         name_parts = selected + [f"removed_{pid}" for pid in removed]
+        if configured:
+            name_parts.append("settings")
         name = "ms41_patched_" + "_".join(name_parts) + f"_{ts}.bin"
         try:
             entry = self._backup_mgr.add_data(
@@ -9997,6 +10590,7 @@ class MS41FlashGUI(QMainWindow):
                         bytearray(out), entry.filename, disconnect_after_success=True)
 
         self._patch_removed_ids.clear()
+        self._patch_parameter_changes.clear()
         self._patch_change_base = self._patch_base
         self._on_patch_selection_changed()
 
@@ -10527,54 +11121,547 @@ class MS41FlashGUI(QMainWindow):
     # DTC
     # -------------------------------------------------------------------
 
-    def _on_read_dtc(self):
-        if not self._ds2: return
+    def _reset_gm3_coding(self):
+        self._gm3_coding_state = None
+        if not hasattr(self, "_gm3_checks"):
+            return
+        for check in self._gm3_checks.values():
+            check.blockSignals(True)
+            check.setChecked(False)
+            check.blockSignals(False)
+            check.setEnabled(False)
+        self.btn_write_gm3_coding.setEnabled(False)
+        self._apply_coding_filter()
+
+    def _reset_seat_coding(self):
+        self._seat_coding_state = None
+        if not hasattr(self, "cb_seat_timing"):
+            return
+        self.cb_seat_timing.setCurrentIndex(0)
+        self.cb_seat_timing.setEnabled(False)
+        self.chk_seat_one_touch.setChecked(False)
+        self.chk_seat_one_touch.setEnabled(False)
+        self.btn_write_seat_coding.setEnabled(False)
+        self._apply_coding_filter()
+
+    def _open_named_tab(self, name: str):
+        for index in range(self.tabs.count()):
+            if self.tabs.tabText(index).strip() == name:
+                self.tabs.setCurrentIndex(index)
+                return
+
+    def _update_transmission_swap_status(self):
+        if not hasattr(self, "lbl_transmission_swap_status"):
+            return
+        family = self._ecu_program_variant or self._ecu_variant or "Unavailable"
+        transmission = "Unavailable"
+        label = getattr(self, "_info_labels", {}).get("Transmission Mode")
+        if label is not None and label.text() not in ("", "—"):
+            transmission = label.text()
+        if self._ds2 is None:
+            egs = "Connect and scan"
+        elif hasattr(self, "cb_diag_module") and self.cb_diag_module.findData("egs") >= 0:
+            egs = "Responded (compatibility not identified)"
+        else:
+            egs = "Not observed in the current scan"
+        self.lbl_transmission_swap_status.setText(
+            f"Engine computer: {family}\n"
+            f"Engine-reported transmission mode: {transmission}\n"
+            f"Automatic-transmission computer: {egs}"
+        )
+
+    def _apply_coding_filter(self, *_args):
+        if not hasattr(self, "_coding_rows"):
+            return
+        advanced = self.chk_coding_advanced.isChecked()
+        state = self._gm3_coding_state
+        supported = (
+            {feature.key for feature in state.profile.features}
+            if state is not None else set(self._coding_rows)
+        )
+        for key, (row, feature) in self._coding_rows.items():
+            row.setVisible(key in supported and (
+                feature.level == "basic" or advanced
+            ))
+            note = self._coding_notes[key]
+            note.setText(
+                feature.description + (
+                    f"  ·  Reference: {feature.reference}" if advanced else ""
+                )
+            )
+        for section, group in self._coding_section_groups.items():
+            group.setVisible(any(
+                key in supported
+                and feature.section == section
+                and (feature.level == "basic" or advanced)
+                for key, (_row, feature) in self._coding_rows.items()
+            ))
+        if state is not None:
+            reference = (
+                f" Reference: {state.profile.key}." if advanced else ""
+            )
+            self.lbl_gm3_coding.setText(
+                "Window, lock and memory settings were read from an exact "
+                f"built-in profile.{reference}"
+            )
+        if hasattr(self, "lbl_seat_reference"):
+            self.lbl_seat_reference.setVisible(advanced)
+            seat_state = getattr(self, "_seat_coding_state", None)
+            if seat_state is not None:
+                reference = (
+                    f" Reference: {seat_state.profile.key}." if advanced else ""
+                )
+                self.lbl_seat_coding.setText(
+                    "Driver-seat memory settings were read from an exact "
+                    f"built-in profile.{reference}"
+                )
+
+    def _update_coding_actions(self):
+        if not hasattr(self, "btn_read_gm3_coding"):
+            return
+        available = bool(
+            self._ds2 is not None and self._connection_echo and not self._task_busy
+        )
+        self.btn_read_gm3_coding.setEnabled(available)
+        if hasattr(self, "btn_read_seat_coding"):
+            self.btn_read_seat_coding.setEnabled(available)
+        editable = available and self._gm3_coding_state is not None
+        self.btn_write_gm3_coding.setEnabled(editable)
+        supported = (
+            {feature.key for feature in self._gm3_coding_state.profile.features}
+            if self._gm3_coding_state is not None else set()
+        )
+        for key, check in self._gm3_checks.items():
+            check.setEnabled(editable and key in supported)
+        seat_editable = available and getattr(
+            self, "_seat_coding_state", None) is not None
+        if hasattr(self, "btn_write_seat_coding"):
+            self.btn_write_seat_coding.setEnabled(seat_editable)
+            self.cb_seat_timing.setEnabled(seat_editable)
+            self.chk_seat_one_touch.setEnabled(seat_editable)
+        if self._ds2 is not None and not self._connection_echo:
+            self.lbl_gm3_coding.setText(
+                "General Module coding requires normal K-Line mode. Direct Tap reaches "
+                "the Engine ECU only."
+            )
+            if hasattr(self, "lbl_seat_coding"):
+                self.lbl_seat_coding.setText(
+                    "Seat coding requires normal K-Line mode. Direct Tap reaches "
+                    "the Engine ECU only."
+                )
+        self._update_transmission_swap_status()
+
+    def _show_gm3_state(self, state: GM3CodingState):
+        self._gm3_coding_state = state
+        values = state.values
+        features = {feature.key: feature for feature in state.profile.features}
+        for key, check in self._gm3_checks.items():
+            check.blockSignals(True)
+            check.setChecked(values.get(key, False))
+            if key in features:
+                check.setToolTip(
+                    f"{features[key].description}\n"
+                    f"Reference: {features[key].reference}"
+                )
+            check.blockSignals(False)
+        self._apply_coding_filter()
+        self._update_coding_actions()
+
+    def _on_read_gm3_coding(self):
+        if not self._ds2 or not self._connection_echo:
+            return
 
         def task(log_fn, progress_fn):
-            log_fn("Requesting DTCs (DS2 0x04)…")
-            raw = self._ds2.read_dtc()
-            log_fn(f"DS2 DTC response: {len(raw)} bytes")
-            dtcs = parse_ds2_dtc_response(raw)
-            log_fn(f"Decoded {len(dtcs)} unique DTC(s)")
-            return dtcs
+            log_fn("Reading General Module window, lock and memory settings…")
+            return read_gm3_coding(self._ds2)
 
-        def on_success(dtcs):
-            self._dtcs = dtcs
-            self._populate_dtc_table(dtcs)
-            active  = sum(1 for d in dtcs if d.is_active)
-            stored  = len(dtcs) - active
-            if not dtcs:
-                self.lbl_dtc_count.setText("✓  No DTCs stored")
+        def on_success(state):
+            self._show_gm3_state(state)
+            self._log(f"General Module settings read with {state.profile.key}.", "ok")
+
+        def on_failure(error):
+            self._reset_gm3_coding()
+            self.lbl_gm3_coding.setText(str(error))
+            QMessageBox.critical(self, "Settings Read Failed", str(error))
+
+        self._reset_gm3_coding()
+        self.lbl_gm3_coding.setText("Reading window and lock settings…")
+        self._run_task(task, on_success=on_success, on_failure=on_failure)
+
+    def _on_write_gm3_coding(self):
+        state = self._gm3_coding_state
+        if not self._ds2 or state is None:
+            return
+        requested = {
+            feature.key: self._gm3_checks[feature.key].isChecked()
+            for feature in state.profile.features
+        }
+        changes = []
+        labels = {feature.key: feature.label for feature in state.profile.features}
+        for key, old_value in state.values.items():
+            if requested[key] != old_value:
+                changes.append(
+                    f"• {labels[key]}: {'On' if old_value else 'Off'} → "
+                    f"{'On' if requested[key] else 'Off'}"
+                )
+        if not changes:
+            QMessageBox.information(self, "Vehicle Coding", "No settings changed.")
+            return
+        answer = QMessageBox.question(
+            self, "Write Window and Lock Settings?",
+            (f"Reference: {state.profile.key}\n\n"
+             if self.chk_coding_advanced.isChecked() else "") + "\n".join(changes)
+            + "\n\nKeep ignition ON and engine OFF. Write these settings?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        def task(log_fn, progress_fn):
+            log_fn(f"Writing {len(changes)} General Module setting change(s)…")
+            return write_gm3_coding(
+                self._ds2, state.profile.key, state.raw_data, requested
+            )
+
+        def on_success(updated):
+            self._show_gm3_state(updated)
+            self._log("General Module settings written and verified by exact readback.", "ok")
+            QMessageBox.information(
+                self, "Vehicle Coding Complete",
+                "Settings were written and verified. Cycle the ignition before testing them."
+            )
+
+        def on_failure(error):
+            self._reset_gm3_coding()
+            self.lbl_gm3_coding.setText(
+                f"Write status is not trusted: {error}. Read the module again."
+            )
+            QMessageBox.critical(self, "Vehicle Coding Failed", str(error))
+
+        self._run_task(task, on_success=on_success, on_failure=on_failure)
+
+    def _show_seat_state(self, state: ModuleCodingState):
+        self._seat_coding_state = state
+        values = state.values
+        self.cb_seat_timing.setCurrentIndex(
+            self.cb_seat_timing.findData(
+                values["automatic_seat_adjustment_timing"])
+        )
+        self.chk_seat_one_touch.setChecked(values["one_touch_memory"])
+        self._apply_coding_filter()
+        self._update_coding_actions()
+
+    def _on_read_seat_coding(self):
+        if not self._ds2 or not self._connection_echo:
+            return
+
+        def task(log_fn, progress_fn):
+            log_fn("Reading E46 driver-seat memory settings…")
+            return read_module_coding(self._ds2, "sm_e46")
+
+        def on_success(state):
+            self._show_seat_state(state)
+            self._log(
+                f"Driver-seat memory settings read with {state.profile.key}.", "ok")
+
+        def on_failure(error):
+            self._reset_seat_coding()
+            self.lbl_seat_coding.setText(str(error))
+            QMessageBox.critical(self, "Seat Settings Read Failed", str(error))
+
+        self._reset_seat_coding()
+        self.lbl_seat_coding.setText("Reading driver-seat memory settings…")
+        self._run_task(task, on_success=on_success, on_failure=on_failure)
+
+    def _on_write_seat_coding(self):
+        state = self._seat_coding_state
+        if not self._ds2 or state is None:
+            return
+        requested = {
+            "automatic_seat_adjustment_timing": self.cb_seat_timing.currentData(),
+            "one_touch_memory": self.chk_seat_one_touch.isChecked(),
+        }
+        labels = {
+            choice.value: choice.label
+            for choice in state.profile.features[0].choices
+        }
+        changes = []
+        if requested["automatic_seat_adjustment_timing"] != state.values[
+                "automatic_seat_adjustment_timing"]:
+            changes.append(
+                "• Automatic seat adjustment: "
+                f"{labels[state.values['automatic_seat_adjustment_timing']]} → "
+                f"{labels[requested['automatic_seat_adjustment_timing']]}"
+            )
+        if requested["one_touch_memory"] != state.values["one_touch_memory"]:
+            changes.append(
+                "• One-touch seat-memory buttons: "
+                f"{'On' if state.values['one_touch_memory'] else 'Off'} → "
+                f"{'On' if requested['one_touch_memory'] else 'Off'}"
+            )
+        if not changes:
+            QMessageBox.information(self, "Vehicle Coding", "No settings changed.")
+            return
+        answer = QMessageBox.question(
+            self, "Write Driver-Seat Settings?",
+            "\n".join(changes)
+            + "\n\nKeep ignition ON and engine OFF. Write these settings?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        def task(log_fn, progress_fn):
+            log_fn(f"Writing {len(changes)} driver-seat setting change(s)…")
+            return write_module_coding(
+                self._ds2, "sm_e46", state.profile.key,
+                state.raw_data, requested,
+            )
+
+        def on_success(updated):
+            self._show_seat_state(updated)
+            self._log(
+                "Driver-seat settings written and verified by exact readback.", "ok")
+            QMessageBox.information(
+                self, "Vehicle Coding Complete",
+                "Settings were written and verified. Cycle the ignition before testing them."
+            )
+
+        def on_failure(error):
+            self._reset_seat_coding()
+            self.lbl_seat_coding.setText(
+                f"Write status is not trusted: {error}. Read the module again."
+            )
+            QMessageBox.critical(self, "Vehicle Coding Failed", str(error))
+
+        self._run_task(task, on_success=on_success, on_failure=on_failure)
+
+    def _reset_diag_scan(self, connected: bool):
+        self.cb_diag_module.blockSignals(True)
+        self.cb_diag_module.clear()
+        self.cb_diag_module.addItem("Engine ECU", "dme")
+        self.cb_diag_module.blockSignals(False)
+        self.lbl_diag_scan.setText(
+            "Ready to scan six verified DS2 modules. Some cars require the BMW "
+            "20-pin diagnostic connector to reach non-powertrain modules."
+            if connected else "Connect, then scan the vehicle.")
+        self._on_diag_module_changed()
+        self._update_transmission_swap_status()
+
+    def _selected_diag_key(self):
+        return self.cb_diag_module.currentData() or "dme"
+
+    def _selected_fault_profile_key(self):
+        return self.cb_diag_profile.currentData()
+
+    def _update_diag_actions(self):
+        connected = self._ds2 is not None and not self._task_busy
+        module_key = self._selected_diag_key()
+        engine = module_key == "dme"
+        profile = PROFILE_BY_FAULT_KEY.get(self._selected_fault_profile_key())
+        supported = engine or (profile is not None and self._connection_echo)
+        scan_available = connected and self._connection_echo
+        self.btn_scan_modules.setEnabled(scan_available)
+        self.cb_diag_module.setEnabled(connected)
+        self.cb_diag_profile.setEnabled(
+            connected and not engine and self._connection_echo
+            and any(p.module_key == module_key for p in FAULT_PROFILES))
+        self.btn_read_dtc.setEnabled(connected and supported)
+        self.btn_clear_dtc.setEnabled(connected and supported)
+        self.btn_export_dtc.setEnabled(connected and supported)
+        if connected and not self._connection_echo:
+            self.lbl_diag_scan.setText(
+                "Vehicle module scan requires normal K-Line mode. Direct Tap reaches "
+                "the Engine ECU only.")
+        if engine:
+            self.lbl_diag_module.setText(
+                "Engine ECU fault memory is decoded below. Module addresses and raw "
+                "identification remain technical references only.")
+        elif module_key == "abs" and profile is None:
+            self.lbl_diag_module.setText(
+                "Choose the exact fitted brake system before reading or clearing faults. "
+                "The supported fault-memory layouts are not interchangeable.")
+        elif module_key == "egs" and profile is None:
+            self.lbl_diag_module.setText(
+                "Choose the exact fitted transmission before reading or clearing faults. "
+                "The 19-byte layout is verified only for GS 8.32 and GS 8.55.")
+        elif profile is not None:
+            self.lbl_diag_module.setText(
+                f"Faults will use the embedded {profile.name} profile. Raw records remain "
+                "available as technical references.")
+        else:
+            self.lbl_diag_module.setText(
+                "This module responded to identification. Its fault format and text "
+                "table are not embedded yet, so fault reading and clearing stay unavailable.")
+
+    def _on_diag_module_changed(self, _index=None):
+        module_key = self._selected_diag_key()
+        profiles = [p for p in FAULT_PROFILES if p.module_key == module_key]
+        self.cb_diag_profile.blockSignals(True)
+        self.cb_diag_profile.clear()
+        if module_key == "dme":
+            self.cb_diag_profile.addItem("MS41 Engine ECU", "dme")
+        else:
+            if module_key == "abs":
+                self.cb_diag_profile.addItem("Choose fitted brake system…", None)
+            elif module_key == "egs":
+                self.cb_diag_profile.addItem("Choose fitted transmission…", None)
+            for profile in profiles:
+                self.cb_diag_profile.addItem(profile.name, profile.key)
+            if not profiles:
+                self.cb_diag_profile.addItem("Not available", None)
+        self.cb_diag_profile.blockSignals(False)
+        self._on_diag_profile_changed()
+
+    def _on_diag_profile_changed(self, _index=None):
+        self._dtcs = []
+        if hasattr(self, "dtc_table"):
+            self._populate_dtc_table([])
+            self.dtc_detail.clear()
+            self.lbl_dtc_count.setText("No data")
+            self.lbl_dtc_count.setStyleSheet("color:#aaa; padding:4px;")
+        if hasattr(self, "btn_read_dtc"):
+            self._update_diag_actions()
+
+    def _on_scan_modules(self):
+        if not self._ds2 or not self._connection_echo:
+            return
+
+        def task(log_fn, progress_fn):
+            log_fn("Scanning the six verified DS2 module addresses…")
+            results = scan_modules(self._ds2)
+            for result in results:
+                level = "ok" if result.responded else "warn"
+                log_fn(f"{result.profile.name}: {result.status_text}", level)
+            return results
+
+        def on_success(results):
+            responsive = [result for result in results if result.responded]
+            missing = [
+                result.profile.name for result in results
+                if result.error == "No response"
+            ]
+            errors = [
+                result.profile.name for result in results
+                if result.error and result.error != "No response"
+            ]
+
+            self.cb_diag_module.blockSignals(True)
+            self.cb_diag_module.clear()
+            for result in results:
+                if result.responded or result.profile.key == "dme":
+                    self.cb_diag_module.addItem(
+                        result.profile.name, result.profile.key)
+                    index = self.cb_diag_module.count() - 1
+                    raw = result.response.hex(" ").upper() or "No response"
+                    self.cb_diag_module.setItemData(
+                        index,
+                        f"Address 0x{result.profile.address:02X}\n"
+                        f"{result.status_text}\nRaw identification: {raw}",
+                        Qt.ToolTipRole,
+                    )
+            self.cb_diag_module.blockSignals(False)
+
+            parts = [
+                f"Responded: {len(responsive)} of {len(MODULE_PROFILES)}."
+            ]
+            if missing:
+                parts.append("No response: " + ", ".join(missing) + ".")
+            if errors:
+                parts.append("Communication error: " + ", ".join(errors) + ".")
+            parts.append(
+                "Other body, lighting, airbag, and cluster profiles need additional "
+                "transport or module-specific support."
+            )
+            parts.append(
+                "Cabin OBD may expose only powertrain modules; use the BMW 20-pin "
+                "diagnostic path when applicable."
+            )
+            self.lbl_diag_scan.setText(" ".join(parts))
+            self._on_diag_module_changed()
+            self._update_transmission_swap_status()
+            self._log(
+                f"Vehicle module scan complete: {len(responsive)} response(s).", "ok")
+
+        self._run_task(task, on_success=on_success)
+
+    def _on_read_dtc(self):
+        if not self._ds2:
+            return
+        engine = self._selected_diag_key() == "dme"
+        profile_key = self._selected_fault_profile_key()
+        profile = PROFILE_BY_FAULT_KEY.get(profile_key)
+        if not engine and profile is None:
+            return
+
+        def task(log_fn, progress_fn):
+            if engine:
+                log_fn("Requesting Engine ECU faults (DS2 0x04)…")
+                raw = self._ds2.read_dtc()
+                log_fn(f"DS2 fault response: {len(raw)} bytes")
+                faults = parse_ds2_dtc_response(raw)
+            else:
+                log_fn(f"Requesting {profile.name} faults…")
+                faults = read_module_faults(self._ds2, profile_key)
+            log_fn(f"Decoded {len(faults)} fault(s)")
+            return faults
+
+        def on_success(faults):
+            self._dtcs = faults
+            self._populate_dtc_table(faults)
+            active = sum(1 for fault in faults if fault.is_active)
+            stored = len(faults) - active
+            if not faults:
+                self.lbl_dtc_count.setText("✓  No faults stored")
                 self.lbl_dtc_count.setStyleSheet("color:#5f5; padding:4px; font-weight:bold;")
             else:
                 parts = []
                 if active: parts.append(f"{active} active")
                 if stored: parts.append(f"{stored} stored")
-                self.lbl_dtc_count.setText(f"⚠  {len(dtcs)} DTC(s): {', '.join(parts)}")
+                self.lbl_dtc_count.setText(
+                    f"⚠  {len(faults)} fault(s): {', '.join(parts)}")
                 self.lbl_dtc_count.setStyleSheet("color:#e8c46a; padding:4px; font-weight:bold;")
             self.dtc_detail.clear()
-            self._log(f"DTC read complete: {len(dtcs)} code(s) found.", "ok")
+            self._log(f"Fault read complete: {len(faults)} code(s) found.", "ok")
 
+        self._dtcs = []
+        self._populate_dtc_table([])
+        self.dtc_detail.clear()
+        self.lbl_dtc_count.setText("Reading…")
+        self.lbl_dtc_count.setStyleSheet("color:#aaa; padding:4px;")
         self._run_task(task, on_success=on_success)
 
     def _on_clear_dtc(self):
-        if not self._ds2: return
+        if not self._ds2:
+            return
+        engine = self._selected_diag_key() == "dme"
+        profile_key = self._selected_fault_profile_key()
+        profile = PROFILE_BY_FAULT_KEY.get(profile_key)
+        if not engine and profile is None:
+            return
+        target = "Engine ECU" if engine else profile.name
         ans = QMessageBox.question(
-            self, "Confirm Clear DTCs",
-            "This will erase all stored DTCs from the ECU.\n\nProceed?",
+            self, f"Confirm Clear {target} Faults",
+            f"This will erase all stored faults from {target}.\n\nProceed?",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if ans != QMessageBox.Yes: return
 
         def task(log_fn, progress_fn):
-            log_fn("Clearing DTCs (DS2 0x05)…")
-            self._ds2.clear_dtc()
-            return "DTCs cleared"
+            log_fn(f"Clearing {target} faults…")
+            if engine:
+                self._ds2.clear_dtc()
+            else:
+                clear_module_faults(self._ds2, profile_key)
+            return (f"{target} faults cleared" if engine else
+                    f"{target} clear request accepted; read again to confirm")
 
         def on_success(msg):
             self._dtcs = []
             self._populate_dtc_table([])
-            self.lbl_dtc_count.setText("✓  DTCs cleared")
+            self.lbl_dtc_count.setText(
+                "✓  Faults cleared" if engine else
+                "✓  Clear accepted — read again to confirm")
             self.lbl_dtc_count.setStyleSheet("color:#5f5; padding:4px; font-weight:bold;")
             self.dtc_detail.clear()
             self._log(msg, "ok")
@@ -10653,11 +11740,34 @@ class MS41FlashGUI(QMainWindow):
 
         if isinstance(d, DS2DTCRecord):
             active_color = "#f47171" if d.is_active else "#5f5"
+            reason_row = (
+                kv("Self-Test Reason", f'<b>{d.self_test_reason}</b>')
+                if d.self_test_reason is not None else ""
+            )
             rows_html = (
                 kv("DS2 Code", f'<b style="color:#7ec8e3;">{d.code}</b>  <span style="color:#888;">({d.sae_code})</span>')
                 + kv("System", d.system, "#c8a85f")
                 + kv("Status", f'{d.status_text}  <span style="color:#555;">raw=0x{d.status_raw:02X}</span>')
                 + kv("Active", flag(d.is_active), active_color)
+                + reason_row
+                + kv("Raw", f'<span style="font-family:\'Courier New\',monospace; font-size:9pt; color:#888;">{d.raw_record.hex(" ").upper()}</span>')
+                + kv("Description", f'<b>{d.description}</b>')
+            )
+        elif isinstance(d, ModuleFault):
+            active_color = "#f47171" if d.is_active else "#5f5"
+            conditions = "<br>".join(d.conditions) or "No recorded conditions"
+            rows_html = (
+                kv("Fault Code", f'<b style="color:#7ec8e3;">{d.code_hex}</b>')
+                + kv("System", d.system, "#c8a85f")
+                + kv("Status", f'{d.status_text}  <span style="color:#555;">raw=0x{d.status:02X}</span>')
+                + kv("Current", flag(d.is_active), active_color)
+                + (kv("Frequency", d.frequency) if d.frequency is not None else "")
+                + (kv("Module Fault Count", d.reported_total)
+                   if d.reported_total is not None else "")
+                + (kv("Vehicle Speed", f"{d.speed_kmh:g} km/h") if d.speed_kmh is not None else "")
+                + kv("Conditions", conditions)
+                + (kv("Unknown Status Bits", f"0x{d.unknown_status_bits:02X}") if d.unknown_status_bits else "")
+                + (kv("Environment", d.environment_raw.hex(" ").upper()) if d.environment_raw else "")
                 + kv("Raw", f'<span style="font-family:\'Courier New\',monospace; font-size:9pt; color:#888;">{d.raw_record.hex(" ").upper()}</span>')
                 + kv("Description", f'<b>{d.description}</b>')
             )
@@ -11008,7 +12118,9 @@ class MS41FlashGUI(QMainWindow):
         ecu_btns = [
             self.btn_read_full, self.btn_read_tune,
             self.btn_write_full, self.btn_write_tune,
-            self.btn_read_dtc, self.btn_clear_dtc, self.btn_export_dtc,
+            self.btn_scan_modules, self.btn_read_dtc,
+            self.btn_clear_dtc, self.btn_export_dtc,
+            self.btn_read_gm3_coding, self.btn_write_gm3_coding,
             self.btn_info, self.btn_reset_adapt,
             self.btn_read_adaptations,
             self.btn_id_read_flash_ecu, self.btn_id_read_ecu,
@@ -11016,6 +12128,8 @@ class MS41FlashGUI(QMainWindow):
         ]
         for btn in ecu_btns:
             btn.setEnabled(enabled)
+        self.cb_diag_module.setEnabled(enabled)
+        self.cb_diag_profile.setEnabled(enabled)
         if not enabled:
             if hasattr(self, "btn_id_vin_apply"):
                 self.btn_id_vin_apply.setEnabled(False)
@@ -11078,6 +12192,8 @@ class MS41FlashGUI(QMainWindow):
             self.cb_port.setEnabled(False)
             self.chk_direct_tap.setEnabled(False)
         self._update_eeprom_buttons()
+        self._update_diag_actions()
+        self._update_coding_actions()
 
     def closeEvent(self, event):
         # Don't silently close over a running read/write/flash — a half-written flash can need
@@ -11178,10 +12294,17 @@ class MS41FlashGUI(QMainWindow):
                 "If ignition is still ON, do not close the application; use Retry Flash "
                 "Recovery first."
                 if getattr(recovery, "retry_supported", True)
+                else (
+                "Same-session replay is unavailable because the retained ECU handler "
+                "is no longer qualified. Close only when you are ready to abandon it "
+                "and perform the recovery ignition cycle."
+                if getattr(recovery, "power_cycle_required", False)
                 else
-                "Same-session replay is unavailable because finalization had begun. "
-                "Close only when you are ready to abandon the retained handler and "
-                "perform the recovery ignition cycle."
+                "Same-session replay is unavailable while the flash result remains "
+                "unknown. Keep ECU power on, export a Support Bundle, and contact "
+                "support before any ignition cycle; do not close merely to dismiss "
+                "the warning."
+                )
             )
             answer = QMessageBox.warning(
                 self,

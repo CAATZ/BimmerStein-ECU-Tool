@@ -5,7 +5,7 @@
   "version": "V1",
   "status": "DEPRECATED",
   "title": "CalGuard compatibility guard",
-  "user_description": "Previous CalGuard revision retained only so installed V1 images can be identified and removed before installing CalGuard V4. This patch writes the boot/parameter region.",
+  "user_description": "Previous CalGuard revision retained only so installed V1 images can be identified and removed before installing CalGuard V5. This patch writes the boot/parameter region.",
   "description": "Deprecated CalGuard V1 boot-to-application gate. It checked broad MS41.0/.1/.2/.3 program-versus-calibration identity using strict SS1v2 and CAL-ID/ECU-ID markers, but did not compare the canonical four-byte Firmware Compatibility IDs. Retained only for exact installed-state detection and safe removal.",
   "target": "MS41.3",
   "targets": [

@@ -25,6 +25,46 @@ def test_alphan_compose_is_available_only_for_ms413():
             ref("MS41.2"), "29f400", with_alphan=True)
 
 
+def test_alphan_v2_upgrades_during_softbsl_install_compose():
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+
+    patches = patch_ms41.load_patches()
+    stock = ref("MS41.3")
+    v1, _ = patch_ms41.build(
+        stock, ["alphan_failsafe_v1"], allow_deprecated=True)
+    v2, _ = patch_ms41.build(
+        stock, ["alphan_failsafe_v2"], allow_deprecated=True)
+    v3, _ = patch_ms41.build(stock, ["alphan_failsafe"])
+    current = patches["alphan_failsafe"]
+    assert softbsl_install._sb._patch_state(stock, current) == "absent"
+    assert softbsl_install._sb._patch_state(v1, current) == "legacy"
+    assert softbsl_install._sb._patch_state(
+        v2, current) == "legacy"
+    assert softbsl_install._sb._patch_state(v3, current) == "applied"
+    assert softbsl_install._sb._confirm_reinstall(
+        SimpleNamespace(confirm_reinstall=lambda _message: True),
+        stock, patches, ["alphan_failsafe"],
+    ) == {"alphan_failsafe": "absent"}
+
+    args = softbsl_install._sb.InstallRequest(
+        port="COM_TEST",
+        prompt=lambda _message: None,
+        base=v2,
+        chip="29f400",
+        with_alphan=True,
+        confirm_reinstall=lambda _message: True,
+    )
+    try:
+        softbsl_install._sb._install_resolve_images(args)
+        target = Path(args.target).read_bytes()
+        assert patch_ms41.is_applied(target, patches["alphan_failsafe"])
+        assert not patch_ms41.is_applied(target, patches["alphan_failsafe_v2"])
+    finally:
+        if args.target:
+            shutil.rmtree(Path(args.target).parent, ignore_errors=True)
+
+
 def test_install_log_keeps_detail_as_debug_and_one_terminal_success():
     events = []
     log = softbsl_install._install_log(
@@ -88,15 +128,18 @@ def test_cached_full_read_is_passed_as_bytes_not_a_file_path(monkeypatch):
     monkeypatch.setattr(softbsl_install, "_run_install",
                         lambda args, log: captured.setdefault("args", args) and 0)
     cached = b"\x5A" * 0x40000
+    serial_factory = object()
 
     softbsl_install.install_compose(
         "COM4", cached, with_calguard=True, allow_convert=False,
-        prompt=lambda _m: None, log=lambda _m: None)
+        prompt=lambda _m: None, log=lambda _m: None,
+        serial_factory=serial_factory)
 
     args = captured["args"]
     assert args.base is None
     assert args.base_bytes == cached
     assert args.ds2_factory is softbsl_install.AppDS2Interface
+    assert args.serial_factory is serial_factory
 
 
 def test_install_request_uses_dedicated_phase1_reentry_callback():
@@ -308,6 +351,11 @@ def test_phase1_recovery_reuses_native_session_before_continuing_install(monkeyp
 
 def test_install_keycycle_retries_until_stock_ds2_reboot_is_confirmed(monkeypatch):
     events = []
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_verify_post_keycycle_bootstrap",
+        lambda *_args: None,
+    )
 
     class Probe:
         def __init__(self, label, answers):
@@ -345,6 +393,11 @@ def test_install_keycycle_retries_until_stock_ds2_reboot_is_confirmed(monkeypatc
 
 def test_install_keycycle_cancel_is_typed_and_pre_phase2(monkeypatch):
     events = []
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_verify_post_keycycle_bootstrap",
+        lambda *_args: None,
+    )
 
     class SilentProbe:
         def identify(self):
@@ -369,6 +422,102 @@ def test_install_keycycle_cancel_is_typed_and_pre_phase2(monkeypatch):
     ):
         softbsl_install._sb._install_keycycle(args)
 
+    assert events == ["close"]
+
+
+def test_post_keycycle_gate_reads_every_prepared_phase1_range(tmp_path, monkeypatch):
+    bootstrap = bytes(
+        (index * 17 + 3) & 0xFF
+        for index in range(softbsl_install._sb.IMAGE_SIZE)
+    )
+    bootstrap_path = tmp_path / "bootstrap.bin"
+    bootstrap_path.write_bytes(bootstrap)
+    door_ranges = softbsl_install._sb._bootstrap_verify_ranges(("door_0x43",))
+    ranges = [(0x02000, 0x04000, "program-low safety range"), *door_ranges]
+    requested = []
+    identity = b"SHINDE1"
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_live_preflight",
+        lambda _args: {"identity": identity},
+    )
+
+    class Probe:
+        def read_mem(self, address, length):
+            assert (address, length) == (0xE740, 1)
+            return b"\x00"
+
+        def read_memory_range(self, address, length):
+            requested.append((address, length))
+            return softbsl_install._sb._bootstrap_cpu_bytes(
+                bootstrap, address, length)
+
+    softbsl_install._sb._verify_post_keycycle_bootstrap(
+        SimpleNamespace(
+            bootstrap=str(bootstrap_path), target_version="MS41.3",
+            bootstrap_verify_ranges=tuple(ranges),
+        ),
+        Probe(),
+        identity,
+    )
+
+    assert requested == [(address, length) for address, length, _label in ranges]
+    assert len(requested) == 3
+    assert max(length for _address, length in requested) > 4
+
+
+def test_live_preflight_captures_the_exact_ds2_identify_value(monkeypatch):
+    class Probe:
+        def identify(self):
+            return b"SHINDE1\x00extra"
+
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_detect_ecu_variant",
+        lambda _probe, **_kwargs: ("MS41.3", "MS41.3", True),
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_detect_firmware_compatibility",
+        lambda _probe: ("0912", "0912", b"909", True),
+    )
+
+    evidence = softbsl_install._sb._store_live_preflight(
+        SimpleNamespace(port="COM1"),
+        Probe(),
+        "amd",
+        softbsl_install._sb._DRV_SIG_AMD,
+    )
+
+    assert evidence["identity"] == b"SHINDE1"
+
+
+def test_post_keycycle_verification_failure_is_a_typed_safe_stop(monkeypatch):
+    events = []
+
+    class Probe:
+        def identify(self): return b"1406464"
+        def close(self): events.append("close")
+
+    monkeypatch.setattr(
+        softbsl_install._sb, "_open", lambda _args: Probe())
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_verify_post_keycycle_bootstrap",
+        lambda *_args: (_ for _ in ()).throw(
+            softbsl_install._sb.BootstrapVerificationError(
+                "door cave mismatch")
+        ),
+    )
+
+    with pytest.raises(softbsl_install._sb.InstallCancelled) as caught:
+        softbsl_install._sb._install_keycycle(SimpleNamespace(
+            keycycle_prompt=lambda _message: None,
+            keycycle_retry_prompt=lambda _message: True,
+        ))
+
+    assert caught.value.phase == "pre_phase2"
+    assert "Phase 2 erase was not started" in str(caught.value)
     assert events == ["close"]
 
 
@@ -434,6 +583,23 @@ def test_compose_reuses_an_already_applied_patch(monkeypatch):
             AssertionError("build must not run for an already-applied patch")))
 
     assert softbsl_install._sb._compose_image(b"\x5A", ["installed"]) == b"\x5A"
+
+
+def test_patch_match_normalizes_only_an_exact_requested_top_marker():
+    patch = {"edits": [{
+        "off": softbsl_install._sb.MARKER_OFF - 2,
+        "data": "1122a55a42bd",
+    }]}
+    top = bytearray(b"\xFF" * (softbsl_install._sb.MARKER_OFF + 4))
+    top[-6:] = bytes.fromhex("1122a55a54ab")
+
+    normalized = softbsl_install._sb._normalize_patch_marker_for_match(
+        top, patch, "T")
+    assert normalized[-6:] == bytes.fromhex("1122a55a42bd")
+
+    top[-1] ^= 1
+    assert softbsl_install._sb._normalize_patch_marker_for_match(
+        top, patch, "T") == bytes(top)
 
 
 def test_golden_top_composer_shares_persistent_install_patch_set():
@@ -598,7 +764,8 @@ def test_persistent_composer_builds_ms412_and_migrates_deprecated_loaders():
     image, patch_ids, _log = softbsl_install.compose_persistent_target(
         ref("MS41.2"), with_calguard=True, marker="B", chip="29f400")
     assert patch_ids == ["softbsl_loader", "door_magic", "cal_guard", "amd_flash"]
-    assert image[0x55A0:0x55A4] == bytes.fromhex("da00921d")
+    assert image[0x55A0:0x55A4] == bytes.fromhex("da008c1f")
+    assert image[0x5D07:0x5F8B] == ref("MS41.2")[0x5D07:0x5F8B]
     assert checksum.checksum_status(image) == {
         "boot": True, "program": True, "cal": True,
         "prog_disabled": False, "cal_disabled": False,
@@ -609,14 +776,22 @@ def test_persistent_composer_builds_ms412_and_migrates_deprecated_loaders():
             "softbsl_loader_legacy",
             "softbsl_loader_relocated_v1",
             "softbsl_loader_v2",
+            "softbsl_loader_v10",
     ):
-        old, _ = patch_ms41.build(
-            ref("MS41.3"), [old_id], allow_deprecated=True)
-        migrated, _ids, _ = softbsl_install.compose_persistent_target(
-            old, with_calguard=False, marker="B", chip="29f400")
-        assert not patch_ms41.is_applied(migrated, patches[old_id])
-        assert patch_ms41.is_applied(migrated, patches["softbsl_loader"])
-        assert migrated[0x5D36:0x5D92] == ref("MS41.3")[0x5D36:0x5D92]
+        for marker in ("B", "T"):
+            old, _ = patch_ms41.build(
+                ref("MS41.3"), [old_id], allow_deprecated=True, marker=marker)
+            migrated, _ids, _ = softbsl_install.compose_persistent_target(
+                old, with_calguard=False, marker=marker, chip="29f400")
+            assert not patch_ms41.is_applied(migrated, patches[old_id])
+            assert patch_ms41.is_applied(
+                softbsl_install._sb._normalize_patch_marker_for_match(
+                    migrated, patches["softbsl_loader"], marker),
+                patches["softbsl_loader"],
+            )
+            assert migrated[0x5FFE:0x6000] == bytes(
+                [ord(marker), ord(marker) ^ 0xFF])
+            assert migrated[0x5D07:0x5F8B] == ref("MS41.3")[0x5D07:0x5F8B]
 
 
 @pytest.mark.parametrize(
@@ -637,6 +812,23 @@ def test_persistent_composer_builds_older_softbsl_ports(version, door_id):
         "boot": True, "program": True, "cal": True,
         "prog_disabled": False, "cal_disabled": False,
     }
+
+
+def test_persistent_composer_rejects_a_partial_deprecated_calguard():
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+
+    old, _ = patch_ms41.build(
+        ref("MS41.2"), ["softbsl_loader_v10", "cal_guard_v4"],
+        allow_deprecated=True)
+    old = bytearray(old)
+    old[0x5E20] ^= 0x01
+
+    with pytest.raises(
+            softbsl_install._sb.SoftBSLError,
+            match="deprecated CalGuard is partial/corrupt"):
+        softbsl_install.compose_persistent_target(
+            old, with_calguard=True, marker="B", chip="29f400")
 
 
 def test_fixed_relocated_loader_restores_the_hardware_proven_crc_bytes():
@@ -682,11 +874,12 @@ def test_installer_composes_relocated_loader_for_both_flash_families(
 
         for image in (bootstrap, target):
             assert patch_ms41.is_applied(image, patches["softbsl_loader"])
-            assert image[0x55A0:0x55A4] == bytes.fromhex("da00921d")
-            assert image[0x5D36:0x5D92] == stock[0x5D36:0x5D92]
+            assert image[0x55A0:0x55A4] == bytes.fromhex("da008c1f")
+            assert image[0x5D07:0x5F8B] == stock[0x5D07:0x5F8B]
+            assert image[0x4412:0x4416] == bytes.fromhex("4fd87eb7")
             assert image[0x5C32:0x5C36] == bytes.fromhex("f075e6f5")
-            assert image[0x5D92:0x5D96] == bytes.fromhex("f3f853e6")
-            assert image[0x5FC4:0x5FC8] == bytes.fromhex("4fd87eb7")
+            assert image[0x5CA0:0x5CA4] == bytes.fromhex("4ed8f7f8")
+            assert image[0x5F8C:0x5F90] == bytes.fromhex("f3f853e6")
 
         assert patch_ms41.is_applied(bootstrap, patches[bootstrap_door_id])
         assert patch_ms41.is_applied(target, patches[persistent_door_id])
@@ -706,7 +899,7 @@ def test_installer_composes_relocated_loader_for_both_flash_families(
         guard_body = next(edit for edit in guard["edits"]
                           if edit["off"] == guard["cave"]["base"])
         assert amd_end == loader_crc["off"] == 0x5C32
-        assert guard_body["off"] + len(bytes.fromhex(guard_body["data"])) == 0x5FC4
+        assert guard_body["off"] + len(bytes.fromhex(guard_body["data"])) == 0x3BF80
     finally:
         if args.target:
             shutil.rmtree(Path(args.target).parent, ignore_errors=True)
@@ -776,7 +969,8 @@ def test_final_install_verifier_reads_every_relocated_loader_component(
 
     assert {(address ^ softbsl_install._sb.DESCR, length)
             for address, length in reads} >= {
-        (0x55A0, 4), (0x5C32, 4), (0x5D92, 4), (0x5FC4, 4),
+        (0x4412, 4), (0x55A0, 4), (0x5C32, 4), (0x5CA0, 4),
+        (0x5F8C, 4),
     }
     bootstrap_door_id, persistent_door_id = softbsl_install._sb._door_patch_ids(
         version)
@@ -891,6 +1085,7 @@ def test_same_variant_different_boot_family_aborts_before_phase1(
     preflight = {
         "port": "COM1",
         "uses_d2xx": True,
+        "native_fast_capable": True,
         "flash_family": "intel",
         "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
         "cal_variant": "MS41.1",
@@ -1033,7 +1228,7 @@ def test_install_43_fast_tier_uses_staged_entry_without_second_baud_command(monk
     d.close()
 
 
-def test_install_43_staged_failure_falls_back_without_resetting_pre_erase_agent(monkeypatch):
+def test_install_43_staged_failure_requires_cycle_before_another_trigger(monkeypatch):
     events = []
 
     class FakeD:
@@ -1074,14 +1269,106 @@ def test_install_43_staged_failure_falls_back_without_resetting_pre_erase_agent(
         "baud": "high", "trigger": "43", "agent": "agent.hex",
     })()
 
-    d, _sb, tier = softbsl_install._sb._session_with_baud_fallback(args)
+    with pytest.raises(
+        softbsl_install._sb.AgentLinkPreEraseFailure,
+        match="ignition cycle is required",
+    ):
+        softbsl_install._sb._session_with_baud_fallback(args)
 
-    assert tier == "mid"
     assert ("enter_staged", "high", "high", "43") in events
-    assert ("enter_staged", "mid", "mid", "43") in events
+    assert ("enter_staged", "mid", "mid", "43") not in events
     assert ("reset", "high") not in events
     assert ("close", "high") in events
-    d.close()
+
+
+def test_install_baud_preflight_preserves_each_tier_error(monkeypatch):
+    errors = iter(("high stage rejected", "mid stage timeout", "low CRC failed"))
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_session",
+        lambda _args, require_d2xx=False: (_ for _ in ()).throw(
+            softbsl_install._sb.SoftBSLError(next(errors))
+        ),
+    )
+    monkeypatch.setattr(softbsl_install._sb.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(
+        softbsl_install._sb.AgentLinkPreEraseFailure,
+    ) as caught:
+        softbsl_install._sb._session_with_baud_fallback(
+            SimpleNamespace(baud="high")
+        )
+
+    detail = str(caught.value)
+    assert "high (high stage rejected)" in detail
+    assert "mid (mid stage timeout)" in detail
+    assert "low (low CRC failed)" in detail
+
+
+def test_install_phase2_entry_retry_cycles_again_without_repeating_phase1(monkeypatch):
+    events = []
+    attempts = iter((False, True))
+    args = SimpleNamespace(
+        keycycle_retry_prompt=lambda message: events.append(("retry", message)) or True,
+    )
+
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_install_keycycle",
+        lambda _args: events.append("keycycle"),
+    )
+
+    def phase2(_args, target, flash_over):
+        events.append(("phase2", target, flash_over))
+        if not next(attempts):
+            raise softbsl_install._sb.AgentLinkPreEraseFailure("high (timeout)")
+
+    monkeypatch.setattr(softbsl_install._sb, "_run_install_target_phase", phase2)
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_finish_install",
+        lambda _args, target: events.append(("finish", target)),
+    )
+
+    softbsl_install._sb._continue_install_after_bootstrap(
+        args, b"target", {"scope": "softbsl"}
+    )
+
+    assert events[0] == "keycycle"
+    assert events.count("keycycle") == 2
+    assert len([event for event in events if isinstance(event, tuple)
+                and event[0] == "phase2"]) == 2
+    assert len([event for event in events if isinstance(event, tuple)
+                and event[0] == "retry"]) == 1
+    retry_message = next(event[1] for event in events if isinstance(event, tuple)
+                         and event[0] == "retry")
+    assert "requires an ignition cycle" in retry_message
+    assert events[-1] == ("finish", b"target")
+
+
+def test_install_phase2_entry_cancel_is_typed_before_target_erase(monkeypatch):
+    args = SimpleNamespace(keycycle_retry_prompt=lambda _message: False)
+    monkeypatch.setattr(softbsl_install._sb, "_install_keycycle", lambda _args: None)
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_run_install_target_phase",
+        lambda *_args: (_ for _ in ()).throw(
+            softbsl_install._sb.AgentLinkPreEraseFailure("low (timeout)")
+        ),
+    )
+    monkeypatch.setattr(
+        softbsl_install._sb,
+        "_finish_install",
+        lambda *_args: pytest.fail("cancelled Phase 2 must not finish"),
+    )
+
+    with pytest.raises(softbsl_install._sb.InstallCancelled) as caught:
+        softbsl_install._sb._continue_install_after_bootstrap(
+            args, b"target", {"scope": "softbsl"}
+        )
+
+    assert caught.value.phase == "pre_phase2"
+    assert "Phase 2 erase was not started" in str(caught.value)
 
 
 def test_install_skips_fast_tiers_when_selected_port_is_not_d2xx(monkeypatch):
@@ -1180,6 +1467,7 @@ def test_bootstrap_unsafe_native_failure_never_starts_legacy_writer(
 
     class Probe:
         uses_d2xx = True
+        native_fast_capable = True
 
         def close(self):
             events.append("probe_closed")
@@ -1244,6 +1532,8 @@ def test_bootstrap_seed_unavailable_never_starts_legacy_writer_even_when_low_is_
 
     class Probe:
         uses_d2xx = True
+
+        native_fast_capable = True
 
         def close(self):
             events.append("probe_closed")
@@ -1316,6 +1606,7 @@ def test_bootstrap_reuses_install_preflight_without_reopening_ds2(
     preflight = {
         "port": "COM1",
         "uses_d2xx": True,
+        "native_fast_capable": True,
         "flash_family": "intel",
         "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
         "cal_variant": "MS41.3",
@@ -1374,6 +1665,7 @@ def test_install_reuses_cached_variant_and_family_for_phase1(monkeypatch, tmp_pa
     preflight = {
         "port": "COM1",
         "uses_d2xx": True,
+        "native_fast_capable": True,
         "flash_family": "intel",
         "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
         "cal_variant": "MS41.3",
@@ -1444,7 +1736,11 @@ def test_install_phase1_cycle_recovery_reuses_prepared_images_and_live_family(
 
     class Probe:
         uses_d2xx = True
+        native_fast_capable = True
         closed = False
+
+        def identify(self):
+            return b"SHINDE1"
 
         def close(self):
             self.closed = True
@@ -1595,6 +1891,7 @@ def test_repeated_phase1_cycle_failure_requires_each_decision_and_cancel_is_type
     preflight = {
         "port": "COM1",
         "uses_d2xx": True,
+        "native_fast_capable": True,
         "flash_family": "intel",
         "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
         "cal_variant": "MS41.3",
@@ -1691,6 +1988,7 @@ def test_phase1_native_retry_never_downshifts_to_legacy_writer(monkeypatch, tmp_
     preflight = {
         "port": "COM1",
         "uses_d2xx": True,
+        "native_fast_capable": True,
         "flash_family": "intel",
         "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
         "cal_variant": "MS41.3",
@@ -1790,6 +2088,7 @@ def test_phase1_non_cycle_preerase_failures_do_not_prompt(
     preflight = {
         "port": "COM1",
         "uses_d2xx": True,
+        "native_fast_capable": True,
         "flash_family": "intel",
         "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
         "cal_variant": "MS41.3",
@@ -1837,6 +2136,7 @@ def test_phase1_posterase_failure_retains_session_without_marker_prompt(
     preflight = {
         "port": "COM1",
         "uses_d2xx": True,
+        "native_fast_capable": True,
         "flash_family": "intel",
         "flash_signature": softbsl_install._sb._DRV_SIG_INTEL,
         "cal_variant": "MS41.3",
@@ -1849,7 +2149,10 @@ def test_phase1_posterase_failure_retains_session_without_marker_prompt(
         "consistent": True,
     }
     retained = SimpleNamespace(
-        port="COM1", error=RuntimeError("program interrupted"), is_open=True
+        port="COM1",
+        error=RuntimeError("program interrupted"),
+        is_open=True,
+        retry_supported=True,
     )
     post_erase = ds2_native_fast_service.NativeWriteRecoveryRequired(retained)
     args = SimpleNamespace(

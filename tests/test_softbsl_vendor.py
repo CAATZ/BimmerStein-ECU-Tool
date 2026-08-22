@@ -181,7 +181,7 @@ def test_runtime_calguard_detector_does_not_use_the_abhishek_credit():
     assert sh._detect_ecu_variant(FakeDS2()) == (
         "MS41.3", "MS41.3", True)
     assert sh._detect_ecu_variant(FakeDS2(), accept_credit=False) == (
-        "MS41.2", "MS41.3", False)
+        "MS41.3", "MS41.3", True)
 
 
 def test_calguard_mismatch_selects_direct_entry_without_marker_one(monkeypatch):
@@ -268,22 +268,6 @@ def test_calguard_exact_id_mismatch_selects_direct_entry(monkeypatch):
     assert sb.calguard_direct_entry_ready() is True
 
 
-def test_calguard_prior_caves_are_safe_upgrade_states():
-    from engines.patcher.patch_ms41 import load_patches
-    from engines.softbsl import softbsl_host as sh
-
-    guard = load_patches()["cal_guard"]
-    cave = next(edit for edit in guard["edits"] if edit["off"] == guard["cave"]["base"])
-    for prior_cave in cave["upgrade_expect"]:
-        image = bytearray(b"\xFF" * 0x40000)
-        for edit in guard["edits"]:
-            payload = bytes.fromhex(edit["data"])
-            image[edit["off"]:edit["off"] + len(payload)] = payload
-        payload = bytes.fromhex(prior_cave)
-        image[cave["off"]:cave["off"] + len(payload)] = payload
-        assert sh._patch_state(image, guard) == "legacy"
-
-
 def test_enter_retry_forwards_the_bounded_ack_timeout(monkeypatch):
     from engines.softbsl import softbsl_host as sh
 
@@ -329,6 +313,208 @@ def test_staged_entry_switches_after_stage_header_and_reaches_normal_agent(monke
     assert handed_off == [b"agent"]
     assert ds2.baud == 187500
     assert sb.staged_entry is True
+
+
+@pytest.mark.parametrize(
+    ("echoed", "detail"),
+    ((b"\x10", "echo length mismatch"),
+     (b"\x10\x21", "echo content mismatch")),
+)
+def test_raw_send_requires_the_exact_kline_echo(echoed, detail, monkeypatch):
+    from engines.softbsl import softbsl_host as sh
+
+    class Serial:
+        timeout = 0
+        echo_drain_chunk_size = 128
+        chunks = [echoed]
+        def reset_input_buffer(self): pass
+        def write(self, data): return len(data)
+        def flush(self): pass
+        def read(self, _size):
+            return self.chunks.pop(0) if self.chunks else b""
+
+    ds2 = types.SimpleNamespace(_ser=Serial(), baud=9600, echo=True)
+    times = iter((0.0, 0.0, 0.0, 3.0))
+    monkeypatch.setattr(sh.time, "perf_counter", lambda: next(times, 3.0))
+
+    with pytest.raises(sh.SoftBSLError, match=detail):
+        sh.SoftBSL(ds2)._txs(b"\x10\x20")
+
+
+def test_raw_send_drains_fifo_sized_chunks_and_collects_fragmented_echo(monkeypatch):
+    from engines.softbsl import softbsl_host as sh
+
+    payload = bytes(index & 0xFF for index in range(464))
+
+    class Serial:
+        timeout = 0
+        echo_drain_chunk_size = 128
+
+        def __init__(self):
+            self.chunks = []
+            self.writes = []
+            self.resets = 0
+
+        def reset_input_buffer(self): self.resets += 1
+        def write(self, data):
+            data = bytes(data)
+            self.writes.append(data)
+            split = min(80, max(1, len(data) // 2))
+            self.chunks.extend((data[:split], b"", data[split:]))
+            return len(data)
+        def flush(self): pass
+        def read(self, size):
+            chunk = self.chunks.pop(0)
+            assert len(chunk) <= size
+            return chunk
+
+    serial = Serial()
+    monkeypatch.setattr(sh.time, "sleep", lambda _seconds: None)
+    sh.SoftBSL(types.SimpleNamespace(
+        _ser=serial, baud=9600, echo=True,
+    ))._txs(payload)
+
+    assert serial.writes == [
+        payload[:128], payload[128:256], payload[256:384], payload[384:]
+    ]
+    assert b"".join(serial.writes) == payload
+    assert serial.resets == 1
+    assert serial.chunks == []
+
+
+def test_raw_send_stops_before_next_chunk_when_echo_misses_post_wire_deadline(monkeypatch):
+    from engines.softbsl import softbsl_host as sh
+
+    now = [0.0]
+
+    class Serial:
+        timeout = 0.0
+        echo_drain_chunk_size = 128
+
+        def __init__(self):
+            self.writes = []
+            self.read_timeouts = []
+
+        def reset_input_buffer(self): pass
+        def write(self, data):
+            data = bytes(data)
+            self.writes.append(data)
+            now[0] += len(data) * 12 / 9600
+            return len(data)
+        def flush(self): pass
+        def read(self, _size):
+            self.read_timeouts.append(self.timeout)
+            now[0] += self.timeout
+            return b""
+
+    payload = bytes(range(128)) * 2
+    serial = Serial()
+    monkeypatch.setattr(sh.time, "perf_counter", lambda: now[0])
+    monkeypatch.setattr(sh.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(sh.SoftBSLError, match="echo length mismatch at byte 0"):
+        sh.SoftBSL(types.SimpleNamespace(
+            _ser=serial, baud=9600, echo=True,
+        ))._txs(payload)
+
+    assert serial.writes == [payload[:128]]
+    assert serial.read_timeouts
+    assert max(serial.read_timeouts) <= 0.01
+    assert sum(serial.read_timeouts) == pytest.approx(0.032, abs=0.001)
+
+
+def test_raw_send_stops_if_descheduled_after_exact_chunk_echo(monkeypatch):
+    from engines.softbsl import softbsl_host as sh
+
+    class Serial:
+        timeout = 0.0
+        echo_drain_chunk_size = 128
+
+        def __init__(self):
+            self.writes = []
+            self.echo = b""
+
+        def reset_input_buffer(self): pass
+        def write(self, data):
+            data = bytes(data)
+            self.writes.append(data)
+            self.echo = data
+            return len(data)
+        def flush(self): pass
+        def read(self, _size):
+            echo, self.echo = self.echo, b""
+            return echo
+
+    payload = bytes(range(128)) * 2
+    serial = Serial()
+    times = iter((0.0, 0.0, 0.0, 0.193))
+    monkeypatch.setattr(sh.time, "perf_counter", lambda: next(times, 0.193))
+
+    with pytest.raises(
+        sh.SoftBSLError,
+        match="inter-chunk deadline exceeded before byte 128",
+    ):
+        sh.SoftBSL(types.SimpleNamespace(
+            _ser=serial, baud=9600, echo=True,
+        ))._txs(payload)
+
+    assert serial.writes == [payload[:128]]
+
+
+def test_raw_send_keeps_unflagged_desktop_transport_as_one_write():
+    from engines.softbsl import softbsl_host as sh
+
+    payload = bytes(range(256)) * 4 + b"frame"
+
+    class Serial:
+        def __init__(self):
+            self.writes = []
+            self.resets = 0
+
+        def reset_input_buffer(self): self.resets += 1
+        def write(self, data): self.writes.append(bytes(data)); return len(data)
+        def flush(self): pass
+
+    serial = Serial()
+    echo_reads = []
+
+    def read_exact(size, timeout):
+        echo_reads.append((size, timeout))
+        return payload
+
+    sh.SoftBSL(types.SimpleNamespace(
+        _ser=serial, baud=187500, echo=True, _read_exact=read_exact,
+    ))._txs(payload)
+
+    assert serial.writes == [payload]
+    assert serial.resets == 1
+    assert echo_reads == [(
+        len(payload), 2.0 + len(payload) * 12 / 187500,
+    )]
+
+
+def test_staged_trigger_timeout_is_labelled_and_never_retransmitted(monkeypatch):
+    from engines.softbsl import softbsl_host as sh
+
+    serial = types.SimpleNamespace(baudrate=9600, reset_input_buffer=lambda: None)
+    ds2 = types.SimpleNamespace(_ser=serial, baud=9600, ecu_addr=0x12)
+    sb = sh.SoftBSL(ds2, log=lambda _line: None)
+    frames = []
+    monkeypatch.setattr(sb, "_txs", lambda data: frames.append(bytes(data)))
+    monkeypatch.setattr(
+        sb, "_rx",
+        lambda _timeout=2.0: (_ for _ in ()).throw(
+            sh.SoftBSLError("timeout waiting for agent byte")
+        ),
+    )
+
+    with pytest.raises(
+        sh.SoftBSLError,
+        match="staged 0x5A trigger ACK: timeout waiting for agent byte",
+    ):
+        sb.enter_staged(b"agent", "high", stage_payload=b"stage")
+
+    assert len(frames) == 1
 
 
 def test_intel_agent_reuses_the_automatic_program_status_sample():
@@ -535,6 +721,7 @@ def test_crossbank_top_verify_uses_1k_crc_reads_for_every_non_ff_byte(monkeypatc
 
     guard_count = 0
     verify_reads = []
+    progress = []
     def read_back(cpu, size):
         nonlocal guard_count
         if cpu == 0x1FFC and size == 4:
@@ -545,12 +732,17 @@ def test_crossbank_top_verify_uses_1k_crc_reads_for_every_non_ff_byte(monkeypatc
         return bytes(image[file_off:file_off + size])
     monkeypatch.setattr(sb, "crc_read", read_back)
 
-    sb.flash_cross_bank(bytes(image), baud="low", do_verify=True, prompt=lambda _msg: None)
+    sb.flash_cross_bank(
+        bytes(image), baud="low", do_verify=True, prompt=lambda _msg: None,
+        progress_cb=lambda done, total, phase: progress.append((done, total, phase)),
+    )
 
     assert guard_count == 2
     assert len(verify_reads) == (sh.IMAGE_SIZE - 0x4000) // sh.CHUNK_SIZE
     assert all(size == sh.CHUNK_SIZE for _cpu, size in verify_reads)
     assert sum(size for _cpu, size in verify_reads) == sh.IMAGE_SIZE - 0x4000
+    assert progress[0][2] == "erase"
+    assert progress[-1] == (sh.IMAGE_SIZE, sh.IMAGE_SIZE, "verify")
 
 
 def test_write_tune_partial_skips_all_ff_chunks(monkeypatch):

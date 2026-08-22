@@ -176,6 +176,13 @@ compiler. Inno Setup is not bundled as a standalone application or compiler.
 
 ## Drivers and external software
 
+### usb-serial-for-android 3.10.0
+
+- Project: https://github.com/mik3y/usb-serial-for-android
+- Copyright: Google Inc., Mike Wakerly, Kai Morich, and contributors
+- License: MIT
+- Use: Android USB-host serial driver for one-shot FT232/DS2 identification and stored-DTC reads
+
 ### FTDI D2XX
 
 BimmerStein ECU Tool can call the system-installed FTDI D2XX driver directly.

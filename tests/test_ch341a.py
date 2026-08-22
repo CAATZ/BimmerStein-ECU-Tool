@@ -69,6 +69,28 @@ def test_full_read_requires_two_matching_physical_passes():
         programmer.read_full()
 
 
+def test_open_drain_consumes_stale_packets_until_input_is_idle():
+    class Timeout(Exception):
+        pass
+
+    class Core:
+        USBTimeoutError = Timeout
+
+    class Device(FakeUSBDevice):
+        def read(self, endpoint, length, timeout):
+            if self.responses:
+                return self.responses.pop(0)
+            raise Timeout
+
+    programmer = _programmer()
+    programmer._device = Device((b"x" * 32, b"y" * 16))
+    programmer._usb_core = Core
+
+    programmer._drain_input()
+
+    assert programmer._device.responses == []
+
+
 def test_write_splits_page_and_bank_and_verifies(monkeypatch):
     programmer = _programmer((b"\x11", b"\x22" * 16, b"\x33"))
     waits = []

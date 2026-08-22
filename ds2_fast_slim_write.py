@@ -1,9 +1,9 @@
 """Slim production native-fast DS2 writers for stock MS41 ECUs.
 
 The capture-qualified wire protocol stays intact.  Production policy is kept
-small: no mandatory ECU backup, no pre-write flash comparison, no content
-hashing, and readback only when the caller selected Verify.  A failure after
-erase still retains the live high-rate session for a complete re-erase/write.
+small: no mandatory ECU backup or pre-read, sparse live target checks, and
+readback only when the caller selected Verify.  A failure after erase still
+retains the live high-rate session for a complete re-erase/write.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from ds2_fast_contracts import (
     CommitUnknownError,
     FastOperation,
     LinkRate,
+    ResponseStatus,
     SessionState,
 )
 from ds2_fast_full_write import (
@@ -65,6 +66,11 @@ from ds2_fast_plans import (
 )
 from ds2_fast_read import RateProfile
 from ds2_fast_safety import OperationJournal
+from ms41 import (
+    CODING_FAMILY_DS2_ADDR,
+    FIRMWARE_COMPAT_PROGRAM_ADDRS,
+    SS1V2_PROG_SIG_ADDR,
+)
 
 
 STABILITY_PROBES = 3
@@ -161,6 +167,13 @@ class SlimNativeFastPartialWriteSession(
         finalize_challenge: int = FINALIZE_CHALLENGE,
         reentry_required: bool = False,
         reentry_ready_cb: Optional[Callable[[], None]] = None,
+        expected_ecu_id: Optional[str] = None,
+        expected_program_compatibility_id: Optional[str] = None,
+        expected_coding_family: Optional[str] = None,
+        expected_coding_digit: Optional[str] = None,
+        expected_program_signature_hex: Optional[str] = None,
+        expected_driver_signature_hex: Optional[str] = None,
+        cancel_cb: Optional[Callable[[], bool]] = None,
         progress_cb: Optional[Callable[[str, int, int], None]] = None,
         sleeper: Callable[[float], None] = time.sleep,
     ):
@@ -168,13 +181,60 @@ class SlimNativeFastPartialWriteSession(
             raise PartialWriteStateError("journal operation must be partial_write")
         if transport.baud != rates.low or not rates.direct_low_to_high:
             raise PartialWriteStateError(
-                "slim partial writes require the direct qualified rate profile"
+                "slim partial writes require the direct rate profile"
             )
         target = bytes(target_tune)
         if len(target) != TUNE_SIZE:
             raise ValueError(
                 f"partial target must be {TUNE_SIZE} bytes, got {len(target)}"
             )
+        if expected_ecu_id is not None and (
+            not isinstance(expected_ecu_id, str)
+            or len(expected_ecu_id) != 7
+            or any(ord(character) < 0x20 or ord(character) > 0x7E
+                   for character in expected_ecu_id)
+        ):
+            raise ValueError("expected ECU ID must be exactly seven printable ASCII characters")
+        if expected_program_compatibility_id is not None and (
+            len(expected_program_compatibility_id) != 4
+            or not expected_program_compatibility_id.isdigit()
+        ):
+            raise ValueError("expected program compatibility ID must be four ASCII digits")
+        if expected_coding_family is not None and (
+            len(expected_coding_family) != 3 or not expected_coding_family.isdigit()
+        ):
+            raise ValueError("expected coding family must be three ASCII digits")
+        if expected_coding_digit is not None and (
+            len(expected_coding_digit) != 1 or not expected_coding_digit.isdigit()
+        ):
+            raise ValueError("expected coding digit must be one ASCII digit")
+        if expected_program_signature_hex is not None:
+            try:
+                expected_program_signature = bytes.fromhex(expected_program_signature_hex)
+            except ValueError as error:
+                raise ValueError("expected program signature must be eight hexadecimal digits") from error
+            if len(expected_program_signature) != 4:
+                raise ValueError("expected program signature must be eight hexadecimal digits")
+        else:
+            expected_program_signature = None
+        if expected_driver_signature_hex is not None:
+            if (
+                not isinstance(expected_driver_signature_hex, str)
+            ):
+                raise ValueError("expected driver signature must be hexadecimal")
+            try:
+                expected_driver_signature = bytes.fromhex(
+                    expected_driver_signature_hex
+                )
+            except ValueError as error:
+                raise ValueError("expected driver signature must be hexadecimal") from error
+            if (
+                len(expected_driver_signature) != ecu_info.DRV_SIG_LEN
+                or ecu_info.chip_family(expected_driver_signature) not in ("amd", "intel")
+            ):
+                raise ValueError("expected driver signature is unknown")
+        else:
+            expected_driver_signature = None
         self.transport = transport
         self.target_tune = target
         self.journal = journal
@@ -184,8 +244,14 @@ class SlimNativeFastPartialWriteSession(
         self.finalize_challenge = finalize_challenge
         self.reentry_required = bool(reentry_required)
         self.reentry_ready_cb = reentry_ready_cb
+        self.expected_ecu_id = expected_ecu_id
+        self.expected_program_compatibility_id = expected_program_compatibility_id
+        self.expected_coding_family = expected_coding_family
+        self.expected_coding_digit = expected_coding_digit
+        self.expected_program_signature = expected_program_signature
+        self.expected_driver_signature = expected_driver_signature
         self.progress_cb = progress_cb
-        self.cancel_cb = None
+        self.cancel_cb = cancel_cb
         self._sleep = sleeper
         self.link = LinkRate.LOW
         self.state = SessionState.LOW_READY
@@ -200,6 +266,7 @@ class SlimNativeFastPartialWriteSession(
         self.restore_verified = False
         self.flash_completed = False
         self.failure_state: Optional[SessionState] = None
+        self.recovery_replay_attempted = False
         self.cleanup_attempted = False
         self.safe_legacy_fallback = False
         self.verify_write = bool(verify_write)
@@ -211,6 +278,7 @@ class SlimNativeFastPartialWriteSession(
             self.destructive_started
             and not self.flash_completed
             and self.failure_state is SessionState.HIGH_PARTIAL_WRITE
+            and not self.recovery_replay_attempted
         )
 
     def _verify_requested_tune(self) -> int:
@@ -257,6 +325,76 @@ class SlimNativeFastPartialWriteSession(
     def execute(self) -> SlimPartialWriteResult:
         try:
             self.identity = self._identify()
+            if self.expected_ecu_id is not None:
+                try:
+                    actual_ecu_id = bytes(self.identity[:7]).decode("ascii")
+                except UnicodeDecodeError as error:
+                    raise PartialWriteStateError(
+                        "live ECU identity is not printable ASCII"
+                    ) from error
+                if actual_ecu_id != self.expected_ecu_id:
+                    raise PartialWriteStateError(
+                        "live ECU identity mismatch: expected "
+                        f"{self.expected_ecu_id}, received {actual_ecu_id}"
+                    )
+            if self.expected_program_compatibility_id is not None:
+                expected = self.expected_program_compatibility_id.encode("ascii")
+                for file_address in FIRMWARE_COMPAT_PROGRAM_ADDRS:
+                    address = file_address ^ 0x4000
+                    actual = self._read_mem(
+                        address,
+                        4,
+                        label=f"live_program_compatibility_0x{address:05X}",
+                    )
+                    if actual != expected:
+                        raise PartialWriteStateError(
+                            "live program compatibility mismatch at "
+                            f"0x{address:05X}: expected {expected.decode('ascii')}, "
+                            f"received {actual.hex()}"
+                        )
+            if self.expected_coding_family is not None:
+                actual = self._read_mem(
+                    CODING_FAMILY_DS2_ADDR,
+                    3,
+                    label="live_coding_family_0x01CF4",
+                )
+                if actual != self.expected_coding_family.encode("ascii"):
+                    raise PartialWriteStateError(
+                        "live coding family mismatch: expected "
+                        f"{self.expected_coding_family}, received {actual.hex()}"
+                    )
+            elif self.expected_coding_digit is not None:
+                actual = self._read_mem(
+                    CODING_FAMILY_DS2_ADDR,
+                    3,
+                    label="live_coding_family_0x01CF4",
+                )
+                if len(actual) != 3 or not actual.isdigit() or actual[2:3] != (
+                    self.expected_coding_digit.encode("ascii")
+                ):
+                    raise PartialWriteStateError(
+                        "live coding-family digit does not match target: expected "
+                        f"{self.expected_coding_digit}, received {actual.hex()}"
+                    )
+            if self.expected_program_signature is not None:
+                address = SS1V2_PROG_SIG_ADDR ^ 0x4000
+                actual = self._read_mem(
+                    address,
+                    len(self.expected_program_signature),
+                    label=f"live_program_signature_0x{address:05X}",
+                )
+                if actual != self.expected_program_signature:
+                    raise PartialWriteStateError("live program signature does not match target")
+            if self.expected_driver_signature is not None:
+                actual = self._read_mem(
+                    ecu_info.DRV_SIG_ADDR,
+                    ecu_info.DRV_SIG_LEN,
+                    label="live_driver_signature_0x0023C",
+                )
+                if actual != self.expected_driver_signature:
+                    raise PartialWriteStateError(
+                        "live flash-driver signature does not match target"
+                    )
             self.plan = build_fast_partial_write_plan(
                 self.target_tune,
                 b"\xFF" * (TUNE_SECTOR_END - TUNE_END),
@@ -293,6 +431,12 @@ class SlimNativeFastPartialWriteSession(
             return result
         except Exception as error:
             self.failure_state = self.state
+            if (
+                self.destructive_started
+                and getattr(error, "response_status", None)
+                == int(ResponseStatus.READINESS_A2)
+            ):
+                self.recovery_replay_attempted = True
             commit_unknown = isinstance(error, CommitUnknownError)
             cancelled = isinstance(error, PartialWriteCancelled)
             recovered = False
@@ -336,8 +480,8 @@ class SlimNativeFastPartialWriteSession(
             raise PartialWriteStateError("no destructive partial-write state is available")
         if not self.can_recover_in_place:
             raise PartialWriteStateError(
-                "partial write failed during or after finalization; the retained "
-                "handler is not qualified for a destructive replay"
+                "same-session partial-write replay is no longer qualified; the "
+                "retained handler is not safe for another destructive retry"
             )
         if not self.transport.is_open:
             raise PartialWriteStateError("retained partial-write transport is closed")
@@ -356,6 +500,7 @@ class SlimNativeFastPartialWriteSession(
             strategy="same-session complete re-erase and rewrite",
         )
         try:
+            self.recovery_replay_attempted = True
             blocks, payload_bytes = self._erase_and_program()
             finalize_attempts = self._finalize()
             self.flash_completed = True
@@ -377,15 +522,25 @@ class SlimNativeFastPartialWriteSession(
             return result
         except Exception as error:
             self.failure_state = self.state
+            self.fast_write_armed = False
+            self.state = (
+                SessionState.COMMIT_UNKNOWN
+                if isinstance(error, CommitUnknownError)
+                else SessionState.POWER_CYCLE_REQUIRED
+            )
             if not self.journal.closed:
                 self.journal.finish(
-                    "commit_unknown" if isinstance(error, CommitUnknownError) else "failed",
+                    "commit_unknown"
+                    if isinstance(error, CommitUnknownError)
+                    else "power_cycle_required",
                     recovery=True,
                     error=f"{type(error).__name__}: {error}",
                     state=self.state.value,
                     link=self.link.name.lower(),
                     destructive_started=True,
-                    power_cycle_required=True,
+                    retry_supported=False,
+                    transport_retained=self.transport.is_open,
+                    power_cycle_required=not isinstance(error, CommitUnknownError),
                 )
             raise
 
@@ -410,6 +565,11 @@ class SlimNativeFastFullWriteSession(
         reentry_required: bool = False,
         reentry_ready_cb: Optional[Callable[[], None]] = None,
         initial_identity_attempts: int = 1,
+        expected_ecu_id: Optional[str] = None,
+        expected_program_compatibility_id: Optional[str] = None,
+        expected_coding_family: Optional[str] = None,
+        expected_program_signature_hex: Optional[str] = None,
+        expected_driver_signature_hex: Optional[str] = None,
         progress_cb: Optional[Callable[[str, int, int], None]] = None,
         sleeper: Callable[[float], None] = time.sleep,
     ):
@@ -417,7 +577,7 @@ class SlimNativeFastFullWriteSession(
             raise PartialWriteStateError("journal operation must be full_write")
         if transport.baud != rates.low or not rates.direct_low_to_high:
             raise PartialWriteStateError(
-                "slim full writes require the direct qualified rate profile"
+                "slim full writes require the direct rate profile"
             )
         target = bytes(target_file_image)
         if len(target) != FULL_IMAGE_SIZE:
@@ -436,7 +596,45 @@ class SlimNativeFastFullWriteSession(
         self.reentry_ready_cb = reentry_ready_cb
         if initial_identity_attempts < 1:
             raise ValueError("initial identity attempts must be positive")
+        if expected_ecu_id is not None and (
+            len(expected_ecu_id) != 7
+            or any(ord(character) < 0x20 or ord(character) > 0x7E
+                   for character in expected_ecu_id)
+        ):
+            raise ValueError("expected ECU ID must be exactly seven printable ASCII characters")
+        if expected_program_compatibility_id is not None and (
+            len(expected_program_compatibility_id) != 4
+            or not expected_program_compatibility_id.isdigit()
+        ):
+            raise ValueError("expected program compatibility ID must be four ASCII digits")
+        if expected_coding_family is not None and (
+            len(expected_coding_family) != 3 or not expected_coding_family.isdigit()
+        ):
+            raise ValueError("expected coding family must be three ASCII digits")
+        try:
+            expected_program_signature = (
+                bytes.fromhex(expected_program_signature_hex)
+                if expected_program_signature_hex is not None else None
+            )
+            expected_driver_signature = (
+                bytes.fromhex(expected_driver_signature_hex)
+                if expected_driver_signature_hex is not None else None
+            )
+        except ValueError as error:
+            raise ValueError("invalid full-write target expectation") from error
+        if expected_program_signature is not None and len(expected_program_signature) != 4:
+            raise ValueError("expected program signature must be eight hexadecimal digits")
+        if expected_driver_signature is not None and (
+            len(expected_driver_signature) != ecu_info.DRV_SIG_LEN
+            or ecu_info.chip_family(expected_driver_signature) not in ("amd", "intel")
+        ):
+            raise ValueError("expected driver signature is unknown")
         self.initial_identity_attempts = int(initial_identity_attempts)
+        self.expected_ecu_id = expected_ecu_id
+        self.expected_program_compatibility_id = expected_program_compatibility_id
+        self.expected_coding_family = expected_coding_family
+        self.expected_program_signature = expected_program_signature
+        self.expected_driver_signature = expected_driver_signature
         self.progress_cb = progress_cb
         self.cancel_cb = None
         self._sleep = sleeper
@@ -454,6 +652,7 @@ class SlimNativeFastFullWriteSession(
         self.restore_verified = False
         self.flash_completed = False
         self.failure_state: Optional[SessionState] = None
+        self.recovery_replay_attempted = False
         self.safe_legacy_fallback = False
         self.verify_write = bool(verify_write)
         self.variant_conversion = bool(variant_conversion)
@@ -462,6 +661,42 @@ class SlimNativeFastFullWriteSession(
         # this explicit so retained-session recovery can never silently switch
         # a program-only operation into a full program+tune erase.
         self.program_only = False
+
+    def _validate_live_identity(self) -> None:
+        if self.expected_ecu_id is not None:
+            try:
+                actual_ecu_id = bytes(self.identity[:7]).decode("ascii")
+            except UnicodeDecodeError as error:
+                raise FullWriteError("live ECU identity is not printable ASCII") from error
+            if actual_ecu_id != self.expected_ecu_id:
+                raise FullWriteError(
+                    "live ECU identity mismatch: expected "
+                    f"{self.expected_ecu_id}, received {actual_ecu_id}"
+                )
+        if self.expected_program_compatibility_id is not None:
+            expected = self.expected_program_compatibility_id.encode("ascii")
+            for file_address in FIRMWARE_COMPAT_PROGRAM_ADDRS:
+                address = file_address ^ 0x4000
+                if self._read_mem(address, 4, label=f"live_program_compatibility_0x{address:05X}") != expected:
+                    raise FullWriteError("live program compatibility does not match target")
+        if self.expected_coding_family is not None and self._read_mem(
+            CODING_FAMILY_DS2_ADDR, 3, label="live_coding_family_0x01CF4"
+        ) != self.expected_coding_family.encode("ascii"):
+            raise FullWriteError("live coding family does not match target")
+        if self.expected_program_signature is not None:
+            address = SS1V2_PROG_SIG_ADDR ^ 0x4000
+            if self._read_mem(
+                address,
+                len(self.expected_program_signature),
+                label=f"live_program_signature_0x{address:05X}",
+            ) != self.expected_program_signature:
+                raise FullWriteError("live program signature does not match target")
+        if self.expected_driver_signature is not None and self._read_mem(
+            ecu_info.DRV_SIG_ADDR,
+            ecu_info.DRV_SIG_LEN,
+            label="live_driver_signature_0x0023C",
+        ) != self.expected_driver_signature:
+            raise FullWriteError("live flash-driver signature does not match target")
 
     @property
     def can_recover_in_place(self) -> bool:
@@ -473,6 +708,7 @@ class SlimNativeFastFullWriteSession(
                 SessionState.HIGH_FULL_PROGRAM,
                 SessionState.HIGH_FULL_TUNE,
             )
+            and not self.recovery_replay_attempted
         )
 
     def _validate_family(self) -> str:
@@ -689,6 +925,7 @@ class SlimNativeFastFullWriteSession(
             self.identity = self._identify(
                 attempts=self.initial_identity_attempts
             )
+            self._validate_live_identity()
             self.plan = build_fast_full_write_plan(
                 self.target_file_image,
                 self.target_file_image,
@@ -732,6 +969,12 @@ class SlimNativeFastFullWriteSession(
             return result
         except Exception as error:
             self.failure_state = self.state
+            if (
+                self.destructive_started
+                and getattr(error, "response_status", None)
+                == int(ResponseStatus.READINESS_A2)
+            ):
+                self.recovery_replay_attempted = True
             commit_unknown = isinstance(error, CommitUnknownError)
             recovered = False
             if not self.destructive_started:
@@ -843,6 +1086,12 @@ class SlimNativeFastFullWriteSession(
             return result
         except Exception as error:
             self.failure_state = self.state
+            if (
+                self.destructive_started
+                and getattr(error, "response_status", None)
+                == int(ResponseStatus.READINESS_A2)
+            ):
+                self.recovery_replay_attempted = True
             commit_unknown = isinstance(error, CommitUnknownError)
             recovered = False
             if not self.destructive_started:
@@ -886,8 +1135,8 @@ class SlimNativeFastFullWriteSession(
             raise FullWriteError("no destructive full-write state is available")
         if not self.can_recover_in_place:
             raise FullWriteError(
-                "full write failed during or after finalization; the retained "
-                "handler is not qualified for a destructive replay"
+                "same-session full-write replay is no longer qualified; the retained "
+                "handler is not safe for another destructive retry"
             )
         if not self.transport.is_open:
             raise FullWriteError("retained full-write transport is closed")
@@ -906,6 +1155,7 @@ class SlimNativeFastFullWriteSession(
             strategy="same-session complete re-erase and rewrite",
         )
         try:
+            self.recovery_replay_attempted = True
             if self.program_only:
                 program_payload = self._program_program_only_plan()
                 tune_payload = 0
@@ -960,14 +1210,24 @@ class SlimNativeFastFullWriteSession(
             return result
         except Exception as error:
             self.failure_state = self.state
+            self.fast_write_armed = False
+            self.state = (
+                SessionState.COMMIT_UNKNOWN
+                if isinstance(error, CommitUnknownError)
+                else SessionState.POWER_CYCLE_REQUIRED
+            )
             if not self.journal.closed:
                 self.journal.finish(
-                    "commit_unknown" if isinstance(error, CommitUnknownError) else "failed",
+                    "commit_unknown"
+                    if isinstance(error, CommitUnknownError)
+                    else "power_cycle_required",
                     recovery=True,
                     error=f"{type(error).__name__}: {error}",
                     state=self.state.value,
                     link=self.link.name.lower(),
                     destructive_started=True,
-                    power_cycle_required=True,
+                    retry_supported=False,
+                    transport_retained=self.transport.is_open,
+                    power_cycle_required=not isinstance(error, CommitUnknownError),
                 )
             raise

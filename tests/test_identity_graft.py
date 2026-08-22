@@ -4,7 +4,22 @@ import identity
 from tests.conftest import SYNTHETIC_IDENTITIES, ref
 
 
-def test_graft_moves_serial_and_vin_only():
+def test_graft_copies_only_the_two_admitted_ranges_without_private_images():
+    target = bytes([0xA5]) * 0x6100
+    source = bytes([0x5A]) * 0x6100
+
+    out = identity.graft_identity(target, source)
+
+    for start, end in identity.IDENTITY_GRAFT_RANGES:
+        assert out[start:end] == source[start:end]
+    assert out[:identity.PRODUCTION_OFF] == target[:identity.PRODUCTION_OFF]
+    assert out[identity.PRODUCTION_END:identity.AIF_OFF] == target[
+        identity.PRODUCTION_END:identity.AIF_OFF
+    ]
+    assert out[identity.AIF_END:] == target[identity.AIF_END:]
+
+
+def test_graft_moves_production_identity_and_aif_history_only():
     source = ref("MS41.1")   # donor identity
     target = ref("MS41.3")   # a .3 base
     out = identity.graft_identity(target, source)
@@ -19,12 +34,20 @@ def test_graft_moves_serial_and_vin_only():
     # the target's part number (firmware-common) is unchanged — it is a .3 base
     assert got.part == identity.decode_identity(target).part
 
-    # exactly the serial field and the VIN field changed; nothing else
+    # The complete production and AIF ranges come from the live ECU. The gap
+    # containing coding-family data and the firmware-owned ZIF remain the target's.
+    for start, end in identity.IDENTITY_GRAFT_RANGES:
+        assert out[start:end] == source[start:end]
+    assert out[identity.PRODUCTION_END:identity.AIF_OFF] == target[
+        identity.PRODUCTION_END:identity.AIF_OFF
+    ]
+    assert out[0x6001:0x6072] == target[0x6001:0x6072]
+
+    # exactly the admitted graft ranges changed; nothing else
     tb = bytearray(target)
     for i in range(len(out)):
-        in_serial = identity.SERIAL_OFF <= i < identity.SERIAL_NUL_OFF + 1
-        in_vin = identity.VIN_OFF <= i < identity.VIN_OFF + identity.VIN_LEN
-        if not (in_serial or in_vin):
+        in_graft = any(start <= i < end for start, end in identity.IDENTITY_GRAFT_RANGES)
+        if not in_graft:
             assert out[i] == tb[i], f"unexpected change at 0x{i:05X}"
 
 

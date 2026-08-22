@@ -11,10 +11,16 @@ synthetic bytes), across all 4 MS41 variants, so this can't silently regress
 back to the naive slice.
 """
 import os, sys
+import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from ms41 import MS41ECU
 from tests.conftest import ref, ref_partial
+
+
+def test_merge_rejects_a_non_full_base():
+    with pytest.raises(ValueError, match="262144 B full ROM"):
+        MS41ECU.tune_into_full(bytes(MS41ECU.TUNE_SIZE), bytes(MS41ECU.TUNE_SIZE))
 
 # "MS41.3" (REF_MS41.3/stock_*) is deliberately excluded here: that pair shows
 # ~20 small scattered byte diffs from genuine live ECU-state drift during a

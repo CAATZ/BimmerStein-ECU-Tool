@@ -14,18 +14,39 @@ def format_dtc_table(dtcs: list) -> str:
     if not dtcs:
         return "No DTCs stored."
     lines = [
-        f"{'BMW Code':<10} {'SAE Code':<10} {'System':<22} {'Status':<30} Description",
+        f"{'Fault Code':<10} {'Reference':<10} {'System':<22} {'Status':<30} Description",
         "-" * 115,
     ]
     for d in dtcs:
         lines.append(
             f"{d.code_hex:<10} {d.sae_code:<10} {d.system:<22} {d.status_text:<30} {d.description}"
         )
+
+    lines.extend((
+        "",
+        "Raw DTC Records",
+        "-" * 115,
+        f"{'Fault Code':<10} {'Reference':<10} Raw Record",
+        "-" * 115,
+    ))
+    for d in dtcs:
+        lines.append(
+            f'{d.code_hex:<10} {d.sae_code:<10} {d.raw_record.hex(" ").upper()}'
+        )
+        conditions = getattr(d, "conditions", ())
+        if conditions:
+            lines.append(f"{'':<21}Conditions: {'; '.join(conditions)}")
+        reported_total = getattr(d, "reported_total", None)
+        if reported_total is not None:
+            lines.append(f"{'':<21}Module Fault Count: {reported_total}")
+        if d.self_test_reason is not None:
+            lines.append(f"{'':<21}Self-Test Reason: {d.self_test_reason}")
     return "\n".join(lines)
 
 # ---------------------------------------------------------------------------
 # DS2 single-byte DTC database (BMW MS41 / MS42 / MS43)
-# Source: openms41.sites.google.com DTC reference table (verified)
+# Primary source: openms41.sites.google.com DTC reference table (verified).
+# Code 46 is supplemented from the exact MS41.1 diagnostic text table.
 # Code = single byte integer (1–255), matches byte[0] of each 10-byte DS2 record
 # ---------------------------------------------------------------------------
 
@@ -66,6 +87,7 @@ DS2_DTC_DB: dict = {
     42:  ("Multi Function Steering Wheel - Plausibility","Communication"),
     43:  ("Multi Function Steering Wheel Button",       "Communication"),
     45:  ("Multi Function Steering Wheel Port",         "Communication"),
+    46:  ("Fuel-Level Reserve-Lamp Signal",             "Fuel System"),
     47:  ("Temp Sensor Downstream Pre-Cat",             "Temperature"),
     48:  ("DME Control Unit - Self Test 1",             "ECU Internal"),
     49:  ("DME Control Unit",                           "ECU Internal"),
@@ -250,13 +272,184 @@ _DS2_FLAG_RECORDED = 0x20
 _DS2_FLAG_ACTIVE = 0x40
 _DS2_FLAG_HISTORY = 0x80
 
+# Hash-bound BMW FUMWELTTEXTE values.  The BEST jobs apply raw * A + B.
+_ENVIRONMENT = {
+    0x01: ("Engine speed", "rpm", 32.0, 0.0),
+    0x02: ("Air mass", "kg/h", 4.0, 0.0),
+    0x03: ("Spark duration (low range)", "ms", 0.0196, 0.0),
+    0x04: ("Spark duration (high range)", "ms", 2.56, 0.0),
+    0x05: ("Lambda controller bank 1", "%", 0.3906, -50.0),
+    0x06: ("Lambda controller bank 2", "%", 0.3906, -50.0),
+    0x07: ("Oxygen-sensor voltage 1", "V", 0.0196, 0.0),
+    0x08: ("Oxygen-sensor voltage 2", "V", 0.0196, 0.0),
+    0x09: ("Battery voltage", "V", 0.1020, 0.0),
+    0x0A: ("Throttle angle", "degrees", 0.4686, 0.0),
+    0x0B: ("Idle actuator", "%", 0.3906, 0.0),
+    0x0C: ("Engine load", "mg/stroke", 5.4471, 0.0),
+    0x0D: ("Vehicle speed", "km/h", 1.0, 0.0),
+    0x0E: ("Gear information", "raw", 1.0, 0.0),
+    0x0F: ("Camshaft angle", "degrees", 32.0, 0.0),
+    0x10: ("Engine operating state", "raw", 1.0, 0.0),
+    0x11: ("Digital fault code 1", "raw", 1.0, 0.0),
+    0x12: ("Digital fault code 2", "raw", 1.0, 0.0),
+    0x13: ("Coolant-sensor voltage", "V", 0.0196, 0.0),
+    0x14: ("Mean rich oxygen-sensor value", "V", 32.0, 0.0),
+    0x15: ("Knock-signal gain", "ratio", 0.00392, 0.0),
+    0x16: ("Noise value", "V", 0.02, 0.0),
+    0x17: ("Oxygen-sensor heater", "%", 0.391, 0.0),
+    0x18: ("Coolant temperature", "deg C", 0.7471, -48.0),
+    0x19: ("Intake-air temperature", "deg C", 0.7471, -48.0),
+    0x1A: ("Air-flow-meter voltage", "V", 0.0196, 0.0),
+    0x1B: ("Tank-vent valve command", "%", 0.391, 0.0),
+}
+
+# FORTTEXTE selects the four environment bytes for each fault.  MS410DS1 and
+# MS410DS3 are byte-identical here; MS411DS2 is also the inherited MS41.3 base.
+_ENVIRONMENT_BY_CODE = {
+    0x00: (0x00, 0x00, 0x00, 0x00),
+    0x01: (0x01, 0x0C, 0x03, 0x04),
+    0x02: (0x01, 0x0C, 0x03, 0x04),
+    0x03: (0x01, 0x0C, 0x03, 0x04),
+    0x05: (0x01, 0x0C, 0x09, 0x05),
+    0x06: (0x01, 0x0C, 0x09, 0x05),
+    0x08: (0x01, 0x0A, 0x0B, 0x1A),
+    0x0A: (0x01, 0x0C, 0x19, 0x18),
+    0x0C: (0x01, 0x0C, 0x18, 0x0A),
+    0x0E: (0x01, 0x0C, 0x18, 0x19),
+    0x10: (0x01, 0x0C, 0x18, 0x19),
+    0x12: (0x01, 0x0C, 0x18, 0x0A),
+    0x14: (0x01, 0x0C, 0x18, 0x19),
+    0x15: (0x01, 0x0C, 0x18, 0x19),
+    0x16: (0x01, 0x0C, 0x09, 0x05),
+    0x17: (0x01, 0x0C, 0x09, 0x06),
+    0x18: (0x01, 0x0C, 0x09, 0x06),
+    0x19: (0x01, 0x0C, 0x07, 0x18),
+    0x1B: (0x01, 0x02, 0x0A, 0x0B),
+    0x1D: (0x01, 0x0C, 0x03, 0x04),
+    0x1E: (0x07, 0x0C, 0x03, 0x04),
+    0x1F: (0x01, 0x0C, 0x03, 0x04),
+    0x21: (0x01, 0x0C, 0x09, 0x06),
+    0x23: (0x01, 0x0C, 0x09, 0x06),
+    0x2E: (0x01, 0x0C, 0x09, 0x06),
+    0x2F: (0x01, 0x0C, 0x09, 0x06),
+    0x32: (0x01, 0x0C, 0x18, 0x09),
+    0x33: (0x01, 0x0C, 0x18, 0x09),
+    0x34: (0x01, 0x0C, 0x18, 0x09),
+    0x35: (0x01, 0x02, 0x0A, 0x0B),
+    0x37: (0x01, 0x0C, 0x08, 0x18),
+    0x38: (0x01, 0x0C, 0x18, 0x09),
+    0x39: (0x01, 0x0C, 0x15, 0x16),
+    0x3B: (0x01, 0x0C, 0x15, 0x16),
+    0x3D: (0x01, 0x0C, 0x15, 0x16),
+    0x3E: (0x01, 0x0C, 0x15, 0x16),
+    0x41: (0x01, 0x10, 0x18, 0x09),
+    0x44: (0x01, 0x0C, 0x18, 0x1B),
+    0x45: (0x01, 0x0D, 0x18, 0x09),
+    0x4A: (0x01, 0x0D, 0x18, 0x09),
+    0x4B: (0x01, 0x0C, 0x17, 0x07),
+    0x4C: (0x01, 0x0C, 0x17, 0x08),
+    0x4D: (0x01, 0x0C, 0x17, 0x08),
+    0x4E: (0x01, 0x0C, 0x17, 0x08),
+    0x4F: (0x01, 0x0C, 0x17, 0x08),
+    0x50: (0x01, 0x0C, 0x0D, 0x18),
+    0x51: (0x01, 0x0C, 0x0D, 0x18),
+    0x52: (0x01, 0x0C, 0x0D, 0x18),
+    0x53: (0x01, 0x10, 0x18, 0x09),
+    0x64: (0x13, 0x09, 0x11, 0x12),
+    0xC8: (0x01, 0x14, 0x17, 0x07),
+    0xC9: (0x01, 0x14, 0x17, 0x08),
+    0xCA: (0x01, 0x18, 0x17, 0x07),
+    0xCB: (0x01, 0x18, 0x17, 0x08),
+    0xD1: (0x01, 0x0C, 0x18, 0x09),
+    0xD2: (0x01, 0x0C, 0x18, 0x09),
+    0xD3: (0x01, 0x0C, 0x18, 0x09),
+    0xD4: (0x01, 0x0C, 0x0E, 0x09),
+    0xD6: (0x01, 0x0C, 0x0E, 0x09),
+    0xD7: (0x01, 0x0C, 0x0D, 0x18),
+    0xD8: (0x01, 0x0C, 0x09, 0x0E),
+    0xD9: (0x01, 0x0C, 0x18, 0x09),
+    0xDA: (0x01, 0x0C, 0x18, 0x09),
+    0xDB: (0x01, 0x0C, 0x18, 0x09),
+    0xDE: (0x01, 0x0C, 0x18, 0x09),
+    0xE1: (0x01, 0x0C, 0x18, 0x09),
+    0xE2: (0x01, 0x0C, 0x18, 0x09),
+    0xE3: (0x01, 0x0C, 0x18, 0x09),
+    0xE4: (0x01, 0x0C, 0x18, 0x09),
+    0xE5: (0x01, 0x0C, 0x18, 0x09),
+    0xE6: (0x01, 0x0C, 0x18, 0x09),
+    0xE7: (0x01, 0x0C, 0x18, 0x09),
+    0xE8: (0x01, 0x0C, 0x18, 0x09),
+    0xE9: (0x01, 0x0C, 0x18, 0x09),
+    0xEA: (0x01, 0x0C, 0x18, 0x09),
+    0xEB: (0x01, 0x0C, 0x18, 0x09),
+    0xEC: (0x01, 0x0C, 0x18, 0x09),
+    0xEE: (0x01, 0x0C, 0x18, 0x09),
+    0xEF: (0x01, 0x0C, 0x18, 0x09),
+    0xF0: (0x01, 0x0C, 0x18, 0x09),
+    0xF1: (0x01, 0x0C, 0x18, 0x09),
+    0xF2: (0x01, 0x0C, 0x18, 0x09),
+    0xF3: (0x01, 0x0C, 0x18, 0x09),
+    0xF4: (0x01, 0x0C, 0x18, 0x09),
+    0xF5: (0x01, 0x0C, 0x18, 0x09),
+    0xF6: (0x01, 0x0C, 0x18, 0x09),
+    0xF7: (0x01, 0x0C, 0x18, 0x09),
+    0xF8: (0x01, 0x0C, 0x18, 0x09),
+    0xF9: (0x01, 0x0C, 0x18, 0x09),
+    0xFA: (0x01, 0x0C, 0x18, 0x09),
+    0xFB: (0x01, 0x0C, 0x18, 0x09),
+    0xFC: (0x01, 0x0C, 0x18, 0x09),
+    0xFD: (0x01, 0x0C, 0x18, 0x09),
+    0xFE: (0x01, 0x0C, 0x18, 0x09),
+    0xFF: (0x01, 0x0C, 0x18, 0x09),
+}
+
+_VARIANT_ENVIRONMENT_ADDITIONS = {
+    "MS41.0": {0x0B: (0x01, 0x0C, 0x19, 0x18)},
+    "MS41.1": {0x0B: (0x01, 0x0C, 0x19, 0x18)},
+    "MS41.2": {
+        code: (0x13, 0x09, 0x11, 0x12)
+        for code in range(0xBE, 0xC6)
+    },
+    "MS41.3": {
+        code: (0x13, 0x09, 0x11, 0x12)
+        for code in range(0xBE, 0xC6)
+    },
+}
+
+
+@dataclass(frozen=True)
+class DTCEnvironmentValue:
+    identifier: int
+    label: str
+    unit: str
+    raw: int
+    value: float
+
+    @property
+    def value_text(self) -> str:
+        return f"{self.value:.4f}".rstrip("0").rstrip(".")
+
+
+@dataclass(frozen=True)
+class MS41FaultMemory:
+    profile: str
+    stored: tuple
+    shadow: tuple
+
 
 @dataclass
 class DS2DTCRecord:
-    """A single DTC record decoded from a DS2 0x04 response."""
+    """One BMW MS41 stored or shadow-memory record."""
     code:       int    # 1-byte DTC number from record byte[0]
     status_raw: int    # state flags from record byte[1]
-    raw_record: bytes  # full 10-byte record (for debugging)
+    raw_record: bytes  # full 10-byte stored or 11-byte shadow record
+    memory: str = "stored"
+    frequency: int | None = None
+    logistics_counter: int | None = None
+    qualifiers: tuple = ()
+    freeze_frame: tuple = ()
+    occurred_hours_ago: float | None = None
+    operating_hours: float | None = None
 
     # --- GUI-facing properties ------------------------------------------------
 
@@ -290,17 +483,90 @@ class DS2DTCRecord:
         entry = DS2_DTC_DB.get(self.code)
         return entry[0] if entry else f"Unknown fault code {self.code}"
 
+    @property
+    def self_test_reason(self) -> str | None:
+        if self.code != 100 or self.memory != "stored":
+            return None
+        # Native command 0x04 omits internal record byte 1, placing the reason here.
+        return f"0x{int.from_bytes(self.raw_record[6:8], 'little'):04X}"
+
     def __repr__(self):
         return f"DS2 DTC {self.code:03d}  [{self.status_text}]  {self.description}"
 
 
-def parse_ds2_dtc_response(payload: bytes) -> list:
+def _environment_ids(variant: str | None, code: int):
+    if variant in (None, "common"):
+        return _ENVIRONMENT_BY_CODE.get(code)
+    if variant not in _VARIANT_ENVIRONMENT_ADDITIONS:
+        raise ValueError(f"unsupported MS41 fault profile {variant!r}")
+    return _VARIANT_ENVIRONMENT_ADDITIONS[variant].get(
+        code, _ENVIRONMENT_BY_CODE.get(code))
+
+
+def _qualifiers(variant: str | None, code: int, status: int) -> tuple:
+    if _environment_ids(variant, code) is None:
+        return ()
+    values = []
+    if status & 0x20:
+        values.append("Stored after debounce")
+    values.append("Currently present" if status & 0x40 else "Currently not present")
+    values.append("Sporadic" if status & 0x80 else "Static")
+    if status & 0x10:
+        values.append("Emissions relevant")
+    if status & 0x01:
+        values.append("Short circuit to battery positive")
+    if status & 0x02:
+        values.append("Short circuit to ground")
+    if status & 0x04:
+        values.append("Open circuit")
+    return tuple(values)
+
+
+def _freeze_frame(variant: str | None, code: int, raw_values: bytes) -> tuple:
+    identifiers = _environment_ids(variant, code)
+    if identifiers is None:
+        return ()
+    decoded = []
+    for identifier, raw in zip(identifiers, raw_values):
+        definition = _ENVIRONMENT.get(identifier)
+        if definition is None:
+            continue
+        label, unit, factor, offset = definition
+        decoded.append(DTCEnvironmentValue(
+            identifier, label, unit, raw, raw * factor + offset))
+    return tuple(decoded)
+
+
+def _record(raw: bytes, variant: str | None, memory: str,
+            current_counter: int | None = None) -> DS2DTCRecord:
+    occurred = None
+    operating = None
+    if memory == "stored" and current_counter is not None:
+        occurred = (current_counter - int.from_bytes(raw[8:10], "big")) * 0.1
+    elif memory == "shadow":
+        operating = float(raw[9])
+    return DS2DTCRecord(
+        code=raw[0],
+        status_raw=raw[1],
+        raw_record=raw,
+        memory=memory,
+        frequency=raw[2],
+        logistics_counter=raw[3],
+        qualifiers=_qualifiers(variant, raw[0], raw[1]),
+        freeze_frame=_freeze_frame(variant, raw[0], raw[4:8]),
+        occurred_hours_ago=occurred,
+        operating_hours=operating,
+    )
+
+
+def parse_ds2_dtc_response(payload: bytes, *, variant: str | None = None,
+                           current_counter: int | None = None) -> list:
     """Parse a DS2 command-0x04 response payload into a list of DS2DTCRecord.
 
     Format verified against captured DS2 traffic:
       payload = count byte + count × 10-byte records
       Per record: byte[0] = DTC code, byte[1] = state flags
-      Records with code == 0 or code == 0xFF are silently skipped (empty slots).
+      Records with code == 0 are silently skipped (empty slots).
 
     Returns unique DTC codes sorted by code number.
     """
@@ -321,9 +587,58 @@ def parse_ds2_dtc_response(payload: bytes) -> list:
         rec = data[i:i + 10]
         code = rec[0]
         status_raw = rec[1]
-        if code not in (0x00, 0xFF) and code not in seen:
+        if code != 0x00 and code not in seen:
             seen.add(code)
-            records.append(DS2DTCRecord(code=code, status_raw=status_raw,
-                                        raw_record=rec))
+            records.append(
+                _record(rec, variant, "stored", current_counter)
+                if variant else DS2DTCRecord(code, status_raw, rec)
+            )
     records.sort(key=lambda r: r.code)
     return records
+
+
+def parse_ds2_shadow_response(payload: bytes, *, variant: str | None = None) -> list:
+    """Decode the 11-byte records returned by BMW FS_SHADOW_LESEN."""
+    data = bytes(payload)
+    if data in (b"\x00", b"\x00\x00"):
+        return []
+    if not data:
+        raise ValueError("empty shadow DTC payload")
+    count = data[0]
+    expected = 1 + count * 11
+    if len(data) != expected:
+        raise ValueError(
+            f"unexpected shadow DTC payload length: {len(data)}, expected {expected}")
+    records = []
+    seen = set()
+    for index in range(count):
+        raw = data[1 + index * 11:12 + index * 11]
+        if raw[0] and raw[0] not in seen:
+            seen.add(raw[0])
+            records.append(_record(raw, variant, "shadow"))
+    return sorted(records, key=lambda record: record.code)
+
+
+def read_ms41_fault_memory(ds2, variant: str | None = None) -> MS41FaultMemory:
+    """Run BMW FS_LESEN and FS_SHADOW_LESEN through an open DS2 owner."""
+    from ds2 import DS2Error, DS2NegativeResponse
+
+    header = None
+    for _attempt in range(32):
+        try:
+            header = ds2.read_dtc(0)
+            break
+        except DS2NegativeResponse as error:
+            # Exact FS_LESEN behavior: only 0x04/0x00 A1 means preparation busy.
+            if error.command != 0x04 or error.status != 0xA1:
+                raise
+    if header is None:
+        raise DS2Error("DTC preparation remained busy")
+    if len(header) < 5:
+        raise ValueError("DTC preparation response is too short")
+    current_counter = int.from_bytes(header[3:5], "big")
+    profile = variant or "common"
+    stored = parse_ds2_dtc_response(
+        ds2.read_dtc(1), variant=profile, current_counter=current_counter)
+    shadow = parse_ds2_shadow_response(ds2.read_shadow_dtc(), variant=profile)
+    return MS41FaultMemory(profile, tuple(stored), tuple(shadow))

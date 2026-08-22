@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <strong><a href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b13">Download Beta 13</a></strong>
+  <strong><a href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b14">Download Beta 14</a></strong>
   &nbsp;&middot;&nbsp;
   <a href="manual/USER_MANUAL.md">User Manual</a>
   &nbsp;&middot;&nbsp;
@@ -39,10 +39,6 @@ BimmerStein ECU Tool brings BMW MS41 flashing, diagnostics, configuration, patch
 - Correct the applicable MS41 checksums before flashing.
 - Honor the operator's backup and host read-back Verify selections.
 - Preserve an active recovery session after a post-erase write failure.
-- Read, inspect, edit, archive, and write full 512-byte EEPROM images through
-  the ECU Agent or a CH341A programmer.
-- Recover stock DS2 access on some locked or apparently bricked ECUs by safely
-  seeding their EEPROM, when the stock boot code and listener remain intact.
 - Read ECU information, DTCs, live data, coding, VIN, and EWS information.
 - Analyze ROMs with user-managed definitions and a detachable parameter table.
 - Convert, catalogue, and patch ROM images offline.
@@ -82,7 +78,6 @@ least 10 seconds, then ignition ON.
 | Stock fast transfer | Native-fast DS2 through FTDI D2XX, requesting the ECU-exact 187,500 baud rate |
 | Soft-BSL | Persistent loader and Intel/AMD RAM agents |
 | Hardware BSL | Intel 28F200 and AMD/JEDEC 29F200/29F400 through a separate direct ASC0 connection |
-| EEPROM | Full 512-byte read/edit/archive/write through the ECU Agent or CH341A on MS41.0 through MS41.3 |
 | Image sizes | 256 KB full ROM and 24 KB tune |
 
 Hardware-BSL and armed Soft-BSL boot-region operations are advanced recovery-sensitive workflows.
@@ -91,27 +86,6 @@ not use that Intel programming-voltage requirement.
 
 For the bench wiring and hardware connections used by the BSL-Unbricker tab, see
 [CAATZ/MS41-BSL-Unbricker](https://github.com/CAATZ/MS41-BSL-Unbricker).
-
-## EEPROM service and Seed ECU Recovery
-
-The EEPROM tab provides one workspace for full 512-byte images across MS41.0,
-MS41.1, MS41.2, and MS41.3. Use the ECU Agent for in-ECU access or a CH341A
-programmer for direct access, then inspect, edit, archive, and write the same
-loaded image. Layout detection is automatic, with a manual override when the
-image is ambiguous.
-
-**Seed ECU Recovery** can restore stock DS2 access on some locked or apparently
-bricked ECUs when the ECU's boot code and stock DS2 listener are still intact.
-It does not repair damaged flash or an absent listener. Before writing, the
-tool preserves an immutable full before-image; after writing, it reads back the
-entire device. **Restore Pre-Seed State** writes back the exact bytes captured
-before seeding.
-
-> [!CAUTION]
-> EEPROM writes and Seed ECU Recovery remain experimental and are not yet
-> validated across every supported ECU/programmer combination. Keep the ECU
-> unpowered and isolated when using a CH341A programmer, retain the before-image,
-> and verify the full readback before relying on a write.
 
 ## Soft-BSL: persistent high-speed ECU access
 
@@ -191,27 +165,33 @@ The Patches tab detects installed and deprecated revisions, validates dependenci
 collisions, corrects checksums, and archives the composed image in Bins.
 
 > [!WARNING]
-> **HIGHLY EXPERIMENTAL — UNTESTED.** Ignition Cut V7, current Launch Control, and AlphaN
-> MAF-failsafe are currently untested
-> and may work incorrectly or may not work at all. Unexpected engine behavior, stalling, failure to
-> limit RPM, or other unintended results are possible. Test only in controlled off-road or bench
+> **HIGHLY EXPERIMENTAL — ON-CAR TESTING REQUIRED.** Ignition Cut V9, Launch Control V7,
+> and AlphaN MAF-failsafe V3 passed exact firmware execution checks but have not completed
+> on-car validation.
+> Unexpected engine behavior, stalling, failure to limit RPM, or other unintended results are
+> possible. Test only in controlled off-road or bench
 > conditions, begin conservatively, monitor the engine closely, and keep a verified stock image and
-> recovery path available. Do not rely on either patch for engine protection or any safety-critical
+> recovery path available. Do not rely on these patches for engine protection or any safety-critical
 > function.
 >
-> **IGNITION CUT HAZARD.** Ignition Cut V7 is in a very early stage. It will cause fuel-related,
-> misfire, and coil-related DTCs and fuel-trim issues, and the cut is extremely aggressive. Never
-> use it on a car with catalytic converters; unburned fuel can destroy them.
+> **IGNITION CUT HAZARD.** Ignition Cut V9 remains experimental. It may suppress spark while
+> injection continues at the stock or configured fixed pulse width. Unburned fuel can damage
+> catalytic converters and exhaust components; never use it on a car with catalytic converters.
+> Its fuel-adaptation and diagnostic guards passed offline execution checks but are not
+> vehicle-validated.
 
-The Patches tab labels these revisions **UNTESTED**. Deprecated field revisions, including
-non-working Ignition Cut V6, remain detectable and remove-only so an older installation can still be
-removed safely during migration.
+The Patches tab shows each revision's verification status. Deprecated revisions, including broken
+AlphaN MAF-failsafe V1/V2, non-working Ignition Cut V6, superseded Ignition Cut V7/V8, and Launch
+Control V6, remain detectable and remove-only so an older installation can still be removed safely
+during migration.
 
 Every Windows package includes `BimmerStein MS41 Patch Definitions.xml` beside the executable for
 RomRaider or BimmerStein Tuning Suite. It covers the calibration items introduced by supported
 patches; install the matching firmware patch before editing those tables and verify the ECU variant,
 calibration ID, and patch revision. A mismatched definition can expose incorrect tables or write to
-the wrong calibration addresses.
+the wrong calibration addresses. Standalone Ignition Cut and Launch ignition mode have separate RPM
+hysteresis and fixed injector-pulse-width settings. Launch fuel mode continues to use the stock
+staged fuel limiter and ignores the Launch ignition-only settings.
 
 ## Installation
 
@@ -242,7 +222,7 @@ native-fast journal. Raw ROMs are excluded. Session logs require an explicit pri
 The illustrated manual covers normal flashing, recovery behavior, Soft-BSL, hardware BSL,
 diagnostics, offline tools, patches, and final checklists:
 
-- [Download BimmerStein ECU Tool 0.1.0 Beta 13](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b13)
+- [Download BimmerStein ECU Tool 0.1.0 Beta 14](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b14)
 - [Illustrated PDF manual](output/pdf/BimmerStein-ECU-Tool-User-Manual.pdf)
 - [User manual (web-readable Markdown)](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/manual/USER_MANUAL.md)
 - [Build and release instructions](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/BUILDING.md)

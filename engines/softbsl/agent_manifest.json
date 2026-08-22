@@ -28,6 +28,14 @@
       "payload": "eeprom_agent.hex",
       "payload_size": 1442,
       "payload_sha256": "e1c17e3a4e3684ab99f8d3ca98506a1829d37315028a00ff86a04c6f4ca3949f"
+    },
+    "st9030_probe": {
+      "source": "st9030_agent_build.asm",
+      "source_text_sha256": "603a3c2d857d8bea4b3dfdb257ba6af3783d6f934e9afba63229d15ed796535b",
+      "preprocessed_sha256": "2f7e3bc1b7f4042c8ed841eb3221271f211eded3d5bc0044c923040b5eef9f87",
+      "payload": "st9030_agent.hex",
+      "payload_size": 1944,
+      "payload_sha256": "cd43358bde39c4e2a5dd00884b7775df1662802d08886df9a209027c32706ee2"
     }
   }
 }

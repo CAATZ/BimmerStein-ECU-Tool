@@ -24,6 +24,8 @@ D2XXRequiredError = _sb.D2XXRequiredError
 class SoftBSLRecoveryStateError(RuntimeError):
     """A pre-erase attempt could not prove a safe return to normal DS2."""
 
+    power_cycle_required = True
+
 
 @dataclass
 class SoftBSLBootSession:
@@ -264,9 +266,60 @@ def _recover_marker0(sb, log, finalize_sent=False):
         return True
 
 
+def _recover_staged_entry_marker0(ds2, log):
+    """Use the still-open stock DS2 owner to restore and prove E740=0."""
+    def emit(message, level="info"):
+        try:
+            log(message, level)
+        except TypeError:
+            log(message)
+
+    try:
+        marker = bytes(ds2.read_mem(0xE740, 1))
+        if marker == b"\x00":
+            emit("Staged entry stopped with E740 already confirmed at 0x00.")
+            return True
+        emit(
+            "Staged entry stopped before the RAM-agent banner with "
+            f"E740={marker.hex() or '<empty>'}; running stock program VERIFY.",
+            "warn",
+        )
+    except Exception as error:
+        emit(
+            "E740 could not be read after staged entry stopped; attempting the "
+            f"stock program VERIFY on the same DS2 handle ({error}).",
+            "warn",
+        )
+
+    try:
+        ok, status = ds2.verify_program_region(log_fn=emit)
+        marker = bytes(ds2.read_mem(0xE740, 1))
+    except Exception as error:
+        emit(
+            f"Stock marker-0 recovery after staged entry failed: {error}",
+            "error",
+        )
+        return False
+    if ok is True and marker == b"\x00":
+        emit("Stock program VERIFY restored and confirmed E740=0x00.", "ok")
+        return True
+    status_text = f"0x{status:02X}" if status is not None else "unknown"
+    emit(
+        "Stock marker-0 recovery was not proven after staged entry: "
+        f"verify={status_text}, E740={marker.hex() or '<empty>'}.",
+        "error",
+    )
+    return False
+
+
 def marker(image):
     """'T'/'B' bank-ID marker (file 0x5FFC), or None."""
     return _sb.image_marker(bytes(image))
+
+
+def full_write_requires_softbsl(live_marker, image):
+    """TOP's fused SA7 geometry cannot be rewritten by the resident DS2 driver."""
+    return live_marker == "T" or marker(image) == "T"
 
 
 def calguard_recovery_ready(ds2, log):
@@ -286,7 +339,8 @@ def crossbank_plan(image):
 
 
 def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=None,
-                  entry_mode="auto", boot_timeout=8.0, agent_payload=None):
+                  entry_mode="auto", boot_timeout=8.0, agent_payload=None,
+                  serial_factory=None):
     """Open the port and enter the RAM agent through the persistent 0x5A loader.
 
     Automatic normal entry uses 0x2A door_magic first. Built-in flash agents may
@@ -320,11 +374,18 @@ def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=Non
             "Soft-BSL recovery requires a known Intel/AMD flash-driver family; "
             "no port was opened and nothing was erased.")
 
-    d = _sbds2.DS2Interface(port, baud=9600, verbose=False, echo=True)
+    ds2_kwargs = {"baud": 9600, "verbose": False, "echo": True}
+    if serial_factory is not None:
+        ds2_kwargs["serial_factory"] = serial_factory
+    d = _sbds2.DS2Interface(port, **ds2_kwargs)
     d.open()
-    if require_d2xx and not d.uses_d2xx:
+    if require_d2xx and not bool(
+        getattr(d, "native_fast_capable", False)
+    ):
         d.close()
-        raise D2XXRequiredError(f"{port} opened through {d.transport_name or 'an unknown transport'}")
+        raise D2XXRequiredError(
+            f"{port} opened through "
+            f"{d.transport_name or 'an unsupported transport'}")
     # Detailed agent mechanics remain in the session file, while the GUI keeps
     # phase outcomes, warnings, errors, and recovery instructions visible.
     sb = _sb.SoftBSL(d, log=_agent_log(log))
@@ -391,12 +452,23 @@ def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=Non
             sb.enter_retry(agent, trigger="5a")
     except (Exception, KeyboardInterrupt) as error:
         if staged:
-            # Stage-one owns its pre-erase failure/reset path.  Do not send the production-agent
-            # recovery command to a stage that has not emitted the A5 handoff banner.
+            # No production-agent banner was reached, so its reset command is unavailable.
+            # Keep this exact DS2 handle open long enough to restore/prove stock marker 0.
+            recovered = False
+            try:
+                recovered = _recover_staged_entry_marker0(d, log)
+            except Exception:
+                pass
             try:
                 d.close()
             except Exception:
                 pass
+            if not recovered:
+                raise SoftBSLRecoveryStateError(
+                    "staged Soft-BSL entry stopped before the RAM-agent banner and "
+                    "E740=0 / normal stock DS2 could not be proven on the same handle; "
+                    "automatic baud fallback is blocked and an ignition cycle is required"
+                ) from error
             raise
         recovered = False
         try:
@@ -418,7 +490,8 @@ def _open_session(port, log, chip_family=None, require_d2xx=False, baud_tier=Non
     return d, sb
 
 
-def open_boot_recovery(port, log, *, baud="high", timeout=15.0):
+def open_boot_recovery(port, log, *, baud="high", timeout=15.0,
+                       serial_factory=None):
     """Catch CalGuard V4 at key-on and retain the running RAM agent."""
     d, sb = _open_session(
         port,
@@ -428,6 +501,7 @@ def open_boot_recovery(port, log, *, baud="high", timeout=15.0):
         baud_tier=baud,
         entry_mode="boot",
         boot_timeout=timeout,
+        serial_factory=serial_factory,
     )
     return SoftBSLBootSession(
         port=str(port),
@@ -600,7 +674,7 @@ def _set_agent_baud_if_needed(sb, tier):
 
 def run_flash(port, image, scope, prompt, log, baud="low", progress_cb=None,
              do_verify=True, write_bootloader=False, chip_family=None,
-             entry_mode="auto"):
+             entry_mode="auto", serial_factory=None):
     """Live full-image-scope write with a brief pre-erase link gate.
 
     High/mid failures may fall back only while flash is untouched. Once the host emits the
@@ -620,7 +694,7 @@ def run_flash(port, image, scope, prompt, log, baud="low", progress_cb=None,
     def _attempt(tier):
         d, sb = _open_session(
             port, log, chip_family, require_d2xx=tier != "low", baud_tier=tier,
-            entry_mode=entry_mode)
+            entry_mode=entry_mode, serial_factory=serial_factory)
         tracker = _WriteProgressTracker(progress_cb)
         finalized_by_flash = False
         write_complete = False
@@ -674,7 +748,7 @@ def run_flash(port, image, scope, prompt, log, baud="low", progress_cb=None,
 
 
 def write_identity_sector(port, sector, prompt, log, baud="high", progress_cb=None,
-                          chip_family=None, half="B"):
+                          chip_family=None, half="B", serial_factory=None):
     """Write the complete identity-containing erase sector on the visible half.
 
     The host flash primitive consumes a file-order 256 KB container even for a
@@ -704,11 +778,11 @@ def write_identity_sector(port, sector, prompt, log, baud="high", progress_cb=No
     return run_flash(
         port, bytes(image), "sa1", prompt, log, baud=baud,
         progress_cb=progress_cb, do_verify=True, write_bootloader=True,
-        chip_family=chip_family)
+        chip_family=chip_family, serial_factory=serial_factory)
 
 
 def write_tune(port, partial, log, baud="low", progress_cb=None, do_verify=True,
-               chip_family=None, entry_mode="auto"):
+               chip_family=None, entry_mode="auto", serial_factory=None):
     """Live Fast TUNE write: enter the RAM agent and write the 24 KB calibration/tune PARTITION to
     the running bank via SoftBSL.write_tune_partial — the agent counterpart of ds2.write_partial.
     Unlike run_flash, this takes a 24 KB partial (NOT a 256 KB full image) and needs NO bank marker:
@@ -721,7 +795,7 @@ def write_tune(port, partial, log, baud="low", progress_cb=None, do_verify=True,
     def _attempt(tier):
         d, sb = _open_session(
             port, log, chip_family, require_d2xx=tier != "low", baud_tier=tier,
-            entry_mode=entry_mode)
+            entry_mode=entry_mode, serial_factory=serial_factory)
         tracker = _WriteProgressTracker(progress_cb)
         write_complete = False
         retain_for_recovery = False
@@ -824,7 +898,7 @@ def resume_write_recovery(recovery, *, progress_cb=None, log=lambda *_args: None
 
 
 def read_image(port, scope, baud, progress_cb, log, chip_family=None,
-               entry_mode="auto"):
+               entry_mode="auto", serial_factory=None):
     """Live Fast Read: enter the RAM agent and read `scope` ('full'/'tune') back as bytes,
     with real progress_cb(done, total) movement. `chip_family`
     ('amd'/'intel'/None) picks the flash agent — reads are chip-agnostic, but using the right
@@ -832,7 +906,7 @@ def read_image(port, scope, baud, progress_cb, log, chip_family=None,
     def _attempt(tier):
         d, sb = _open_session(
             port, log, chip_family, require_d2xx=tier != "low", baud_tier=tier,
-            entry_mode=entry_mode)
+            entry_mode=entry_mode, serial_factory=serial_factory)
         try:
             _set_agent_baud_if_needed(sb, tier)
             if scope == "tune":
@@ -860,11 +934,13 @@ def read_image(port, scope, baud, progress_cb, log, chip_family=None,
     return _with_baud_fallback(_attempt, baud, log, f"Fast read ({scope})")
 
 
-def _read_identity_range(port, baud, progress_cb, log, chip_family, lo, length, label):
+def _read_identity_range(port, baud, progress_cb, log, chip_family, lo, length,
+                         label, serial_factory=None):
     """Read one file-order identity range through a disposable RAM-agent session."""
     def _attempt(tier):
         d, sb = _open_session(
-            port, log, chip_family, require_d2xx=tier != "low", baud_tier=tier)
+            port, log, chip_family, require_d2xx=tier != "low", baud_tier=tier,
+            serial_factory=serial_factory)
         try:
             _set_agent_baud_if_needed(sb, tier)
             return sb.read_range(
@@ -879,7 +955,8 @@ def _read_identity_range(port, baud, progress_cb, log, chip_family, lo, length, 
     return _with_baud_fallback(_attempt, baud, log, label)
 
 
-def read_identity_data(port, baud, progress_cb, log, chip_family=None, half="B"):
+def read_identity_data(port, baud, progress_cb, log, chip_family=None, half="B",
+                       serial_factory=None):
     """Read enough cached data to display and safely edit identity on one half.
 
     Uses the same disposable RAM-agent session, high->mid->low baud fallback,
@@ -898,10 +975,11 @@ def read_identity_data(port, baud, progress_cb, log, chip_family=None, half="B")
         raise ValueError(f"identity half must be 'B' or 'T', got {half!r}")
     return _read_identity_range(
         port, baud, progress_cb, log, chip_family, lo, length,
-        "Fast read (BOOT identity)")
+        "Fast read (BOOT identity)", serial_factory=serial_factory)
 
 
-def read_identity_sector(port, baud, progress_cb, log, chip_family=None, half="B"):
+def read_identity_sector(port, baud, progress_cb, log, chip_family=None, half="B",
+                         serial_factory=None):
     """Read the exact erase sector used by a VIN write (BOTTOM SA1 or TOP SA7)."""
     half = str(half).upper()
     if half == "T":
@@ -914,10 +992,11 @@ def read_identity_sector(port, baud, progress_cb, log, chip_family=None, half="B
         raise ValueError(f"identity half must be 'B' or 'T', got {half!r}")
     return _read_identity_range(
         port, baud, progress_cb, log, chip_family, lo, length,
-        "Fast read (identity erase sector)")
+        "Fast read (identity erase sector)", serial_factory=serial_factory)
 
 
-def read_cross_bank_image(port, prompt, log, baud="high", progress_cb=None):
+def read_cross_bank_image(port, prompt, log, baud="high", progress_cb=None,
+                          serial_factory=None):
     """Read the currently-selected 29F400 TOP half through an agent entered from BOTTOM.
 
     The operator flips A17 only while the agent is resident in RAM.  A marker read before and
@@ -928,7 +1007,8 @@ def read_cross_bank_image(port, prompt, log, baud="high", progress_cb=None):
     guard_addr = _sb.MARKER_OFF ^ _sb.DESCR
     def _attempt(tier):
         d, sb = _open_session(
-            port, log, chip_family="amd", require_d2xx=tier != "low", baud_tier=tier)
+            port, log, chip_family="amd", require_d2xx=tier != "low", baud_tier=tier,
+            serial_factory=serial_factory)
         may_be_upper = False
         try:
             _set_agent_baud_if_needed(sb, tier)
@@ -971,7 +1051,8 @@ def read_cross_bank_image(port, prompt, log, baud="high", progress_cb=None):
     return _with_baud_fallback(_attempt, baud, log, "Golden-TOP base read")
 
 
-def run_cross_bank(port, image, prompt, log, chip_family=None, baud="high"):
+def run_cross_bank(port, image, prompt, log, chip_family=None, baud="high",
+                   serial_factory=None, progress_cb=None):
     """Live BRICK-CLASS: enter from the bottom half, then flash the 29F400 golden
     TOP half (SA7 fused boot written LAST; A17 flips prompted). Recoverable if
     booted from the intact bottom."""
@@ -986,7 +1067,8 @@ def run_cross_bank(port, image, prompt, log, chip_family=None, baud="high"):
             try:
                 d, sb = _open_session(
                     port, log, chip_family=chip_family,
-                    require_d2xx=tier != "low", baud_tier=tier)
+                    require_d2xx=tier != "low", baud_tier=tier,
+                    serial_factory=serial_factory)
                 break
             except D2XXRequiredError:
                 if tier != "low" and "low" in tiers[index + 1:]:
@@ -999,7 +1081,10 @@ def run_cross_bank(port, image, prompt, log, chip_family=None, baud="high"):
                     f"trying '{tiers[index + 1]}'.")
         if sb is None:
             raise SoftBSLError("Golden-TOP write could not enter a staged RAM session")
-        sb.flash_cross_bank(bytes(image), baud=tiers[index], prompt=prompt)
+        sb.flash_cross_bank(
+            bytes(image), baud=tiers[index], prompt=prompt,
+            progress_cb=progress_cb,
+        )
     finally:
         if d is not None:
             try:

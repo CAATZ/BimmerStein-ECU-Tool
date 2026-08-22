@@ -18,7 +18,12 @@ P3.3/P3.12 I2C implementation reads every address `0x000..0x1FF` without calling
 variant-specific firmware routines. RAM access is admitted only on a recognized
 MS41.0-MS41.3 ECU with an installed Soft-BSL bank marker and the matching
 variant door. CalGuard and flash-chip family are not admission requirements.
-No EEPROM write has been performed on a physical ECU as part of this work.
+The Android path has completed a controlled MS41.3 bench write and exact
+restore through the installed Soft-BSL agent. The test changed only the
+transmission selector and its record check, required complete 512-byte
+readback after each write, and restored the ECU byte-for-byte to its original
+image. This qualifies that exact MS41.3 bench path; the other program families
+remain emulator-qualified rather than physically write-qualified.
 
 The transmission shortcut selects the family-specific persisted record:
 MS41.0 `0x196`, MS41.1 `0x1CC`, and MS41.2/MS41.3 `0x1CA`. It changes only
@@ -176,6 +181,12 @@ shared Soft-BSL failure cleanup `R 9C 9C` is an alias for the same conditional
 finalizer. Stock DS2 with `E740=0` or `3` must answer before the port is released;
 a power cycle alone does not clear `E740=1`.
 
+An EEPROM dump taken inside an agent session that entered with `E740=1` sees the
+temporary `01 02 03` physical progression. Successful exit finalizes marker zero
+after that dump. Starting another agent read re-enters state 1, so it is not an
+independent inspection of the post-exit tail; use confirmed normal DS2 for the
+exit state or an isolated, unpowered CH341A read for external physical proof.
+
 ## Writer transaction
 
 `write_image()` accepts an exact 512-byte target for the selected family. The
@@ -247,10 +258,16 @@ typed `WRITE EEPROM`; a retained partial sequence uses typed `RESUME EEPROM`.
   MS41.3 uses the byte-identical MS41.2 EEPROM application paths and layout.
 - Exact RAM-agent bytes are assembler-manifest checked. The exact 1,442-byte v3
   payload performs full reads on MS41.0, MS41.1, MS41.2, and MS41.3 reference
-  images in exact execution checks. Generic writes, exact replay, stale compares,
+  images in the shared emulator. Generic writes, exact replay, stale compares,
   I2C failures, and both conditional finalizer commands are exact-byte tested.
-- Exact-image functional proof is not UART timing, electrical, bench, or on-car
+- Functional emulator proof is not UART timing, electrical, bench, or on-car
   proof.
-- The current physical ECU has not been written by this tool.
+- One MS41.3 bench ECU completed an Android Manual-to-Automatic write and exact
+  Automatic-to-Manual restore on 2026-08-18. Both physical readbacks matched
+  their target SHA-256 values, and normal DS2 identification succeeded after
+  the restore. An isolated, unpowered Android CH341A read on 2026-08-19 then
+  independently matched the restored 512-byte image at rest, including
+  `0x1DD..0x1DF = 00 01 02`. See
+  `docs/evidence/android-eeprom-agent-2026-08-18.md`.
 - OEM labels for the `00A` key, one `11A` correction byte, the `1B4` latch, and
   especially the `1D6` event remain inferred from behavior.

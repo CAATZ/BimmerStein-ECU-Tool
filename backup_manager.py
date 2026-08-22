@@ -9,6 +9,7 @@ import os
 import json
 import datetime
 import hashlib
+import uuid
 from dataclasses import dataclass, asdict
 from typing import List
 
@@ -39,6 +40,7 @@ class BackupEntry:
                                   # so a hybrid ROM's two sides are both on record)
     hybrid:          str = ""    # human-readable program/cal mismatch description, or ""
     sha256:          str = ""    # immutable catalogue identity; blank for legacy entries
+    folder:          str = ""    # logical user folder; files remain flat on disk
 
     @property
     def path(self) -> str:
@@ -113,8 +115,19 @@ class BackupManager:
             hybrid          = resolved["hybrid"] or ""
 
         base = self._unique_name(filename)
-        with open(os.path.join(BACKUP_DIR, base), "wb") as f:
-            f.write(data)
+        destination = self._entry_path(base)
+        temporary = os.path.join(BACKUP_DIR, f".{uuid.uuid4().hex}.tmp")
+        try:
+            with open(temporary, "xb") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, destination)
+        finally:
+            try:
+                os.remove(temporary)
+            except FileNotFoundError:
+                pass
 
         entry = BackupEntry(
             filename=base, file_type=file_type, variant=variant, cs_ok=cs_ok,
@@ -138,30 +151,158 @@ class BackupManager:
             return "EEPROM", "Unknown"
         return "Unknown", "Unknown"
 
-    @staticmethod
-    def _unique_name(filename: str) -> str:
-        base = os.path.basename(filename)
-        if os.path.exists(os.path.join(BACKUP_DIR, base)):
-            stem, ext = os.path.splitext(base)
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            base = f"{stem}_{ts}{ext}"
-        return base
+    def _entry_path(self, filename: str) -> str:
+        if (not filename or filename in (".", "..") or "\x00" in filename
+                or "/" in filename or "\\" in filename):
+            raise ValueError("invalid backup filename")
+        root = os.path.realpath(BACKUP_DIR)
+        path = os.path.realpath(os.path.join(root, filename))
+        if os.path.dirname(path) != root:
+            raise ValueError("backup path escapes the catalogue")
+        return path
 
-    def remove(self, entry: BackupEntry):
-        try:
-            os.remove(entry.path)
-        except OSError:
-            pass
+    def _unique_name(self, filename: str) -> str:
+        base = os.path.basename(filename)
+        self._entry_path(base)
+        if not os.path.exists(self._entry_path(base)):
+            return base
+        stem, ext = os.path.splitext(base)
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        suffix = 1
+        while True:
+            candidate = f"{stem}_{ts}_{suffix}{ext}"
+            if not os.path.exists(self._entry_path(candidate)):
+                return candidate
+            suffix += 1
+
+    def exact_entry(self, filename: str, sha256: str = "") -> BackupEntry:
+        self._entry_path(filename)
+        matches = [entry for entry in self._entries if entry.filename == filename]
+        if len(matches) != 1:
+            raise ValueError("catalogue entry was not found")
+        entry = matches[0]
+        if sha256 and entry.sha256 != sha256:
+            raise ValueError("catalogue entry identity changed")
+        return entry
+
+    def read_data(self, filename: str, sha256: str) -> bytes:
+        entry = self.exact_entry(filename, sha256)
+        path = self._entry_path(entry.filename)
+        with open(path, "rb") as stream:
+            data = stream.read()
+        if (len(data) != entry.size or
+                hashlib.sha256(data).hexdigest() != entry.sha256):
+            raise ValueError("catalogue file failed its content check")
+        return data
+
+    def remove_exact(self, filename: str, sha256: str):
+        entry = self.exact_entry(filename, sha256)
+        path = self._entry_path(entry.filename)
+        os.remove(path)
         self._entries = [e for e in self._entries if e.filename != entry.filename]
         self._save()
 
-    def update_notes(self, entry: BackupEntry, notes: str):
-        entry.notes = notes
+    def update_notes_exact(self, filename: str, sha256: str, notes: str):
+        entry = self.exact_entry(filename, sha256)
+        entry.notes = str(notes)
         self._save()
+        return entry
+
+    def rename_exact(self, filename: str, sha256: str, replacement: str):
+        entry = self.exact_entry(filename, sha256)
+        replacement = str(replacement).strip()
+        self._entry_path(replacement)
+        if (len(replacement.encode("utf-8")) > 255
+                or replacement.endswith((".", " "))
+                or any(ord(character) < 32 or character in '<>:"/\\|?*'
+                       for character in replacement)
+                or replacement.split(".", 1)[0].casefold() in {
+                    "con", "prn", "aux", "nul",
+                    *(f"com{index}" for index in range(1, 10)),
+                    *(f"lpt{index}" for index in range(1, 10)),
+                }):
+            raise ValueError("filename is not portable")
+        if replacement == entry.filename:
+            return entry
+        if any(candidate.filename.casefold() == replacement.casefold()
+               for candidate in self._entries):
+            raise ValueError("filename already exists")
+        self.read_data(entry.filename, entry.sha256)
+        source = self._entry_path(entry.filename)
+        destination = self._entry_path(replacement)
+        if os.path.exists(destination):
+            raise ValueError("filename already exists")
+        original = entry.filename
+        os.rename(source, destination)
+        entry.filename = replacement
+        try:
+            self._save()
+        except Exception:
+            entry.filename = original
+            os.rename(destination, source)
+            raise
+        return entry
+
+    @staticmethod
+    def normalize_folder(folder: str) -> str:
+        folder = " ".join(str(folder).split())
+        if not folder:
+            return ""
+        if len(folder) > 48:
+            raise ValueError("folder name is too long")
+        if folder.casefold() in {"all", "unfiled"}:
+            raise ValueError("folder name is reserved")
+        if any(ord(character) < 32 for character in folder):
+            raise ValueError("folder name contains control characters")
+        return folder
+
+    def update_folder_exact(self, filename: str, sha256: str, folder: str):
+        entry = self.exact_entry(filename, sha256)
+        entry.folder = self.normalize_folder(folder)
+        self._save()
+        return entry
+
+    def rename_folder(self, current: str, replacement: str) -> int:
+        current = self.normalize_folder(current)
+        replacement = self.normalize_folder(replacement)
+        if not current or not replacement:
+            raise ValueError("folder name is required")
+        matches = [entry for entry in self._entries if entry.folder == current]
+        if not matches:
+            raise ValueError("folder was not found")
+        if replacement.casefold() != current.casefold() and any(
+                entry.folder.casefold() == replacement.casefold()
+                for entry in self._entries if entry.folder):
+            raise ValueError("folder already exists")
+        for entry in matches:
+            entry.folder = replacement
+        self._save()
+        return len(matches)
+
+    def clear_folder(self, folder: str) -> int:
+        folder = self.normalize_folder(folder)
+        if not folder:
+            raise ValueError("folder name is required")
+        matches = [entry for entry in self._entries if entry.folder == folder]
+        if not matches:
+            raise ValueError("folder was not found")
+        for entry in matches:
+            entry.folder = ""
+        self._save()
+        return len(matches)
+
+    def remove(self, entry: BackupEntry):
+        self.remove_exact(entry.filename, entry.sha256)
+
+    def update_notes(self, entry: BackupEntry, notes: str):
+        self.update_notes_exact(entry.filename, entry.sha256, notes)
 
     def refresh(self):
         """Prune entries whose files have been deleted externally."""
-        self._entries = [e for e in self._entries if os.path.exists(e.path)]
+        self._entries = [
+            e for e in self._entries
+            if os.path.exists(self._entry_path(e.filename))
+        ]
         self._save()
 
     # ── Persistence ────────────────────────────────────────────────────────
@@ -182,5 +323,15 @@ class BackupManager:
             self._entries = []
 
     def _save(self):
-        with open(INDEX_FILE, "w", encoding="utf-8") as f:
-            json.dump([asdict(e) for e in self._entries], f, indent=2, ensure_ascii=False)
+        temporary = os.path.join(BACKUP_DIR, f".index-{uuid.uuid4().hex}.tmp")
+        try:
+            with open(temporary, "x", encoding="utf-8") as f:
+                json.dump([asdict(e) for e in self._entries], f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, INDEX_FILE)
+        finally:
+            try:
+                os.remove(temporary)
+            except FileNotFoundError:
+                pass

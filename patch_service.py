@@ -5,6 +5,11 @@ collisions for a selection (so the UI can gray out incompatible patches), and
 delegates the actual compose to engines.patcher.patch_ms41.build. Pure logic —
 no Qt, no file I/O.
 """
+import hashlib
+import json
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
+import checksum
 from ms41 import MS41ECU
 from engines.patcher import patch_ms41
 
@@ -16,6 +21,127 @@ PatchError = patch_ms41.PatchError
 PATCH_TAB_HIDDEN_IDS = frozenset({
     "door_0x43", "door_0x43_ms410", "door_0x43_ms411",
 })
+
+
+_SWITCH_INPUT_CHOICES = (
+    ("off", "Off", 0xFF),
+    ("always", "Always on (RPM limiter)", 0x00),
+    ("pin80", "Switch - Pin 80", 0x01),
+    ("pin81", "Switch - Pin 81", 0x02),
+    ("pin82", "Switch - Pin 82", 0x04),
+)
+
+# Only patch-owned, user-facing controls belong here. Descriptor ``cave.cals``
+# also contains internal markers; keeping this allow-list separate prevents a
+# UI or caller from turning every symbolic address into a write primitive.
+_EDITABLE_PARAMETER_FAMILIES = {
+    "ignition_cut_v9": (
+        {
+            "id": "CUTSW", "label": "Switch input", "kind": "choice",
+            "codec": "choice", "choices": _SWITCH_INPUT_CHOICES,
+            "description": "Arms the standalone ignition-cut limiter.",
+        },
+        {
+            "id": "CUTRPM", "label": "RPM limit", "kind": "number",
+            "codec": "rpm_u8", "units": "RPM", "minimum": "0",
+            "maximum": "8160", "step": "32", "decimals": 0,
+            "description": "Spark-cut threshold, stored in 32 RPM steps.",
+        },
+        {
+            "id": "CUT_HYST", "label": "RPM hysteresis", "kind": "number",
+            "codec": "rpm_hysteresis_u8", "units": "RPM", "minimum": "0",
+            "maximum": "8128", "step": "32", "decimals": 0,
+            "specials": (("@legacy_zero", "Legacy zero hysteresis", 0xFF),),
+            "description": "Spark resumes below the cut RPM by this amount.",
+        },
+        {
+            "id": "CUT_IPW", "label": "Fixed injector pulse width",
+            "kind": "number", "codec": "ipw_u16le", "units": "ms",
+            "minimum": "0", "maximum": "349.95156", "step": "0.00534",
+            "decimals": 5,
+            "specials": (("@stock", "Preserve stock injection", 0xFFFF),),
+            "description": "Injector pulse width while standalone spark cut is active.",
+        },
+    ),
+    "launch_control_v7": (
+        {
+            "id": "LC_SW", "label": "Switch / mode", "kind": "choice",
+            "codec": "choice", "choices": _SWITCH_INPUT_CHOICES,
+            "description": "Arms Launch Control from the selected input.",
+        },
+        {
+            "id": "LC_CUTTYPE", "label": "Cut type", "kind": "choice",
+            "codec": "choice", "choices": (
+                ("fuel", "Fuel cut (stock injector limiter)", 0x00),
+                ("ignition", "Ignition cut (shared V9 engine)", 0x01),
+            ),
+            "description": "Selects the launch limiter strategy.",
+        },
+        {
+            "id": "LC_CLUTCHPOL", "label": "Clutch polarity", "kind": "choice",
+            "codec": "choice", "choices": (
+                ("active_high", "Active-high (depressed = 5V)", 0x00),
+                ("active_low", "Active-low (depressed = 0V)", 0x01),
+            ),
+            "description": "Electrical sense of the clutch or toggle input.",
+        },
+        {
+            "id": "LC_MAXRPM", "label": "Soft cut RPM", "kind": "number",
+            "codec": "rpm_u8", "units": "RPM", "minimum": "0",
+            "maximum": "8160", "step": "32", "decimals": 0,
+            "description": "Launch limiter threshold, stored in 32 RPM steps.",
+        },
+        {
+            "id": "LC_ARMSPEED", "label": "Arm speed", "kind": "number",
+            "codec": "u8", "units": "km/h", "minimum": "0",
+            "maximum": "255", "step": "1", "decimals": 0,
+            "description": "A cleared launch latch can arm below this speed.",
+        },
+        {
+            "id": "LC_MAXSPEED", "label": "Maximum speed", "kind": "number",
+            "codec": "u8", "units": "km/h", "minimum": "0",
+            "maximum": "255", "step": "1", "decimals": 0,
+            "description": "Releases the launch latch at this speed.",
+        },
+        {
+            "id": "LC_MINTPS", "label": "Minimum throttle", "kind": "number",
+            "codec": "tps_u8", "units": "%", "minimum": "0",
+            "maximum": "119.85", "step": "0.47", "decimals": 2,
+            "description": "Clears the launch latch below this throttle value.",
+        },
+        {
+            "id": "LC_HARDRPM", "label": "Hard cut RPM", "kind": "number",
+            "codec": "rpm_reserved_u8", "units": "RPM", "minimum": "0",
+            "maximum": "8128", "step": "32", "decimals": 0,
+            "specials": (("@auto", "Automatic: soft cut + 96 RPM", 0xFF),),
+            "description": "Upper fuel-cut threshold; ignition mode ignores it.",
+        },
+        {
+            "id": "LC_HYST", "label": "Ignition RPM hysteresis",
+            "kind": "number", "codec": "rpm_hysteresis_u8", "units": "RPM",
+            "minimum": "0", "maximum": "8128", "step": "32", "decimals": 0,
+            "specials": (("@legacy_zero", "Legacy zero hysteresis", 0xFF),),
+            "description": "Spark resumes below the soft cut by this amount.",
+        },
+        {
+            "id": "LC_IPW", "label": "Ignition fixed injector pulse width",
+            "kind": "number", "codec": "ipw_u16le", "units": "ms",
+            "minimum": "0", "maximum": "349.95156", "step": "0.00534",
+            "decimals": 5,
+            "specials": (("@stock", "Preserve stock injection", 0xFFFF),),
+            "description": "Injector pulse width while launch spark cut is active.",
+        },
+    ),
+    "vanos_minrpm": (
+        {
+            "id": "VANOSRPM", "label": "Minimum RPM (closed throttle)",
+            "kind": "number", "codec": "rpm_reserved_u8", "units": "RPM",
+            "minimum": "0", "maximum": "8128", "step": "32", "decimals": 0,
+            "specials": (("@stock", "Stock behavior", 0xFF),),
+            "description": "Minimum RPM for closed-throttle VANOS engagement.",
+        },
+    ),
+}
 
 
 def definitions():
@@ -37,6 +163,357 @@ def base_version(data):
         if patch_ms41.check_base(data, version) is None
     ]
     return matches[0] if len(matches) == 1 else None
+
+
+def _parameter_family(patch):
+    return str(patch.get("family_id") or patch.get("id") or "")
+
+
+def _descriptor_token(patch):
+    payload = json.dumps(
+        {
+            "patch": patch,
+            "parameters": _EDITABLE_PARAMETER_FAMILIES.get(
+                _parameter_family(patch), ()),
+        },
+        sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _parameter_width(spec):
+    return 2 if spec["codec"] == "ipw_u16le" else 1
+
+
+def _is_calibration_offset(offset):
+    storage_address = (int(offset) ^ 0x4000) - MS41ECU.TUNE_DS2_BASE
+    return 0 <= storage_address < MS41ECU.TUNE_SIZE
+
+
+def _parameter_location(patch, spec):
+    cals = patch.get("cave", {}).get("cals", {})
+    parameter_id = spec["id"]
+    if parameter_id not in cals:
+        raise PatchError(
+            f"patch '{patch.get('id')}' does not declare calibration {parameter_id}"
+        )
+    offset = int(cals[parameter_id])
+    width = _parameter_width(spec)
+    if not all(_is_calibration_offset(index) for index in range(offset, offset + width)):
+        raise PatchError(
+            f"patch parameter {parameter_id} is outside the calibration partition"
+        )
+    parameter_range = (offset, offset + width)
+    if any(patch_ms41._overlap(parameter_range, edit_range)
+           for edit_range in patch_ms41._ranges(patch)):
+        raise PatchError(
+            f"patch parameter {parameter_id} overlaps executable patch bytes"
+        )
+    return offset, width
+
+
+def _raw_parameter_value(image, patch, spec):
+    offset, width = _parameter_location(patch, spec)
+    raw = int.from_bytes(image[offset:offset + width], "little")
+    return raw, offset, width
+
+
+def _special_for_raw(spec, raw):
+    return next(
+        ((token, label) for token, label, value in spec.get("specials", ())
+         if value == raw),
+        None,
+    )
+
+
+def _format_decimal(value, decimals):
+    if decimals == 0:
+        return str(int(value))
+    return f"{value:.{decimals}f}"
+
+
+def _decode_parameter(spec, raw):
+    if spec["kind"] == "choice":
+        for token, label, value in spec["choices"]:
+            if value == raw:
+                return token, label
+        raw_hex = f"{raw:0{_parameter_width(spec) * 2}X}"
+        return f"@raw:{raw_hex}", f"Unknown (0x{raw_hex})"
+
+    special = _special_for_raw(spec, raw)
+    if special:
+        return special
+
+    codec = spec["codec"]
+    if codec.startswith("rpm_"):
+        value = Decimal(raw * 32)
+    elif codec == "u8":
+        value = Decimal(raw)
+    elif codec == "tps_u8":
+        value = Decimal(raw) * Decimal("0.47")
+    elif codec == "ipw_u16le":
+        value = Decimal(raw) * Decimal("0.00534")
+    else:
+        raise PatchError(f"unsupported patch parameter codec: {codec}")
+    text = _format_decimal(value, int(spec.get("decimals", 0)))
+    display = f"{text} {spec.get('units', '')}".strip()
+    return text, display
+
+
+def _decimal_value(value, parameter_id):
+    try:
+        parsed = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError):
+        raise PatchError(f"{parameter_id} needs a numeric value") from None
+    if not parsed.is_finite():
+        raise PatchError(f"{parameter_id} needs a finite numeric value")
+    return parsed
+
+
+def _rounded_raw(value, scale):
+    return int((value / scale).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _encode_parameter(spec, value):
+    token = str(value).strip()
+    if spec["kind"] == "choice":
+        for choice_token, _label, raw in spec["choices"]:
+            if token == choice_token:
+                return raw
+        raise PatchError(f"invalid choice for {spec['id']}: {token}")
+
+    for special_token, _label, raw in spec.get("specials", ()):
+        if token == special_token:
+            return raw
+    if token.startswith("@"):
+        raise PatchError(f"invalid special value for {spec['id']}: {token}")
+
+    number = _decimal_value(token, spec["id"])
+    minimum = Decimal(spec["minimum"])
+    maximum = Decimal(spec["maximum"])
+    if not minimum <= number <= maximum:
+        raise PatchError(
+            f"{spec['id']} must be between {minimum} and {maximum} {spec.get('units', '')}".strip()
+        )
+
+    codec = spec["codec"]
+    if codec.startswith("rpm_"):
+        raw = _rounded_raw(number, Decimal(32))
+        if number != Decimal(raw * 32):
+            raise PatchError(f"{spec['id']} must use 32 RPM steps")
+    elif codec == "u8":
+        raw = _rounded_raw(number, Decimal(1))
+        if number != Decimal(raw):
+            raise PatchError(f"{spec['id']} must be a whole number")
+    elif codec == "tps_u8":
+        raw = _rounded_raw(number, Decimal("0.47"))
+    elif codec == "ipw_u16le":
+        raw = _rounded_raw(number, Decimal("0.00534"))
+    else:
+        raise PatchError(f"unsupported patch parameter codec: {codec}")
+
+    max_raw = (1 << (_parameter_width(spec) * 8)) - 1
+    reserved = {raw_value for _token, _label, raw_value in spec.get("specials", ())}
+    if not 0 <= raw <= max_raw or raw in reserved:
+        raise PatchError(f"{spec['id']} is not representable without a sentinel value")
+    return raw
+
+
+def _public_parameter(image, patch, spec):
+    raw, _offset, width = _raw_parameter_value(image, patch, spec)
+    current, current_display = _decode_parameter(spec, raw)
+    return {
+        "id": spec["id"],
+        "label": spec["label"],
+        "description": spec.get("description", ""),
+        "kind": spec["kind"],
+        "units": spec.get("units", ""),
+        "minimum": spec.get("minimum"),
+        "maximum": spec.get("maximum"),
+        "step": spec.get("step"),
+        "decimals": int(spec.get("decimals", 0)),
+        "current": current,
+        "current_display": current_display,
+        "raw_hex": raw.to_bytes(width, "little").hex().upper(),
+        "choices": [
+            {"value": token, "label": label}
+            for token, label, _raw in spec.get("choices", ())
+        ],
+        "specials": [
+            {"value": token, "label": label}
+            for token, label, _raw in spec.get("specials", ())
+        ],
+    }
+
+
+def editable_parameters(data):
+    """Return controls for exact, current patches installed in a 256 KiB ROM.
+
+    Addresses and codecs remain private to this service. Consumers receive only
+    stable patch/parameter ids and semantic values.
+    """
+    data = bytes(data)
+    if len(data) != MS41ECU.FULL_ROM_SIZE:
+        raise PatchError("patch parameters require an exact 256 KiB full ROM")
+    if base_version(data) is None:
+        raise PatchError("patch parameters require one exact, non-hybrid ROM base")
+
+    all_patches = patch_ms41.load_patches()
+    available = {entry["id"]: entry for entry in available_patches(data)}
+    checksum_ok, _checksum_details = checksum.verify_checksum(bytearray(data))
+    result = []
+    for patch_id, entry in available.items():
+        patch = all_patches[patch_id]
+        specs = _EDITABLE_PARAMETER_FAMILIES.get(_parameter_family(patch))
+        if not specs or not entry.get("installed") or entry.get("deprecated"):
+            continue
+        parameters = [_public_parameter(data, patch, spec) for spec in specs]
+        result.append({
+            "patch_id": patch_id,
+            "title": patch.get("title", patch_id),
+            "version": patch.get("version", ""),
+            "descriptor_token": _descriptor_token(patch),
+            "editable": bool(entry.get("ok") and checksum_ok),
+            "blocked_reason": (
+                "" if entry.get("ok") and checksum_ok
+                else entry.get("badge") if not entry.get("ok")
+                else "Source checksum verification failed."
+            ),
+            "parameters": parameters,
+        })
+    return result
+
+
+def _validate_parameter_relationships(image, patch, specs):
+    if _parameter_family(patch) != "launch_control_v7":
+        return
+    by_id = {spec["id"]: spec for spec in specs}
+
+    def raw(parameter_id):
+        return _raw_parameter_value(image, patch, by_id[parameter_id])[0]
+
+    if raw("LC_SW") == 0xFF:
+        return
+    if raw("LC_MAXSPEED") <= raw("LC_ARMSPEED"):
+        raise PatchError("LC_MAXSPEED must be greater than LC_ARMSPEED")
+    if raw("LC_CUTTYPE") == 0x00 and raw("LC_HARDRPM") != 0xFF:
+        if raw("LC_HARDRPM") < raw("LC_MAXRPM"):
+            raise PatchError("LC_HARDRPM must be at or above LC_MAXRPM")
+
+
+def apply_parameter_changes(
+        base_data, patch_id, changes, *, expected_sha256=None,
+        expected_descriptor_token=None):
+    """Apply declared semantic parameter changes to one exact installed patch.
+
+    The result may differ only at the requested parameter bytes and calibration
+    checksum stores. Returns ``(image, report)`` and never mutates ``base_data``.
+    """
+    source = bytes(base_data)
+    if len(source) != MS41ECU.FULL_ROM_SIZE:
+        raise PatchError("patch parameters require an exact 256 KiB full ROM")
+    source_sha = hashlib.sha256(source).hexdigest()
+    if expected_sha256 and expected_sha256.lower() != source_sha:
+        raise PatchError("the source ROM changed after its parameters were opened")
+    if not isinstance(changes, dict) or not changes:
+        raise PatchError("choose at least one patch parameter change")
+    if not all(isinstance(key, str) and isinstance(value, str)
+               for key, value in changes.items()):
+        raise PatchError("patch parameter changes must use string ids and values")
+
+    all_patches = patch_ms41.load_patches()
+    patch = all_patches.get(str(patch_id))
+    if patch is None:
+        raise PatchError(f"no such patch: {patch_id}")
+    descriptor_token = _descriptor_token(patch)
+    if expected_descriptor_token and expected_descriptor_token != descriptor_token:
+        raise PatchError("the patch definition changed after its parameters were opened")
+
+    groups = {group["patch_id"]: group for group in editable_parameters(source)}
+    group = groups.get(str(patch_id))
+    if group is None:
+        raise PatchError(f"patch '{patch_id}' is not an editable current installation")
+    if not group["editable"]:
+        raise PatchError(group["blocked_reason"] or "patch parameters are not editable")
+
+    specs = _EDITABLE_PARAMETER_FAMILIES[_parameter_family(patch)]
+    by_id = {spec["id"]: spec for spec in specs}
+    unknown = sorted(set(changes) - set(by_id))
+    if unknown:
+        raise PatchError("unknown patch parameter(s): " + ", ".join(unknown))
+
+    checksum_ok, checksum_details = checksum.verify_checksum(bytearray(source))
+    if not checksum_ok:
+        raise PatchError("source checksum verification failed: " + "; ".join(checksum_details))
+
+    working = bytearray(source)
+    authorized_parameter_bytes = set()
+    expected_parameter_bytes = {}
+    report_changes = []
+    for parameter_id, requested in changes.items():
+        spec = by_id[parameter_id]
+        old_raw, offset, width = _raw_parameter_value(source, patch, spec)
+        new_raw = _encode_parameter(spec, requested)
+        if new_raw == old_raw:
+            continue
+        working[offset:offset + width] = new_raw.to_bytes(width, "little")
+        authorized_parameter_bytes.update(range(offset, offset + width))
+        expected_parameter_bytes[parameter_id] = (offset, width, new_raw)
+        _old_value, old_display = _decode_parameter(spec, old_raw)
+        _new_value, new_display = _decode_parameter(spec, new_raw)
+        report_changes.append({
+            "parameter_id": parameter_id,
+            "label": spec["label"],
+            "before": old_display,
+            "after": new_display,
+            "before_raw": old_raw.to_bytes(width, "little").hex().upper(),
+            "after_raw": new_raw.to_bytes(width, "little").hex().upper(),
+        })
+    if not report_changes:
+        raise PatchError("the selected patch parameters are already set")
+
+    _validate_parameter_relationships(working, patch, specs)
+    corrected, correction_details = checksum.correct_checksums(
+        working, correct_program=False)
+    corrected = bytes(corrected)
+    for parameter_id, (offset, width, expected_raw) in expected_parameter_bytes.items():
+        actual_raw = int.from_bytes(corrected[offset:offset + width], "little")
+        if actual_raw != expected_raw:
+            raise PatchError(
+                f"patch parameter {parameter_id} overlaps checksum storage"
+            )
+    checksum_bytes = {
+        index for index, (before, after) in enumerate(zip(working, corrected))
+        if before != after
+    }
+    if any(not _is_calibration_offset(index) for index in checksum_bytes):
+        raise PatchError("parameter editing attempted a non-calibration checksum change")
+    final_diff = {
+        index for index, (before, after) in enumerate(zip(source, corrected))
+        if before != after
+    }
+    allowed_diff = authorized_parameter_bytes | checksum_bytes
+    if not final_diff <= allowed_diff:
+        raise PatchError("parameter editing changed bytes outside its declared scope")
+
+    final_ok, final_details = checksum.verify_checksum(bytearray(corrected))
+    if not final_ok:
+        raise PatchError("result checksum verification failed: " + "; ".join(final_details))
+    if base_version(corrected) != base_version(source):
+        raise PatchError("parameter editing changed the ROM family fingerprint")
+    if not patch_ms41.is_applied(corrected, patch):
+        raise PatchError("parameter editing damaged the installed patch signature")
+
+    return corrected, {
+        "patch_id": patch_id,
+        "title": patch.get("title", patch_id),
+        "source_sha256": source_sha,
+        "result_sha256": hashlib.sha256(corrected).hexdigest(),
+        "descriptor_token": descriptor_token,
+        "changes": report_changes,
+        "checksum_details": correction_details,
+        "changed_byte_count": len(final_diff),
+    }
 
 
 def _installed_patch_state(data, all_patches=None):

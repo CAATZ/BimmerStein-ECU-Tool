@@ -6,8 +6,8 @@ Telegram mode: MS41 DS2 command 0x0B/0x01 — one registered-address response
   containing every displayed RAM parameter.
 
 Standard mode note:
-  Byte layouts, offsets, and scaling factors are derived from BMW INPA
-  MS41.PRG source analysis and community reverse-engineering.
+  Byte layouts, offsets, and scaling factors are packaged compatibility
+  profiles selected for the detected firmware.
 
 Telegram mode note:
   Addresses are 24-bit C166 logical addresses for the Siemens 80C166
@@ -64,8 +64,8 @@ class MS41Parameter:
         return "—" if value is None else self.fmt.format(value)
 
 
-# Source: BMW INPA MS41.PRG analysis, NCS Expert traces, community docs.
-# Scaling is approximate — verify against your INPA version for critical use.
+# Legacy standard-mode scaling is approximate; verify critical measurements
+# against a calibrated instrument.
 
 MS41_PARAMETERS: List[MS41Parameter] = [
     # LID 0x01 — Basic engine values
@@ -145,6 +145,7 @@ _WBO2_ENABLE_ADDR = 0xFD22
 _WBO2_ENABLE_MASK = 0x0100
 _NARROWBAND_EMULATION_ADDR = 0xFD5A
 _NARROWBAND_EMULATION_MASK = 0x0004
+_CUT_STATE_ADDR = 0xE847
 # Calibration SA 0x33C0 is visible to a DS2 CPU-memory read at 0x133C0.
 # Its little-endian word is the live 10-bit ADC source pointer used by FUN_024570.
 _WBO2_INPUT_SELECT_DS2_ADDR = 0x133C0
@@ -185,6 +186,46 @@ _PROFILE_DISPLAY_ROWS = [
     ("Wideband Input Voltage", "V"),
     ("Wideband AFR", "AFR"),
     ("AFR Target", "AFR"),
+    ("Cut Input 80", ""),
+    ("Cut Input 81", ""),
+    ("Cut Input 82", ""),
+    ("Ignition Cut Switch", ""),
+    ("Ignition Cut RPM", "RPM"),
+    ("Cut Hysteresis", "RPM"),
+    ("Cut Fixed IPW", "ms"),
+    ("Launch Control Switch", ""),
+    ("Launch Cut Type", ""),
+    ("Launch Clutch Polarity", ""),
+    ("Launch Control RPM", "RPM"),
+    ("Launch Arm Speed", "km/h"),
+    ("Launch Max Speed", "km/h"),
+    ("Launch Min TPS", "%"),
+    ("Launch Hard Cut RPM", "RPM"),
+    ("Launch Ignition Hysteresis", "RPM"),
+    ("Launch Ignition Fixed IPW", "ms"),
+    ("Ignition Cut Request", ""),
+    ("Launch Ignition Request", ""),
+    ("Launch Fuel Cut Active", ""),
+    ("Intentional Combustion Cut", ""),
+    ("Cut Patch Runtime", ""),
+    ("Launch Armed", ""),
+    ("Launch Legacy FD5A.7", ""),
+    ("Stock Limiter Active", ""),
+    ("Fuel Cut Stage Count", ""),
+    ("Cut RPM", "RPM"),
+    ("Launch TPS", "%"),
+    ("Launch Speed", "km/h"),
+    ("Fuel Trim Additive", "ms"),
+    ("Fuel Trim Additive B2", "ms"),
+    ("Lambda Regulation B1", ""),
+    ("Lambda Regulation B2", ""),
+    ("O2 Heater Front B1", "%"),
+    ("O2 Heater Front B2", "%"),
+    ("O2 Heater Rear B1", "%"),
+    ("O2 Heater Rear B2", "%"),
+    ("Lambda Monitor Counter", ""),
+    ("Lambda Functions FD0E", ""),
+    ("Lambda Functions FD10", ""),
 ]
 PROFILE_DISPLAY_NAMES = frozenset(name for name, _unit in _PROFILE_DISPLAY_ROWS)
 _PROFILE_STATUS_NAMES = frozenset({
@@ -257,6 +298,45 @@ _ECU_FAMILY = {
     "1406464": "1406464",   # MS41.2 E36 M3 S52
     "SHINDE1": "1406464",   # MS41.3 bench build (shares MS41.2 RAM layout)
 }
+
+# Patch/runtime addresses are grounded in the four V9/V7 descriptors and the
+# matching RomRaider logger definitions. Full-read file offsets for patch
+# calibrations are converted to CPU-memory addresses with offset XOR 0x4000.
+_CUT_LIVE_LAYOUT = {
+    "1429861": {
+        "input": ((0xFD51, 0x02), (0xFD51, 0x01), (0xFD50, 0x80)),
+        "rpm": 0xFAE6, "speed": 0xEDF4, "tps": 0xE8D0, "stage": 0xED51,
+        "ignition_cals": 0x13010, "launch_cals": 0x13020,
+        "launch_latch": 0xFD80,
+        "sreg": (0xED58, 0xED92), "heater_front": (0xEDE3, 0xEDEB),
+    },
+    "1437806": {
+        "input": ((0xFD61, 0x02), (0xFD61, 0x01), (0xFD60, 0x80)),
+        "rpm": 0xFC3C, "speed": 0xF1BE, "tps": 0xE8D0, "stage": 0xF02B,
+        "ignition_cals": 0x13700, "launch_cals": 0x13710,
+        "launch_latch": 0xFDB6,
+        "sreg": (0xF032, 0xF0EE), "heater_front": (0xF1AF, 0xF1B7),
+        "heater_rear": (0xF07C, 0xF138), "lambda_counter": 0xEDE6,
+    },
+    "1406464": {
+        "input": ((0xFD61, 0x02), (0xFD61, 0x01), (0xFD60, 0x80)),
+        "rpm": 0xFC3C, "speed": 0xF19A, "tps": 0xE8D0, "stage": 0xF013,
+        "ignition_cals": 0x12A65, "launch_cals": 0x1352C,
+        "launch_latch": 0xFDB6,
+        "sreg": (0xF01A, 0xF0C6), "heater_front": (0xF189, 0xF191),
+        "heater_rear": (0xF064, 0xF110), "lambda_counter": 0xEDE6,
+        "lambda_functions": (0xFD0E, 0xFD10),
+    },
+    "SHINDE1": {
+        "input": ((0xFD61, 0x02), (0xFD61, 0x01), (0xFD60, 0x80)),
+        "rpm": 0xFC3C, "speed": 0xF19A, "tps": 0xE8D0, "stage": 0xF013,
+        "ignition_cals": 0x12A65, "launch_cals": 0x147E0,
+        "launch_latch": 0xFDB6,
+        "sreg": (0xF01A, 0xF0C6), "heater_front": (0xF189, 0xF191),
+        "heater_rear": (0xF064, 0xF110), "lambda_counter": 0xEDE6,
+        "lambda_functions": (0xFD0E, 0xFD10),
+    },
+}
 _LIVE_SHARED_IDS = frozenset({
     "1405854", "1406464", "SHINDE1", "1429373", "1429861", "1432401",
     "1437806", "1440176",
@@ -313,8 +393,158 @@ def _profile_telegram_params(profile: str, wideband_input_addr: int):
     ]
 
 
+def _cut_telegram_params(ecu_id, fam_map):
+    layout = _CUT_LIVE_LAYOUT.get(ecu_id)
+    if layout is None:
+        return []
+
+    def state_param(name, address, mask):
+        return TelegramParameter(
+            name, "", address, 1, False,
+            lambda x: _state(x & mask), "{}",
+        )
+
+    def selector(value):
+        return {
+            0x00: "Always", 0x01: "Input 80", 0x02: "Input 81",
+            0x04: "Input 82", 0xFF: "Off",
+        }.get(value, f"Invalid 0x{value:02X}")
+    ignition_cals = layout["ignition_cals"]
+    launch_cals = layout["launch_cals"]
+    params = [
+        *[
+            state_param(f"Cut Input {pin}", address, mask)
+            for pin, (address, mask) in zip((80, 81, 82), layout["input"])
+        ],
+        TelegramParameter(
+            "Ignition Cut Switch", "", ignition_cals, 1, False,
+            selector, "{}",
+        ),
+        TelegramParameter(
+            "Ignition Cut RPM", "RPM", ignition_cals + 1, 1, False,
+            lambda x: x * 32, "{:.0f}",
+        ),
+        TelegramParameter(
+            "Cut Hysteresis", "RPM", ignition_cals + 2, 1, False,
+            lambda x: "Legacy (0)" if x == 0xFF else str(x * 32), "{}",
+        ),
+        TelegramParameter(
+            "Cut Fixed IPW", "ms", ignition_cals + 3, 2, False,
+            lambda x: "Stock" if x == 0xFFFF else f"{x * 0.00534:.2f}", "{}",
+        ),
+        TelegramParameter(
+            "Launch Control Switch", "", launch_cals, 1, False,
+            selector, "{}",
+        ),
+        TelegramParameter(
+            "Launch Cut Type", "", launch_cals + 1, 1, False,
+            lambda x: {0: "Fuel", 1: "Ignition"}.get(x, f"Invalid {x}"), "{}",
+        ),
+        TelegramParameter(
+            "Launch Clutch Polarity", "", launch_cals + 2, 1, False,
+            lambda x: "Active-low (0V)" if x else "Active-high (5V)", "{}",
+        ),
+        TelegramParameter(
+            "Launch Control RPM", "RPM", launch_cals + 3, 1, False,
+            lambda x: x * 32, "{:.0f}",
+        ),
+        TelegramParameter(
+            "Launch Arm Speed", "km/h", launch_cals + 4, 1, False,
+            lambda x: x, "{:.0f}",
+        ),
+        TelegramParameter(
+            "Launch Max Speed", "km/h", launch_cals + 5, 1, False,
+            lambda x: x, "{:.0f}",
+        ),
+        TelegramParameter(
+            "Launch Min TPS", "%", launch_cals + 6, 1, False,
+            lambda x: x * 0.47, "{:.0f}",
+        ),
+        TelegramParameter(
+            "Launch Hard Cut RPM", "RPM", launch_cals + 7, 1, False,
+            lambda x: "Soft + 96" if x == 0xFF else str(x * 32), "{}",
+        ),
+        TelegramParameter(
+            "Launch Ignition Hysteresis", "RPM", launch_cals + 8, 1, False,
+            lambda x: "Zero (0)" if x == 0xFF else str(x * 32), "{}",
+        ),
+        TelegramParameter(
+            "Launch Ignition Fixed IPW", "ms", launch_cals + 9, 2, False,
+            lambda x: "Stock" if x == 0xFFFF else f"{x * 0.00534:.2f}", "{}",
+        ),
+        state_param("Ignition Cut Request", _CUT_STATE_ADDR, 0x01),
+        state_param("Launch Ignition Request", _CUT_STATE_ADDR, 0x02),
+        state_param("Launch Fuel Cut Active", _CUT_STATE_ADDR, 0x04),
+        TelegramParameter(
+            "Intentional Combustion Cut", "", _CUT_STATE_ADDR, 1, False,
+            lambda x: _state((x & 0xF0) == 0xA0 and x & 0x07), "{}",
+        ),
+        TelegramParameter(
+            "Cut Patch Runtime", "", _CUT_STATE_ADDR, 1, False,
+            lambda x: _state((x & 0xF0) == 0xA0), "{}",
+        ),
+        state_param("Launch Armed", layout["launch_latch"], 0x40),
+        state_param("Launch Legacy FD5A.7", 0xFD5A, 0x80),
+        state_param("Stock Limiter Active", 0xFD13, 0x80),
+        TelegramParameter(
+            "Fuel Cut Stage Count", "", layout["stage"], 1, False,
+            lambda x: x, "{}",
+        ),
+        TelegramParameter(
+            "Cut RPM", "RPM", layout["rpm"], 1, False,
+            lambda x: x * 32, "{:.0f}",
+        ),
+        TelegramParameter(
+            "Launch TPS", "%", layout["tps"], 1, False,
+            lambda x: x * 0.47, "{:.1f}",
+        ),
+        TelegramParameter(
+            "Launch Speed", "km/h", layout["speed"], 1, False,
+            lambda x: x, "{:.0f}",
+        ),
+        TelegramParameter(
+            "Fuel Trim Additive", "ms", fam_map["Fuel Trim Additive"],
+            2, False, lambda x: (x - 32768) * 0.00534, "{:.2f}",
+        ),
+        TelegramParameter(
+            "Fuel Trim Additive B2", "ms", fam_map["Fuel Trim Additive B2"],
+            2, False, lambda x: (x - 32768) * 0.00534, "{:.2f}",
+        ),
+        state_param("Lambda Regulation B1", layout["sreg"][0], 0x08),
+        state_param("Lambda Regulation B2", layout["sreg"][1], 0x08),
+        *[
+            TelegramParameter(
+                f"O2 Heater Front B{bank}", "%", address, 1, False,
+                lambda x: x * 100 / 255, "{:.1f}",
+            )
+            for bank, address in enumerate(layout["heater_front"], 1)
+        ],
+    ]
+    params.extend(
+        TelegramParameter(
+            f"O2 Heater Rear B{bank}", "%", address, 1, False,
+            lambda x: x * 100 / 255, "{:.1f}",
+        )
+        for bank, address in enumerate(layout.get("heater_rear", ()), 1)
+    )
+    if "lambda_counter" in layout:
+        params.append(TelegramParameter(
+            "Lambda Monitor Counter", "", layout["lambda_counter"],
+            2, False, lambda x: x, "{}",
+        ))
+    params.extend(
+        TelegramParameter(
+            f"Lambda Functions FD{address & 0xFF:02X}", "", address,
+            2, False, lambda x: f"0x{x:04X}", "{}",
+        )
+        for address in layout.get("lambda_functions", ())
+    )
+    return params
+
+
 def telegram_params_for(ecu_id, profile: str = PROFILE_STANDARD,
-                        wideband_input_addr: int = _DEFAULT_WBO2_INPUT_ADDR
+                        wideband_input_addr: int = _DEFAULT_WBO2_INPUT_ADDR,
+                        include_cut: bool = False,
                         ) -> List["TelegramParameter"]:
     """
     Build the telegram parameter list for a given ECU ID. Shared parameters and
@@ -338,7 +568,19 @@ def telegram_params_for(ecu_id, profile: str = PROFILE_STANDARD,
             continue                                  # varying param, unknown for this ID
         params.append(TelegramParameter(name, unit, addr, length, signed, convert, fmt))
     params.extend(_profile_telegram_params(profile, wideband_input_addr))
+    if include_cut:
+        params.extend(_cut_telegram_params(ecu_id, fam_map))
     return params
+
+
+def live_data_supported(ecu_id) -> bool:
+    """Whether the packaged logger has at least one exact-ID live channel."""
+    return bool(telegram_params_for(ecu_id))
+
+
+def adaptation_read_supported(ecu_id) -> bool:
+    """Whether the packaged definition owner has exact knock-table axes."""
+    return str(ecu_id or "") in _ADAPTATION_AXES
 
 
 def read_adaptations(ds2, ecu_id):
@@ -615,19 +857,23 @@ class LiveDataPoller:
     """
 
     def __init__(self, interval: float = 0.5, use_telegram: bool = False,
-                 ecu_id=None, ecu_variant=None, ds2=None):
+                 ecu_id=None, ecu_variant=None, ds2=None, log_columns=None,
+                 telegram_fallback: bool = True):
         self._ds2          = ds2          # DS2Interface — the live ECU connection
         self._interval     = interval
         self._use_telegram = use_telegram
+        self._telegram_fallback = telegram_fallback
         self._ecu_id       = ecu_id
         self._ecu_variant  = ecu_variant
         self._profile      = PROFILE_STANDARD
         self._profile_ready = False
+        self._cut_patch_active = False
         self._wideband_input_addr = _DEFAULT_WBO2_INPUT_ADDR
         # Resolve only parameters explicitly mapped for this ECU ID.
         self._tel_params   = telegram_params_for(ecu_id)
         self._tel_blocks   = _build_telegram_blocks(self._tel_params)
         self._batch_layout = batch_layout_for(ecu_id)
+        self._log_columns = tuple(log_columns) if log_columns is not None else None
         self._active_profile_names = set()
         self._stop         = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -641,6 +887,8 @@ class LiveDataPoller:
         self._csv_last_flush = 0.0
         self._samples = 0
         self._sample_started = 0.0
+        self._pending_log_path = None
+        self._terminal_error = None
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -651,10 +899,10 @@ class LiveDataPoller:
         with self._lock:
             self._latest.clear()
             self._errors.clear()
+            self._terminal_error = None
         self._samples = 0
         self._sample_started = time.monotonic()
-        if log_path:
-            self._open_csv(log_path)
+        self._pending_log_path = log_path
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
 
@@ -670,10 +918,33 @@ class LiveDataPoller:
         with self._lock:
             return dict(self._latest)
 
+    def resolved_rows(self) -> List[Tuple[str, str]]:
+        """Ordered channels selected by the exact ECU/profile owner."""
+        rows = [(param.name, param.unit) for param in self._tel_params]
+        rows.extend(
+            row for row in _PROFILE_DISPLAY_ROWS
+            if row[0] in self._active_profile_names
+        )
+        return list(dict.fromkeys(rows))
+
+    def display_values(self) -> List[Tuple[str, str, str]]:
+        """Ordered display-ready values for the currently resolved channels."""
+        latest = self.latest_values()
+        return [
+            (name, latest[name][0], latest[name][1])
+            for name, _unit in self.resolved_rows()
+            if name in latest and latest[name][0] != "—"
+        ]
+
     def pop_errors(self) -> List[str]:
         with self._lock:
             errs, self._errors = list(self._errors), []
         return errs
+
+    @property
+    def terminal_error(self):
+        with self._lock:
+            return self._terminal_error
 
     @property
     def active_profile_names(self):
@@ -741,9 +1012,20 @@ class LiveDataPoller:
                             "showing the Front O2 Bank 1 input")
 
         key = self._ecu_id
+        if self._ds2 is not None and str(key) in _CUT_LIVE_LAYOUT:
+            try:
+                cut_state = bytes(self._ds2.read_mem(_CUT_STATE_ADDR, 1))
+                if len(cut_state) != 1:
+                    raise ValueError(f"short read {len(cut_state)}/1")
+                self._cut_patch_active = (cut_state[0] & 0xF0) == 0xA0
+            except Exception as error:
+                with self._lock:
+                    self._errors.append(
+                        f"Cut-patch runtime status unavailable ({error})")
         self._profile = profile
         self._wideband_input_addr = input_addr
-        self._tel_params = telegram_params_for(key, profile, input_addr)
+        self._tel_params = telegram_params_for(
+            key, profile, input_addr, include_cut=self._cut_patch_active)
         self._tel_blocks = _build_telegram_blocks(self._tel_params)
         self._batch_layout = batch_layout_for(key, profile, input_addr)
         active_names = {
@@ -771,6 +1053,7 @@ class LiveDataPoller:
         reliable.  It uses the same addresses and scaling as batch mode.
         """
         self._prepare_live_profile()
+        self._ensure_csv()
         produced = {p.name for p in self._tel_params}
         with self._lock:
             for p in MS41_PARAMETERS:
@@ -816,15 +1099,19 @@ class LiveDataPoller:
         Parameter order and byte-widths match DS2_BATCH_LAYOUT.
         Every recurring sample is one poll response. Confirmed MS41.3 firmware uses
         small one-time reads before setup to select the correct live-data profile.
-        Falls back to individual cmd 0x06 reads if setup is unsupported; transient
-        poll errors are reported and retried without writing incomplete CSV rows.
+        Auto mode falls back to individual cmd 0x06 reads if setup is unsupported;
+        forced Telegram stops with an error. Transient poll errors are retried without
+        writing incomplete CSV rows.
         """
         self._prepare_live_profile()
+        self._ensure_csv()
+        if self._cut_patch_active:
+            self._telegram_unavailable(
+                "Cut-patch diagnostics require direct standard DS2 reads")
+            return
         if self._batch_layout is None:
-            with self._lock:
-                self._errors.append(
-                    "DS2 batch logging is not mapped for this ECU ID — using available cmd 0x06 parameters")
-            self._poll_loop_ds2_reads()
+            self._telegram_unavailable(
+                "Telegram logging is not mapped for this ECU ID")
             return
         # Try to run the setup frame; if it fails, fall back to individual reads.
         try:
@@ -833,9 +1120,7 @@ class LiveDataPoller:
                 entries=batch_wire_entries(self._batch_layout),
             )
         except Exception as e:
-            with self._lock:
-                self._errors.append(f"DS2 batch setup failed ({e}) — using cmd 0x06 reads")
-            self._poll_loop_ds2_reads()
+            self._telegram_unavailable(f"Telegram setup failed ({e})")
             return
 
         while not self._stop.is_set():
@@ -856,6 +1141,18 @@ class LiveDataPoller:
             self._samples += 1
             self._stop.wait(max(0.0, self._interval - (time.monotonic() - cycle_started)))
 
+    def _telegram_unavailable(self, message):
+        with self._lock:
+            if self._telegram_fallback:
+                self._errors.append(f"{message} — using standard DS2 reads")
+            else:
+                self._terminal_error = message
+                self._errors.append(message)
+        if self._telegram_fallback:
+            self._poll_loop_ds2_reads()
+        else:
+            self._stop.set()
+
     @property
     def csv_rows(self) -> int:
         return self._csv_rows
@@ -875,12 +1172,17 @@ class LiveDataPoller:
         #   Time     — elapsed seconds (float); MLV uses this as the primary time axis
         #   Datetime — human-readable full timestamp for post-processing reference
         #   then all standard params + telegram-only extras in display order
-        param_cols = [name for name, _unit in display_rows()]
-        headers = ["Time", "Datetime"] + param_cols
+        param_cols = self._log_columns or [name for name, _unit in self.resolved_rows()]
+        headers = ["Time", "Datetime"] + list(param_cols)
         self._csv_writer = csv.DictWriter(
             self._csv_file, fieldnames=headers, extrasaction="ignore"
         )
         self._csv_writer.writeheader()
+
+    def _ensure_csv(self):
+        if self._pending_log_path and self._csv_file is None:
+            path, self._pending_log_path = self._pending_log_path, None
+            self._open_csv(path)
 
     def _csv_row_base(self) -> dict:
         """Return the per-row dict pre-populated with Time and Datetime fields."""
@@ -907,6 +1209,7 @@ class LiveDataPoller:
                 self._csv_last_flush = now
 
     def _close_csv(self):
+        self._pending_log_path = None
         if self._csv_file:
             self._csv_file.close()
             self._csv_file   = None

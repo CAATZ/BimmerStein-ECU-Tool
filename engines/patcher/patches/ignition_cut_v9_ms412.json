@@ -1,0 +1,117 @@
+{
+  "id": "ignition_cut_v9_ms412",
+  "family_id": "ignition_cut_v9",
+  "version": "V9",
+  "status": "EMULATOR VERIFIED - ON-CAR TEST REQUIRED",
+  "tested": false,
+  "verification": "The shared-request architecture, both real P1L final-stage hooks, standalone hysteresis, separate launch/standalone fixed-IPW selection, cut-active adaptation freeze, and stock-cleanup diagnostic guards pass the canonical MS41.2 emulator gate. Vehicle validation remains required.",
+  "title": "Ignition Cut",
+  "user_description": "Adds an independent ignition-cut limiter with its own adjustable RPM hysteresis and fixed injector pulse width while cutting. Launch Control V7 can use the same installed cut engine with separate launch settings and without depending on this limiter's runtime switch.",
+  "description": "MS41.2 Ignition Cut V9. E847.0 owns the standalone limiter request and E847.1 is reserved for Launch Control V7; the final-stage gate cuts when either request is active. CUTSW, CUTRPM, CUT_HYST, and CUT_IPW control only the standalone requester. CUT_HYST is RPM/32 (FF means zero hysteresis), and CUT_IPW is uint16 x0.00534 ms (FFFF preserves stock injection). Launch Control V7 supplies separate LC_HYST and LC_IPW settings; LC_IPW wins while both spark requests are active. While E847.0/.1/.2 reports a real cut, trim stores pause and lambda-regulation, front/rear O2-voltage, catalyst, misfire, and coil/resistor monitors take their stock disabled/neutral cleanup paths; O2-heater electrical monitoring stays active.",
+  "target": "MS41.2",
+  "recompute": ["program"],
+  "requires": [],
+  "conflicts": [
+    "ignition_cut",
+    "ignition_cut_v2",
+    "ignition_cut_v3",
+    "ignition_cut_v4",
+    "ignition_cut_v5",
+    "ignition_cut_v6",
+    "ignition_cut_v7",
+    "ignition_cut_v8_ms412"
+  ],
+  "supersedes": [
+    "ignition_cut",
+    "ignition_cut_v2",
+    "ignition_cut_v3",
+    "ignition_cut_v4",
+    "ignition_cut_v5",
+    "ignition_cut_v6",
+    "ignition_cut_v7",
+    "ignition_cut_v8_ms412"
+  ],
+  "cave": {
+    "region": "proghigh",
+    "base": 236656,
+    "splice_off": 235818,
+    "splice_op": "calls",
+    "relocatable": false,
+    "splices": [
+      {"off": 235818, "base": 236656, "op": "calls"},
+      {"off": 235918, "base": 236656, "op": "calls"},
+      {"off": 144730, "base": 237216, "op": "calls"},
+      {"off": 196368, "base": 237984, "op": "jmps"},
+      {"off": 165998, "base": 238022, "op": "calls"},
+      {"off": 166044, "base": 238058, "op": "calls"},
+      {"off": 202046, "base": 238094, "op": "jmps"},
+      {"off": 193958, "base": 238134, "op": "jmps"},
+      {"off": 192604, "base": 238174, "op": "jmps"},
+      {"off": 192798, "base": 238214, "op": "jmps"},
+      {"off": 205384, "base": 238254, "op": "jmps"},
+      {"off": 205428, "base": 238294, "op": "jmps"},
+      {"off": 213596, "base": 238334, "op": "jmps"}
+    ],
+    "cals": {
+      "CUTSW": 92773,
+      "CUTRPM": 92774,
+      "CUT_HYST": 92775,
+      "CUT_IPW": 92776
+    }
+  },
+  "edits": [
+    {
+      "off": 235818,
+      "expect": "65f204ff",
+      "upgrade_expect": ["da0370dc"],
+      "data": "da0370dc"
+    },
+    {
+      "off": 235918,
+      "expect": "65f204ff",
+      "upgrade_expect": ["da0370dc"],
+      "data": "da0370dc"
+    },
+    {
+      "off": 144730,
+      "expect": "f2f47cef",
+      "data": "da03a0de"
+    },
+    {
+      "off": 236656,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "upgrade_expect": [
+        "ec00ecf4e6000400f3f85afd67f880003d27f3f8652a47f8ff002d2547f800002d1a47f801003d06f3f861fd67f802002d1a0d1147f802003d06f3f861fd67f801002d110d0847f804003d0df3f860fd67f880002d08f3f83cfc43f8662a8d03fcf4fc00db00fcf4fc0065f204ffdb00",
+        "ecf4f3f812e867f8f00047f8a0003d04f3f812e869833d04fcf465f204ffdb00fcf4db00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      ],
+      "data": "ecf4f3f847e867f8f00047f8a0003d04f3f847e869833d04fcf465f204ffdb00fcf4db00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 237216,
+      "upgrade_expect": [
+        "ec00ecf5ecf6e6000400f3fa12e867faf00047faa0002d04e7faa000f7fa12e8f3fa652a47faff002d3849a02d1549a13d05f3fa61fd69a22d300d0e49a23d05f3fa61fd69a12d290d0749a43d26f3fa60fd67fa80002d21f3fa12e869a12d14f3fa672a47faff002d06f3fc662a41ca8d0521ca0d04f3fc662a0d01e10cf3fa3cfc41ac8d0a0d05f3fa3cfc43fa662a8d04e11a75fa12e80d04e7fafe0065fa12e8f3fa12e869a32d09f2f5682a46f5ffff2d04f6f57eeff6f580effcf6fcf5fc00f2f47cefdb00ffffffffffffffffffffffffffffffffffff",
+        "ec00ecf5ecf6e6000400f3fa12e867faf00047faa0002d04e7faa000f7fa12e8f3fa652a47faff002d3849a02d1549a13d05f3fa61fd69a22d300d0e49a23d05f3fa61fd69a12d290d0749a43d26f3fa60fd67fa80002d21f3fa12e869a12d14f3fa672a47faff002d06f3fc662a41ca8d0521ca0d04f3fc662a0d01e10cf3fa3cfc41ac8d0a0d05f3fa3cfc43fa662a8d04e11a75fa12e80d04e7fafe0065fa12e8f3fa12e869a22d03f2f535350d06f3fa12e869a12d09f2f5682a46f5ffff2d04f6f57eeff6f580effcf6fcf5fc00f2f47cefdb00ffffffff"
+      ],
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf5ecf6e6000400f3fa47e867faf00047faa0002d04e7faa000f7fa47e8f3fa652a47faff002d3849a02d1549a13d05f3fa61fd69a22d300d0e49a23d05f3fa61fd69a12d290d0749a43d26f3fa60fd67fa80002d21f3fa47e869a12d14f3fa672a47faff002d07f3fc662a41ca8d032d0221ca0d03f3fc662a0d00f3fa3cfc41ac8d0a0d05f3fa3cfc43fa662a8d04e11a75fa47e80d04e7fafe0065fa47e8f3fa47e869a22d05f3fa3535f3fb36350d06f3fa47e869a12d09f2f5682a46f5ffff2d04f6f57eeff6f580effcf6fcf5fc00f2f47cefdb00"
+    },
+    {"off": 196368, "expect": "88d08880", "data": "fa03a0e1"},
+    {"off": 165998, "expect": "c4861800", "data": "da03c6e1"},
+    {"off": 166044, "expect": "c4471000", "data": "da03eae1"},
+    {"off": 202046, "expect": "f3fa34fc", "data": "fa030ee2"},
+    {"off": 193958, "expect": "f4893300", "data": "fa0336e2"},
+    {"off": 192604, "expect": "e6f4c4f0", "data": "fa035ee2"},
+    {"off": 192798, "expect": "e6f418f0", "data": "fa0386e2"},
+    {"off": 205384, "expect": "e6fc46ee", "data": "fa03aee2"},
+    {"off": 205428, "expect": "e6fc52ee", "data": "fa03d6e2"},
+    {"off": 213596, "expect": "f3f83cfc", "data": "fa03fee2"},
+    {
+      "off": 237984,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ecf4f3f847e867f8f00047f8a0003d06f3f847e869872d02fcf4db00fcf4ecfdecf8fa0214bfecf4f3f847e867f8f00047f8a0003d06f3f847e869872d02fcf4db00fcf4c4861800db00ecf4f3f847e867f8f00047f8a0003d06f3f847e869872d02fcf4db00fcf4c4471000db00ecf4f3f847e867f8f00047f8a0003d07f3f847e869872d03fcf4fa032e58fcf4f3fa34fcfa034255ecf4f3f847e867f8f00047f8a0003d07f3f847e869872d03fcf4fa02a8b6fcf4f4893300fa02aab5ecf4f3f847e867f8f00047f8a0003d07f3f847e869872d03fcf4fa02bcb0fcf4e6f4c4f0fa0260b0ecf4f3f847e867f8f00047f8a0003d07f3f847e869872d03fcf4fa027eb1fcf4e6f418f0fa0222b1ecf4f3f847e867f8f00047f8a0003d07f3f847e869872d03fcf4fa039e62fcf4e6fc46eefa034c62ecf4f3f847e867f8f00047f8a0003d07f3f847e869872d03fcf4fa039e62fcf4e6fc52eefa037862ecf4f3f847e867f8f00047f8a0003d07f3f847e869872d03fcf4fa033003fcf4f3f83cfcfa036002ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "upgrade_expect": [
+        "ecf4f3f812e867f8f00047f8a0003d06f3f812e869872d02fcf4db00fcf4ecfdecf8fa0214bfecf4f3f812e867f8f00047f8a0003d06f3f812e869872d02fcf4db00fcf4c4861800db00ecf4f3f812e867f8f00047f8a0003d06f3f812e869872d02fcf4db00fcf4c4471000db00ecf4f3f812e867f8f00047f8a0003d07f3f812e869872d03fcf4fa032e58fcf4f3fa34fcfa034255ecf4f3f812e867f8f00047f8a0003d07f3f812e869872d03fcf4fa02a8b6fcf4f4893300fa02aab5ecf4f3f812e867f8f00047f8a0003d07f3f812e869872d03fcf4fa02bcb0fcf4e6f4c4f0fa0260b0ecf4f3f812e867f8f00047f8a0003d07f3f812e869872d03fcf4fa027eb1fcf4e6f418f0fa0222b1ecf4f3f812e867f8f00047f8a0003d07f3f812e869872d03fcf4fa039e62fcf4e6fc46eefa034c62ecf4f3f812e867f8f00047f8a0003d07f3f812e869872d03fcf4fa039e62fcf4e6fc52eefa037862ecf4f3f812e867f8f00047f8a0003d07f3f812e869872d03fcf4fa033003fcf4f3f83cfcfa036002ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      ]
+    }
+  ]
+}

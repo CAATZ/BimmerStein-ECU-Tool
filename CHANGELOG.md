@@ -6,26 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Release numbers use a `major.minor.patch` base and the compact `bN` beta suffix
 shared by BimmerStein applications.
 
-## [Unreleased]
-
-## [0.1.0b13] - 2026-08-05
-
-### Highlights
-
-- Added a complete EEPROM workspace for MS41.0 through MS41.3. Full 512-byte
-  images can be read, inspected, edited, archived, and written through either
-  the ECU Agent or a CH341A programmer.
-- Added Seed ECU Recovery for some locked or apparently bricked ECUs whose
-  stock boot code and DS2 listener are still intact. The original full image is
-  preserved, every write receives a full-device readback, and Restore
-  Pre-Seed State restores the exact captured bytes.
+## [0.1.0b14] - 2026-08-22
 
 ### Added
 
-- Added automatic MS41 EEPROM layout detection with a manual override and
-  Windows-safe automatic filenames.
-- Added exact-image release admission for the supported patch suite and
-  Intel/AMD flash drivers; missing required inputs now fail the release gate.
+- Added curated multi-module K-line diagnostics with plain-English discovery,
+  fault reading, and clearing for exact supported profiles.
+- Added human-readable GM3 and E46 driver-seat coding with an optional Advanced
+  view for technical references.
+- Added programming-history and program-lineage fields to ECU Info, a read-only
+  transmission-swap compatibility summary, and advisory pre-write voltage
+  warnings.
+
+### Fixed
+
+- Relocated Soft-BSL V11 and CalGuard V5 outside the complete BMW AIF history
+  area. Exact V10/V4 installations migrate to the new layout; both replacements
+  passed exact firmware execution checks and require renewed bench testing.
+- Replaced broken AlphaN MAF-failsafe V2 with V3 for MS41.3. V3 uses the native
+  SS1v2 AlphaN producer and load publisher for DTC8 fallback, corrects DTC12 load
+  scaling, and upgrades exact V1/V2 installations. Physical/on-car validation
+  is still required.
+
+### Changed
+
+- Retained the exact packaged Beta 13 Ignition Cut V9 and Launch Control V7
+  descriptors in Windows release builds while development revisions remain
+  private for further testing.
+
+## [0.1.0b13] - 2026-07-27
+
+### Added
+
+- Added Ignition Cut V9 and Launch Control V7 for MS41.0, MS41.1, MS41.2,
+  and MS41.3, with independent standalone and launch requests, separate RPM
+  hysteresis and fixed injector-pulse-width settings, and matching bundled
+  patch definitions.
+- Added exact-image emulator admission to release preparation for the
+  supported patch suite and Intel/AMD flash drivers; missing private reference
+  inputs now fail the release gate instead of skipping it.
 - Restored AlphaN MAF-failsafe V2 with the historical A14-XOR transfer error
   corrected. It remains **UNTESTED** for physical/on-car behavior.
 - Added read-only comparison of two Bins with SHA-256 catalog identity,
@@ -35,11 +54,12 @@ shared by BimmerStein applications.
 
 ### Fixed
 
-- Corrected regular-DS2 write fallback so eligible native-fast startup failures
-  retry at 9600 baud instead of ending the operation immediately.
-- Accepted the two-byte empty DTC response (`00 00`) returned by some ECUs.
-- Allowed CH341A EEPROM reads before a manual layout is selected and sanitized
-  unreadable ECU identifiers before using them in Windows filenames.
+- Corrected MS41.0 cut-switch inputs and MS41.0/MS41.1 launch-speed sources,
+  and added cut-active adaptation and diagnostic cleanup guards while retaining
+  O2-heater electrical monitoring.
+- Hid Ignition Cut and Launch Control diagnostic rows unless the V9 runtime
+  marker is active, and completed the Live Data calibration snapshot with
+  clutch polarity, arm/max speed, minimum TPS, and hard-cut RPM.
 - Hardened Soft-BSL Phase 1 startup with bounded normal-DS2 identity retries
   and no unsafe fallback after an indeterminate native-fast start.
 - Kept provisional Connect transports worker-owned through setup and cleanup,
@@ -60,13 +80,8 @@ shared by BimmerStein applications.
   tooltips. A selected full-ROM Bin can now be opened directly in Patches.
 - Shortened Bins toolbar labels and made single-Bin actions unambiguous when
   two rows are selected for comparison.
-- Retained the Beta 12 Ignition Cut V7 and Launch Control V4/V5 payloads and
-  matching definitions. Newer experimental revisions are not included.
-- Ignition Cut V7 and Launch Control V4/V5 still require the vehicle testing or
-  retesting indicated by their descriptors; AlphaN MAF-failsafe remains
-  untested.
-- EEPROM writes and Seed ECU Recovery remain experimental and are not yet
-  validated across every supported ECU/programmer combination.
+- Ignition Cut V9 and Launch Control V7 are emulator verified but still require
+  on-car testing; AlphaN MAF-failsafe remains untested.
 
 ## [0.1.0b12] - 2026-07-26
 

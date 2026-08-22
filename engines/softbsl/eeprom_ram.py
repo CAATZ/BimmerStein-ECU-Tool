@@ -399,6 +399,12 @@ def validate_physical_capture(image: bytes) -> bytes:
             "recheck chip power, ground, clip contact/orientation, SDA/SCL, "
             "and in-circuit isolation before retrying"
         )
+    unrotated = image[32:] + image[:32]
+    if not detect_layouts(image) and detect_layouts(unrotated):
+        raise EepromError(
+            "physical EEPROM read is rotated by one 32-byte CH341A packet; "
+            "discard it and reopen the programmer before retrying"
+        )
     return image
 
 
@@ -693,7 +699,16 @@ def _save_capture_atomic(path: str | os.PathLike, image: bytes) -> Path:
     temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
     try:
         save_capture(temporary, image)
-        os.link(temporary, target)
+        try:
+            os.link(temporary, target)
+        except PermissionError:
+            # ponytail: Android app storage forbids hard links; operation IDs make
+            # same-path writers unique, so a checked same-directory rename is enough.
+            if target.exists():
+                raise FileExistsError(
+                    f"refusing to overwrite EEPROM capture {target}"
+                )
+            os.rename(temporary, target)
     finally:
         temporary.unlink(missing_ok=True)
     return target
@@ -796,7 +811,7 @@ def load_eeprom_agent() -> bytes:
         len(payload) != record["payload_size"]
         or hashlib.sha256(payload).hexdigest() != record["payload_sha256"]
     ):
-        raise EepromError("EEPROM agent failed its packaged manifest integrity check")
+        raise EepromError("EEPROM agent failed its integrity check")
     return payload
 
 
@@ -1004,9 +1019,12 @@ def repair_write_recovery(recovery: EepromWriteRecovery, *, confirm) -> bytes:
         recovery, resolution="explicit_safe_resume", confirm=confirm)
 
 
-def preflight(port: str) -> Preflight:
+def preflight(port: str, *, serial_factory=None) -> Preflight:
     """Admit only a recognized ECU with the installed Soft-BSL loader door."""
-    interface = ds2.DS2Interface(port, baud=9600, verbose=False, echo=True)
+    ds2_kwargs = {"baud": 9600, "verbose": False, "echo": True}
+    if serial_factory is not None:
+        ds2_kwargs["serial_factory"] = serial_factory
+    interface = ds2.DS2Interface(port, **ds2_kwargs)
     interface.open()
     try:
         interface.identify()
@@ -1057,21 +1075,27 @@ def _agent_tiers(baud: str) -> tuple[str, ...]:
     raise ValueError(f"unknown EEPROM agent baud tier {baud!r}")
 
 
-def _open_agent(port, baud, log):
-    admission = preflight(port)
+def _open_agent(port, baud, log, serial_factory=None):
+    admission = (
+        preflight(port)
+        if serial_factory is None
+        else preflight(port, serial_factory=serial_factory)
+    )
     agent_payload = load_eeprom_agent()
     last_error = None
     for tier in _agent_tiers(baud):
         interface = None
         try:
+            session_kwargs = {
+                "require_d2xx": tier != "low",
+                "baud_tier": tier,
+                "entry_mode": "auto",
+                "agent_payload": agent_payload,
+            }
+            if serial_factory is not None:
+                session_kwargs["serial_factory"] = serial_factory
             interface, softbsl = softbsl_service._open_session(
-                port,
-                log,
-                require_d2xx=tier != "low",
-                baud_tier=tier,
-                entry_mode="auto",
-                agent_payload=agent_payload,
-            )
+                port, log, **session_kwargs)
             protocol = EepromProtocol(softbsl)
             protocol.identity = protocol.identify()
             protocol.baud_tier = tier
@@ -1100,9 +1124,11 @@ def _open_agent(port, baud, log):
     raise EepromError(f"EEPROM agent entry failed: {last_error}")
 
 
-def read_eeprom(port: str, *, baud="auto", log=print) -> Capture:
+def read_eeprom(port: str, *, baud="auto", log=print,
+                serial_factory=None) -> Capture:
     """Return two matching, CRC-protected, direct physical 512-byte reads."""
-    admission, interface, protocol = _open_agent(port, baud, log)
+    admission, interface, protocol = _open_agent(
+        port, baud, log, serial_factory=serial_factory)
     returned_to_normal = False
     try:
         image = protocol.stable_dump()
@@ -1126,6 +1152,7 @@ def _write_eeprom(
     baud="auto",
     log=print,
     operation="eeprom_image",
+    serial_factory=None,
 ) -> Capture:
     backup = Path(backup_path)
     if backup.exists():
@@ -1145,7 +1172,8 @@ def _write_eeprom(
         },
     )
     try:
-        admission, interface, protocol = _open_agent(port, baud, log)
+        admission, interface, protocol = _open_agent(
+            port, baud, log, serial_factory=serial_factory)
     except (Exception, KeyboardInterrupt) as error:
         try:
             journal.finish(
@@ -1321,6 +1349,7 @@ def write_image(
     confirm,
     baud="auto",
     log=print,
+    serial_factory=None,
 ) -> Capture:
     """Write a prepared exact image through replay-safe byte transactions."""
     target = validate_write_image(target, variant)
@@ -1333,6 +1362,7 @@ def write_image(
         baud=baud,
         log=log,
         operation="eeprom_image",
+        serial_factory=serial_factory,
     )
 
 
@@ -1344,6 +1374,7 @@ def write_transmission(
     confirm,
     baud="auto",
     log=print,
+    serial_factory=None,
 ) -> Capture:
     """Compatibility wrapper for the version-specific transmission shortcut."""
     return _write_eeprom(
@@ -1356,6 +1387,7 @@ def write_transmission(
         baud=baud,
         log=log,
         operation="eeprom_transmission",
+        serial_factory=serial_factory,
     )
 
 

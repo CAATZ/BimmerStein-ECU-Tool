@@ -140,6 +140,16 @@ def test_layout_detection_fails_closed_on_unknown_or_conflicting_tail():
     assert eeprom_ram.detect_layouts(conflicting) == ()
 
 
+def test_physical_capture_rejects_one_stale_ch341a_packet_rotation():
+    image = bytearray(_valid_image("MS41.3"))
+    image[0x1E3:0x1EF] = b"111009091202"
+    image[0x1EF:0x1FD] = b"14064641406464"
+    rotated = image[-32:] + image[:-32]
+
+    with pytest.raises(eeprom_ram.EepromError, match="rotated by one 32-byte"):
+        eeprom_ram.validate_physical_capture(rotated)
+
+
 @pytest.mark.parametrize("variant", tuple(eeprom_ram.FIELDS_BY_VARIANT))
 def test_transmission_shortcut_changes_only_mode_bits_and_check(variant):
     before = _valid_image(variant)
@@ -239,6 +249,21 @@ def test_capture_save_is_durable_and_never_overwrites(tmp_path):
     assert target.read_bytes() == image
     with pytest.raises(FileExistsError):
         eeprom_ram.save_capture(target, image)
+
+
+def test_atomic_capture_falls_back_when_hard_links_are_forbidden(
+    tmp_path, monkeypatch,
+):
+    image = _valid_image()
+    target = tmp_path / "capture.bin"
+    monkeypatch.setattr(
+        eeprom_ram.os, "link",
+        lambda *_args: (_ for _ in ()).throw(PermissionError("hard links disabled")),
+    )
+
+    assert eeprom_ram._save_capture_atomic(target, image) == target
+    assert target.read_bytes() == image
+    assert not list(tmp_path.glob(".*.tmp"))
 
 
 class _FakeDS2:
@@ -346,6 +371,8 @@ def test_agent_baud_tiers_fall_back_to_9600(requested, tiers):
 def test_open_agent_retries_complete_entry_at_9600(monkeypatch):
     calls = []
     admission = _admission()
+    serial_factory = object()
+    preflight_factories = []
     interface = type("Interface", (), {"is_open": True, "close": lambda self: None})()
 
     class Protocol:
@@ -361,16 +388,23 @@ def test_open_agent_retries_complete_entry_at_9600(monkeypatch):
             raise RuntimeError("fast entry unavailable")
         return interface, object()
 
-    monkeypatch.setattr(eeprom_ram, "preflight", lambda _port: admission)
+    def preflight(_port, *, serial_factory=None):
+        preflight_factories.append(serial_factory)
+        return admission
+
+    monkeypatch.setattr(eeprom_ram, "preflight", preflight)
     monkeypatch.setattr(eeprom_ram, "load_eeprom_agent", lambda: b"agent")
     monkeypatch.setattr(eeprom_ram, "EepromProtocol", Protocol)
     monkeypatch.setattr(eeprom_ram.softbsl_service, "_open_session", open_session)
 
     _, result_interface, protocol = eeprom_ram._open_agent(
-        "COM1", "auto", lambda *_args: None
+        "COM1", "auto", lambda *_args: None,
+        serial_factory=serial_factory,
     )
     assert result_interface is interface
     assert protocol.baud_tier == "low"
+    assert preflight_factories == [serial_factory]
+    assert all(call["serial_factory"] is serial_factory for call in calls)
     assert [(call["baud_tier"], call["require_d2xx"]) for call in calls] == [
         ("high", True), ("low", False)
     ]

@@ -32,6 +32,12 @@ class FrameValidationError(FastDS2Error):
 class ContractViolation(FastDS2Error):
     """A valid DS2 frame violates the response contract for this transition."""
 
+    def __init__(self, message: str, *, response_status: Optional[int] = None):
+        self.response_status = (
+            None if response_status is None else int(response_status)
+        )
+        super().__init__(message)
+
 
 class MissingResponseError(FastDS2Error):
     """No ECU response was available for a request."""
@@ -226,7 +232,8 @@ class StatusResponseContract:
                 f"0x{status:02X}" for status in sorted(self.allowed_statuses)
             )
             raise ContractViolation(
-                f"{self.name}: status 0x{response.status:02X}, expected {expected}"
+                f"{self.name}: status 0x{response.status:02X}, expected {expected}",
+                response_status=response.status,
             )
         if (
             self.exact_payload_length is not None

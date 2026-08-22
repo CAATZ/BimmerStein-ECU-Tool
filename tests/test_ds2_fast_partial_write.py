@@ -104,6 +104,8 @@ class MemoryJournal:
 
 
 class PartialWriteStockSerial:
+    native_fast_capable = True
+
     ECU_RATES = {0x26: 9615.4, 0x12: 19736.8, 0x01: 187500.0}
 
     def __init__(
@@ -113,6 +115,7 @@ class PartialWriteStockSerial:
         token: bytes,
         finalize_busy: int = 2,
         missing_flash_response_at: int | None = None,
+        flash_outer_status_at=None,
         corrupt_flash_response_at: int | None = None,
         wrong_cursor_at: int | None = None,
         readback_corrupt_address: int | None = None,
@@ -141,6 +144,7 @@ class PartialWriteStockSerial:
         self.finalize_busy = int(finalize_busy)
         self.finalize_attempts = 0
         self.missing_flash_response_at = missing_flash_response_at
+        self.flash_outer_status_at = dict(flash_outer_status_at or {})
         self.corrupt_flash_response_at = corrupt_flash_response_at
         self.wrong_cursor_at = wrong_cursor_at
         self.readback_corrupt_address = readback_corrupt_address
@@ -352,6 +356,10 @@ class PartialWriteStockSerial:
         assert count == len(data)
         self.flash_requests.append((operation, address, data))
         flash_index = len(self.flash_requests)
+
+        if flash_index in self.flash_outer_status_at:
+            self._response(self.flash_outer_status_at[flash_index])
+            return
 
         if operation == FlashOperation.ERASE:
             assert address == TUNE_START and not data
@@ -921,14 +929,14 @@ def test_ambiguous_existing_authorization_confirmation_blocks_all_fallback(tmp_p
     assert not session.safe_legacy_fallback
 
 
-def test_transport_requires_d2xx_echo_and_declared_low_rate():
+def test_transport_requires_capability_echo_and_declared_low_rate():
     source = _image_fixture()
     token = source.ds2_image[TOKEN_ADDRESS : TOKEN_ADDRESS + TOKEN_LENGTH]
     serial = PartialWriteStockSerial(source.ds2_image, token=token)
-    serial.transport_name = "pyserial"
-    with pytest.raises(UnsafePartialWriteCommand, match="D2XX"):
+    serial.native_fast_capable = False
+    with pytest.raises(UnsafePartialWriteCommand, match="qualified"):
         NativeFastPartialWriteTransport(serial)
-    serial.transport_name = "d2xx"
+    serial.native_fast_capable = True
     with pytest.raises(UnsafePartialWriteCommand, match="echo"):
         NativeFastPartialWriteTransport(serial, echo=False)
     serial._baud = 19200
@@ -1125,6 +1133,107 @@ def test_retained_partial_session_can_reerase_restore_and_cleanup(tmp_path):
     assert result.cleanup_attempted
     assert session.journal.outcome == "success"
     assert session.state is SessionState.COMPLETE
+
+
+def test_retained_partial_recovery_a2_disables_further_replay(tmp_path):
+    session, serial, first_journal = _authorization_session(tmp_path)
+    session.target_tune = bytes(index % 251 for index in range(TUNE_END - TUNE_START))
+    serial.missing_flash_response_at = 4
+    serial.flash_outer_status_at = {5: ResponseStatus.READINESS_A2}
+    with pytest.raises(CommitUnknownError):
+        session.execute()
+    assert session.can_recover_in_place
+    assert serial.flash_requests[-1][1] == 0x0101E6
+
+    serial.missing_flash_response_at = None
+    session.journal = MemoryJournal(tmp_path / "recovery-a2.jsonl")
+    with pytest.raises(ContractViolation, match="status 0xA2, expected 0xA0"):
+        session.recover_in_place()
+
+    assert serial.flash_requests[-1] == (FlashOperation.ERASE, TUNE_START, b"")
+    assert session.transport.is_open
+    assert session.link is LinkRate.HIGH
+    assert session.fast_write_armed is False
+    assert session.state is SessionState.POWER_CYCLE_REQUIRED
+    assert session.can_recover_in_place is False
+    assert session.journal.outcome == "power_cycle_required"
+    finish = next(
+        fields for event, fields in session.journal.events
+        if event == "journal_finished"
+    )
+    assert finish["retry_supported"] is False
+    assert finish["transport_retained"] is True
+    assert finish["power_cycle_required"] is True
+
+    requests_after_a2 = len(serial.flash_requests)
+    with pytest.raises(PartialWriteStateError, match="no longer qualified"):
+        session.recover_in_place()
+    assert len(serial.flash_requests) == requests_after_a2
+
+
+def test_original_partial_a2_never_qualifies_retained_replay(tmp_path):
+    session, serial, _journal = _authorization_session(tmp_path)
+    session.target_tune = bytes(index % 251 for index in range(TUNE_END - TUNE_START))
+    serial.flash_outer_status_at = {4: ResponseStatus.READINESS_A2}
+
+    with pytest.raises(ContractViolation, match="status 0xA2, expected 0xA0") as caught:
+        session.execute()
+
+    assert caught.value.response_status == ResponseStatus.READINESS_A2
+    assert serial.flash_requests[-1][1] == 0x0101E6
+    assert session.state is SessionState.POWER_CYCLE_REQUIRED
+    assert session.can_recover_in_place is False
+    requests_after_a2 = len(serial.flash_requests)
+    with pytest.raises(PartialWriteStateError, match="no longer qualified"):
+        session.recover_in_place()
+    assert len(serial.flash_requests) == requests_after_a2
+
+
+def test_retained_partial_recovery_timeout_stays_commit_unknown(tmp_path):
+    session, serial, _first_journal, _source = _session(
+        tmp_path,
+        serial_kwargs={"missing_flash_response_at": 1},
+    )
+    with pytest.raises(CommitUnknownError):
+        session.execute()
+
+    serial.missing_flash_response_at = 2
+    session.journal = MemoryJournal(tmp_path / "recovery-timeout.jsonl")
+    with pytest.raises(CommitUnknownError):
+        session.recover_in_place()
+
+    assert session.state is SessionState.COMMIT_UNKNOWN
+    assert session.can_recover_in_place is False
+    assert session.journal.outcome == "commit_unknown"
+    finish = next(
+        fields for event, fields in session.journal.events
+        if event == "journal_finished"
+    )
+    assert finish["power_cycle_required"] is False
+
+
+def test_recovery_setup_failure_does_not_consume_replay(tmp_path, monkeypatch):
+    session, serial, _first_journal = _authorization_session(tmp_path)
+    serial.missing_flash_response_at = 1
+    with pytest.raises(CommitUnknownError):
+        session.execute()
+    assert session.can_recover_in_place
+
+    serial.missing_flash_response_at = None
+    session.journal = MemoryJournal(tmp_path / "recovery-setup.jsonl")
+    requests_before = len(serial.flash_requests)
+    monkeypatch.setattr(
+        session.transport,
+        "set_baud",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("host baud setup failed")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="host baud setup failed"):
+        session.recover_in_place()
+    assert session.can_recover_in_place
+    assert len(serial.flash_requests) == requests_before
 
 
 def test_ambiguous_program_ack_stops_without_resending_or_advancing(tmp_path):

@@ -1,8 +1,16 @@
-"""Emit the CalGuard cave that validates exact Firmware Compatibility IDs."""
+"""Emit the AIF-safe CalGuard trampoline and exact-ID guard body."""
 
-CAVE_CPU = 0x1E10
-CAVE_SIZE = 0x5FC4 - 0x5E10
+STUB_CPU = 0x1C76
+STUB_PART2_CPU = 0x1C8C
+STUB_FALLBACK_CPU = 0x0426
+CAVE_FILE = 0x3BE00
+CAVE_CPU = CAVE_FILE ^ 0x4000
+CAVE_SIZE = 0x180
+CAVE_MARKER_ADDRESS = 0xBF7E
+CAVE_MARKER = 1
+SOFTBSL_TX = 0x1CA0
 BOOT_EXIT = 0x0942
+BOOT_FALLBACK = STUB_FALLBACK_CPU
 RECOVER_EXIT = 0x094A
 POLL_COUNT = 0x3000
 RECOVERY_TOKEN = (0x5A, 0x9C, 0x9C)
@@ -13,7 +21,9 @@ CC_UC, CC_EQ, CC_NE = 0, 2, 3
 class _Assembler:
     """Tiny two-pass emitter for the C166 forms used by this cave."""
 
-    def __init__(self):
+    def __init__(self, base=CAVE_CPU, limit=CAVE_SIZE):
+        self.base = base
+        self.limit = limit
         self.code = bytearray()
         self.labels = {}
         self.fixups = []
@@ -21,7 +31,7 @@ class _Assembler:
 
     @property
     def pc(self):
-        return CAVE_CPU + len(self.code)
+        return self.base + len(self.code)
 
     def emit(self, *values):
         self.code.extend(value & 0xFF for value in values)
@@ -60,6 +70,11 @@ class _Assembler:
     def cmp(self, reg, value):
         self.emit(0x46, 0xF0 + reg, value, value >> 8)
 
+    def cmp_small(self, reg, value):
+        if not 0 <= value <= 7:
+            raise ValueError("compact CMP immediate must fit three bits")
+        self.emit(0x48, (reg << 4) | value)
+
     def cmp_rr(self, left, right):
         self.emit(0x40, (left << 4) | right)
 
@@ -72,6 +87,12 @@ class _Assembler:
     def jmpr(self, cc, label):
         self.emit((cc << 4) | 0x0D, 0)
         self.fixups.append((len(self.code) - 1, label))
+
+    def jmpr_address(self, cc, address):
+        delta = address - (self.pc + 2)
+        if delta & 1 or not -256 <= delta <= 254:
+            raise ValueError(f"relative branch out of range: 0x{address:05X}")
+        self.emit((cc << 4) | 0x0D, (delta // 2) & 0xFF)
 
     def jb(self, address, bit, label):
         if address & 1 or not 0xFE00 <= address <= 0xFFFE:
@@ -93,6 +114,15 @@ class _Assembler:
     def calls(self, address):
         self.emit(0xDA, address >> 16, address, address >> 8)
 
+    def jmps(self, address):
+        self.emit(0xFA, address >> 16, address, address >> 8)
+
+    def mov_rr(self, destination, source):
+        self.emit(0xE0, (source << 4) | destination)
+
+    def rets(self):
+        self.emit(0xDB, 0x00)
+
     def srvwdt(self):
         self.emit(0xA7, 0x58, 0xA7, 0xA7)
 
@@ -102,31 +132,54 @@ class _Assembler:
     def finish(self):
         for position, label in self.fixups:
             target = self.labels[label]
-            instruction = CAVE_CPU + position - 1
+            instruction = self.base + position - 1
             delta = target - (instruction + 2)
             if delta & 1 or not -256 <= delta <= 254:
                 raise ValueError(f"relative branch out of range: {label}")
             self.code[position] = (delta // 2) & 0xFF
         for start, label in self.bit_fixups:
             target = self.labels[label]
-            delta = target - (CAVE_CPU + start + 4)
+            delta = target - (self.base + start + 4)
             if delta & 1 or not -256 <= delta <= 254:
                 raise ValueError(f"relative bit branch out of range: {label}")
             self.code[start + 2] = (delta // 2) & 0xFF
-        if len(self.code) > CAVE_SIZE:
-            raise ValueError(f"CalGuard is {len(self.code)} B, cave holds {CAVE_SIZE} B")
-        return bytes(self.code).ljust(CAVE_SIZE, b"\xFF")
+        if len(self.code) > self.limit:
+            raise ValueError(
+                f"CalGuard fragment is {len(self.code)} B, cave holds {self.limit} B")
+        return bytes(self.code)
+
+
+def assemble_stub():
+    """Return the three boot-local trampoline fragments keyed by file offset."""
+    first = _Assembler(STUB_CPU, 10)
+    first.mov_dpp(2, 15)
+    first.mov_mem(4, CAVE_MARKER_ADDRESS)
+    first.jmpr_address(CC_UC, STUB_PART2_CPU)
+
+    second = _Assembler(STUB_PART2_CPU, 14)
+    second.mov_dpp(2, 0)
+    second.cmp_small(4, CAVE_MARKER)
+    second.jmpa(CC_NE, STUB_FALLBACK_CPU)
+    second.jmps(CAVE_CPU)
+
+    fallback = _Assembler(STUB_FALLBACK_CPU, 8)
+    fallback.mov_rr(12, 0)
+    fallback.calls(0x0720)
+    fallback.rets()
+    return {
+        STUB_CPU ^ 0x4000: first.finish(),
+        STUB_PART2_CPU ^ 0x4000: second.finish(),
+        STUB_FALLBACK_CPU ^ 0x4000: fallback.finish(),
+    }
 
 
 def assemble():
-    """Return the 436-byte production cave, including deliberate FF padding."""
+    """Return the program-resident guard with its end-of-write marker."""
     a = _Assembler()
     rl5 = 10
 
-    # Preserve stock E740=1 flash-listener behavior before any identification.
-    a.movb_mem(rl5, 0xE740)
-    a.cmpb(rl5, 1)
-    a.jmpa(CC_EQ, RECOVER_EXIT)
+    # The untouched stock E740 branch and marker-check trampoline execute
+    # before this body. DPP0=4 exposes the calibration window.
     a.mov_dpp(0, 4)
 
     # A genuine SS1v2 calibration must pair with the genuine SS1v2 program.
@@ -140,9 +193,9 @@ def assemble():
     a.mov_mem(5, 0x9A9C)
     a.mov_dpp(2, 0)
     a.cmp(4, 0x119A)
-    a.jmpa(CC_NE, RECOVER_EXIT)
+    a.jmpr(CC_NE, "recover")
     a.cmp(5, 0x9063)
-    a.jmpa(CC_NE, RECOVER_EXIT)
+    a.jmpr(CC_NE, "recover")
     a.jmpr(CC_UC, "compare_compatibility")
 
     # Without the strict calibration marker the program must not be SS1v2, and
@@ -155,14 +208,16 @@ def assemble():
     a.cmp(4, 0x119A)
     a.jmpr(CC_NE, "check_legacy_suffix")
     a.cmp(5, 0x9063)
-    a.jmpa(CC_EQ, RECOVER_EXIT)
+    a.jmpr(CC_EQ, "recover")
 
     a.label("check_legacy_suffix")
     a.mov_mem(4, 0x000E)
     for suffix in (0x3231, 0x3036, 0x3134, 0x3234, 0x3935, 0x3538):
         a.cmp(4, suffix)
         a.jmpr(CC_EQ, "compare_compatibility")
-    a.jmpa(CC_UC, RECOVER_EXIT)
+
+    a.label("recover")
+    a.jmps(RECOVER_EXIT)
 
     # DPP0=4 exposes cal 0x1400C at 0x000C; DPP2=0 exposes program
     # 0x06007 at 0xA007. The program ID starts at an odd address, so compare
@@ -178,7 +233,7 @@ def assemble():
     a.jmpr(CC_UC, "poll_recovery")
 
     a.label("compatibility_fail")
-    a.jmpa(CC_UC, RECOVER_EXIT)
+    a.jmps(RECOVER_EXIT)
 
     # The exact IDs matched, but corruption elsewhere could still stop the
     # application. Briefly open ASC0 and accept the staged-loader magic before
@@ -204,7 +259,9 @@ def assemble():
     a.mov_mem_reg(0xFFB0, 8)
     a.mov_mem_reg(0xFEB4, 7)
     a.mov_mem_reg(0xFF6E, 9)
-    a.jmpa(CC_UC, BOOT_EXIT)
+    # Replay the six stock bytes through the segment-0 fallback trampoline.
+    # Calling stock 0x0720 from CSP0 preserves its native call context.
+    a.jmps(STUB_FALLBACK_CPU)
 
     a.label("poll_byte")
     a.movb_mem(8, 0xFEB2)      # RL4 = S0RBUF
@@ -235,9 +292,10 @@ def assemble():
 
     a.label("poll_match")
     a.movb_reg_imm(8, 6)
-    a.calls(0x1FD8)            # Soft-BSL polled TX helper: ACK the pre-arm token.
-    a.jmpa(CC_UC, RECOVER_EXIT)
-    return a.finish()
+    a.calls(SOFTBSL_TX)        # Soft-BSL polled TX helper: ACK the pre-arm token.
+    a.jmps(RECOVER_EXIT)
+    code = a.finish()
+    return code.ljust(CAVE_SIZE - 2, b"\xFF") + CAVE_MARKER.to_bytes(2, "little")
 
 
 if __name__ == "__main__":

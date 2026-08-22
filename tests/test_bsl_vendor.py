@@ -116,6 +116,8 @@ def test_dump_outputs_standard_full_and_tune_file_formats(tmp_path, monkeypatch)
 
 
 def test_short_preerase_backup_aborts_before_erase(tmp_path):
+    destructive = []
+
     class Fake:
         def __init__(self):
             self.erases = 0
@@ -129,11 +131,94 @@ def test_short_preerase_backup_aborts_before_erase(tmp_path):
 
     args = SimpleNamespace(
         no_backup=False, backup_dir=str(tmp_path), chip="28f200", half="upper",
-        progress_cb=None, baud=9600, ref="ref.bin")
+        progress_cb=None, baud=9600, ref="ref.bin",
+        destructive_cb=lambda: destructive.append(True))
     plan = bu._region_plan(args, "tune", b"\xFF" * 0x40000, bu.FLASH_REGIONS)
     fake = Fake()
     assert bu._flash_region(fake, args, "tune", plan, amd=False) == 1
     assert fake.erases == 0
+    assert destructive == []
+
+
+def test_backup_callback_precedes_destructive_callback_and_first_erase(tmp_path):
+    events = []
+
+    class Fake:
+        def mon_read(self, _addr, size, progress=None):
+            return b"\xFF" * size
+
+        def mon_erase(self, addr):
+            events.append(("erase", addr))
+            return 0x80
+
+    args = SimpleNamespace(
+        no_backup=False, backup_dir=str(tmp_path), chip="29f400", half="upper",
+        progress_cb=None, baud=9600, ref="ref.bin",
+        backup_cb=lambda path: events.append(("backup", path)),
+        destructive_cb=lambda: events.append("destructive"))
+    plan = bu._region_plan(
+        args, "program-high", b"\xFF" * 0x40000,
+        bu.FLASH_REGIONS_AMD)
+
+    assert bu._flash_region(
+        Fake(), args, "program-high", plan, amd=True) == 0
+    assert events[0][0] == "backup"
+    assert events[0][1].endswith(".bin")
+    assert events[1:] == [
+        "destructive", ("erase", 0x20000), ("erase", 0x30000)]
+
+
+def test_backup_callback_failure_aborts_before_destructive_boundary(tmp_path):
+    events = []
+
+    class Fake:
+        def mon_read(self, _addr, size, progress=None):
+            return b"\xFF" * size
+
+        def mon_erase(self, _addr):
+            events.append("erase")
+            return 0x80
+
+    def reject_backup(_path):
+        events.append("backup")
+        raise RuntimeError("catalog unavailable")
+
+    args = SimpleNamespace(
+        no_backup=False, backup_dir=str(tmp_path), chip="28f200", half="upper",
+        progress_cb=None, baud=9600, ref="ref.bin",
+        backup_cb=reject_backup,
+        destructive_cb=lambda: events.append("destructive"))
+    plan = bu._region_plan(
+        args, "tune", b"\xFF" * 0x40000, bu.FLASH_REGIONS)
+
+    assert bu._flash_region(Fake(), args, "tune", plan, amd=False) == 1
+    assert events == ["backup"]
+
+
+def test_monitor_and_variant_failures_stay_pre_destructive(monkeypatch):
+    destructive = []
+    args = SimpleNamespace(
+        ref="ref.bin", ref_bytes=b"\xFF" * 0x40000,
+        chip="28f200", half="upper", region="tune",
+        fix_checksums=False, force=True, arm=True,
+        progress_cb=None, baud=9600,
+        destructive_cb=lambda: destructive.append(True))
+
+    class Fake:
+        def __init__(self, starts):
+            self.starts = starts
+
+        def start_monitor(self, flash=False, amd=False):
+            return self.starts
+
+    monkeypatch.setattr(bu, "_bsl", lambda _args: Fake(False))
+    assert bu.cmd_flash(args) == 1
+    assert destructive == []
+
+    monkeypatch.setattr(bu, "_bsl", lambda _args: Fake(True))
+    monkeypatch.setattr(bu, "_variant_guard", lambda *_args: 1)
+    assert bu.cmd_flash(args) == 1
+    assert destructive == []
 
 
 def test_variant_guard_refuses_incomplete_live_evidence():
