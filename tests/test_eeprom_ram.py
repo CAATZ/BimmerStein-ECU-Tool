@@ -616,6 +616,93 @@ def test_identical_target_archives_and_succeeds_without_writing(
     }
 
 
+def test_transmission_write_refuses_stale_preflight_before_any_byte(
+    tmp_path, monkeypatch
+):
+    reviewed = _valid_image()
+    live = bytearray(reviewed)
+    live[0x20] ^= 0x01
+    events = []
+
+    class Interface:
+        is_open = True
+
+        def close(self):
+            self.is_open = False
+            events.append("closed")
+
+    class Protocol:
+        identity = {"version": 3, "capabilities": 0x0F, "entry_marker": 0}
+        baud_tier = "high"
+
+        def stable_dump(self):
+            return bytes(live)
+
+        def write_byte(self, _operation):
+            pytest.fail("stale preflight must be rejected before a byte write")
+
+        def quit_to_normal(self):
+            events.append("quit")
+            return True
+
+    monkeypatch.setattr(
+        eeprom_ram, "_open_agent",
+        lambda *_a, **_k: (_admission(), Interface(), Protocol()),
+    )
+    with pytest.raises(eeprom_ram.EepromError, match="changed since"):
+        eeprom_ram.write_transmission(
+            "COM1",
+            "at",
+            backup_path=tmp_path / "before.bin",
+            confirm=lambda _message: pytest.fail("stale write cannot be confirmed"),
+            expected_before=reviewed,
+        )
+    assert events == ["quit", "closed"]
+
+
+def test_image_write_refuses_stale_preflight_before_any_byte(tmp_path, monkeypatch):
+    reviewed = _valid_image()
+    live = bytearray(reviewed)
+    live[0x20] ^= 0x01
+    events = []
+
+    class Interface:
+        is_open = True
+
+        def close(self):
+            self.is_open = False
+            events.append("closed")
+
+    class Protocol:
+        identity = {"version": 3, "capabilities": 0x0F, "entry_marker": 0}
+        baud_tier = "high"
+
+        def stable_dump(self):
+            return bytes(live)
+
+        def write_byte(self, _operation):
+            pytest.fail("stale image must be rejected before a byte write")
+
+        def quit_to_normal(self):
+            events.append("quit")
+            return True
+
+    monkeypatch.setattr(
+        eeprom_ram, "_open_agent",
+        lambda *_a, **_k: (_admission(), Interface(), Protocol()),
+    )
+    with pytest.raises(eeprom_ram.EepromError, match="changed since"):
+        eeprom_ram.write_image(
+            "COM1",
+            reviewed,
+            variant="MS41.3",
+            backup_path=tmp_path / "before.bin",
+            confirm=lambda _message: pytest.fail("stale write cannot be confirmed"),
+            expected_before=reviewed,
+        )
+    assert events == ["quit", "closed"]
+
+
 def test_generic_write_cancelled_before_first_byte(monkeypatch, tmp_path):
     before = _valid_image()
     target = eeprom_ram.set_transmission_mode(before, "at")

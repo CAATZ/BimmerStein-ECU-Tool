@@ -14,9 +14,12 @@ shared by BimmerStein applications.
   fault reading, and clearing for exact supported profiles.
 - Added human-readable GM3 and E46 driver-seat coding with an optional Advanced
   view for technical references.
-- Added programming-history and program-lineage fields to ECU Info, a read-only
-  transmission-swap compatibility summary, and advisory pre-write voltage
-  warnings.
+- Added guided manual/automatic conversion for exact reviewed E39 MS41-family,
+  E46 MS42 AM51, and late E46 MS43 EV51 profiles, including complete preflight,
+  durable owner archives, restart recovery, mandatory ignition-cycle handoff,
+  and independent final verification.
+- Added programming-history and program-lineage fields to ECU Info and advisory
+  pre-write voltage warnings.
 
 ### Fixed
 

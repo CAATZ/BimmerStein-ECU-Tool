@@ -1149,11 +1149,14 @@ def _write_eeprom(
     variant: str | None,
     backup_path: str | os.PathLike,
     confirm,
+    expected_before: bytes | None = None,
     baud="auto",
     log=print,
     operation="eeprom_image",
     serial_factory=None,
 ) -> Capture:
+    if expected_before is not None:
+        expected_before = validate_physical_capture(expected_before)
     backup = Path(backup_path)
     if backup.exists():
         raise FileExistsError(f"refusing to overwrite EEPROM backup {backup}")
@@ -1198,6 +1201,9 @@ def _write_eeprom(
                 f"{admission.program_variant}")
         active_variant = admission.program_variant
         before = protocol.stable_dump()
+        if expected_before is not None and before != expected_before:
+            raise EepromError(
+                "EEPROM changed since compatibility checking; no byte write was sent")
         target = validate_physical_capture(
             target_builder(before, admission))
         plan = build_write_plan(before, target, active_variant)
@@ -1347,6 +1353,7 @@ def write_image(
     variant: str,
     backup_path: str | os.PathLike,
     confirm,
+    expected_before: bytes | None = None,
     baud="auto",
     log=print,
     serial_factory=None,
@@ -1359,6 +1366,7 @@ def write_image(
         variant=variant,
         backup_path=backup_path,
         confirm=confirm,
+        expected_before=expected_before,
         baud=baud,
         log=log,
         operation="eeprom_image",
@@ -1372,6 +1380,7 @@ def write_transmission(
     *,
     backup_path: str | os.PathLike,
     confirm,
+    expected_before: bytes | None = None,
     baud="auto",
     log=print,
     serial_factory=None,
@@ -1384,6 +1393,7 @@ def write_transmission(
         variant=None,
         backup_path=backup_path,
         confirm=confirm,
+        expected_before=expected_before,
         baud=baud,
         log=log,
         operation="eeprom_transmission",
