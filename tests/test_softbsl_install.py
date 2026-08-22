@@ -641,7 +641,7 @@ def test_ms411_deprecated_calguard_directly_upgrades_during_softbsl_compose(
     assert is_applied(composed, patches["door_magic_ms411"])
     assert is_applied(composed, patches["cal_guard"])
     assert not is_applied(composed, patches[legacy_id])
-    assert any("exact prior revision" in line for line in log)
+    assert f"removed exact predecessor {legacy_id}" in log
 
 
 def test_complete_existing_loader_asks_and_allows_reinstall():
@@ -825,7 +825,7 @@ def test_persistent_composer_rejects_a_partial_deprecated_calguard():
     old[0x5E20] ^= 0x01
 
     with pytest.raises(
-            softbsl_install._sb.SoftBSLError,
+            softbsl_install.SoftBSLInstallError,
             match="deprecated CalGuard is partial/corrupt"):
         softbsl_install.compose_persistent_target(
             old, with_calguard=True, marker="B", chip="29f400")
@@ -859,6 +859,7 @@ def test_fixed_relocated_loader_restores_the_hardware_proven_crc_bytes():
 def test_installer_composes_relocated_loader_for_both_flash_families(
         version, chip, wants_amd):
     from engines.patcher import patch_ms41
+    from engines.patcher.cal_guard_exact import CAVE_FILE, CAVE_SIZE
     from tests.conftest import ref
 
     stock = ref(version)
@@ -897,9 +898,10 @@ def test_installer_composes_relocated_loader_for_both_flash_families(
                           if edit["off"] == 0x5C32)
         guard = patches["cal_guard"]
         guard_body = next(edit for edit in guard["edits"]
-                          if edit["off"] == guard["cave"]["base"])
+                          if edit["off"] == CAVE_FILE)
         assert amd_end == loader_crc["off"] == 0x5C32
-        assert guard_body["off"] + len(bytes.fromhex(guard_body["data"])) == 0x3BF80
+        assert guard_body["off"] + len(bytes.fromhex(guard_body["data"])) == (
+            CAVE_FILE + CAVE_SIZE)
     finally:
         if args.target:
             shutil.rmtree(Path(args.target).parent, ignore_errors=True)
