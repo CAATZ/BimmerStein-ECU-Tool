@@ -952,8 +952,7 @@ def test_transport_requires_capability_echo_and_declared_low_rate():
     token = source.ds2_image[TOKEN_ADDRESS : TOKEN_ADDRESS + TOKEN_LENGTH]
     serial = PartialWriteStockSerial(source.ds2_image, token=token)
     serial.native_fast_capable = False
-    with pytest.raises(
-            UnsafePartialWriteCommand, match="supported direct USB transport"):
+    with pytest.raises(UnsafePartialWriteCommand, match="supported direct USB transport"):
         NativeFastPartialWriteTransport(serial)
     serial.native_fast_capable = True
     with pytest.raises(UnsafePartialWriteCommand, match="echo"):
