@@ -17,8 +17,6 @@ from transmission_conversion import (
 from vehicle_coding_profiles import (
     CodingProfile as ModuleCodingProfile,
     CodingRegion,
-    GM3_PROFILES,
-    SM_E46_PROFILES,
     TARGET_BY_KEY,
     profiles_for_target,
     resolve_profile,
