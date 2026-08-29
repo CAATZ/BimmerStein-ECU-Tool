@@ -31,6 +31,7 @@ definitions/
 
 # Internal engineering material is maintained in a separate local-only repo
 /_private/
+/docs/evidence/
 *.private.md
 
 # Operating-system and editor files
