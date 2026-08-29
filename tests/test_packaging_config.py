@@ -257,6 +257,8 @@ def test_inno_installer_uses_bimmerstein_identity_and_per_user_install():
     )
     assert "AppName={#SetupAppName}" in installer
     assert '#define SetupAppName "BimmerStein ECU Tool"' in installer
+    assert '#define SetupShortcutSuffix " (Nuitka)"' in installer
+    assert '#define SetupShortcutSuffix ""' in installer
     assert '#define AppNumericVersion "0.1.0.14"' in installer
     assert 'SetupAppName "BimmerStein ECU Tool (' not in installer
     assert "AppPublisher=CAATZ" in installer
@@ -270,8 +272,9 @@ def test_inno_installer_uses_bimmerstein_identity_and_per_user_install():
     assert "InfoBeforeFile={#SourceDir}\\RELEASE_NOTES.md" in installer
     assert 'Name: "desktopicon"' in installer
     assert 'Filename: "{app}\\BimmerStein ECU Tool.exe"' in installer
-    assert 'Name: "{group}\\{#SetupAppName}"' in installer
-    assert 'Name: "{autodesktop}\\{#SetupAppName}"' in installer
+    assert "DefaultGroupName={#SetupAppName}{#SetupShortcutSuffix}" in installer
+    assert 'Name: "{group}\\{#SetupAppName}{#SetupShortcutSuffix}"' in installer
+    assert 'Name: "{autodesktop}\\{#SetupAppName}{#SetupShortcutSuffix}"' in installer
 
     builder = (ROOT / "packaging" / "build_installer.ps1").read_text(
         encoding="utf-8"
