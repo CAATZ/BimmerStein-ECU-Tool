@@ -20,9 +20,11 @@
 #ifdef NuitkaBuild
   #define SetupAppId "{{53C48669-F8A0-4C31-A2C1-E4AF447F71CA}"
   #define SetupInstallDirName "BimmerStein ECU Tool-N"
+  #define SetupShortcutSuffix " (Nuitka)"
 #else
   #define SetupAppId "{{2FB57080-7F5F-4C36-B723-55377DC11A55}"
   #define SetupInstallDirName "BimmerStein ECU Tool"
+  #define SetupShortcutSuffix ""
 #endif
 #define InstallerDescription "BimmerStein ECU Tool Installer"
 
@@ -41,7 +43,7 @@ VersionInfoDescription={#InstallerDescription}
 VersionInfoProductName={#SetupAppName}
 VersionInfoProductVersion={#AppNumericVersion}
 DefaultDirName={localappdata}\Programs\{#SetupInstallDirName}
-DefaultGroupName={#SetupAppName}
+DefaultGroupName={#SetupAppName}{#SetupShortcutSuffix}
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -67,8 +69,8 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 Source: "..\assets\bimmerstein_ecu_tool.ico"; DestDir: "{app}"; DestName: "BimmerStein-ECU-Tool-{#AppVersion}{#PackageSuffix}.ico"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#SetupAppName}"; Filename: "{app}\BimmerStein ECU Tool.exe"; WorkingDir: "{app}"; IconFilename: "{app}\BimmerStein-ECU-Tool-{#AppVersion}{#PackageSuffix}.ico"
-Name: "{autodesktop}\{#SetupAppName}"; Filename: "{app}\BimmerStein ECU Tool.exe"; WorkingDir: "{app}"; IconFilename: "{app}\BimmerStein-ECU-Tool-{#AppVersion}{#PackageSuffix}.ico"; Tasks: desktopicon
+Name: "{group}\{#SetupAppName}{#SetupShortcutSuffix}"; Filename: "{app}\BimmerStein ECU Tool.exe"; WorkingDir: "{app}"; IconFilename: "{app}\BimmerStein-ECU-Tool-{#AppVersion}{#PackageSuffix}.ico"
+Name: "{autodesktop}\{#SetupAppName}{#SetupShortcutSuffix}"; Filename: "{app}\BimmerStein ECU Tool.exe"; WorkingDir: "{app}"; IconFilename: "{app}\BimmerStein-ECU-Tool-{#AppVersion}{#PackageSuffix}.ico"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\BimmerStein ECU Tool.exe"; Description: "Launch {#SetupAppName}"; Flags: nowait postinstall skipifsilent
