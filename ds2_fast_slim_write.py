@@ -17,6 +17,8 @@ import ecu_info
 from ds2_fast_contracts import (
     CommitUnknownError,
     FastOperation,
+    FlashOperation,
+    FlashRequest,
     LinkRate,
     ResponseStatus,
     SessionState,
@@ -92,6 +94,20 @@ class SlimPartialWriteResult:
 
 
 @dataclass(frozen=True)
+class EepromRecordWriteResult:
+    record: bytes
+    previous_record: bytes
+    identity: bytes
+    variant: str
+    offset: int
+    written: bool
+    final_link: LinkRate
+    final_state: SessionState
+    cleanup_attempted: bool
+    power_cycle_required: bool = True
+
+
+@dataclass(frozen=True)
 class SlimFullWriteResult:
     operation_id: str
     journal_path: Path
@@ -105,6 +121,32 @@ class SlimFullWriteResult:
     final_state: SessionState
     cleanup_attempted: bool = False
     power_cycle_required: bool = True
+
+
+def validate_eeprom_record_change(
+    variant: str,
+    expected_record: bytes,
+    target_record: bytes,
+) -> tuple[int, bytes, bytes]:
+    """Validate the narrow transmission-record write request without I/O."""
+
+    from engines.softbsl import eeprom_ram
+
+    offset = eeprom_ram.transmission_offset(variant)
+    expected = bytes(expected_record)
+    target = bytes(target_record)
+    expected_fields = eeprom_ram.decode_transmission_record(expected)
+    target_fields = eeprom_ram.decode_transmission_record(target)
+    # An uncertain prior write may leave a bytewise original/target mixture and
+    # therefore an invalid expected check.  The live compare still binds those
+    # exact four bytes; only the target must be a complete valid record.
+    if not target_fields["check_ok"]:
+        raise ValueError("target transmission record has an invalid check word")
+    if expected_fields["preserved_bits"] != target_fields["preserved_bits"]:
+        raise ValueError("target changes transmission-record bits outside bits 0..1")
+    if target_fields["mode_bits"] not in (1, 2):
+        raise ValueError("target transmission mode must be automatic or manual")
+    return offset, expected, target
 
 
 class _SlimTokenMixin:
@@ -472,6 +514,171 @@ class SlimNativeFastPartialWriteSession(
                     safe_legacy_fallback=self.safe_legacy_fallback,
                     verify_requested=self.verify_write,
                     power_cycle_required=power_cycle_required,
+                )
+            raise
+
+    def execute_eeprom_record(
+        self,
+        variant: str,
+        expected_record: bytes,
+        target_record: bytes,
+        *,
+        expected_identity: bytes | None = None,
+    ) -> EepromRecordWriteResult:
+        """Compare, write, and immediately verify one transmission record."""
+
+        offset = None
+        expected = b""
+        target = b""
+        actual_before = b""
+        write_attempted = False
+        try:
+            offset, expected, target = validate_eeprom_record_change(
+                variant,
+                expected_record,
+                target_record,
+            )
+            if expected_identity is not None:
+                expected_identity = bytes(expected_identity)
+                if len(expected_identity) != 42:
+                    raise ValueError("expected identity must be exactly 42 bytes")
+            self.identity = self._identify()
+            if (
+                expected_identity is not None
+                and self.identity != expected_identity
+            ):
+                raise PartialWriteStateError(
+                    "live ECU identity differs from the identity bound to the request"
+                )
+            self._discover_token()
+            self._set_state(
+                state=SessionState.TOKEN_KNOWN,
+                link=LinkRate.LOW,
+                reason="identity, transmission record, and token validated",
+            )
+            self._authorize_once()
+            self._arm_and_enter_high()
+            self._high_rate_stability_check()
+
+            # The authorized selector-0x01 entry retains the stock 0x55 fast
+            # marker required by both EEPROM selector-3 read and subcommand-3 write.
+            read_address = (0x03 << 24) | offset
+            actual_before = self._read_mem(
+                read_address,
+                4,
+                label=f"eeprom_transmission_compare_0x{offset:03X}",
+            )
+            if actual_before != expected:
+                raise PartialWriteStateError(
+                    "live transmission record changed before write: expected "
+                    f"{expected.hex(' ')}, received {actual_before.hex(' ')}"
+                )
+
+            if actual_before != target:
+                request = FlashRequest(
+                    FlashOperation.EEPROM_WRITE,
+                    offset,
+                    target,
+                )
+                self.destructive_started = True
+                write_attempted = True
+                self._record(
+                    "destructive_boundary_crossed",
+                    request_operation="0x03",
+                    response_operation="0x03",
+                    address=f"0x{offset:03X}",
+                    bytes=4,
+                    retry_policy="never",
+                )
+                self._flash(
+                    request,
+                    label=f"eeprom_transmission_write_0x{offset:03X}_4",
+                    timeout=5.0,
+                )
+                self.flash_completed = True
+
+            actual_after = self._read_mem(
+                read_address,
+                4,
+                label=f"eeprom_transmission_readback_0x{offset:03X}",
+            )
+            if actual_after != target:
+                index = next(
+                    i
+                    for i, (expected_byte, actual_byte) in enumerate(
+                        zip(target, actual_after)
+                    )
+                    if expected_byte != actual_byte
+                )
+                raise PartialWriteReadbackMismatch(
+                    offset + index,
+                    target[index],
+                    actual_after[index],
+                )
+            self.restore_verified = True
+            cleanup_confirmed = self._cleanup_to_low()
+            result = EepromRecordWriteResult(
+                record=actual_after,
+                previous_record=actual_before,
+                identity=bytes(self.identity or b""),
+                variant=str(variant),
+                offset=offset,
+                written=write_attempted,
+                final_link=self.link,
+                final_state=self.state,
+                cleanup_attempted=self.cleanup_attempted,
+            )
+            self.journal.finish(
+                "success" if cleanup_confirmed else "power_cycle_required",
+                operation="eeprom_transmission_record",
+                address=f"0x{offset:03X}",
+                bytes=4,
+                written=write_attempted,
+                readback_verified=True,
+                retry_policy="never",
+                cleanup_confirmed=cleanup_confirmed,
+            )
+            return result
+        except Exception as error:
+            self.failure_state = self.state
+            cleanup_confirmed = False
+            cleanup_error = None
+            try:
+                if self.token is not None and self.link in (
+                    LinkRate.HIGH,
+                    LinkRate.MID,
+                ):
+                    cleanup_confirmed = self._cleanup_to_low()
+                elif not self.destructive_started:
+                    cleanup_confirmed = self._recover_pre_erase_to_low()
+            except Exception as caught_cleanup_error:
+                cleanup_error = caught_cleanup_error
+
+            commit_unknown = isinstance(error, CommitUnknownError)
+            if commit_unknown:
+                self.state = SessionState.COMMIT_UNKNOWN
+            elif cleanup_confirmed:
+                self.state = SessionState.LOW_READY
+            elif self.write_authorized or self.authorization_may_be_active:
+                self.state = SessionState.POWER_CYCLE_REQUIRED
+            else:
+                self.state = SessionState.FAILED
+            if not self.journal.closed:
+                self.journal.finish(
+                    "commit_unknown" if commit_unknown else "failed",
+                    operation="eeprom_transmission_record",
+                    address=(None if offset is None else f"0x{offset:03X}"),
+                    bytes=4,
+                    write_attempted=write_attempted,
+                    commit_unknown=commit_unknown,
+                    retry_allowed=False,
+                    cleanup_confirmed=cleanup_confirmed,
+                    cleanup_error=(
+                        None
+                        if cleanup_error is None
+                        else f"{type(cleanup_error).__name__}: {cleanup_error}"
+                    ),
+                    error=f"{type(error).__name__}: {error}",
                 )
             raise
 

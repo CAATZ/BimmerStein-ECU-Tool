@@ -30,6 +30,7 @@ from ds2_fast_plans import (
 )
 from ds2_fast_read import (
     CAPTURED_RATE_PROFILE,
+    EEPROM_READ_SELECTOR,
     FastReadError,
     FastReadTimeout,
     NativeFastReadReentryNotReady,
@@ -43,6 +44,7 @@ from ds2_fast_read import (
     TOKEN_LENGTH,
     UnsafeReadOnlyCommand,
     read_full_d2xx,
+    read_eeprom_record_d2xx,
     read_partial_d2xx,
 )
 from ds2_write_authorization import (
@@ -122,6 +124,7 @@ class ReadOnlyStockSerial:
             ((address * 17 + 3) & 0xFF) for address in range(FULL_IMAGE_SIZE)
         )
         self.memory[TOKEN_ADDRESS : TOKEN_ADDRESS + TOKEN_LENGTH] = self.token
+        self.eeprom = bytearray(0x200)
 
     def _reentry_state(self):
         return self.reentry_states[min(self.reentry_index, len(self.reentry_states) - 1)]
@@ -215,6 +218,11 @@ class ReadOnlyStockSerial:
             elif address == NATIVE_FAST_REENTRY_LATCH_ADDRESS and count == 1:
                 data = bytearray((marker["e659"],))
                 self.reentry_index += 1
+            elif address >> 24 == EEPROM_READ_SELECTOR:
+                assert self.fast_state
+                assert self.selector == SELECTOR_HIGH
+                offset = address & 0xFFFFFF
+                data = bytearray(self.eeprom[offset : offset + count])
             else:
                 data = bytearray(self.memory[address : address + count])
             self.read_hits[address] += 1
@@ -392,6 +400,90 @@ def test_partial_read_restores_low_and_confirms_identity_after_b0():
         (9600, 0x00, b""),
     ]
     assert sleeps[-1] == pytest.approx(0)
+
+
+@pytest.mark.parametrize(
+    ("variant", "offset"),
+    (
+        ("MS41.0", 0x196),
+        ("MS41.1", 0x1CC),
+        ("MS41.2", 0x1CA),
+        ("MS41.3", 0x1CA),
+    ),
+)
+def test_eeprom_record_read_uses_selector_three_only_after_native_fast_entry(
+    variant,
+    offset,
+):
+    serial = ReadOnlyStockSerial()
+    record = b"\x01\x00\x02\x00"
+    serial.eeprom[offset : offset + 4] = record
+    session = _session(serial)
+
+    result = session.read_eeprom_record(
+        variant,
+        offset,
+        expected_identity=serial.identity,
+    )
+
+    assert result.record == record
+    assert result.identity == serial.identity
+    assert result.offset == offset
+    selector_index = next(
+        index
+        for index, (_baud, command, args) in enumerate(serial.requests)
+        if command == SELECTOR_COMMAND and args[:1] == bytes((SELECTOR_HIGH,))
+    )
+    read_index = serial.requests.index(
+        (
+            187500,
+            0x06,
+            bytes((EEPROM_READ_SELECTOR, 0x00))
+            + offset.to_bytes(2, "big")
+            + b"\x04",
+        )
+    )
+    assert selector_index < read_index
+    assert result.final_link is LinkRate.LOW
+
+
+def test_eeprom_record_read_identity_mismatch_stops_before_selector():
+    serial = ReadOnlyStockSerial()
+    session = _session(serial)
+
+    with pytest.raises(FastReadError, match="identity differs"):
+        session.read_eeprom_record(
+            "MS41.2",
+            0x1CA,
+            expected_identity=b"X" * 42,
+        )
+
+    assert not any(
+        command == SELECTOR_COMMAND and len(args) == TOKEN_LENGTH + 1
+        for _baud, command, args in serial.requests
+    )
+
+
+def test_eeprom_record_read_service_passes_android_compatible_serial_factory():
+    serial = ReadOnlyStockSerial()
+    serial.eeprom[0x1CA : 0x1CE] = b"\x02\x00\x03\x00"
+    calls = []
+
+    def factory(**kwargs):
+        calls.append(kwargs)
+        return serial
+
+    result = read_eeprom_record_d2xx(
+        "COM1",
+        "MS41.3",
+        expected_identity=serial.identity,
+        serial_factory=factory,
+    )
+
+    assert result.record == b"\x02\x00\x03\x00"
+    assert calls[0]["port"] == "COM1"
+    assert calls[0]["baudrate"] == 9600
+    assert serial.is_open is False
 
 
 def test_partial_read_records_empty_queues_after_captured_b0_cleanup():

@@ -6166,78 +6166,56 @@ def test_tab_order_is_workflow_grouped():
         w.close()
 
 
-def test_coding_tab_reads_humanized_gm3_settings_and_writes_reviewed_changes(
-        monkeypatch):
-    from vehicle_coding import GM3CodingState, GM3_PROFILES
+def test_coding_tab_reads_generic_module_and_preserves_custom_values(monkeypatch):
+    from vehicle_coding import ModuleCodingState
+    from vehicle_coding_profiles import (
+        CodingChoice, CodingPart, CodingProfile, CodingRegion, CodingSetting,
+    )
 
-    app, w = _gui()
+    toggle = CodingSetting(
+        "comfort_open", "Comfort opening", "Open windows from the key.",
+        "KOMFORTOEFFNUNG", "basic", (CodingPart("b0", 0, b"\x01"),),
+        (
+            CodingChoice("on", "On", "aktiv", (b"\x01",)),
+            CodingChoice("off", "Off", "nicht_aktiv", (b"\x00",)),
+        ),
+        ("on", "off"),
+    )
+    custom = CodingSetting(
+        "alarm_tone", "Alarm tone", "Choose the alarm tone.", "ALARM_TON",
+        "advanced", (CodingPart("b0", 0, b"\x06"),),
+        (
+            CodingChoice("tone_1", "Tone 1", "wert_01", (b"\x00",)),
+            CodingChoice("tone_2", "Tone 2", "wert_02", (b"\x01",)),
+        ),
+    )
+    profile = CodingProfile(
+        "E39.GM3.TEST", "e39_gm3", "E39", "GM3", "General Module (GM3)",
+        0x00, "gm3_selected", 0x04, (0x04,), "BYTE",
+        (CodingRegion("b0", 0, 0, 1),), (toggle, custom),
+    )
+    state = ModuleCodingState(profile, (("b0", b"\x06"),), b"ident")
     connection = object()
-    data = bytearray(17)
-    state = GM3CodingState(GM3_PROFILES[0], bytes(data), b"ident")
     written = []
+    questions = []
 
     def sync_run(task, on_success=None, **_kwargs):
         result = task(lambda *_args: None, lambda *_args: None)
         if on_success:
             on_success(result)
 
-    try:
-        w._ds2 = connection
-        w._connection_echo = True
-        monkeypatch.setattr(w, "_run_task", sync_run)
-        monkeypatch.setattr(gui, "read_gm3_coding", lambda ds2: state)
-        monkeypatch.setattr(
-            gui, "write_gm3_coding",
-            lambda ds2, profile_key, expected, values:
-            written.append((ds2, profile_key, expected, values)) or state,
-        )
-        monkeypatch.setattr(
-            QMessageBox, "question",
-            staticmethod(lambda *_args, **_kwargs: QMessageBox.Yes),
-        )
-        monkeypatch.setattr(
-            QMessageBox, "information", staticmethod(lambda *_args, **_kwargs: None)
-        )
-
-        w._on_read_gm3_coding()
-        assert "GM3.C04" not in w.lbl_gm3_coding.text()
-        supported = {feature.key for feature in state.profile.features}
-        assert all(w._gm3_checks[key].isEnabled() for key in supported)
-        assert w._coding_rows["auto_relock"][0].isHidden()
-        assert w._coding_rows["key_memory"][0].isHidden()
-        w.chk_coding_advanced.setChecked(True)
-        assert "GM3.C04" in w.lbl_gm3_coding.text()
-        assert not w._coding_rows["key_memory"][0].isHidden()
-
-        w._gm3_checks["remote_open"].setChecked(True)
-        w._on_write_gm3_coding()
-
-        assert written[0][0] is connection
-        assert written[0][1] == "GM3.C04"
-        assert written[0][2] == bytes(data)
-        assert written[0][3]["remote_open"] is True
-    finally:
-        w._ds2 = None
-        w.close()
-
-
-def test_coding_tab_reads_and_writes_exact_e46_seat_choices(monkeypatch):
-    from vehicle_coding import ModuleCodingState, SM_E46_PROFILES
-
     app, w = _gui()
-    connection = object()
-    state = ModuleCodingState(SM_E46_PROFILES[0], b"\xF8", b"ident")
-    written = []
-
-    def sync_run(task, on_success=None, **_kwargs):
-        result = task(lambda *_args: None, lambda *_args: None)
-        if on_success:
-            on_success(result)
-
     try:
+        w.cb_coding_chassis.setCurrentText("E39")
+        w.cb_coding_module.setCurrentIndex(
+            w.cb_coding_module.findData("e39_gm3"))
         w._ds2 = connection
         w._connection_echo = True
         monkeypatch.setattr(w, "_run_task", sync_run)
+        monkeypatch.setattr(
+            w, "_prewrite_battery_notice",
+            lambda: "Battery voltage: 11.70 V — LOW (warning only)",
+        )
         monkeypatch.setattr(gui, "read_module_coding", lambda ds2, key: state)
         monkeypatch.setattr(
             gui, "write_module_coding",
@@ -6245,29 +6223,62 @@ def test_coding_tab_reads_and_writes_exact_e46_seat_choices(monkeypatch):
         )
         monkeypatch.setattr(
             QMessageBox, "question",
-            staticmethod(lambda *_args, **_kwargs: QMessageBox.Yes),
+            staticmethod(
+                lambda *_args, **_kwargs:
+                questions.append(_args[2]) or QMessageBox.Yes
+            ),
         )
         monkeypatch.setattr(
             QMessageBox, "information", staticmethod(lambda *_args, **_kwargs: None)
         )
 
-        w._on_read_seat_coding()
-        assert w.cb_seat_timing.currentData() == "unlock"
-        assert not w.chk_seat_one_touch.isChecked()
-        assert w.lbl_seat_reference.isHidden()
+        w._on_read_module_coding()
+        assert w._coding_controls["comfort_open"].isEnabled()
+        assert "KOMFORTOEFFNUNG" not in w._coding_controls["comfort_open"].toolTip()
+        assert w._coding_rows["alarm_tone"][0].isHidden()
+        w.chk_coding_advanced.setChecked(True)
+        assert "E39.GM3.TEST" in w.lbl_module_coding.text()
+        assert "KOMFORTOEFFNUNG" in w._coding_controls["comfort_open"].toolTip()
+        assert w._coding_controls["alarm_tone"].currentData() is None
+        assert not w._coding_rows["alarm_tone"][0].isHidden()
+        w.txt_coding_search.setText("alarm tone")
+        assert w._coding_rows["comfort_open"][0].isHidden()
+        assert not w._coding_rows["alarm_tone"][0].isHidden()
 
-        w.cb_seat_timing.setCurrentIndex(
-            w.cb_seat_timing.findData("unlock_and_door"))
-        w.chk_seat_one_touch.setChecked(True)
-        w._on_write_seat_coding()
+        w._coding_controls["comfort_open"].setChecked(True)
+        w._on_write_module_coding()
 
         assert written[0][:4] == (
-            connection, "sm_e46", "SM_E46.C01", b"\xF8",
+            connection, "e39_gm3", "E39.GM3.TEST", b"\x06",
         )
-        assert written[0][4] == {
-            "automatic_seat_adjustment_timing": "unlock_and_door",
-            "one_touch_memory": True,
-        }
+        assert written[0][4] == {"comfort_open": True}
+        assert "11.70 V — LOW" in questions[0]
+    finally:
+        w._ds2 = None
+        w.close()
+
+
+def test_coding_tab_blocks_ads_target_before_bus_request(monkeypatch):
+    app, w = _gui()
+    called = []
+    try:
+        w._ds2 = object()
+        w._connection_echo = True
+        w.cb_coding_chassis.setCurrentText("E36")
+        w.cb_coding_module.setCurrentIndex(
+            w.cb_coding_module.findData("e36_gm4"))
+        monkeypatch.setattr(
+            gui, "read_module_coding", lambda *_args: called.append(True)
+        )
+        monkeypatch.setattr(
+            QMessageBox, "warning", staticmethod(lambda *_args, **_kwargs: None)
+        )
+
+        w._update_coding_actions()
+        assert not w.btn_read_module_coding.isEnabled()
+        w._on_read_module_coding()
+        assert not called
+        assert "ADS/L-line" in w.lbl_module_coding.text()
     finally:
         w._ds2 = None
         w.close()
@@ -6355,24 +6366,22 @@ def test_transmission_conversion_requires_preflight_confirmation_and_cycle(
         w.close()
 
 
-def test_transmission_conversion_treats_verified_eeprom_reset_as_cycle_required(
-        monkeypatch, tmp_path):
+def test_transmission_conversion_advances_after_verified_native_record_write(
+        monkeypatch):
     import transmission_conversion as conversion
-    from engines.softbsl import eeprom_ram
 
     _app, w = _gui()
-    target = bytes(range(256)) * 2
+    before = bytes.fromhex("AD A5 53 01")
+    target = bytes.fromhex("AE A5 54 01")
     session = conversion.ConnectedSwapSession(
         "plan-reset", "ready", "Ready", (), (), (),
         conversion.Transmission.AUTOMATIC,
         conversion.Transmission.MANUAL,
         "MS41.2", "E39",
         dme_ident=b"1406464" + bytes(35),
-        eeprom_before=bytes(reversed(target)),
+        eeprom_before=before,
         eeprom_target=target,
     )
-    backup = tmp_path / "before.bin"
-    eeprom_ram._after_capture_path(backup).write_bytes(target)
     journal_events = []
 
     class Journal:
@@ -6388,19 +6397,17 @@ def test_transmission_conversion_treats_verified_eeprom_reset_as_cycle_required(
     def write_modules(_ds2, current, **kwargs):
         assert kwargs["journal"] is w._transmission_swap_journal
         assert kwargs["journal_id"] == session.token
-        assert kwargs["eeprom_current"] == session.eeprom_before
+        assert kwargs["eeprom_current"] == before
         current.phase = "modules_written"
         return current.wire()
 
-    eeprom_runs = 0
-
-    def fresh_read_then_verified_reset(*_args, **_kwargs):
-        nonlocal eeprom_runs
-        eeprom_runs += 1
-        if eeprom_runs == 1:
-            return type("Capture", (), {"image": session.eeprom_before})()
+    def write_record(family, expected, reviewed, identity, *_args):
+        assert (family, expected, reviewed, identity) == (
+            "MS41.2", before, target, session.dme_ident)
+        # A verified write is enough to advance even when normal DS2 does not
+        # immediately reopen; the required ignition cycle is already next.
         w._ds2 = None
-        raise eeprom_ram.EepromResetRequired("normal reset was not confirmed")
+        return target
 
     try:
         w._ds2 = object()
@@ -6408,9 +6415,11 @@ def test_transmission_conversion_treats_verified_eeprom_reset_as_cycle_required(
         w._transmission_swap_sessions[session.token] = session
         monkeypatch.setattr(
             conversion, "write_connected_modules", write_modules)
-        monkeypatch.setattr(w, "_automatic_eeprom_path", lambda _prefix: str(backup))
         monkeypatch.setattr(
-            w, "_run_via_eeprom", fresh_read_then_verified_reset)
+            w, "_read_transmission_eeprom_record",
+            lambda *_args: before)
+        monkeypatch.setattr(
+            w, "_write_transmission_eeprom_record", write_record)
 
         result = w._execute_transmission_swap_core(
             session.token, True, lambda *_args: None, lambda *_args: None)
@@ -6418,7 +6427,6 @@ def test_transmission_conversion_treats_verified_eeprom_reset_as_cycle_required(
         assert result["status"] == "action_required"
         assert result["requires_key_cycle"] is True
         assert session.phase == "awaiting_cycle"
-        assert any("normal K-Line cleanup" in item for item in session.warnings)
         assert [event[:3] for event in journal_events] == [
             ("intent", session.token, "dme_eeprom"),
             ("complete", session.token, "dme_eeprom"),
@@ -6426,6 +6434,107 @@ def test_transmission_conversion_treats_verified_eeprom_reset_as_cycle_required(
         ]
     finally:
         w._ds2 = None
+        w.close()
+
+
+def test_transmission_record_write_error_keeps_guided_recovery(monkeypatch):
+    import transmission_conversion as conversion
+
+    _app, w = _gui()
+    before = bytes.fromhex("AD A5 53 01")
+    target = bytes.fromhex("AE A5 54 01")
+    session = conversion.ConnectedSwapSession(
+        "plan-recovery", "ready", "Ready", (), (), (),
+        conversion.Transmission.AUTOMATIC,
+        conversion.Transmission.MANUAL,
+        "MS41.2", "E39",
+        dme_ident=b"1406464" + bytes(35),
+        eeprom_before=before,
+        eeprom_target=target,
+    )
+    intents = []
+
+    class Journal:
+        @staticmethod
+        def mark_write_intent(operation_id, owner, details):
+            intents.append((operation_id, owner, details))
+
+    def write_modules(_ds2, current, **_kwargs):
+        current.phase = "modules_written"
+        return current.wire()
+
+    def fail_write(*_args):
+        raise RuntimeError("write uncertain")
+
+    try:
+        w._ds2 = object()
+        w._transmission_swap_journal = Journal()
+        w._transmission_swap_sessions[session.token] = session
+        monkeypatch.setattr(
+            conversion, "write_connected_modules", write_modules)
+        monkeypatch.setattr(
+            conversion, "rollback_connected_modules",
+            lambda *_args, **_kwargs:
+            pytest.fail("record-write failure must use guided recovery"))
+        monkeypatch.setattr(
+            w, "_read_transmission_eeprom_record", lambda *_args: before)
+        monkeypatch.setattr(
+            w, "_write_transmission_eeprom_record", fail_write)
+
+        with pytest.raises(RuntimeError, match="write uncertain"):
+            w._execute_transmission_swap_core(
+                session.token, True, lambda *_args: None, lambda *_args: None)
+
+        assert session.phase == "recovery"
+        assert w._transmission_swap_sessions[session.token] is session
+        assert intents[0][:2] == (session.token, "dme_eeprom")
+    finally:
+        w._ds2 = None
+        w.close()
+
+
+def test_transmission_record_helpers_use_stock_native_ds2(monkeypatch):
+    _app, w = _gui()
+    identity = b"I" * ds2_fast_read.IDENTITY_LENGTH
+    before = bytes.fromhex("AD A5 53 01")
+    target = bytes.fromhex("AE A5 54 01")
+    calls = []
+
+    def handoff(operation, log_fn, progress_fn, *, expected_identity):
+        assert expected_identity == identity
+        return operation("COM1", progress_fn, log_fn)
+
+    def read_record(port, family, **kwargs):
+        calls.append(("read", port, family, kwargs))
+        return type("Read", (), {"record": before, "identity": identity})()
+
+    def write_record(port, family, expected, reviewed, **kwargs):
+        calls.append(("write", port, family, expected, reviewed, kwargs))
+        return type("Write", (), {"record": reviewed, "identity": identity})()
+
+    try:
+        w._connection_echo = False
+        monkeypatch.setattr(w, "_run_via_native_fast_ds2", handoff)
+        monkeypatch.setattr(
+            gui.ds2_fast_read, "read_eeprom_record_d2xx", read_record)
+        monkeypatch.setattr(
+            gui.ds2_native_fast_service,
+            "write_eeprom_record_d2xx",
+            write_record,
+        )
+
+        assert w._read_transmission_eeprom_record(
+            "MS41.2", identity, lambda *_args: None,
+            lambda *_args: None) == before
+        assert w._write_transmission_eeprom_record(
+            "MS41.2", before, target, identity,
+            lambda *_args: None, lambda *_args: None) == target
+
+        assert calls[0][3]["expected_identity"] == identity
+        assert calls[0][3]["echo"] is False
+        assert callable(calls[0][3]["event_cb"])
+        assert calls[1][5]["expected_identity"] == identity
+    finally:
         w.close()
 
 
@@ -6736,14 +6845,13 @@ def test_transmission_recovery_restores_awaiting_original_ui(monkeypatch):
     ],
 )
 def test_ms41_transmission_recovery_writes_exact_archived_eeprom(
-        monkeypatch, tmp_path, action, expected_phase, expected_attr,
+        monkeypatch, action, expected_phase, expected_attr,
         restoring_original):
     import transmission_conversion as conversion
-    from engines.softbsl import eeprom_ram
 
     _app, w = _gui()
-    before = bytes(range(256)) * 2
-    target = bytes(reversed(before))
+    before = bytes.fromhex("AD A5 53 01")
+    target = bytes.fromhex("AE A5 54 01")
     session = conversion.ConnectedSwapSession(
         "0123456789abcdef0123456789abcdef", "action_required", "Recover", (),
         (), (), conversion.Transmission.AUTOMATIC,
@@ -6765,9 +6873,9 @@ def test_ms41_transmission_recovery_writes_exact_archived_eeprom(
     def mark_intent(current, journal, **kwargs):
         calls["intent"] = (current, journal, kwargs)
 
-    def write_image(port, image, **kwargs):
-        calls["write"] = (port, image, kwargs)
-        return type("Capture", (), {"image": image})()
+    def write_record(family, expected, reviewed, identity, *_args):
+        calls["write"] = (family, expected, reviewed, identity)
+        return reviewed
 
     def finish(current, image, operation_id, **kwargs):
         calls["finish"] = (current.phase, image, operation_id, kwargs)
@@ -6780,17 +6888,10 @@ def test_ms41_transmission_recovery_writes_exact_archived_eeprom(
         w._transmission_swap_journal = object()
         monkeypatch.setattr(conversion, "recover_connected_modules", recover)
         monkeypatch.setattr(conversion, "mark_eeprom_write_intent", mark_intent)
-        monkeypatch.setattr(eeprom_ram, "write_image", write_image)
         monkeypatch.setattr(
-            w, "_automatic_eeprom_path",
-            lambda prefix: str(tmp_path / f"{prefix}.bin"))
-        def run_via_eeprom(operation, log_fn, progress_fn):
-            if "fresh_read" not in calls:
-                calls["fresh_read"] = True
-                return type("Capture", (), {"image": before})()
-            return operation("COM1", progress_fn, log_fn)
-
-        monkeypatch.setattr(w, "_run_via_eeprom", run_via_eeprom)
+            w, "_read_transmission_eeprom_record", lambda *_args: before)
+        monkeypatch.setattr(
+            w, "_write_transmission_eeprom_record", write_record)
         monkeypatch.setattr(w, "_finish_transmission_eeprom", finish)
 
         result = w._recover_transmission_swap_core(
@@ -6798,107 +6899,14 @@ def test_ms41_transmission_recovery_writes_exact_archived_eeprom(
             lambda *_args: None, lambda *_args: None)
 
         expected = getattr(session, expected_attr)
-        assert calls["write"][1] == expected
-        assert calls["write"][2]["variant"] == "MS41.2"
+        assert calls["write"] == (
+            "MS41.2", before, expected, session.dme_ident)
         assert calls["intent"][2]["restoring_original"] is restoring_original
         assert calls["finish"][1] == expected
         assert calls["finish"][3]["restoring_original"] is restoring_original
         assert result["recovery_action"] == action
     finally:
         w._ds2 = None
-        w.close()
-
-
-def test_retained_eeprom_resolution_completes_original_recovery_journal(
-        monkeypatch, tmp_path):
-    import transmission_conversion as conversion
-    from engines.softbsl import eeprom_ram
-
-    _app, w = _gui()
-    image = bytes(range(256)) * 2
-    session = conversion.ConnectedSwapSession(
-        "0123456789abcdef0123456789abcdef", "action_required", "Recover", (),
-        (), (), conversion.Transmission.AUTOMATIC,
-        conversion.Transmission.MANUAL, "MS41.2", "E39",
-        dme_ident=b"1406464 connected identity", program="1406464",
-        eeprom_before=image, eeprom_target=bytes(reversed(image)),
-        eeprom_variant="MS41.2",
-    )
-    session.phase = "eeprom_recovery"
-
-    class Recovery:
-        is_open = True
-        after_path = tmp_path / "after.bin"
-        variant = "MS41.2"
-
-    recovery = Recovery()
-    calls = []
-
-    def resolve(current):
-        assert current is recovery
-        current.is_open = False
-        return image
-
-    def finish(current, current_image, operation_id, **kwargs):
-        calls.append((current.phase, current_image, operation_id, kwargs))
-        current.phase = "rollback_awaiting_cycle"
-        return {
-            "title": "Original coding restored; ignition cycle required",
-            "source": "automatic", "target": "manual",
-            "requires_key_cycle": True,
-        }
-
-    def sync_run(task, on_success=None, on_failure=None):
-        try:
-            result = task(lambda *_args: None, lambda *_args: None)
-        except Exception as error:
-            if on_failure:
-                on_failure(error)
-        else:
-            if on_success:
-                on_success(result)
-
-    try:
-        w._connection_port = "COM1"
-        w._last_ident_raw = b"I" * ds2_fast_read.IDENTITY_LENGTH
-        w._eeprom_write_recovery = recovery
-        w._port_owner.acquire("eeprom")
-        w._transmission_swap_sessions[session.token] = session
-        w._transmission_swap_recovery_token = session.token
-        w._transmission_swap_eeprom_context = {
-            "token": session.token,
-            "journal_id": "restore-operation",
-            "restoring_original": True,
-            "resume_phase": "rollback_modules_written",
-        }
-        monkeypatch.setattr(eeprom_ram, "resolve_write_recovery", resolve)
-        monkeypatch.setattr(
-            eeprom_ram, "repair_write_recovery",
-            lambda *_args, **_kwargs:
-            pytest.fail("verified recovery must not replay writes"))
-        monkeypatch.setattr(
-            w, "_reopen_ds2_with_retry",
-            lambda *_args, **_kwargs: setattr(w, "_ds2", object()) or True)
-        monkeypatch.setattr(
-            w, "_catalogue_eeprom_safety_image", lambda *_args: None)
-        monkeypatch.setattr(w, "_show_eeprom_image", lambda *_args, **_kwargs: None)
-        monkeypatch.setattr(w, "_finish_transmission_eeprom", finish)
-        monkeypatch.setattr(w, "_run_task", sync_run)
-        monkeypatch.setattr(
-            QMessageBox, "information", staticmethod(lambda *_args, **_kwargs: None))
-
-        w._on_eeprom_resolve()
-
-        assert calls == [(
-            "rollback_modules_written", image, "restore-operation",
-            {"restoring_original": True},
-        )]
-        assert w._transmission_swap_phase == "awaiting_cycle"
-        assert w._transmission_swap_eeprom_context is None
-        assert w._transmission_swap_recovery_token is None
-    finally:
-        w._ds2 = None
-        w._port_owner.release("flasher")
         w.close()
 
 

@@ -58,15 +58,11 @@ from vehicle_diagnostics import (
     scan_modules,
 )
 from vehicle_coding import (
-    GM3_PROFILES,
-    GM3CodingState,
     ModuleCodingState,
-    SM_E46_PROFILES,
-    read_gm3_coding,
     read_module_coding,
-    write_gm3_coding,
     write_module_coding,
 )
+from vehicle_coding_profiles import TARGET_BY_KEY, targets_for_chassis
 import ecu_info
 from live_data import (LiveDataPoller, PROFILE_DISPLAY_NAMES,
                        TELEGRAM_PARAM_NAMES, display_rows, read_adaptations)
@@ -972,8 +968,8 @@ class MS41FlashGUI(QMainWindow):
         "btn_eeprom_write", "btn_ch341a_write", "btn_eeprom_seed",
         "btn_ch341a_restore", "btn_id_vin_apply", "btn_ews_send",
         "btn_softbsl_install", "btn_softbsl_xbank", "btn_native_recovery",
-        "btn_bsl_arm", "btn_bsl_vpp", "btn_write_gm3_coding",
-        "btn_write_seat_coding", "btn_clear_dtc",
+        "btn_bsl_arm", "btn_bsl_vpp", "btn_write_module_coding",
+        "btn_clear_dtc",
         "btn_transmission_swap_convert",
     )
 
@@ -989,7 +985,7 @@ class MS41FlashGUI(QMainWindow):
         self._ds2                 = None
         self._worker              = None
         self._dtcs                = []
-        self._gm3_coding_state    = None
+        self._module_coding_state = None
         self._ecu_variant         = None
         self._ecu_program_variant = None   # confirmed from full ROM read; resolves MS41.2/MS41.3 ambiguity
         self._softbsl_last_is_ms41_3 = False   # backward-compatible sticky used by older UI tests
@@ -1019,11 +1015,9 @@ class MS41FlashGUI(QMainWindow):
         self._softbsl_write_recovery = None # retained Soft-BSL RAM agent after a post-erase failure
         self._eeprom_write_recovery = None # retained EEPROM agent after an uncertain byte write
         self._transmission_swap_sessions = {}
-        self._transmission_swap_recovery_token = None
         self._transmission_swap_journal = SwapOperationJournal(
             os.path.join(BACKUP_DIR, "transmission"))
         self._transmission_swap_journal_ids = {}
-        self._transmission_swap_eeprom_context = None
         self._transmission_recovery_quarantine_id = None
         self._transmission_recovery_quarantine_token = None
         self._transmission_recovery_quarantine_error = None
@@ -1656,121 +1650,71 @@ class MS41FlashGUI(QMainWindow):
         intro.setStyleSheet("color:#aaa; padding:4px;")
         lay.addWidget(intro)
 
-        filter_row = QHBoxLayout()
-        filter_title = QLabel("Everyday settings")
-        filter_title.setStyleSheet("font-weight:bold;")
-        self.chk_coding_advanced = QCheckBox("Show advanced options")
-        self.chk_coding_advanced.setChecked(False)
-        self.chk_coding_advanced.setToolTip(
-            "Shows reviewed equipment-specific settings and their BMW references. "
-            "It does not enable raw-byte editing or unknown module versions."
-        )
-        self.chk_coding_advanced.toggled.connect(self._apply_coding_filter)
-        filter_row.addWidget(filter_title)
-        filter_row.addStretch()
-        filter_row.addWidget(self.chk_coding_advanced)
-        lay.addLayout(filter_row)
-
-        module_group = QGroupBox("Windows, Locks and Memory — General Module")
+        module_group = QGroupBox("Vehicle Module Coding")
         module_lay = QVBoxLayout(module_group)
+        selection = QGridLayout()
+        selection.addWidget(QLabel("Vehicle:"), 0, 0)
+        self.cb_coding_chassis = QComboBox()
+        selection.addWidget(self.cb_coding_chassis, 0, 1)
+        selection.addWidget(QLabel("Module:"), 0, 2)
+        self.cb_coding_module = QComboBox()
+        selection.addWidget(self.cb_coding_module, 0, 3)
+        selection.setColumnStretch(3, 1)
+        module_lay.addLayout(selection)
+
         action_row = QHBoxLayout()
-        self.btn_read_gm3_coding = self._op_btn(
-            "🔎  Read Window & Lock Settings", "#1e5080", self._on_read_gm3_coding
+        self.btn_read_module_coding = self._op_btn(
+            "🔎  Read Settings", "#1e5080", self._on_read_module_coding
         )
-        self.btn_write_gm3_coding = self._op_btn(
-            "Write Changes", "#7a4f16", self._on_write_gm3_coding
+        self.btn_write_module_coding = self._op_btn(
+            "Write Changes", "#7a4f16", self._on_write_module_coding
         )
-        self.btn_read_gm3_coding.setMaximumWidth(210)
-        self.btn_write_gm3_coding.setMaximumWidth(180)
-        action_row.addWidget(self.btn_read_gm3_coding)
-        action_row.addWidget(self.btn_write_gm3_coding)
+        self.btn_read_module_coding.setMaximumWidth(180)
+        self.btn_write_module_coding.setMaximumWidth(180)
+        action_row.addWidget(self.btn_read_module_coding)
+        action_row.addWidget(self.btn_write_module_coding)
         action_row.addStretch()
         module_lay.addLayout(action_row)
 
-        self.lbl_gm3_coding = QLabel(
-            "Connect in normal K-Line mode, then read the fitted General Module."
+        self.lbl_module_coding = QLabel(
+            "Connect in normal K-Line mode, choose the vehicle and module, then read it."
         )
-        self.lbl_gm3_coding.setWordWrap(True)
-        self.lbl_gm3_coding.setStyleSheet("color:#aaa; padding:4px;")
-        module_lay.addWidget(self.lbl_gm3_coding)
+        self.lbl_module_coding.setWordWrap(True)
+        self.lbl_module_coding.setStyleSheet("color:#aaa; padding:4px;")
+        module_lay.addWidget(self.lbl_module_coding)
 
-        features = {}
-        for profile in GM3_PROFILES:
-            for feature in profile.features:
-                features.setdefault(feature.key, feature)
+        filter_row = QHBoxLayout()
+        self.chk_coding_advanced = QCheckBox("Show advanced options")
+        self.chk_coding_advanced.setChecked(False)
+        self.chk_coding_advanced.setToolTip(
+            "Shows reviewed equipment-specific settings and technical references. "
+            "It does not enable raw-byte editing or unknown module versions."
+        )
+        self.txt_coding_search = QLineEdit()
+        self.txt_coding_search.setPlaceholderText("Search settings…")
+        self.txt_coding_search.setClearButtonEnabled(True)
+        self.txt_coding_search.setMaximumWidth(300)
+        filter_row.addWidget(self.chk_coding_advanced)
+        filter_row.addStretch()
+        filter_row.addWidget(self.txt_coding_search)
+        module_lay.addLayout(filter_row)
 
-        self._gm3_checks = {}
+        self._coding_controls = {}
         self._coding_rows = {}
         self._coding_notes = {}
-        self._coding_section_groups = {}
-        for section in dict.fromkeys(feature.section for feature in features.values()):
-            section_group = QGroupBox(section)
-            section_lay = QVBoxLayout(section_group)
-            self._coding_section_groups[section] = section_group
-            for feature in (item for item in features.values()
-                            if item.section == section):
-                row = QWidget()
-                row_lay = QVBoxLayout(row)
-                row_lay.setContentsMargins(0, 0, 0, 2)
-                check = QCheckBox(feature.label)
-                note = QLabel(
-                    f"{feature.description}  ·  Reference: {feature.reference}"
-                )
-                note.setWordWrap(True)
-                note.setStyleSheet("color:#888; padding:0 0 5px 24px;")
-                check.setToolTip(
-                    f"{feature.description}\nReference: {feature.reference}"
-                )
-                row_lay.addWidget(check)
-                row_lay.addWidget(note)
-                section_lay.addWidget(row)
-                self._gm3_checks[feature.key] = check
-                self._coding_rows[feature.key] = (row, feature)
-                self._coding_notes[feature.key] = note
-            module_lay.addWidget(section_group)
-
+        self.coding_settings = QWidget()
+        self._coding_settings_layout = QVBoxLayout(self.coding_settings)
+        self._coding_settings_layout.setContentsMargins(0, 4, 0, 0)
+        module_lay.addWidget(self.coding_settings)
         lay.addWidget(module_group)
 
-        seat_profile = SM_E46_PROFILES[0]
-        seat_group = QGroupBox("Driver Seat Memory — E46")
-        seat_lay = QVBoxLayout(seat_group)
-        seat_actions = QHBoxLayout()
-        self.btn_read_seat_coding = self._op_btn(
-            "🔎  Read Seat Settings", "#1e5080", self._on_read_seat_coding
-        )
-        self.btn_write_seat_coding = self._op_btn(
-            "Write Changes", "#7a4f16", self._on_write_seat_coding
-        )
-        self.btn_read_seat_coding.setMaximumWidth(210)
-        self.btn_write_seat_coding.setMaximumWidth(180)
-        seat_actions.addWidget(self.btn_read_seat_coding)
-        seat_actions.addWidget(self.btn_write_seat_coding)
-        seat_actions.addStretch()
-        seat_lay.addLayout(seat_actions)
-        self.lbl_seat_coding = QLabel(
-            "For supported E46 driver-seat memory modules on normal K-Line."
-        )
-        self.lbl_seat_coding.setWordWrap(True)
-        self.lbl_seat_coding.setStyleSheet("color:#aaa; padding:4px;")
-        seat_lay.addWidget(self.lbl_seat_coding)
-
-        timing = seat_profile.features[0]
-        seat_lay.addWidget(QLabel(timing.label))
-        self.cb_seat_timing = QComboBox()
-        for choice in timing.choices:
-            self.cb_seat_timing.addItem(choice.label, choice.value)
-        self.cb_seat_timing.setToolTip(timing.description)
-        seat_lay.addWidget(self.cb_seat_timing)
-        self.chk_seat_one_touch = QCheckBox(seat_profile.features[1].label)
-        self.chk_seat_one_touch.setToolTip(seat_profile.features[1].description)
-        seat_lay.addWidget(self.chk_seat_one_touch)
-        self.lbl_seat_reference = QLabel(
-            "References: AUT_SITZVERSTELLUNG · MEMORY_TIPP_BETRIEB · SM_E46.C01"
-        )
-        self.lbl_seat_reference.setWordWrap(True)
-        self.lbl_seat_reference.setStyleSheet("color:#888; padding:2px 0;")
-        seat_lay.addWidget(self.lbl_seat_reference)
-        lay.addWidget(seat_group)
+        self.chk_coding_advanced.toggled.connect(self._apply_coding_filter)
+        self.txt_coding_search.textChanged.connect(self._apply_coding_filter)
+        self.cb_coding_chassis.currentTextChanged.connect(
+            self._on_coding_chassis_changed)
+        self.cb_coding_module.currentIndexChanged.connect(
+            self._on_coding_target_changed)
+        self.cb_coding_chassis.addItems(("E36", "E38", "E39", "E46"))
 
         swap_group = QGroupBox("Transmission Conversion")
         swap_lay = QVBoxLayout(swap_group)
@@ -1867,8 +1811,8 @@ class MS41FlashGUI(QMainWindow):
         lay.addWidget(swap_group)
         lay.addStretch()
         self.tabs.addTab(tab, "  Coding  ")
-        self._reset_gm3_coding()
-        self._reset_seat_coding()
+        self._on_coding_chassis_changed()
+        self._reset_module_coding()
         self._reset_transmission_swap_plan()
         self._update_transmission_swap_status()
 
@@ -2402,14 +2346,10 @@ class MS41FlashGUI(QMainWindow):
         if hasattr(self, "id_vin_current"):
             self._clear_identity_tab_state()
         self._reset_diag_scan(False)
-        self._reset_gm3_coding()
-        self._reset_seat_coding()
+        self._reset_module_coding()
         self._reset_transmission_swap_plan()
-        self.lbl_gm3_coding.setText(
-            "Connect in normal K-Line mode, then read the fitted General Module."
-        )
-        self.lbl_seat_coding.setText(
-            "For supported E46 driver-seat memory modules on normal K-Line."
+        self.lbl_module_coding.setText(
+            "Connect in normal K-Line mode, choose the vehicle and module, then read it."
         )
         self._on_live_stop()
         if not keep_session_log:
@@ -6640,7 +6580,7 @@ class MS41FlashGUI(QMainWindow):
 
     def _run_eeprom_task(
             self, task, on_success, on_failure=None, *,
-            state_changing=False, transmission_recovery=False):
+            state_changing=False):
         self._eeprom_task_busy = True
 
         def success(result):
@@ -6657,7 +6597,6 @@ class MS41FlashGUI(QMainWindow):
                     task,
                     on_success=success,
                     on_failure=failure,
-                    transmission_recovery=transmission_recovery,
                 )
                 if not started:
                     self._eeprom_task_busy = False
@@ -7122,64 +7061,15 @@ class MS41FlashGUI(QMainWindow):
                 (f"Bins: {entry.filename}" if entry is not None else
                  f"Verified capture: {recovery.after_path}"),
                 variant=recovery.variant)
-            context = self._transmission_swap_eeprom_context or {}
-            swap_token = context.get(
-                "token", self._transmission_swap_recovery_token)
-            swap_session = self._transmission_swap_sessions.get(swap_token)
-            swap_resolved = bool(
-                swap_session is not None
-                and swap_session.phase == "eeprom_recovery")
-            if swap_resolved:
-                operation_id = context.get(
-                    "journal_id",
-                    self._transmission_swap_journal_ids.get(
-                        swap_token, swap_token),
-                )
-                restoring_original = bool(
-                    context.get("restoring_original", False))
-                swap_session.phase = context.get(
-                    "resume_phase", "modules_written")
-                try:
-                    result = self._finish_transmission_eeprom(
-                        swap_session,
-                        image,
-                        operation_id,
-                        restoring_original=restoring_original,
-                    )
-                except Exception as error:
-                    self._mark_transmission_journal_failed(
-                        operation_id, error, self._log)
-                    self._transmission_swap_phase = "blocked"
-                    self._transmission_swap_eeprom_context = None
-                    self._transmission_swap_recovery_token = None
-                    self._on_eeprom_failure(error)
-                    return
-                if restoring_original:
-                    result["recovery_action"] = "original"
-                self._show_transmission_swap_awaiting_cycle(
-                    swap_token, result)
-                self._transmission_swap_recovery_token = None
-                self._transmission_swap_eeprom_context = None
             self._log("EEPROM retained-session recovery completed.", "ok")
             QMessageBox.information(
                 self,
                 "EEPROM Recovery Complete",
-                ("The transmission record is physically verified. Complete the "
-                 "required OFF → 10 seconds → ON ignition cycle, then return to "
-                 "Coding and verify the conversion."
-                 if swap_resolved else
-                 "The pending image write was resolved and physically verified. "
-                 "Read the EEPROM again before making another change."),
+                "The pending image write was resolved and physically verified. "
+                "Read the EEPROM again before making another change.",
             )
 
         def on_failure(error):
-            context = self._transmission_swap_eeprom_context
-            if context and self._active_eeprom_recovery() is None:
-                self._mark_transmission_journal_failed(
-                    context["journal_id"], error, self._log)
-                self._transmission_swap_phase = "blocked"
-                self._transmission_swap_eeprom_context = None
-                self._transmission_swap_recovery_token = None
             self._on_eeprom_failure(error)
 
         self._run_eeprom_task(
@@ -7187,8 +7077,6 @@ class MS41FlashGUI(QMainWindow):
             on_success,
             on_failure=on_failure,
             state_changing=True,
-            transmission_recovery=bool(
-                self._transmission_swap_eeprom_context),
         )
 
     def _on_eeprom_failure(self, error):
@@ -11333,28 +11221,18 @@ class MS41FlashGUI(QMainWindow):
     # DTC
     # -------------------------------------------------------------------
 
-    def _reset_gm3_coding(self):
-        self._gm3_coding_state = None
-        if not hasattr(self, "_gm3_checks"):
+    def _reset_module_coding(self):
+        self._module_coding_state = None
+        if not hasattr(self, "_coding_settings_layout"):
             return
-        for check in self._gm3_checks.values():
-            check.blockSignals(True)
-            check.setChecked(False)
-            check.blockSignals(False)
-            check.setEnabled(False)
-        self.btn_write_gm3_coding.setEnabled(False)
-        self._apply_coding_filter()
-
-    def _reset_seat_coding(self):
-        self._seat_coding_state = None
-        if not hasattr(self, "cb_seat_timing"):
-            return
-        self.cb_seat_timing.setCurrentIndex(0)
-        self.cb_seat_timing.setEnabled(False)
-        self.chk_seat_one_touch.setChecked(False)
-        self.chk_seat_one_touch.setEnabled(False)
-        self.btn_write_seat_coding.setEnabled(False)
-        self._apply_coding_filter()
+        while self._coding_settings_layout.count():
+            item = self._coding_settings_layout.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        self._coding_controls.clear()
+        self._coding_rows.clear()
+        self._coding_notes.clear()
+        self.btn_write_module_coding.setEnabled(False)
 
     def _open_named_tab(self, name: str):
         for index in range(self.tabs.count()):
@@ -11452,8 +11330,7 @@ class MS41FlashGUI(QMainWindow):
             if button is not None:
                 button.setEnabled(False)
         resolve = getattr(self, "btn_eeprom_resolve", None)
-        if (resolve is not None
-                and not self._transmission_swap_eeprom_context):
+        if resolve is not None:
             resolve.setEnabled(False)
 
     def _run_state_changing_task(
@@ -11531,22 +11408,69 @@ class MS41FlashGUI(QMainWindow):
             journal_id=operation_id,
         )
 
-    @staticmethod
-    def _verified_transmission_eeprom_after(backup_path, expected, warning):
-        after_path = eeprom_ram._after_capture_path(backup_path)
-        try:
-            after = after_path.read_bytes()
-        except OSError as error:
+    def _read_transmission_eeprom_record(
+            self, family, expected_identity, log_fn, progress_fn):
+        """Read the one MS41 EEPROM record owned by transmission conversion."""
+        expected_identity = bytes(expected_identity)
+
+        def event_cb(event, fields):
+            if event == "automatic_read_recovery":
+                log_fn(
+                    "Stock K-Line record-read recovery "
+                    + ("confirmed normal communication."
+                       if fields.get("recovered") else
+                       "could not confirm normal communication."),
+                    "warn",
+                )
+
+        result = self._run_via_native_fast_ds2(
+            lambda port, pf, _lf: ds2_fast_read.read_eeprom_record_d2xx(
+                port,
+                family,
+                expected_identity=expected_identity,
+                progress_cb=pf,
+                event_cb=event_cb,
+                echo=self._connection_echo,
+            ),
+            log_fn,
+            progress_fn,
+            expected_identity=expected_identity,
+        )
+        if bytes(result.identity) != expected_identity:
             raise RuntimeError(
-                "The DME reported a verified EEPROM target, but its local "
-                f"after-image could not be reopened: {error}"
-            ) from warning
-        if after != expected:
+                "The engine computer identity changed during the record read.")
+        record = bytes(result.record)
+        if len(record) != 4:
+            raise RuntimeError("The DME returned an invalid transmission record.")
+        return record
+
+    def _write_transmission_eeprom_record(
+            self, family, expected_record, target_record, expected_identity,
+            log_fn, progress_fn):
+        """Compare, write, and read back one checked MS41 transmission record."""
+        expected_identity = bytes(expected_identity)
+        target_record = bytes(target_record)
+        result = self._run_via_native_fast_ds2(
+            lambda port, pf, _lf:
+            ds2_native_fast_service.write_eeprom_record_d2xx(
+                port,
+                family,
+                bytes(expected_record),
+                target_record,
+                expected_identity=expected_identity,
+                progress_cb=pf,
+            ),
+            log_fn,
+            progress_fn,
+            expected_identity=expected_identity,
+        )
+        if bytes(result.identity) != expected_identity:
             raise RuntimeError(
-                "The archived DME EEPROM after-image does not match the reviewed "
-                "recovery target. Do not assume the coding state."
-            ) from warning
-        return after
+                "The engine computer identity changed during the record write.")
+        if bytes(result.record) != target_record:
+            raise RuntimeError(
+                "The DME transmission-record readback differs from the reviewed target.")
+        return bytes(result.record)
 
     def _prepare_transmission_swap_core(self, target, log_fn, progress_fn):
         """Build one live, zero-write conversion plan from all fitted owners."""
@@ -11565,17 +11489,13 @@ class MS41FlashGUI(QMainWindow):
             identity_bytes)
         eeprom_image = None
         if family.startswith("MS41"):
-            progress_fn(0, 0, "Reading the complete DME EEPROM")
-            capture = self._run_via_eeprom(
-                lambda port, _pf, lf: eeprom_ram.read_eeprom(
-                    port, baud="auto", log=lf),
-                log_fn,
-                progress_fn,
+            progress_fn(0, 0, "Reading the DME transmission record")
+            eeprom_image = self._read_transmission_eeprom_record(
+                family, identity_bytes, log_fn, progress_fn,
             )
             if self._ds2 is None:
                 raise RuntimeError(
-                    "Normal K-Line did not reconnect after the EEPROM read.")
-            eeprom_image = capture.image
+                    "Normal K-Line did not reconnect after the record read.")
         progress_fn(0, 0, "Reading the fitted coding modules")
         session = transmission_conversion.prepare_connected_swap(
             self._ds2, target, eeprom_image=eeprom_image)
@@ -11601,17 +11521,13 @@ class MS41FlashGUI(QMainWindow):
             self._transmission_swap_journal_ids[token] = operation_id
             eeprom_current = None
             if session.family.startswith("MS41"):
-                progress_fn(0, 0, "Rechecking the complete DME EEPROM")
-                capture = self._run_via_eeprom(
-                    lambda port, _pf, lf: eeprom_ram.read_eeprom(
-                        port, baud="auto", log=lf),
-                    log_fn,
-                    progress_fn,
+                progress_fn(0, 0, "Rechecking the DME transmission record")
+                eeprom_current = self._read_transmission_eeprom_record(
+                    session.family, session.dme_ident, log_fn, progress_fn,
                 )
                 if self._ds2 is None:
                     raise RuntimeError(
-                        "Normal K-Line did not reconnect after the EEPROM check.")
-                eeprom_current = capture.image
+                        "Normal K-Line did not reconnect after the record check.")
             progress_fn(0, 0, "Archiving and writing the fitted coding modules")
             try:
                 result = transmission_conversion.write_connected_modules(
@@ -11631,86 +11547,29 @@ class MS41FlashGUI(QMainWindow):
             if not session.family.startswith("MS41"):
                 return result
 
-            backup_path = self._automatic_eeprom_path(
-                "transmission_swap_before")
             progress_fn(0, 0, "Writing the reviewed DME EEPROM record")
             try:
                 transmission_conversion.mark_eeprom_write_intent(
                     session,
                     self._transmission_swap_journal,
                     journal_id=operation_id,
-                    backup_path=backup_path,
                 )
-                capture = self._run_via_eeprom(
-                    lambda port, _pf, lf: eeprom_ram.write_transmission(
-                        port,
-                        "at" if session.target is transmission_conversion.Transmission.AUTOMATIC
-                        else "mt",
-                        backup_path=backup_path,
-                        confirm=lambda _message: True,
-                        expected_before=session.eeprom_before,
-                        baud="auto",
-                        log=lf,
-                    ),
+                after = self._write_transmission_eeprom_record(
+                    session.family,
+                    eeprom_current,
+                    transmission_conversion.connected_swap_eeprom_record(
+                        session, target=True),
+                    session.dme_ident,
                     log_fn,
                     progress_fn,
                 )
-            except (
-                    eeprom_ram.EepromCommitUnknown,
-                    eeprom_ram.EepromWriteRecoveryRequired,
-            ):
-                session.phase = "eeprom_recovery"
+            except Exception:
+                session.phase = "recovery"
                 session.status = "action_required"
-                session.title = "Resolve the pending EEPROM write before continuing"
-                self._transmission_swap_recovery_token = token
-                self._transmission_swap_eeprom_context = {
-                    "token": token,
-                    "journal_id": operation_id,
-                    "restoring_original": False,
-                    "resume_phase": "modules_written",
-                }
+                session.title = "Transmission-record write needs guided recovery"
                 raise
-            except (
-                    eeprom_ram.EepromResetRequired,
-                    eeprom_ram.EepromAuditError,
-            ) as warning:
-                after = self._verified_transmission_eeprom_after(
-                    backup_path, session.eeprom_target, warning)
-                session.warnings += (
-                    f"The DME transmission record is verified, but normal K-Line "
-                    f"cleanup needs the required ignition cycle: {warning}",
-                )
-                log_fn(str(warning), "warn")
-                return self._finish_transmission_eeprom(
-                    session, after, operation_id)
-            except Exception as error:
-                if self._ds2 is None:
-                    self._mark_transmission_journal_failed(
-                        operation_id, error, log_fn)
-                    raise RuntimeError(
-                        "The DME EEPROM write did not complete and normal K-Line did "
-                        "not reconnect. Do not assume the conversion state; preserve "
-                        f"the backup at {backup_path}. Original error: {error}"
-                    ) from error
-                try:
-                    transmission_conversion.rollback_connected_modules(
-                        self._ds2, session)
-                except Exception as rollback_error:
-                    combined = RuntimeError(
-                        f"DME EEPROM write failed ({error}); module rollback also "
-                        f"needs recovery ({rollback_error}). Archive: "
-                        f"{session.archive_path}"
-                    )
-                    self._mark_transmission_journal_failed(
-                        operation_id, combined, log_fn)
-                    raise combined from error
-                self._mark_transmission_journal_failed(
-                    operation_id, error, log_fn)
-                self._transmission_swap_sessions.pop(token, None)
-                raise
-            log_fn(f"DME EEPROM before-image: {backup_path}", "ok")
             return self._finish_transmission_eeprom(
-                session, capture.image, operation_id)
+                session, after, operation_id)
 
         if session.phase not in {"awaiting_cycle", "rollback_awaiting_cycle"}:
             raise RuntimeError(
@@ -11734,18 +11593,15 @@ class MS41FlashGUI(QMainWindow):
         try:
             eeprom_after = None
             if session.family.startswith("MS41"):
-                progress_fn(0, 0, "Reading the DME EEPROM after the ignition cycle")
-                capture = self._run_via_eeprom(
-                    lambda port, _pf, lf: eeprom_ram.read_eeprom(
-                        port, baud="auto", log=lf),
-                    log_fn,
-                    progress_fn,
+                progress_fn(
+                    0, 0, "Reading the DME transmission record after the ignition cycle")
+                eeprom_after = self._read_transmission_eeprom_record(
+                    session.family, session.dme_ident, log_fn, progress_fn,
                 )
                 if self._ds2 is None:
                     raise RuntimeError(
-                        "Normal K-Line did not reconnect after the EEPROM "
+                        "Normal K-Line did not reconnect after the record "
                         "verification read.")
-                eeprom_after = capture.image
             progress_fn(0, 0, "Independently verifying every changed module")
             verify = (
                 transmission_conversion.verify_connected_original
@@ -11786,17 +11642,13 @@ class MS41FlashGUI(QMainWindow):
         self._transmission_swap_journal_ids[session.token] = operation_id
         eeprom_current = None
         if session.family.startswith("MS41"):
-            progress_fn(0, 0, "Checking the complete DME EEPROM before recovery")
-            capture = self._run_via_eeprom(
-                lambda port, _pf, lf: eeprom_ram.read_eeprom(
-                    port, baud="auto", log=lf),
-                log_fn,
-                progress_fn,
+            progress_fn(0, 0, "Checking the DME transmission record before recovery")
+            eeprom_current = self._read_transmission_eeprom_record(
+                session.family, session.dme_ident, log_fn, progress_fn,
             )
             if self._ds2 is None:
                 raise RuntimeError(
-                    "Normal K-Line did not reconnect after the EEPROM recovery check.")
-            eeprom_current = capture.image
+                    "Normal K-Line did not reconnect after the record recovery check.")
         progress_fn(0, 0, "Restoring a known baseline before recovery coding")
         try:
             result = transmission_conversion.recover_connected_modules(
@@ -11825,84 +11677,35 @@ class MS41FlashGUI(QMainWindow):
             return result
 
         restoring_original = action == "original"
-        target = (
-            session.eeprom_before if restoring_original else session.eeprom_target)
-        backup_path = self._automatic_eeprom_path(
-            "transmission_recovery_original_before"
-            if restoring_original else "transmission_recovery_target_before")
-        progress_fn(0, 0, "Writing the archived DME EEPROM image")
+        target = transmission_conversion.connected_swap_eeprom_record(
+            session, target=not restoring_original)
+        progress_fn(0, 0, "Writing the archived DME transmission record")
         try:
             transmission_conversion.mark_eeprom_write_intent(
                 session,
                 self._transmission_swap_journal,
                 journal_id=operation_id,
-                backup_path=backup_path,
                 restoring_original=restoring_original,
             )
-            capture = self._run_via_eeprom(
-                lambda port, _pf, lf: eeprom_ram.write_image(
-                    port,
-                    target,
-                    variant=session.eeprom_variant,
-                    backup_path=backup_path,
-                    confirm=lambda _message: True,
-                    expected_before=eeprom_current,
-                    baud="auto",
-                    log=lf,
-                ),
+            after = self._write_transmission_eeprom_record(
+                session.family,
+                eeprom_current,
+                target,
+                session.dme_ident,
                 log_fn,
                 progress_fn,
             )
-        except (
-                eeprom_ram.EepromCommitUnknown,
-                eeprom_ram.EepromWriteRecoveryRequired,
-        ):
-            self._transmission_swap_eeprom_context = {
-                "token": session.token,
-                "journal_id": operation_id,
-                "restoring_original": restoring_original,
-                "resume_phase": (
-                    "rollback_modules_written"
-                    if restoring_original else "modules_written"),
-            }
-            self._transmission_swap_recovery_token = session.token
-            session.phase = "eeprom_recovery"
+        except Exception:
+            session.phase = "recovery"
             session.status = "action_required"
-            session.title = "Resolve the pending EEPROM write before continuing"
+            session.title = "Transmission-record write needs guided recovery"
             raise
-        except (
-                eeprom_ram.EepromResetRequired,
-                eeprom_ram.EepromAuditError,
-        ) as warning:
-            try:
-                after = self._verified_transmission_eeprom_after(
-                    backup_path, target, warning)
-                session.warnings += (
-                    "The archived DME EEPROM image is verified, but normal K-Line "
-                    f"cleanup needs the required ignition cycle: {warning}",
-                )
-                log_fn(str(warning), "warn")
-                result = self._finish_transmission_eeprom(
-                    session,
-                    after,
-                    operation_id,
-                    restoring_original=restoring_original,
-                )
-            except Exception as error:
-                self._mark_transmission_journal_failed(
-                    operation_id, error, log_fn)
-                raise
-        except Exception as error:
-            self._mark_transmission_journal_failed(
-                operation_id, error, log_fn)
-            raise
-        else:
-            result = self._finish_transmission_eeprom(
-                session,
-                capture.image,
-                operation_id,
-                restoring_original=restoring_original,
-            )
+        result = self._finish_transmission_eeprom(
+            session,
+            after,
+            operation_id,
+            restoring_original=restoring_original,
+        )
         result["recovery_action"] = action
         return result
 
@@ -12040,28 +11843,22 @@ class MS41FlashGUI(QMainWindow):
                 )
 
             def recovery_failure(error):
-                retained = self._active_eeprom_recovery() is not None
-                if (not retained
-                        and session.token in self._transmission_swap_journal_ids):
+                if session.token in self._transmission_swap_journal_ids:
                     self._mark_transmission_journal_failed(
                         self._transmission_swap_journal_ids[session.token],
                         error,
                         self._log,
                     )
                 self._transmission_swap_token = session.token
-                self._transmission_swap_phase = (
-                    "recovery" if retained else "blocked")
+                self._transmission_swap_phase = "blocked"
                 self.transmission_swap_details.setPlainText(
                     "Recovery did not complete. No success is assumed.\n\n"
                     f"{error}\n\nUse Recover Interrupted Conversion to resume from "
                     "the newest durable record."
                 )
                 self._update_transmission_swap_actions()
-                if retained:
-                    self._on_eeprom_failure(error)
-                else:
-                    QMessageBox.critical(
-                        self, "Transmission Recovery Failed", str(error))
+                QMessageBox.critical(
+                    self, "Transmission Recovery Failed", str(error))
 
             self._run_state_changing_task(
                 recover_task,
@@ -12131,7 +11928,7 @@ class MS41FlashGUI(QMainWindow):
 
     def _reset_transmission_swap_plan(self, message=None):
         old_token = getattr(self, "_transmission_swap_token", None)
-        if old_token and old_token != self._transmission_swap_recovery_token:
+        if old_token:
             self._transmission_swap_sessions.pop(old_token, None)
             self._transmission_swap_journal_ids.pop(old_token, None)
         self._transmission_swap_token = None
@@ -12335,25 +12132,25 @@ class MS41FlashGUI(QMainWindow):
 
         def on_failure(error):
             session = self._transmission_swap_sessions.get(token)
-            retained = bool(
-                session is not None
-                and self._transmission_swap_recovery_token == token
-                and self._active_eeprom_recovery() is not None
-            )
+            recovery_pending = bool(
+                session is not None and session.phase == "recovery")
             retry_verification = bool(
                 session is not None and session.phase in {
                     "awaiting_cycle", "rollback_awaiting_cycle"})
-            if not retained and token in self._transmission_swap_journal_ids:
+            if token in self._transmission_swap_journal_ids:
                 self._mark_transmission_journal_failed(
                     self._transmission_swap_journal_ids[token], error, self._log)
-            if retained:
+            if recovery_pending:
                 self._transmission_swap_token = token
-                self._transmission_swap_phase = "recovery"
+                self._transmission_swap_phase = "blocked"
                 self.transmission_swap_details.setPlainText(
-                    "The DME EEPROM result is not yet known. Keep ignition ON and "
-                    "use EEPROM → Resolve Pending Write. Do not disconnect or cycle "
-                    f"the ignition.\n\n{error}"
+                    "The DME transmission-record write did not complete. No success "
+                    "or rollback is assumed.\n\n"
+                    f"{error}\n\nKeep ignition ON and use Recover Interrupted "
+                    "Conversion. The tool will read the record before deciding what "
+                    "must be written."
                 )
+                self._refresh_transmission_recovery_quarantine()
             elif retry_verification:
                 self._transmission_swap_token = token
                 self._transmission_swap_phase = "awaiting_cycle"
@@ -12376,12 +12173,9 @@ class MS41FlashGUI(QMainWindow):
                     f"{error}\n\nRun the compatibility check again before retrying."
                 )
             self._update_transmission_swap_actions()
-            if retained:
-                self._on_eeprom_failure(error)
-            else:
-                QMessageBox.critical(
-                    self, "Transmission Conversion Failed", str(error)
-                )
+            QMessageBox.critical(
+                self, "Transmission Conversion Failed", str(error)
+            )
 
         self._run_state_changing_task(
             task,
@@ -12425,264 +12219,252 @@ class MS41FlashGUI(QMainWindow):
         if not hasattr(self, "_coding_rows"):
             return
         advanced = self.chk_coding_advanced.isChecked()
-        state = self._gm3_coding_state
-        supported = (
-            {feature.key for feature in state.profile.features}
-            if state is not None else set(self._coding_rows)
-        )
-        for key, (row, feature) in self._coding_rows.items():
-            row.setVisible(key in supported and (
-                feature.level == "basic" or advanced
-            ))
-            note = self._coding_notes[key]
-            note.setText(
-                feature.description + (
-                    f"  ·  Reference: {feature.reference}" if advanced else ""
+        query = self.txt_coding_search.text().strip().casefold()
+        state = self._module_coding_state
+        for key, (row, setting) in self._coding_rows.items():
+            searchable = " ".join((
+                setting.label, setting.description, setting.reference, key,
+            )).casefold()
+            row.setVisible(
+                (setting.level == "basic" or advanced)
+                and (not query or query in searchable)
+            )
+            self._coding_notes[key].setText(
+                setting.description + (
+                    f"  ·  Reference: {setting.reference}" if advanced else ""
                 )
             )
-        for section, group in self._coding_section_groups.items():
-            group.setVisible(any(
-                key in supported
-                and feature.section == section
-                and (feature.level == "basic" or advanced)
-                for key, (_row, feature) in self._coding_rows.items()
-            ))
+            self._coding_controls[key].setToolTip(
+                setting.description + (
+                    f"\nReference: {setting.reference}" if advanced else ""
+                )
+            )
         if state is not None:
             reference = (
                 f" Reference: {state.profile.key}." if advanced else ""
             )
-            self.lbl_gm3_coding.setText(
-                "Window, lock and memory settings were read from an exact "
-                f"built-in profile.{reference}"
+            custom = sum(
+                value is None for value in state.decoded_values.values()
             )
-        if hasattr(self, "lbl_seat_reference"):
-            self.lbl_seat_reference.setVisible(advanced)
-            seat_state = getattr(self, "_seat_coding_state", None)
-            if seat_state is not None:
-                reference = (
-                    f" Reference: {seat_state.profile.key}." if advanced else ""
-                )
-                self.lbl_seat_coding.setText(
-                    "Driver-seat memory settings were read from an exact "
-                    f"built-in profile.{reference}"
-                )
+            preserved = (
+                f" {custom} custom setting{'s' if custom != 1 else ''} will be "
+                "left unchanged."
+                if custom else ""
+            )
+            self.lbl_module_coding.setText(
+                f"{state.profile.name} settings were read from an exact built-in "
+                f"profile.{reference}{preserved}"
+            )
 
-    def _update_coding_actions(self):
-        if not hasattr(self, "btn_read_gm3_coding"):
+    def _selected_coding_target(self):
+        if not hasattr(self, "cb_coding_module"):
+            return None
+        return TARGET_BY_KEY.get(self.cb_coding_module.currentData())
+
+    def _on_coding_chassis_changed(self, *_args):
+        if not hasattr(self, "cb_coding_module"):
             return
-        available = bool(
-            self._ds2 is not None and self._connection_echo and not self._task_busy
-        )
-        self.btn_read_gm3_coding.setEnabled(available)
-        if hasattr(self, "btn_read_seat_coding"):
-            self.btn_read_seat_coding.setEnabled(available)
-        editable = available and self._gm3_coding_state is not None
-        self.btn_write_gm3_coding.setEnabled(editable)
-        supported = (
-            {feature.key for feature in self._gm3_coding_state.profile.features}
-            if self._gm3_coding_state is not None else set()
-        )
-        for key, check in self._gm3_checks.items():
-            check.setEnabled(editable and key in supported)
-        seat_editable = available and getattr(
-            self, "_seat_coding_state", None) is not None
-        if hasattr(self, "btn_write_seat_coding"):
-            self.btn_write_seat_coding.setEnabled(seat_editable)
-            self.cb_seat_timing.setEnabled(seat_editable)
-            self.chk_seat_one_touch.setEnabled(seat_editable)
-        if self._ds2 is not None and not self._connection_echo:
-            self.lbl_gm3_coding.setText(
-                "General Module coding requires normal K-Line mode. Direct Tap reaches "
+        self._reset_module_coding()
+        self.cb_coding_module.blockSignals(True)
+        self.cb_coding_module.clear()
+        for target in targets_for_chassis(self.cb_coding_chassis.currentText()):
+            suffix = " — ADS/L-line required" if not target.available else ""
+            self.cb_coding_module.addItem(target.name + suffix, target.key)
+            if target.unavailable_reason:
+                self.cb_coding_module.setItemData(
+                    self.cb_coding_module.count() - 1,
+                    target.unavailable_reason,
+                    Qt.ToolTipRole,
+                )
+        self.cb_coding_module.blockSignals(False)
+        self._on_coding_target_changed()
+
+    def _on_coding_target_changed(self, *_args):
+        self._reset_module_coding()
+        target = self._selected_coding_target()
+        if target is None:
+            self.lbl_module_coding.setText("No built-in coding modules are available.")
+        elif not target.available:
+            self.lbl_module_coding.setText(target.unavailable_reason)
+        elif self._ds2 is None:
+            self.lbl_module_coding.setText(
+                f"Connect in normal K-Line mode, then read {target.name}."
+            )
+        elif not self._connection_echo:
+            self.lbl_module_coding.setText(
+                "Module coding requires normal K-Line mode. Direct Tap reaches "
                 "the Engine ECU only."
             )
-            if hasattr(self, "lbl_seat_coding"):
-                self.lbl_seat_coding.setText(
-                    "Seat coding requires normal K-Line mode. Direct Tap reaches "
-                    "the Engine ECU only."
-                )
+        else:
+            self.lbl_module_coding.setText(f"Ready to read {target.name}.")
+        self._update_coding_actions()
+
+    @staticmethod
+    def _coding_value_label(setting, value):
+        if value is None:
+            return "Custom value"
+        if type(value) is bool and setting.toggle:
+            value = setting.toggle[0 if value else 1]
+        choice = next(
+            (item for item in setting.choices if item.value == value), None
+        )
+        if choice is not None:
+            return choice.label
+        return "On" if value is True else "Off" if value is False else str(value)
+
+    def _show_module_coding_state(self, state: ModuleCodingState):
+        self._reset_module_coding()
+        self._module_coding_state = state
+        values = state.decoded_values
+        for setting in state.profile.settings:
+            row = QWidget()
+            row_lay = QVBoxLayout(row)
+            row_lay.setContentsMargins(0, 0, 0, 4)
+            current = values[setting.key]
+            if setting.toggle and type(current) is bool:
+                control = QCheckBox(setting.label)
+                control.setChecked(current)
+                row_lay.addWidget(control)
+            else:
+                row_lay.addWidget(QLabel(setting.label))
+                control = QComboBox()
+                if current is None:
+                    control.addItem("Custom value — leave unchanged", None)
+                for choice in setting.choices:
+                    control.addItem(choice.label, choice.value)
+                if current is not None:
+                    control.setCurrentIndex(control.findData(current))
+                row_lay.addWidget(control)
+            control.setToolTip(setting.description)
+            note = QLabel(setting.description)
+            note.setWordWrap(True)
+            note.setStyleSheet("color:#888; padding:0 0 4px 24px;")
+            row_lay.addWidget(note)
+            self._coding_settings_layout.addWidget(row)
+            self._coding_controls[setting.key] = control
+            self._coding_rows[setting.key] = (row, setting)
+            self._coding_notes[setting.key] = note
+        self._apply_coding_filter()
+        self._update_coding_actions()
+
+    def _update_coding_actions(self):
+        if not hasattr(self, "btn_read_module_coding"):
+            return
+        target = self._selected_coding_target()
+        available = bool(
+            self._ds2 is not None and self._connection_echo and not self._task_busy
+            and target is not None and target.available
+        )
+        self.cb_coding_chassis.setEnabled(not self._task_busy)
+        self.cb_coding_module.setEnabled(not self._task_busy)
+        self.btn_read_module_coding.setEnabled(available)
+        state = self._module_coding_state
+        editable = bool(
+            available and state is not None and state.profile.target == target.key
+        )
+        self.btn_write_module_coding.setEnabled(editable)
+        for control in self._coding_controls.values():
+            control.setEnabled(editable)
+        if self._ds2 is not None and not self._connection_echo:
+            self.lbl_module_coding.setText(
+                "Module coding requires normal K-Line mode. Direct Tap reaches "
+                "the Engine ECU only."
+            )
         self._update_transmission_swap_status()
         self._apply_transmission_recovery_quarantine()
 
-    def _show_gm3_state(self, state: GM3CodingState):
-        self._gm3_coding_state = state
-        values = state.values
-        features = {feature.key: feature for feature in state.profile.features}
-        for key, check in self._gm3_checks.items():
-            check.blockSignals(True)
-            check.setChecked(values.get(key, False))
-            if key in features:
-                check.setToolTip(
-                    f"{features[key].description}\n"
-                    f"Reference: {features[key].reference}"
-                )
-            check.blockSignals(False)
-        self._apply_coding_filter()
-        self._update_coding_actions()
-
-    def _on_read_gm3_coding(self):
-        if not self._ds2 or not self._connection_echo:
+    def _on_read_module_coding(self):
+        target = self._selected_coding_target()
+        if target is None:
             return
+        if not target.available:
+            self.lbl_module_coding.setText(target.unavailable_reason)
+            QMessageBox.warning(
+                self, "Additional Hardware Required", target.unavailable_reason
+            )
+            return
+        if not self._ds2 or not self._connection_echo:
+            self._update_coding_actions()
+            return
+        target_key = target.key
 
         def task(log_fn, progress_fn):
-            log_fn("Reading General Module window, lock and memory settings…")
-            return read_gm3_coding(self._ds2)
+            log_fn(f"Reading {target.name} settings…")
+            return read_module_coding(self._ds2, target_key)
 
         def on_success(state):
-            self._show_gm3_state(state)
-            self._log(f"General Module settings read with {state.profile.key}.", "ok")
+            self._show_module_coding_state(state)
+            self._log(f"{target.name} settings read with {state.profile.key}.", "ok")
 
         def on_failure(error):
-            self._reset_gm3_coding()
-            self.lbl_gm3_coding.setText(str(error))
+            self._reset_module_coding()
+            self.lbl_module_coding.setText(str(error))
             QMessageBox.critical(self, "Settings Read Failed", str(error))
 
-        self._reset_gm3_coding()
-        self.lbl_gm3_coding.setText("Reading window and lock settings…")
+        self._reset_module_coding()
+        self.lbl_module_coding.setText(f"Reading {target.name} settings…")
         self._run_task(task, on_success=on_success, on_failure=on_failure)
 
-    def _on_write_gm3_coding(self):
-        state = self._gm3_coding_state
+    def _on_write_module_coding(self):
+        state = self._module_coding_state
         if not self._ds2 or state is None:
             return
-        requested = {
-            feature.key: self._gm3_checks[feature.key].isChecked()
-            for feature in state.profile.features
-        }
+        requested = {}
+        for setting in state.profile.settings:
+            control = self._coding_controls[setting.key]
+            value = (
+                control.isChecked() if isinstance(control, QCheckBox)
+                else control.currentData()
+            )
+            if value is not None:
+                requested[setting.key] = value
         changes = []
-        labels = {feature.key: feature.label for feature in state.profile.features}
-        for key, old_value in state.values.items():
-            if requested[key] != old_value:
+        current = state.decoded_values
+        for setting in state.profile.settings:
+            if setting.key in requested and requested[setting.key] != current[setting.key]:
                 changes.append(
-                    f"• {labels[key]}: {'On' if old_value else 'Off'} → "
-                    f"{'On' if requested[key] else 'Off'}"
+                    f"• {setting.label}: "
+                    f"{self._coding_value_label(setting, current[setting.key])} → "
+                    f"{self._coding_value_label(setting, requested[setting.key])}"
                 )
         if not changes:
             QMessageBox.information(self, "Vehicle Coding", "No settings changed.")
             return
+        voltage_notice = self._prewrite_battery_notice()
         answer = QMessageBox.question(
-            self, "Write Window and Lock Settings?",
+            self, f"Write {state.profile.name} Settings?",
             (f"Reference: {state.profile.key}\n\n"
              if self.chk_coding_advanced.isChecked() else "") + "\n".join(changes)
-            + "\n\nKeep ignition ON and engine OFF. Write these settings?",
+            + f"\n\n{voltage_notice}\n\n"
+            "Keep ignition ON and engine OFF. Write these settings?",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if answer != QMessageBox.Yes:
             return
 
         def task(log_fn, progress_fn):
-            log_fn(f"Writing {len(changes)} General Module setting change(s)…")
-            return write_gm3_coding(
-                self._ds2, state.profile.key, state.raw_data, requested
+            log_fn(
+                f"Writing {len(changes)} {state.profile.name} setting change(s)…"
             )
-
-        def on_success(updated):
-            self._show_gm3_state(updated)
-            self._log("General Module settings written and verified by exact readback.", "ok")
-            QMessageBox.information(
-                self, "Vehicle Coding Complete",
-                "Settings were written and verified. Cycle the ignition before testing them."
-            )
-
-        def on_failure(error):
-            self._reset_gm3_coding()
-            self.lbl_gm3_coding.setText(
-                f"Write status is not trusted: {error}. Read the module again."
-            )
-            QMessageBox.critical(self, "Vehicle Coding Failed", str(error))
-
-        self._run_state_changing_task(
-            task, on_success=on_success, on_failure=on_failure)
-
-    def _show_seat_state(self, state: ModuleCodingState):
-        self._seat_coding_state = state
-        values = state.values
-        self.cb_seat_timing.setCurrentIndex(
-            self.cb_seat_timing.findData(
-                values["automatic_seat_adjustment_timing"])
-        )
-        self.chk_seat_one_touch.setChecked(values["one_touch_memory"])
-        self._apply_coding_filter()
-        self._update_coding_actions()
-
-    def _on_read_seat_coding(self):
-        if not self._ds2 or not self._connection_echo:
-            return
-
-        def task(log_fn, progress_fn):
-            log_fn("Reading E46 driver-seat memory settings…")
-            return read_module_coding(self._ds2, "sm_e46")
-
-        def on_success(state):
-            self._show_seat_state(state)
-            self._log(
-                f"Driver-seat memory settings read with {state.profile.key}.", "ok")
-
-        def on_failure(error):
-            self._reset_seat_coding()
-            self.lbl_seat_coding.setText(str(error))
-            QMessageBox.critical(self, "Seat Settings Read Failed", str(error))
-
-        self._reset_seat_coding()
-        self.lbl_seat_coding.setText("Reading driver-seat memory settings…")
-        self._run_task(task, on_success=on_success, on_failure=on_failure)
-
-    def _on_write_seat_coding(self):
-        state = self._seat_coding_state
-        if not self._ds2 or state is None:
-            return
-        requested = {
-            "automatic_seat_adjustment_timing": self.cb_seat_timing.currentData(),
-            "one_touch_memory": self.chk_seat_one_touch.isChecked(),
-        }
-        labels = {
-            choice.value: choice.label
-            for choice in state.profile.features[0].choices
-        }
-        changes = []
-        if requested["automatic_seat_adjustment_timing"] != state.values[
-                "automatic_seat_adjustment_timing"]:
-            changes.append(
-                "• Automatic seat adjustment: "
-                f"{labels[state.values['automatic_seat_adjustment_timing']]} → "
-                f"{labels[requested['automatic_seat_adjustment_timing']]}"
-            )
-        if requested["one_touch_memory"] != state.values["one_touch_memory"]:
-            changes.append(
-                "• One-touch seat-memory buttons: "
-                f"{'On' if state.values['one_touch_memory'] else 'Off'} → "
-                f"{'On' if requested['one_touch_memory'] else 'Off'}"
-            )
-        if not changes:
-            QMessageBox.information(self, "Vehicle Coding", "No settings changed.")
-            return
-        answer = QMessageBox.question(
-            self, "Write Driver-Seat Settings?",
-            "\n".join(changes)
-            + "\n\nKeep ignition ON and engine OFF. Write these settings?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-        )
-        if answer != QMessageBox.Yes:
-            return
-
-        def task(log_fn, progress_fn):
-            log_fn(f"Writing {len(changes)} driver-seat setting change(s)…")
             return write_module_coding(
-                self._ds2, "sm_e46", state.profile.key,
+                self._ds2, state.profile.target, state.profile.key,
                 state.raw_data, requested,
             )
 
         def on_success(updated):
-            self._show_seat_state(updated)
+            self._show_module_coding_state(updated)
             self._log(
-                "Driver-seat settings written and verified by exact readback.", "ok")
+                f"{state.profile.name} settings written and verified by exact readback.",
+                "ok",
+            )
             QMessageBox.information(
                 self, "Vehicle Coding Complete",
                 "Settings were written and verified. Cycle the ignition before testing them."
             )
 
         def on_failure(error):
-            self._reset_seat_coding()
-            self.lbl_seat_coding.setText(
+            self._reset_module_coding()
+            self.lbl_module_coding.setText(
                 f"Write status is not trusted: {error}. Read the module again."
             )
             QMessageBox.critical(self, "Vehicle Coding Failed", str(error))
@@ -13375,7 +13157,7 @@ class MS41FlashGUI(QMainWindow):
             self.btn_write_full, self.btn_write_tune,
             self.btn_scan_modules, self.btn_read_dtc,
             self.btn_clear_dtc, self.btn_export_dtc,
-            self.btn_read_gm3_coding, self.btn_write_gm3_coding,
+            self.btn_read_module_coding, self.btn_write_module_coding,
             self.btn_transmission_swap_check,
             self.btn_transmission_swap_recover,
             self.btn_transmission_swap_convert,

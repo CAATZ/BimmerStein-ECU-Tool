@@ -462,7 +462,14 @@ def field_report(image: bytes, variant: str = "MS41.3") -> list[dict]:
 
 
 def _transmission_record_at(image: bytes, offset: int) -> dict:
-    raw = image[offset:offset + 4]
+    return decode_transmission_record(image[offset:offset + 4])
+
+
+def decode_transmission_record(raw: bytes) -> dict:
+    """Decode one exact four-byte value/check record."""
+    raw = bytes(raw)
+    if len(raw) != 4:
+        raise ValueError("transmission record must be exactly four bytes")
     value = _u16(raw)
     stored = _u16(raw, 2)
     low2 = value & 3
@@ -492,13 +499,22 @@ def make_transmission_record(
     image: bytes, mode: str, variant: str = "MS41.3"
 ) -> bytes:
     """Masked RMW of only bits 0..1; every unrelated bit is preserved."""
+    image = validate_image(image)
+    offset = transmission_offset(variant)
+    return make_transmission_record_from_record(
+        image[offset:offset + 4],
+        mode,
+    )
+
+
+def make_transmission_record_from_record(raw: bytes, mode: str) -> bytes:
+    """Return one checked record changing only transmission bits 0..1."""
     mode_bits = {"at": 1, "mt": 2}.get(mode.lower())
     if mode_bits is None:
         raise ValueError("transmission mode must be 'at' or 'mt'")
-    current = transmission_record(image, variant)
+    current = decode_transmission_record(raw)
     if not current["check_ok"]:
-        raise EepromError(
-            f"0x{transmission_offset(variant):03X} currently has an invalid check word")
+        raise EepromError("transmission record currently has an invalid check word")
     value = (current["value"] & 0xFFFC) | mode_bits
     payload = value.to_bytes(2, "little")
     return payload + additive_check(payload).to_bytes(2, "little")

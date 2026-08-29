@@ -1,23 +1,47 @@
-"""Reviewed, self-contained vehicle-coding profiles.
+"""Embedded, human-readable vehicle coding profiles.
 
-The catalog intentionally contains only exact Concept-6 profiles whose coding
-bytes are understood. External research data is not a runtime dependency.
-Unknown coding indices must remain read-only.
+The generated payload contains only reviewed coding fields and exact value
+encodings. It has no runtime dependency on external diagnostic databases.
 """
 
+from __future__ import annotations
+
+import base64
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
+from functools import lru_cache
+import json
 from typing import Literal
+import zlib
+
+from vehicle_coding_catalog_data import CATALOG_PAYLOAD_B85
 
 
 CodingLevel = Literal["basic", "advanced"]
-CodingTransport = Literal["gm3_selected", "whole_block"]
+
+
+def _masked_value(raw: bytes, mask: bytes) -> int:
+    value = int.from_bytes(raw, "big")
+    bits = int.from_bytes(mask, "big")
+    if not bits:
+        raise ValueError("coding mask cannot be zero")
+    shift = (bits & -bits).bit_length() - 1
+    return (value & bits) >> shift
 
 
 @dataclass(frozen=True)
 class CodingChoice:
     value: str
     label: str
-    raw_value: int
+    reference: str
+    data: tuple[bytes, ...]
+
+
+@dataclass(frozen=True)
+class CodingPart:
+    region: str
+    offset: int
+    mask: bytes
 
 
 @dataclass(frozen=True)
@@ -26,257 +50,199 @@ class CodingSetting:
     label: str
     description: str
     reference: str
-    section: str
     level: CodingLevel
-    byte_index: int
-    mask: int
-    active_when_set: bool = True
-    choices: tuple[CodingChoice, ...] = ()
+    parts: tuple[CodingPart, ...]
+    choices: tuple[CodingChoice, ...]
+    toggle: tuple[str, str] | None = None
 
-    def decode(self, data: bytes) -> bool | str:
-        if self.choices:
-            raw = data[self.byte_index] & self.mask
-            for choice in self.choices:
-                if choice.raw_value == raw:
-                    return choice.value
-            raise ValueError(
-                f"unsupported {self.reference} value 0x{raw:02X}")
-        return bool(data[self.byte_index] & self.mask) == self.active_when_set
-
-    def apply(self, data: bytearray, value: bool | str) -> None:
-        if self.choices:
-            choice = next(
-                (choice for choice in self.choices if choice.value == value), None)
-            if choice is None:
-                raise ValueError(f"invalid {self.key} choice: {value!r}")
-            data[self.byte_index] = (
-                (data[self.byte_index] & ~self.mask)
-                | (choice.raw_value & self.mask)
+    def decode(self, regions: Mapping[str, bytes]) -> bool | str | None:
+        current = tuple(
+            _masked_value(
+                regions[part.region][part.offset:part.offset + len(part.mask)],
+                part.mask,
             )
-            return
-        if type(value) is not bool:
-            raise ValueError(f"{self.key} must be on or off")
-        if value == self.active_when_set:
-            data[self.byte_index] |= self.mask
-        else:
-            data[self.byte_index] &= ~self.mask & 0xFF
+            for part in self.parts
+        )
+        choice = next((
+            candidate for candidate in self.choices
+            if tuple(int.from_bytes(value, "big") for value in candidate.data)
+            == current
+        ), None)
+        if choice is None:
+            return None
+        if self.toggle:
+            return choice.value == self.toggle[0]
+        return choice.value
+
+    def apply(self, regions: dict[str, bytearray], value: bool | str) -> None:
+        if self.toggle and type(value) is bool:
+            value = self.toggle[0 if value else 1]
+        choice = next(
+            (candidate for candidate in self.choices if candidate.value == value),
+            None,
+        )
+        if choice is None:
+            raise ValueError(f"invalid {self.key} choice: {value!r}")
+        for part, logical in zip(self.parts, choice.data):
+            region = regions[part.region]
+            end = part.offset + len(part.mask)
+            current = int.from_bytes(region[part.offset:end], "big")
+            mask = int.from_bytes(part.mask, "big")
+            shift = (mask & -mask).bit_length() - 1
+            updated = (current & ~mask) | ((int.from_bytes(logical, "big") << shift) & mask)
+            region[part.offset:end] = updated.to_bytes(len(part.mask), "big")
+
+
+@dataclass(frozen=True)
+class CodingRegion:
+    key: str
+    selector: int
+    address: int
+    length: int
 
 
 @dataclass(frozen=True)
 class CodingProfile:
     key: str
-    module_key: str
-    module_name: str
+    target: str
+    chassis: str
+    family: str
+    name: str
     address: int
-    coding_index: int
-    diagnostic_index: int
-    # Coding bytes only; the module checksum is separate.
-    data_length: int
-    features: tuple[CodingSetting, ...]
-    transport: CodingTransport = "gm3_selected"
-    ident_bmw_numbers: tuple[bytes, ...] = ()
+    transport: str
+    coding_index_raw: int
+    coding_indexes_raw: tuple[int, ...]
+    memory_structure: str
+    regions: tuple[CodingRegion, ...]
+    settings: tuple[CodingSetting, ...]
 
-    def matches_ident(self, response: bytes) -> bool:
-        return (
-            len(response) >= 10
-            and (self.diagnostic_index is None
-                 or response[9] == self.diagnostic_index)
-            and (not self.ident_bmw_numbers
-                 or response[3:7] in self.ident_bmw_numbers)
-        )
+    @property
+    def module_key(self) -> str:
+        return self.target
+
+    @property
+    def module_name(self) -> str:
+        return self.name
+
+    @property
+    def coding_index(self) -> int:
+        return _decode_bcd(self.coding_index_raw)
+
+    @property
+    def features(self) -> tuple[CodingSetting, ...]:
+        return self.settings
+
+    @property
+    def data_length(self) -> int:
+        return sum(region.length for region in self.regions)
 
 
-def _setting(
-    key: str,
-    label: str,
-    description: str,
-    reference: str,
-    section: str,
-    level: CodingLevel,
-    byte_index: int,
-    mask: int,
-    active_when_set: bool = True,
-    choices: tuple[CodingChoice, ...] = (),
-) -> CodingSetting:
-    return CodingSetting(
-        key, label, description, reference, section, level,
-        byte_index, mask, active_when_set, choices,
+@dataclass(frozen=True)
+class CodingTarget:
+    key: str
+    chassis: str
+    group: str
+    name: str
+    address: int
+    transport: str
+    available: bool
+    unavailable_reason: str
+    profile_keys: tuple[str, ...]
+
+
+def _decode_bcd(value: int) -> int:
+    high, low = value >> 4, value & 0x0F
+    if high > 9 or low > 9:
+        raise ValueError(f"invalid coding-index BCD 0x{value:02X}")
+    return high * 10 + low
+
+
+_CATALOG = json.loads(zlib.decompress(base64.b85decode(CATALOG_PAYLOAD_B85)))
+if _CATALOG.get("schema") != 1:
+    raise RuntimeError("unsupported embedded vehicle-coding catalog")
+_RAW_PROFILES = {profile["key"]: profile for profile in _CATALOG["profiles"]}
+
+
+def _choice(value: dict) -> CodingChoice:
+    return CodingChoice(
+        value["value"], value["label"], value["reference"],
+        tuple(bytes.fromhex(item) for item in value["data"]),
     )
 
 
-def _gm3_features(
-    *,
-    door_byte: int,
-    remote_byte: int,
-    memory_byte: int,
-    confirmation_byte: int,
-    auto_lock_byte: int,
-    auto_lock_mask: int,
-    auto_relock: tuple[int, int] | None,
-) -> tuple[CodingSetting, ...]:
-    features = [
-        _setting(
-            "door_open", "Open windows with the door key",
-            "Hold the key in the door unlock position to open the windows and sunroof.",
-            "KOMFORTOEFFNUNG", "Windows and sunroof", "basic",
-            door_byte, 0x04, False,
-        ),
-        _setting(
-            "door_close", "Close windows with the door key",
-            "Hold the key in the door lock position to close the windows and sunroof.",
-            "KOMFORTSCHLIESSUNG", "Windows and sunroof", "basic",
-            door_byte, 0x08, False,
-        ),
-        _setting(
-            "remote_open", "Open windows with the remote",
-            "Hold Unlock on the remote to open the windows and sunroof.",
-            "KOMFORTOEFFNUNG_FB", "Windows and sunroof", "basic",
-            remote_byte, 0x01,
-        ),
-        _setting(
-            "remote_close", "Close windows with the remote",
-            "Hold Lock on the remote to close the windows and sunroof.",
-            "KOMFORTSCHLIESSUNG_FB", "Windows and sunroof", "basic",
-            remote_byte, 0x02,
-        ),
-        _setting(
-            "auto_lock", "Lock the doors after driving away",
-            "Automatically lock the doors after the car begins moving.",
-            "VERRIEGELN_AUT_AB_X_KM/H", "Locks", "basic",
-            auto_lock_byte, auto_lock_mask,
-        ),
-        _setting(
-            "key_memory", "Remember personal settings for each key",
-            "Allow supported memory features to follow the key used to unlock the car.",
-            "SCHLUESSELMEMORY", "Memory equipment", "advanced",
-            memory_byte, 0x10,
-        ),
-        _setting(
-            "mirror_memory", "Enable mirror memory",
-            "Enable this only when compatible memory mirrors are installed.",
-            "SPIEGELMEMORY", "Memory equipment", "advanced",
-            0, 0x80,
-        ),
-        _setting(
-            "steering_column_memory", "Enable steering-column memory",
-            "Enable this only when the powered memory steering column is installed.",
-            "LENKSAEULENMEMORY", "Memory equipment", "advanced",
-            1, 0x08,
-        ),
-        _setting(
-            "driver_seat_memory", "Driver seat-memory module installed",
-            "Tell the General Module that a compatible driver seat-memory module is installed.",
-            "PM_SITZMEMORY", "Memory equipment", "advanced",
-            memory_byte, 0x02,
-        ),
-        _setting(
-            "passenger_seat_memory", "Passenger seat-memory module installed",
-            "Tell the General Module that a compatible passenger seat-memory module is installed.",
-            "PM_SITZMEMORY_BEIFAHRER", "Memory equipment", "advanced",
-            memory_byte, 0x04,
-        ),
-        _setting(
-            "visual_lock_confirmation", "Flash the lights when locking",
-            "Use the optical acknowledgement supported by the fitted alarm configuration.",
-            "QUIT_OPT_SCHAERF", "Lock confirmation", "advanced",
-            confirmation_byte, 0x02,
-        ),
-        _setting(
-            "acoustic_lock_confirmation", "Sound a confirmation when locking",
-            "Use the acoustic acknowledgement supported by the fitted alarm configuration.",
-            "QUIT_AKUST_SCHAERF", "Lock confirmation", "advanced",
-            confirmation_byte, 0x04,
-        ),
-        _setting(
-            "visual_unlock_confirmation", "Flash the lights when unlocking",
-            "Use the optical acknowledgement supported by the fitted alarm configuration.",
-            "QUIT_OPT_ENTSCH", "Lock confirmation", "advanced",
-            confirmation_byte, 0x08,
-        ),
-        _setting(
-            "acoustic_unlock_confirmation", "Sound a confirmation when unlocking",
-            "Use the acoustic acknowledgement supported by the fitted alarm configuration.",
-            "QUIT_AKUST_ENTSCH", "Lock confirmation", "advanced",
-            confirmation_byte, 0x10,
-        ),
-    ]
-    if auto_relock is not None:
-        features.insert(5, _setting(
-            "auto_relock", "Relock automatically after two minutes",
-            "Enable the General Module's automatic two-minute relock behavior.",
-            "VERRIEGELN_AUT_NACH_2_MIN", "Locks", "basic",
-            *auto_relock,
-        ))
-    return tuple(features)
+@lru_cache(maxsize=None)
+def profile_by_key(key: str) -> CodingProfile:
+    value = _RAW_PROFILES[key]
+    return CodingProfile(
+        value["key"], value["target"], value["chassis"], value["family"],
+        value["name"], value["address"], value["transport"],
+        value["coding_index_raw"], tuple(value["coding_indexes_raw"]),
+        value["memory_structure"],
+        tuple(CodingRegion(**region) for region in value["regions"]),
+        tuple(CodingSetting(
+            setting["key"], setting["label"], setting["description"],
+            setting["reference"], setting["level"],
+            tuple(CodingPart(
+                part["region"], part["offset"], bytes.fromhex(part["mask"])
+            ) for part in setting["parts"]),
+            tuple(_choice(choice) for choice in setting["choices"]),
+            tuple(setting["toggle"]) if setting["toggle"] else None,
+        ) for setting in value["settings"]),
+    )
 
 
-GM3_PROFILES = (
-    CodingProfile(
-        "GM3.C04", "gm3", "General Module (GM3)", 0x00, 4, 0x25, 17,
-        _gm3_features(
-            door_byte=6, remote_byte=13, memory_byte=3,
-            confirmation_byte=9, auto_lock_byte=1, auto_lock_mask=0x02,
-            auto_relock=None,
-        ),
-    ),
-    CodingProfile(
-        "GM3.C05", "gm3", "General Module (GM3)", 0x00, 5, 0x25, 17,
-        _gm3_features(
-            door_byte=6, remote_byte=13, memory_byte=3,
-            confirmation_byte=9, auto_lock_byte=1, auto_lock_mask=0x02,
-            auto_relock=(13, 0x04),
-        ),
-    ),
-    CodingProfile(
-        "GM3.C10", "gm3", "General Module (GM3)", 0x00, 10, 0x25, 25,
-        _gm3_features(
-            door_byte=11, remote_byte=17, memory_byte=5,
-            confirmation_byte=9, auto_lock_byte=15, auto_lock_mask=0x08,
-            auto_relock=(16, 0x08),
-        ),
-    ),
-)
+class _ProfileRegistry(Mapping[str, CodingProfile]):
+    def __getitem__(self, key: str) -> CodingProfile:
+        return profile_by_key(key)
 
-SM_E46_PROFILES = (
-    CodingProfile(
-        "SM_E46.C01", "sm_e46", "Driver Seat Memory (E46)",
-        0x72, 1, None, 1,
-        (
-            _setting(
-                "automatic_seat_adjustment_timing",
-                "Automatic seat adjustment",
-                "Choose when the saved driver-seat position is recalled after unlocking.",
-                "AUT_SITZVERSTELLUNG", "Seat memory", "basic", 0, 0x03,
-                choices=(
-                    CodingChoice("unlock", "After remote unlock", 0),
-                    CodingChoice(
-                        "unlock_and_door",
-                        "After unlock and opening the driver's door",
-                        1,
-                    ),
-                    CodingChoice("off", "Off", 3),
-                ),
-            ),
-            _setting(
-                "one_touch_memory", "One-touch seat-memory buttons",
-                "Recall a saved seat position with one press instead of holding the button.",
-                "MEMORY_TIPP_BETRIEB", "Seat memory", "basic", 0, 0x04,
-            ),
-        ),
-        transport="whole_block",
-        ident_bmw_numbers=tuple(bytes.fromhex(value) for value in (
-            "08 09 90 67", "08 09 90 68", "08 26 31 33",
-            "08 26 31 34", "08 09 92 37", "08 09 92 38",
-        )),
-    ),
-)
+    def __iter__(self) -> Iterator[str]:
+        return iter(_RAW_PROFILES)
 
-CODING_PROFILES = GM3_PROFILES + SM_E46_PROFILES
-PROFILE_BY_KEY = {profile.key: profile for profile in CODING_PROFILES}
+    def __len__(self) -> int:
+        return len(_RAW_PROFILES)
+
+
+PROFILE_BY_KEY: Mapping[str, CodingProfile] = _ProfileRegistry()
+CODING_PROFILES = PROFILE_BY_KEY.values()
+CODING_TARGETS = tuple(CodingTarget(
+    value["key"], value["chassis"], value["group"], value["name"],
+    value["address"], value["transport"], value["available"],
+    value["unavailable_reason"], tuple(value["profile_keys"]),
+) for value in _CATALOG["targets"])
+TARGET_BY_KEY = {target.key: target for target in CODING_TARGETS}
+
+
+def targets_for_chassis(chassis: str) -> tuple[CodingTarget, ...]:
+    chassis = str(chassis).upper()
+    return tuple(target for target in CODING_TARGETS if target.chassis == chassis)
+
+
+def profiles_for_target(target_key: str) -> tuple[CodingProfile, ...]:
+    target = TARGET_BY_KEY.get(target_key)
+    if target is None:
+        return ()
+    return tuple(profile_by_key(key) for key in target.profile_keys)
+
+
+def resolve_profile(target_key: str, coding_index_raw: int) -> CodingProfile | None:
+    candidates = tuple(
+        profile for profile in profiles_for_target(target_key)
+        if coding_index_raw in profile.coding_indexes_raw
+    )
+    exact = tuple(
+        profile for profile in candidates
+        if profile.coding_index_raw == coding_index_raw
+    )
+    pool = exact or candidates
+    return pool[0] if len(pool) == 1 else None
+
+
+# Compatibility names used by older callers while they migrate to target keys.
+GM3_PROFILES = profiles_for_target("e39_gm3")
+SM_E46_PROFILES = profiles_for_target("e46_seat")
 
 
 def profiles_for_module(module_key: str) -> tuple[CodingProfile, ...]:
-    return tuple(
-        profile for profile in CODING_PROFILES
-        if profile.module_key == module_key
-    )
+    return profiles_for_target({"gm3": "e39_gm3", "sm_e46": "e46_seat"}.get(
+        module_key, module_key
+    ))

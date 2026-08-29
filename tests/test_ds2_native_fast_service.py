@@ -4,7 +4,14 @@ import pytest
 
 import ds2_native_fast_service as service
 import ds2_native_fast_reentry as native_reentry
-from ds2_fast_contracts import FastOperation, LinkRate, SessionState
+from ds2_fast_contracts import (
+    CommitUnknownError,
+    FastOperation,
+    FlashOperation,
+    FlashRequest,
+    LinkRate,
+    SessionState,
+)
 from ds2_fast_partial_write import PartialWriteCancelled
 
 
@@ -160,6 +167,133 @@ def test_partial_service_consumes_pending_same_port_reentry(monkeypatch, tmp_pat
     assert service.write_partial_d2xx("com1", b"target") is sentinel
     assert not native_reentry.reentry_required("COM1")
     assert not transport.is_open
+
+
+def test_eeprom_record_service_passes_identity_and_factory_without_retry_owner(
+    monkeypatch,
+    tmp_path,
+):
+    journal = FakeJournal(tmp_path / "eeprom-record.jsonl", FastOperation.PARTIAL_WRITE)
+    transport = FakeTransport()
+    captured = {}
+    sentinel = object()
+    injected_factory = object()
+    identity = b"I" * 42
+    monkeypatch.setattr(service, "_new_journal", lambda port, operation: journal)
+
+    def open_transport(port, **kwargs):
+        captured["open"] = kwargs
+        return transport
+
+    monkeypatch.setattr(
+        service.NativeFastPartialWriteTransport,
+        "open_d2xx",
+        open_transport,
+    )
+
+    class EepromSession:
+        fast_write_armed = True
+        link = LinkRate.LOW
+
+        def __init__(self, transport_arg, target, journal_arg, **kwargs):
+            captured.update(
+                transport=transport_arg,
+                target=target,
+                journal=journal_arg,
+                kwargs=kwargs,
+            )
+
+        def execute_eeprom_record(
+            self,
+            variant,
+            expected_record,
+            target_record,
+            *,
+            expected_identity=None,
+        ):
+            captured.update(
+                variant=variant,
+                expected_record=expected_record,
+                target_record=target_record,
+                expected_identity=expected_identity,
+            )
+            journal.finish("success", retry_policy="never")
+            return sentinel
+
+    monkeypatch.setattr(service, "SlimNativeFastPartialWriteSession", EepromSession)
+
+    result = service.write_eeprom_record_d2xx(
+        "COM1",
+        "MS41.3",
+        b"\x01\x00\x02\x00",
+        b"\x02\x00\x03\x00",
+        expected_identity=identity,
+        serial_factory=injected_factory,
+    )
+
+    assert result is sentinel
+    assert captured["open"]["serial_factory"] is injected_factory
+    assert captured["target"] == b"\xFF" * (24 * 1024)
+    assert captured["variant"] == "MS41.3"
+    assert captured["expected_identity"] == identity
+    assert transport.is_open is False
+    assert native_reentry.reentry_required("COM1")
+
+
+def test_eeprom_service_propagates_commit_unknown_and_closes_without_replay(
+    monkeypatch,
+    tmp_path,
+):
+    journal = FakeJournal(tmp_path / "eeprom-unknown.jsonl", FastOperation.PARTIAL_WRITE)
+    transport = FakeTransport()
+    error = CommitUnknownError(
+        FlashRequest(
+            FlashOperation.EEPROM_WRITE,
+            0x1CA,
+            b"\x02\x00\x03\x00",
+        ),
+        "no ECU response",
+    )
+    monkeypatch.setattr(service, "_new_journal", lambda port, operation: journal)
+    monkeypatch.setattr(
+        service.NativeFastPartialWriteTransport,
+        "open_d2xx",
+        lambda port, **kwargs: transport,
+    )
+
+    class CommitUnknownSession:
+        fast_write_armed = True
+        link = LinkRate.LOW
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def execute_eeprom_record(self, *_args, **_kwargs):
+            journal.finish(
+                "commit_unknown",
+                commit_unknown=True,
+                retry_allowed=False,
+            )
+            raise error
+
+    monkeypatch.setattr(
+        service,
+        "SlimNativeFastPartialWriteSession",
+        CommitUnknownSession,
+    )
+
+    with pytest.raises(CommitUnknownError) as caught:
+        service.write_eeprom_record_d2xx(
+            "COM1",
+            "MS41.2",
+            b"\x01\x00\x02\x00",
+            b"\x02\x00\x03\x00",
+        )
+
+    assert caught.value is error
+    assert caught.value.retry_allowed is False
+    assert transport.is_open is False
+    assert native_reentry.reentry_required("COM1")
 
 
 def test_write_entry_qualification_returns_only_after_proven_low_cleanup(

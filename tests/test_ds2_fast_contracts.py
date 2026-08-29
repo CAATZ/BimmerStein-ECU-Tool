@@ -119,6 +119,35 @@ def test_partial_erase_and_program_use_the_zero_reply_contract():
     assert program_reply.count == 3
 
 
+def test_eeprom_write_requires_four_bytes_and_stock_reply_shape():
+    request = FlashRequest(
+        FlashOperation.EEPROM_WRITE,
+        0x1CA,
+        b"\x02\x00\x03\x00",
+    )
+    reply = validate_flash_exchange(
+        FastOperation.PARTIAL_WRITE,
+        request,
+        _flash_response(0x03, 0x1CA, 0xA5),
+        echo_complete=True,
+        state=SessionState.HIGH_PARTIAL_WRITE,
+    )
+
+    assert request.payload == bytes.fromhex("03 00 01 CA 04 02 00 03 00")
+    assert reply.operation == 0x03
+    assert reply.address == 0x1CA
+    assert reply.count == 0xA5
+    with pytest.raises(ValueError, match="exactly four"):
+        FlashRequest(FlashOperation.EEPROM_WRITE, 0x1CA, b"\x00")
+    with pytest.raises(ContractViolation, match="address/cursor"):
+        validate_flash_exchange(
+            FastOperation.PARTIAL_WRITE,
+            request,
+            _flash_response(0x03, 0x1CE, 4),
+            echo_complete=True,
+        )
+
+
 def test_full_erase_poll_and_program_echo_their_operations():
     for operation, address in (
         (FlashOperation.POLL, 0x2000),

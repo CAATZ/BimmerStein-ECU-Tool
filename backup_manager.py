@@ -22,6 +22,11 @@ BACKUP_DIR = str(mutable_path("backups"))
 INDEX_FILE = os.path.join(BACKUP_DIR, "index.json")
 
 
+def _folder_index_file():
+    # Keep metadata outside BACKUP_DIR so it can never replace an imported image.
+    return os.path.join(os.path.dirname(BACKUP_DIR), "library-folders.json")
+
+
 @dataclass
 class BackupEntry:
     filename:  str
@@ -59,13 +64,30 @@ class BackupManager:
     def __init__(self):
         os.makedirs(BACKUP_DIR, exist_ok=True)
         self._entries: List[BackupEntry] = []
+        self._folders: List[str] = []
         self._load()
+        self._load_folders()
 
     # ── Public API ─────────────────────────────────────────────────────────
 
     @property
     def entries(self) -> List[BackupEntry]:
         return list(self._entries)
+
+    @property
+    def folders(self) -> List[str]:
+        return list(self._folders)
+
+    def create_folder(self, folder: str) -> str:
+        folder = self.normalize_folder(folder)
+        if not folder:
+            raise ValueError("folder name is required")
+        if any(candidate.casefold() == folder.casefold() for candidate in self._folders):
+            raise ValueError("folder already exists")
+        self._folders.append(folder)
+        self._folders.sort(key=str.casefold)
+        self._save_folders()
+        return folder
 
     def add(self, src_path: str, notes: str = "") -> BackupEntry:
         """Copy a .bin file into backups/ and register it (source='imported')."""
@@ -76,7 +98,7 @@ class BackupManager:
 
     def add_data(self, data, filename: str, notes: str = "",
                  source: str = "imported", ecu_id: str = "",
-                 vin: str = "", variant: str = "") -> BackupEntry:
+                 vin: str = "", variant: str = "", folder: str = "") -> BackupEntry:
         """Register an in-memory image (e.g. a live ECU read) as a backup.
 
         Writes `data` into backups/ under a unique `filename` and indexes it with
@@ -86,6 +108,7 @@ class BackupManager:
         from ms41 import MS41ECU
         from checksum import verify_checksum
 
+        folder = self.normalize_folder(folder)
         data = bytearray(data)
         size = len(data)
         file_type, detected_variant = self._classify(data, size)
@@ -135,8 +158,13 @@ class BackupManager:
             cal_id=cal_id, source=source,
             program_variant=program_variant, cal_variant=cal_variant, hybrid=hybrid,
             sha256=hashlib.sha256(data).hexdigest(),
+            folder=folder,
         )
         self._entries.append(entry)
+        if folder and not any(
+                candidate.casefold() == folder.casefold() for candidate in self._folders):
+            self._folders.append(folder)
+            self._folders.sort(key=str.casefold)
         self._save()
         return entry
 
@@ -198,6 +226,8 @@ class BackupManager:
     def remove_exact(self, filename: str, sha256: str):
         entry = self.exact_entry(filename, sha256)
         path = self._entry_path(entry.filename)
+        if entry.folder:
+            self._save_folders()
         os.remove(path)
         self._entries = [e for e in self._entries if e.filename != entry.filename]
         self._save()
@@ -259,7 +289,13 @@ class BackupManager:
     def update_folder_exact(self, filename: str, sha256: str, folder: str):
         entry = self.exact_entry(filename, sha256)
         entry.folder = self.normalize_folder(folder)
+        if entry.folder and not any(
+                candidate.casefold() == entry.folder.casefold()
+                for candidate in self._folders):
+            self._folders.append(entry.folder)
+            self._folders.sort(key=str.casefold)
         self._save()
+        self._save_folders()
         return entry
 
     def rename_folder(self, current: str, replacement: str) -> int:
@@ -267,29 +303,48 @@ class BackupManager:
         replacement = self.normalize_folder(replacement)
         if not current or not replacement:
             raise ValueError("folder name is required")
-        matches = [entry for entry in self._entries if entry.folder == current]
-        if not matches:
+        current_key = current.casefold()
+        matches = [entry for entry in self._entries if entry.folder.casefold() == current_key]
+        registered = next(
+            (folder for folder in self._folders if folder.casefold() == current_key), None,
+        )
+        if not matches and registered is None:
             raise ValueError("folder was not found")
-        if replacement.casefold() != current.casefold() and any(
-                entry.folder.casefold() == replacement.casefold()
-                for entry in self._entries if entry.folder):
+        if replacement.casefold() != current_key and any(
+                folder.casefold() == replacement.casefold() for folder in self._folders):
             raise ValueError("folder already exists")
         for entry in matches:
             entry.folder = replacement
+        if registered is not None:
+            self._folders[self._folders.index(registered)] = replacement
+        else:
+            self._folders.append(replacement)
+        self._folders.sort(key=str.casefold)
         self._save()
-        return len(matches)
+        self._save_folders()
+        return len(matches) or 1
 
     def clear_folder(self, folder: str) -> int:
         folder = self.normalize_folder(folder)
         if not folder:
             raise ValueError("folder name is required")
-        matches = [entry for entry in self._entries if entry.folder == folder]
-        if not matches:
+        folder_key = folder.casefold()
+        matches = [entry for entry in self._entries if entry.folder.casefold() == folder_key]
+        registered = [
+            candidate for candidate in self._folders
+            if candidate.casefold() == folder_key
+        ]
+        if not matches and not registered:
             raise ValueError("folder was not found")
         for entry in matches:
             entry.folder = ""
+        self._folders = [
+            candidate for candidate in self._folders
+            if candidate.casefold() != folder_key
+        ]
         self._save()
-        return len(matches)
+        self._save_folders()
+        return len(matches) or 1
 
     def remove(self, entry: BackupEntry):
         self.remove_exact(entry.filename, entry.sha256)
@@ -322,6 +377,27 @@ class BackupManager:
         except Exception:
             self._entries = []
 
+    def _load_folders(self):
+        stored = []
+        try:
+            with open(_folder_index_file(), "r", encoding="utf-8") as f:
+                stored = json.load(f)
+            if not isinstance(stored, list):
+                stored = []
+        except (FileNotFoundError, OSError, ValueError):
+            stored = []
+        folders = [*stored, *(entry.folder for entry in self._entries if entry.folder)]
+        self._folders = []
+        for candidate in folders:
+            try:
+                folder = self.normalize_folder(candidate)
+            except ValueError:
+                continue
+            if folder and not any(
+                    existing.casefold() == folder.casefold() for existing in self._folders):
+                self._folders.append(folder)
+        self._folders.sort(key=str.casefold)
+
     def _save(self):
         temporary = os.path.join(BACKUP_DIR, f".index-{uuid.uuid4().hex}.tmp")
         try:
@@ -330,6 +406,23 @@ class BackupManager:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temporary, INDEX_FILE)
+        finally:
+            try:
+                os.remove(temporary)
+            except FileNotFoundError:
+                pass
+
+    def _save_folders(self):
+        destination = _folder_index_file()
+        temporary = os.path.join(
+            os.path.dirname(destination), f".library-folders-{uuid.uuid4().hex}.tmp",
+        )
+        try:
+            with open(temporary, "x", encoding="utf-8") as f:
+                json.dump(self._folders, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, destination)
         finally:
             try:
                 os.remove(temporary)

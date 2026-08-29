@@ -128,8 +128,15 @@ def test_catalog_folders_change_metadata_without_moving_images(tmp_path, monkeyp
     mgr = _mgr(tmp_path, monkeypatch)
     first = mgr.add_data(bytes(512), "first.bin", variant="MS41.2")
     second = mgr.add_data(bytes([1]) * 512, "second.bin", variant="MS41.2")
+    direct = mgr.add_data(
+        bytes([2]) * 512, "direct.bin", variant="MS41.2", folder=" Direct imports ",
+    )
     original_paths = {first.filename: first.path, second.filename: second.path}
 
+    assert direct.folder == "Direct imports"
+    assert "Direct imports" in mgr.folders
+    mgr.remove_exact(direct.filename, direct.sha256)
+    assert "Direct imports" in backup_manager.BackupManager().folders
     assert mgr.update_folder_exact(first.filename, first.sha256, " Track  cars ").folder == \
         "Track cars"
     mgr.update_folder_exact(second.filename, second.sha256, "Stock")
@@ -145,3 +152,21 @@ def test_catalog_folders_change_metadata_without_moving_images(tmp_path, monkeyp
     mgr.update_folder_exact(first.filename, first.sha256, "Other")
     with pytest.raises(ValueError, match="already exists"):
         mgr.rename_folder("Other", "stock")
+
+
+def test_empty_catalog_folders_persist_until_removed(tmp_path, monkeypatch):
+    mgr = _mgr(tmp_path, monkeypatch)
+    entry = mgr.add_data(bytes(512), "library-folders.json", variant="MS41.2")
+
+    assert mgr.create_folder(" Track  cars ") == "Track cars"
+    assert backup_manager.BackupManager().folders == ["Track cars"]
+    assert mgr.read_data(entry.filename, entry.sha256) == bytes(512)
+
+    mgr.update_folder_exact(entry.filename, entry.sha256, "Track cars")
+    mgr.remove_exact(entry.filename, entry.sha256)
+    assert backup_manager.BackupManager().folders == ["Track cars"]
+
+    assert mgr.rename_folder("Track cars", "Race day") == 1
+    assert backup_manager.BackupManager().folders == ["Race day"]
+    assert mgr.clear_folder("Race day") == 1
+    assert backup_manager.BackupManager().folders == []

@@ -139,6 +139,7 @@ class PartialWriteStockSerial:
         self.memory[AUTHORIZATION_STATE_ADDRESS] = int(authorization_state)
         self.memory[WRONG_KEY_COUNTER_ADDRESS] = int(wrong_key_count)
         self.memory[FLASH_MODE_MARKER_ADDRESS] = 0
+        self.eeprom = bytearray(0x200)
         self.token = bytes(token)
         self.identity = IDENTITY
         self.finalize_busy = int(finalize_busy)
@@ -257,6 +258,11 @@ class PartialWriteStockSerial:
             elif address == NATIVE_FAST_REENTRY_LATCH_ADDRESS and count == 1:
                 data = bytearray((int(reentry["e659"]),))
                 self.native_reentry_index += 1
+            elif address >> 24 == 0x03:
+                assert self.selector == 0x01
+                assert self.armed
+                offset = address & 0xFFFFFF
+                data = bytearray(self.eeprom[offset : offset + count])
             else:
                 data = bytearray(self.memory[address : address + count])
             if (
@@ -354,6 +360,7 @@ class PartialWriteStockSerial:
         count = args[4]
         data = bytes(args[5:])
         assert count == len(data)
+        response_count = count
         self.flash_requests.append((operation, address, data))
         flash_index = len(self.flash_requests)
 
@@ -372,6 +379,17 @@ class PartialWriteStockSerial:
             self.memory[address : address + count] = data
             response_operation = FlashOperation.PARTIAL_PROGRAM
             cursor = address + count
+        elif operation == FlashOperation.EEPROM_WRITE:
+            assert self.selector == 0x01
+            assert self.armed
+            assert address in (0x196, 0x1CC, 0x1CA)
+            assert count == 4
+            self.eeprom[address : address + count] = data
+            response_operation = FlashOperation.EEPROM_WRITE
+            cursor = address
+            # The stock op-3 branch does not initialize RL6 before copying it
+            # into E527, so the response count byte is not a contract field.
+            response_count = 0xA5
         elif operation == FlashOperation.POLL:
             response_operation = FlashOperation.POLL
             cursor = address
@@ -385,7 +403,7 @@ class PartialWriteStockSerial:
         payload = (
             bytes((int(response_operation),))
             + int(cursor).to_bytes(3, "big")
-            + bytes((count, 1))
+            + bytes((response_count, 1))
         )
         self._response(
             ResponseStatus.ACK,
@@ -978,6 +996,7 @@ def test_transport_structurally_rejects_full_write_and_unproven_commands(tmp_pat
         FlashRequest(FlashOperation.FULL_PROGRAM, 0x2000, b"x"),
         FlashRequest(FlashOperation.ERASE, 0x2000),
         FlashRequest(FlashOperation.POLL, 0x10000),
+        FlashRequest(FlashOperation.EEPROM_WRITE, 0x100, b"\x01\x00\x02\x00"),
     ):
         with pytest.raises((UnsafePartialWriteCommand, ValueError)):
             transport.flash(
@@ -987,6 +1006,207 @@ def test_transport_structurally_rejects_full_write_and_unproven_commands(tmp_pat
                 state=SessionState.HIGH_PARTIAL_WRITE,
             )
     assert len(serial.requests) == before
+
+
+def test_eeprom_transport_requires_native_fast_write_state(tmp_path):
+    session, serial, _journal = _authorization_session(tmp_path)
+    request = FlashRequest(
+        FlashOperation.EEPROM_WRITE,
+        0x1CA,
+        b"\x02\x00\x03\x00",
+    )
+
+    with pytest.raises(PartialWriteStateError, match="HIGH_PARTIAL_WRITE"):
+        session.transport.flash(
+            request,
+            label="forbidden_low_eeprom_write",
+            rate=LinkRate.LOW,
+            state=SessionState.AUTHORIZED_LOW,
+        )
+    with pytest.raises(UnsafePartialWriteCommand, match="restricted"):
+        session.transport.flash(
+            FlashRequest(
+                FlashOperation.EEPROM_WRITE,
+                0x100,
+                b"\x02\x00\x03\x00",
+            ),
+            label="forbidden_arbitrary_eeprom_write",
+            rate=LinkRate.HIGH,
+            state=SessionState.HIGH_PARTIAL_WRITE,
+        )
+
+    assert serial.flash_requests == []
+
+
+@pytest.mark.parametrize(
+    ("variant", "offset"),
+    (
+        ("MS41.0", 0x196),
+        ("MS41.1", 0x1CC),
+        ("MS41.2", 0x1CA),
+        ("MS41.3", 0x1CA),
+    ),
+)
+def test_eeprom_record_write_compares_writes_once_and_reads_back(
+    tmp_path,
+    variant,
+    offset,
+):
+    session, serial, journal = _authorization_session(tmp_path)
+    before = b"\x01\x00\x02\x00"
+    target = b"\x02\x00\x03\x00"
+    serial.eeprom[offset : offset + 4] = before
+
+    result = session.execute_eeprom_record(
+        variant,
+        before,
+        target,
+        expected_identity=IDENTITY,
+    )
+
+    assert result.record == target
+    assert result.previous_record == before
+    assert result.identity == IDENTITY
+    assert result.written is True
+    assert bytes(serial.eeprom[offset : offset + 4]) == target
+    assert serial.flash_requests == [
+        (FlashOperation.EEPROM_WRITE, offset, target)
+    ]
+    eeprom_reads = [
+        (baud, args)
+        for baud, command, args in serial.requests
+        if command == 0x06 and args[0] == 0x03
+    ]
+    assert eeprom_reads == [
+        (187500, b"\x03\x00" + offset.to_bytes(2, "big") + b"\x04"),
+        (187500, b"\x03\x00" + offset.to_bytes(2, "big") + b"\x04"),
+    ]
+    write_args = next(
+        args
+        for baud, command, args in serial.requests
+        if baud == 187500 and command == FLASH_COMMAND and args[0] == 0x03
+    )
+    assert write_args == (
+        b"\x03" + offset.to_bytes(3, "big") + b"\x04" + target
+    )
+    assert result.final_link is LinkRate.LOW
+    assert result.final_state is SessionState.COMPLETE
+    assert journal.outcome == "success"
+
+
+def test_eeprom_record_identity_mismatch_stops_before_selector_or_write(tmp_path):
+    session, serial, _journal = _authorization_session(tmp_path)
+    before = b"\x01\x00\x02\x00"
+    target = b"\x02\x00\x03\x00"
+    serial.eeprom[0x1CA : 0x1CE] = before
+
+    with pytest.raises(PartialWriteStateError, match="identity differs"):
+        session.execute_eeprom_record(
+            "MS41.2",
+            before,
+            target,
+            expected_identity=b"X" * 42,
+        )
+
+    assert serial.flash_requests == []
+    assert not any(
+        command == SEED_KEY_COMMAND and len(args) == TOKEN_LENGTH + 1
+        for _baud, command, args in serial.requests
+    )
+
+
+def test_eeprom_record_compare_mismatch_cleans_up_without_writing(tmp_path):
+    session, serial, journal = _authorization_session(tmp_path)
+    expected = b"\x01\x00\x02\x00"
+    target = b"\x02\x00\x03\x00"
+    serial.eeprom[0x1CA : 0x1CE] = target
+
+    with pytest.raises(PartialWriteStateError, match="changed before write"):
+        session.execute_eeprom_record("MS41.3", expected, target)
+
+    assert serial.flash_requests == []
+    assert serial.cleanup_completed is True
+    assert session.link is LinkRate.LOW
+    assert journal.outcome == "failed"
+
+
+def test_eeprom_record_recovery_accepts_exact_invalid_expected_check(tmp_path):
+    session, serial, _journal = _authorization_session(tmp_path)
+    uncertain = b"\x01\x00\x03\x00"
+    target = b"\x02\x00\x03\x00"
+    serial.eeprom[0x1CA : 0x1CE] = uncertain
+
+    result = session.execute_eeprom_record("MS41.2", uncertain, target)
+
+    assert result.previous_record == uncertain
+    assert result.record == target
+    assert serial.flash_requests == [
+        (FlashOperation.EEPROM_WRITE, 0x1CA, target)
+    ]
+
+
+def test_eeprom_record_invalid_target_is_rejected_before_ecu_traffic(tmp_path):
+    session, serial, journal = _authorization_session(tmp_path)
+    session.identity = None
+    session.token = None
+    session.state = SessionState.LOW_READY
+
+    with pytest.raises(ValueError, match="target.*invalid check"):
+        session.execute_eeprom_record(
+            "MS41.2",
+            b"\x01\x00\x02\x00",
+            b"\x02\x00\x04\x00",
+        )
+
+    assert serial.requests == []
+    assert journal.outcome == "failed"
+
+
+def test_eeprom_missing_ack_is_commit_unknown_never_retried_and_closes_state(
+    tmp_path,
+):
+    session, serial, journal = _authorization_session(
+        tmp_path,
+        missing_flash_response_at=1,
+    )
+    before = b"\x01\x00\x02\x00"
+    target = b"\x02\x00\x03\x00"
+    serial.eeprom[0x1CA : 0x1CE] = before
+
+    with pytest.raises(CommitUnknownError) as caught:
+        session.execute_eeprom_record("MS41.2", before, target)
+
+    assert caught.value.retry_allowed is False
+    assert serial.flash_requests == [
+        (FlashOperation.EEPROM_WRITE, 0x1CA, target)
+    ]
+    assert session.link is LinkRate.LOW
+    assert session.state is SessionState.COMMIT_UNKNOWN
+    assert serial.cleanup_completed is True
+    finish = next(
+        fields for event, fields in journal.events if event == "journal_finished"
+    )
+    assert journal.outcome == "commit_unknown"
+    assert finish["commit_unknown"] is True
+    assert finish["retry_allowed"] is False
+
+
+def test_eeprom_wrong_reply_address_is_not_retried(tmp_path):
+    session, serial, _journal = _authorization_session(
+        tmp_path,
+        wrong_cursor_at=1,
+    )
+    before = b"\x01\x00\x02\x00"
+    target = b"\x02\x00\x03\x00"
+    serial.eeprom[0x1CA : 0x1CE] = before
+
+    with pytest.raises(ContractViolation, match="address/cursor"):
+        session.execute_eeprom_record("MS41.2", before, target)
+
+    assert serial.flash_requests == [
+        (FlashOperation.EEPROM_WRITE, 0x1CA, target)
+    ]
+    assert serial.cleanup_completed is True
 
 
 def test_successful_partial_write_uses_capture_order_and_cleans_low(tmp_path):

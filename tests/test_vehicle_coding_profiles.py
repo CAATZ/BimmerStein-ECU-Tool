@@ -1,112 +1,117 @@
-import pytest
-
 from vehicle_coding_profiles import (
-    CODING_PROFILES,
-    GM3_PROFILES,
+    CODING_TARGETS,
     PROFILE_BY_KEY,
-    SM_E46_PROFILES,
-    profiles_for_module,
+    TARGET_BY_KEY,
+    profiles_for_target,
+    resolve_profile,
+    targets_for_chassis,
 )
 
 
-def _feature(profile_key, feature_key):
-    return next(
-        feature for feature in PROFILE_BY_KEY[profile_key].features
-        if feature.key == feature_key
+def test_catalog_has_complete_humanized_target_matrix():
+    assert {target.chassis for target in CODING_TARGETS} == {
+        "E36", "E38", "E39", "E46",
+    }
+    assert len(CODING_TARGETS) == 50
+    assert len(PROFILE_BY_KEY) == 178
+    assert all(target.profile_keys for target in CODING_TARGETS)
+    assert all(target.name and target.group for target in CODING_TARGETS)
+    assert max(
+        sum(setting.level == "basic" for setting in profile.settings)
+        for profile in PROFILE_BY_KEY.values()
+    ) <= 24
+
+    e36 = {target.key: target for target in targets_for_chassis("e36")}
+    assert not e36["e36_gm4"].available
+    assert "ADS/L-line" in e36["e36_gm4"].unavailable_reason
+    assert e36["e36_compact_cluster"].available
+    assert e36["e36_asc5"].available
+    assert e36["e36_mk60"].available
+
+
+def test_every_embedded_choice_round_trips_without_touching_other_bits():
+    for profile in PROFILE_BY_KEY.values():
+        regions = {region.key: region for region in profile.regions}
+        assert len(regions) == len(profile.regions)
+        assert len({setting.key for setting in profile.settings}) == len(
+            profile.settings)
+        for setting in profile.settings:
+            assert setting.label and setting.description and setting.reference
+            assert setting.level in {"basic", "advanced"}
+            assert len(setting.choices) >= 2
+            assert len({choice.value for choice in setting.choices}) == len(
+                setting.choices)
+            for part in setting.parts:
+                assert part.region in regions
+                assert part.offset + len(part.mask) <= regions[part.region].length
+                assert any(part.mask)
+            for choice in setting.choices:
+                data = {
+                    key: bytearray([0xA5] * region.length)
+                    for key, region in regions.items()
+                }
+                before = {key: bytes(value) for key, value in data.items()}
+                setting.apply(data, choice.value)
+                decoded = setting.decode({key: bytes(value) for key, value in data.items()})
+                expected = (
+                    choice.value == setting.toggle[0]
+                    if setting.toggle else choice.value
+                )
+                assert decoded == expected, (profile.key, setting.reference)
+                owned = {(part.region, part.offset + index)
+                         for part in setting.parts
+                         for index in range(len(part.mask))}
+                assert all(
+                    byte == before[key][index]
+                    for key, value in data.items()
+                    for index, byte in enumerate(value)
+                    if (key, index) not in owned
+                )
+
+
+def test_exact_profile_resolution_and_useful_window_setting():
+    profile = resolve_profile("e39_gm3", 0x04)
+    assert profile is PROFILE_BY_KEY["E39.GM3.C04"]
+    assert resolve_profile("e39_gm3", 0x01) is None
+    assert profiles_for_target("missing") == ()
+    assert TARGET_BY_KEY[profile.target].name == "General Module (GM3)"
+
+    comfort = next(
+        setting for setting in profile.settings
+        if setting.reference == "KOMFORTOEFFNUNG"
     )
+    assert comfort.level == "basic"
+    assert "Comfort opening" in comfort.label
+    assert comfort.toggle is not None
+    assert comfort.parts[0].region == "b0"
 
 
-@pytest.mark.parametrize(
-    "profile_key,data_length,expected",
-    (
-        ("GM3.C04", 17, {
-            "door_open": (6, 0x04, False),
-            "door_close": (6, 0x08, False),
-            "remote_open": (13, 0x01, True),
-            "remote_close": (13, 0x02, True),
-            "auto_lock": (1, 0x02, True),
-        }),
-        ("GM3.C05", 17, {
-            "door_open": (6, 0x04, False),
-            "remote_open": (13, 0x01, True),
-            "auto_lock": (1, 0x02, True),
-            "auto_relock": (13, 0x04, True),
-        }),
-        ("GM3.C10", 25, {
-            "door_open": (11, 0x04, False),
-            "remote_open": (17, 0x01, True),
-            "auto_lock": (15, 0x08, True),
-            "auto_relock": (16, 0x08, True),
-        }),
-    ),
-)
-def test_exact_gm3_profile_layouts(profile_key, data_length, expected):
-    profile = PROFILE_BY_KEY[profile_key]
-
-    assert (profile.module_key, profile.address, profile.coding_index,
-            profile.diagnostic_index) == (
-        "gm3", 0x00, int(profile_key[-2:]), 0x25
+def test_unknown_current_choice_is_preserved_not_fatal():
+    profile = PROFILE_BY_KEY["E46.SM_E46.C01"]
+    timing = next(
+        setting for setting in profile.settings
+        if setting.reference == "AUT_SITZVERSTELLUNG"
     )
-    assert profile.data_length == data_length
-    assert {
-        key: (feature.byte_index, feature.mask, feature.active_when_set)
-        for key in expected
-        for feature in (_feature(profile_key, key),)
-    } == expected
+    regions = {"whole": b"\x02"}
+    assert timing.decode(regions) is None
 
-
-def test_active_low_and_active_high_settings_preserve_other_bits():
-    door_open = _feature("GM3.C05", "door_open")
-    remote_open = _feature("GM3.C05", "remote_open")
-    data = bytearray([0xFF] * 17)
-
-    door_open.apply(data, True)
-    remote_open.apply(data, False)
-
-    assert data[6] == 0xFB
-    assert data[13] == 0xFE
-    assert door_open.decode(data) is True
-    assert remote_open.decode(data) is False
-    assert all(byte == 0xFF for index, byte in enumerate(data) if index not in (6, 13))
-
-
-def test_catalog_is_exact_and_internally_consistent():
-    assert tuple(PROFILE_BY_KEY) == (
-        "GM3.C04", "GM3.C05", "GM3.C10", "SM_E46.C01",
+    updated = {"whole": bytearray(regions["whole"])}
+    one_touch = next(
+        setting for setting in profile.settings
+        if setting.reference == "MEMORY_TIPP_BETRIEB"
     )
-    assert profiles_for_module("gm3") == GM3_PROFILES
-    assert profiles_for_module("unknown") == ()
-    assert profiles_for_module("sm_e46") == SM_E46_PROFILES
-
-    for profile in CODING_PROFILES:
-        keys = [feature.key for feature in profile.features]
-        assert len(keys) == len(set(keys))
-        assert {feature.level for feature in profile.features} <= {"basic", "advanced"}
-        assert "basic" in {feature.level for feature in profile.features}
-        for feature in profile.features:
-            assert feature.reference
-            assert 0 <= feature.byte_index < profile.data_length
-            assert 0 < feature.mask <= 0x80
-            if feature.choices:
-                assert len({choice.value for choice in feature.choices}) == len(
-                    feature.choices)
-                assert all(choice.raw_value & ~feature.mask == 0
-                           for choice in feature.choices)
-            else:
-                assert feature.mask & (feature.mask - 1) == 0
+    one_touch.apply(updated, True)
+    assert updated["whole"][0] & 0x03 == 0x02
 
 
-def test_e46_seat_choice_and_toggle_preserve_unrelated_bits():
-    profile = PROFILE_BY_KEY["SM_E46.C01"]
-    timing, one_touch = profile.features
-    data = bytearray((0xF8,))
-
-    timing.apply(data, "unlock_and_door")
-    one_touch.apply(data, True)
-
-    assert data == bytearray((0xFD,))
-    assert timing.decode(data) == "unlock_and_door"
-    assert one_touch.decode(data) is True
-    assert [(choice.value, choice.raw_value) for choice in timing.choices] == [
-        ("unlock", 0), ("unlock_and_door", 1), ("off", 3),
+def test_newer_lcm_profiles_keep_explicit_selector_blocks():
+    profile = PROFILE_BY_KEY["E39.LCM.C20"]
+    parameters = [
+        setting for setting in profile.settings
+        if setting.reference.startswith("PROGRAMMPARAMETER_LCM_")
     ]
+
+    assert [setting.parts[0].region for setting in parameters] == [
+        f"b{selector}" for selector in range(12, 23)
+    ]
+    assert all(setting.parts[0].offset == 0 for setting in parameters)
