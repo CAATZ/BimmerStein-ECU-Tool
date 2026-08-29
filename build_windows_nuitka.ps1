@@ -161,7 +161,7 @@ try {
     Copy-Item -LiteralPath "THIRD_PARTY_NOTICES.md" -Destination $appDir
     Copy-Item -LiteralPath "output\pdf\BimmerStein-ECU-Tool-User-Manual.pdf" -Destination $appDir
 
-    & $python "packaging\verify_dist.py" --backend nuitka $appDir
+    & $python "packaging\verify_dist.py" --backend nuitka --expected-version $Version $appDir
     if ($LASTEXITCODE -ne 0) { throw "Nuitka packaged-runtime verification failed." }
 
     Write-Host "Nuitka package ready: dist\BimmerStein ECU Tool Nuitka"

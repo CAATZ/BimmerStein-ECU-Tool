@@ -1000,13 +1000,17 @@ class SlimNativeFastFullWriteSession(
             power_cycle_required=power_cycle_required,
         )
 
-    def _program_program_only_plan(self) -> int:
+    def _program_program_only_plan(self, *, recovery: bool = False) -> int:
         """Erase/program only the program array; never enter the tune phase."""
         assert self.plan is not None
         plan = self.plan
         self._progress("Preparing program erase", 0, 1)
         for index, request in enumerate(plan.program_polls, 1):
-            self._flash_full(request, f"program_only_control_poll_{index}")
+            self._flash_full(
+                request,
+                f"program_only_control_poll_{index}",
+                allowed_statuses=frozenset((0x01, 0x0C) if recovery else (0x01,)),
+            )
             self._sleep(self.timing.poll_delay)
         self._progress("Erasing program region", 0, 1)
         self.destructive_started = True
@@ -1054,7 +1058,7 @@ class SlimNativeFastFullWriteSession(
         self._record("program_only_optional_verify_passed", bytes=checked)
         return checked
 
-    def _program_full_plan(self) -> Tuple[int, int]:
+    def _program_full_plan(self, *, recovery: bool = False) -> Tuple[int, int]:
         assert self.plan is not None
         plan = self.plan
         program_payload_total = plan.primer.count + sum(
@@ -1064,7 +1068,11 @@ class SlimNativeFastFullWriteSession(
         full_payload_total = program_payload_total + tune_payload_total
         self._progress("Erasing program region (phase 1 of 2)", 0, 1)
         for index, request in enumerate(plan.program_polls, 1):
-            self._flash_full(request, f"full_program_control_poll_{index}")
+            self._flash_full(
+                request,
+                f"full_program_control_poll_{index}",
+                allowed_statuses=frozenset((0x01, 0x0C) if recovery else (0x01,)),
+            )
             self._sleep(self.timing.poll_delay)
         self.destructive_started = True
         self._record(
@@ -1363,11 +1371,15 @@ class SlimNativeFastFullWriteSession(
         )
         try:
             self.recovery_replay_attempted = True
+            # An interrupted program can report an unwritten end sentinel (0x0C).
+            # Its poll still arms the stock erase latch. Accept it only before
+            # re-erasing this retained program failure, never as final success.
+            program_recovery = self.failure_state is SessionState.HIGH_FULL_PROGRAM
             if self.program_only:
-                program_payload = self._program_program_only_plan()
+                program_payload = self._program_program_only_plan(recovery=program_recovery)
                 tune_payload = 0
             else:
-                program_payload, tune_payload = self._program_full_plan()
+                program_payload, tune_payload = self._program_full_plan(recovery=program_recovery)
             self._finalize_full()
             self.flash_completed = True
             if self.program_only:

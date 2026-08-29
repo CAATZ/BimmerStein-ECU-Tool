@@ -3,7 +3,7 @@
   "label": "V11 AIF-safe loader",
   "version": "V11",
   "title": "Soft-BSL 0x5A loader",
-  "status": "EMULATOR VERIFIED - BENCH TEST REQUIRED",
+  "status": "OFFLINE EXACT-BYTE VERIFIED - BENCH TEST REQUIRED",
   "tested": false,
   "user_description": "Persistent Soft-BSL recovery loader relocated outside the complete BMW AIF programming-history area.",
   "description": "Soft-BSL V11 keeps every executable byte outside file 0x5D07-0x5F8A, retains the bounded 1-2048 byte RAM-agent upload and full hook anchor, and preserves all 14 MS41.2 AIF slots.",

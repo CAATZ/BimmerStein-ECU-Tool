@@ -1,7 +1,7 @@
 {
   "id": "door_magic_ms410",
   "version": "V2",
-  "status": "EMULATOR VERIFIED - BENCH TEST REQUIRED",
+  "status": "OFFLINE EXACT-BYTE VERIFIED - BENCH TEST REQUIRED",
   "tested": false,
   "title": "DS2 0x2A Soft-BSL entry",
   "user_description": "Adds DS2 command 0x2A as a normal-mode entry into the persistent Soft-BSL loader on MS41.0 while leaving the standard 0x43 adaptation-clear command intact.",

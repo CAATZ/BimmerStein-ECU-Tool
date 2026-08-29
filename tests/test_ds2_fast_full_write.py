@@ -635,6 +635,125 @@ def test_retained_full_session_can_reerase_restore_and_optionally_verify(tmp_pat
     assert session.journal.outcome == "success"
 
 
+@pytest.mark.parametrize("program_only", (False, True))
+@pytest.mark.parametrize("missing_response", (4, 6), ids=("primer", "second-block"))
+def test_retained_program_recovery_accepts_incomplete_pre_erase_polls(
+    tmp_path, program_only, missing_response
+):
+    session, serial, _journal = _authorization_full_session(
+        tmp_path, missing_flash_response_at=missing_response
+    )
+    target = bytearray(session.target_file_image)
+    target[0x6000:0x6400] = b"\x55" * 0x400
+    target[0x24000:0x24100] = b"\x33" * 0x100
+    target[0x14000:0x14100] = b"\xAA" * 0x100
+    session.target_file_image = bytes(target)
+    session.verify_write = True
+    serial.memory[TUNE_START:TUNE_START + 16] = b"\xC7" * 16
+    original_tune = bytes(serial.memory[TUNE_START:0x20000])
+    transport = session.transport
+    operation = session.execute_program_only if program_only else session.execute
+
+    with pytest.raises(CommitUnknownError):
+        operation()
+    assert serial.flash_requests[-1][0:2] == (
+        FlashOperation.FULL_PROGRAM,
+        0x2000 if missing_response == 4 else 0x20F3,
+    )
+
+    serial.missing_flash_response_at = None
+    serial.flash_status_by_request[(int(FlashOperation.POLL), 0x2000)] = 0x0C
+    before_flash = len(serial.flash_requests)
+    before_wire = len(serial.requests)
+    session.journal = FullMemoryJournal(tmp_path / "recovery-incomplete.jsonl")
+    result = session.recover_in_place()
+
+    assert serial.flash_requests[before_flash:before_flash + 3] == [
+        (FlashOperation.POLL, 0x2000, b""),
+        (FlashOperation.POLL, 0x2000, b""),
+        (FlashOperation.ERASE, 0x2000, b""),
+    ]
+    assert serial.flash_requests[-1] == (FlashOperation.POLL, 0x1D07, b"")
+    assert serial.final_key_accepted and session.flash_completed
+    assert result.verified_bytes == (0x24000 if program_only else 0x36000)
+    assert result.final_link is LinkRate.HIGH
+    assert session.transport is transport and transport.serial is serial
+    assert transport.is_open
+    assert {baud for baud, _command, _args in serial.requests[before_wire:]} == {187500}
+    assert not serial.cleanup_completed
+    assert session.journal.outcome == "success"
+    if program_only:
+        assert bytes(serial.memory[TUNE_START:0x20000]) == original_tune
+    assert not session.can_recover_in_place
+
+
+@pytest.mark.parametrize("program_only", (False, True))
+def test_initial_program_polls_reject_incomplete_status(tmp_path, program_only):
+    session, serial, _journal = _authorization_full_session(
+        tmp_path,
+        flash_status_by_request={(int(FlashOperation.POLL), 0x2000): 0x0C},
+    )
+    operation = session.execute_program_only if program_only else session.execute
+
+    with pytest.raises(ContractViolation, match="flash status 0x0C"):
+        operation()
+
+    assert serial.flash_requests == [(FlashOperation.POLL, 0x2000, b"")]
+    assert not session.destructive_started
+
+
+def test_retained_tune_phase_failure_keeps_program_polls_strict(tmp_path):
+    session, serial, _journal = _authorization_full_session(
+        tmp_path, missing_flash_response_at=7
+    )
+    with pytest.raises(CommitUnknownError):
+        session.execute()
+    assert session.failure_state is SessionState.HIGH_FULL_TUNE
+
+    serial.missing_flash_response_at = None
+    serial.flash_status_by_request[(int(FlashOperation.POLL), 0x2000)] = 0x0C
+    before = len(serial.flash_requests)
+    session.journal = FullMemoryJournal(tmp_path / "recovery-tune-phase.jsonl")
+    with pytest.raises(ContractViolation, match="flash status 0x0C"):
+        session.recover_in_place()
+
+    assert serial.flash_requests[before:] == [(FlashOperation.POLL, 0x2000, b"")]
+    assert session.transport.is_open
+    assert not session.can_recover_in_place
+
+
+@pytest.mark.parametrize(
+    "program_only,poll_address",
+    ((False, 0x100), (False, TUNE_START), (False, 0x1D07), (True, 0x1D07)),
+)
+def test_retained_recovery_keeps_later_polls_strict(
+    tmp_path, program_only, poll_address
+):
+    session, serial, _journal = _authorization_full_session(
+        tmp_path, missing_flash_response_at=4
+    )
+    operation = session.execute_program_only if program_only else session.execute
+    with pytest.raises(CommitUnknownError):
+        operation()
+
+    serial.missing_flash_response_at = None
+    serial.flash_status_by_request = {
+        (int(FlashOperation.POLL), 0x2000): 0x0C,
+        (int(FlashOperation.POLL), poll_address): 0x0C,
+    }
+    session.journal = FullMemoryJournal(tmp_path / "recovery-later-poll.jsonl")
+    with pytest.raises(ContractViolation, match="flash status 0x0C"):
+        session.recover_in_place()
+
+    assert serial.flash_requests[-1] == (FlashOperation.POLL, poll_address, b"")
+    assert session.transport.is_open
+    assert not session.can_recover_in_place
+    before = len(serial.flash_requests)
+    with pytest.raises(FullWriteError, match="no longer qualified"):
+        session.recover_in_place()
+    assert len(serial.flash_requests) == before
+
+
 def test_retained_full_recovery_a2_disables_further_replay(tmp_path):
     session, serial, first_journal = _authorization_full_session(tmp_path)
     serial.missing_flash_response_at = 3

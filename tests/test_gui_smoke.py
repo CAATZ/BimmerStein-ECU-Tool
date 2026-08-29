@@ -2,12 +2,12 @@ import os
 import sys
 import json
 import zipfile
-from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # Set before importing PyQt5.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import pytest
 import ds2_fast_read
+from backup_manager import BackupEntry
 from ms41 import MS41ECU
 
 try:
@@ -965,6 +965,153 @@ def test_ch341a_uncertain_seed_clears_stale_capture(monkeypatch, tmp_path):
         w._ch341a_write_uncertain = False
         w._update_eeprom_buttons()
         assert w.btn_ch341a_restore.isEnabled()
+    finally:
+        w.close()
+
+
+@pytest.mark.parametrize(
+    ("scenario", "variant", "restore_available"),
+    (
+        ("reconnect-detect", "MS41.0", True),
+        ("reconnect-read", "MS41.1", True),
+        ("restart-durable", "MS41.2", True),
+        ("restart-renamed-bins", "MS41.3", True),
+        ("restart-uncertain-bins", "MS41.2", True),
+        ("missing", "MS41.3", False),
+        ("invalid", "MS41.3", False),
+        ("different-eeprom", "MS41.3", False),
+        ("ambiguous", "MS41.3", False),
+    ),
+)
+def test_ch341a_preseed_restore_recovers_saved_original(
+    monkeypatch, tmp_path, scenario, variant, restore_available
+):
+    import backup_manager
+    from tests.test_ch341a_eeprom_service import (
+        FakeBackend, FakeDevice, _writeable_image,
+    )
+
+    service = gui.ch341a_eeprom_service
+    backup_dir = tmp_path / "backups"
+    durable_dir = backup_dir / "eeprom"
+    durable_dir.mkdir(parents=True)
+    monkeypatch.setattr(backup_manager, "BACKUP_DIR", str(backup_dir))
+    monkeypatch.setattr(backup_manager, "INDEX_FILE", str(backup_dir / "index.json"))
+    monkeypatch.setattr(gui, "BACKUP_DIR", str(backup_dir))
+    monkeypatch.setattr(gui, "EEPROM_BACKUP_DIR", str(durable_dir))
+    monkeypatch.setattr(gui.DS2Interface, "list_ports", staticmethod(lambda: []))
+
+    original = bytearray(_writeable_image(variant))
+    if variant in ("MS41.1", "MS41.3"):
+        original[0x1DD:0x1E0] = service.NORMAL_STATE_3_PROGRESSION
+    original = bytes(original)
+    seeded = bytearray(original)
+    seeded[0x1DD:0x1E0] = service.RECOVERY_PROGRESSION
+    seeded = bytes(seeded)
+    old_device, new_device = FakeDevice("before-replug"), FakeDevice("after-replug")
+    backend = FakeBackend(seeded, devices=(new_device,))
+    monkeypatch.setattr(service, "_load_backend", lambda: backend)
+
+    app, w = _gui()
+    try:
+        messages, confirmations, restore_layouts = [], [], []
+        monkeypatch.setattr(w, "_log", lambda message, level="info":
+                            messages.append((message, level)))
+        monkeypatch.setattr(w, "_offer_additional_read_copy", lambda *_a: None)
+        monkeypatch.setattr(w, "_ch341a_restore_confirm", lambda message:
+                            confirmations.append(message) or True)
+        monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *_a: None))
+        monkeypatch.setattr(QMessageBox, "warning", staticmethod(
+            lambda *args: messages.append((args[2], "warn"))))
+        monkeypatch.setattr(QMessageBox, "critical", staticmethod(
+            lambda *args: pytest.fail(args[2])))
+
+        def run_now(task_fn, on_success=None, on_failure=None):
+            on_success(task_fn(lambda *_a: None, lambda *_a: None))
+
+        monkeypatch.setattr(w, "_run_task", run_now)
+        restore = service.restore_pre_seed
+
+        def restore_checked(expected, saved, path, *, confirm):
+            restore_layouts.append((expected.variant, saved.variant))
+            return restore(expected, saved, path, confirm=confirm)
+
+        monkeypatch.setattr(service, "restore_pre_seed", restore_checked)
+        w._ch341a_status = service.DeviceStatus("ready", "ready", (old_device,))
+        if scenario.startswith("reconnect"):
+            before_path = tmp_path / "external-preseed.bin"
+            before_path.write_bytes(original)
+            w._ch341a_preseed_capture = service._capture(
+                original, before_path, old_device, variant)
+            seeded_path = tmp_path / "previous-seeded-read.bin"
+            seeded_path.write_bytes(seeded)
+            w._ch341a_capture = service._capture(
+                seeded, seeded_path, old_device, variant)
+            w._show_eeprom_image(seeded, "previous read", variant=variant)
+        elif scenario.endswith("bins"):
+            source = ("CH341A EEPROM before uncertain write"
+                      if scenario == "restart-uncertain-bins"
+                      else "CH341A EEPROM before Seed ECU")
+            entry = w._backup_mgr.add_data(
+                original, "ch341a_before_seed_original.bin", source=source,
+                variant=variant)
+            w._backup_mgr.rename_exact(entry.filename, entry.sha256, "renamed.bin")
+            w._backup_mgr = backup_manager.BackupManager()
+        elif scenario != "missing":
+            candidate = bytearray(original)
+            if scenario == "invalid":
+                candidate.pop()
+            elif scenario == "different-eeprom":
+                candidate[0] ^= 1
+            (durable_dir / "ch341a_before_seed_original.bin").write_bytes(candidate)
+            if scenario == "ambiguous":
+                candidate[0x1DD:0x1E0] = service.NORMAL_PROGRESSION
+                (durable_dir / "ch341a_before_seed_conflict.bin").write_bytes(candidate)
+
+        if scenario != "reconnect-read":
+            retained = w._ch341a_preseed_capture
+            w._on_ch341a_refresh()
+            assert w._ch341a_capture is None
+            assert w._ch341a_preseed_capture is retained
+        w._ch341a_write_uncertain = True
+        w._update_eeprom_buttons()
+        assert w.btn_ch341a_read.isEnabled()
+        w._on_ch341a_read()
+
+        assert backend.storage == seeded
+        assert all(call[0] == "read_full"
+                   for programmer in backend.opened for call in programmer.calls)
+        assert not confirmations
+        assert w._ch341a_capture.device == new_device
+        assert w._ch341a_status.devices == (new_device,)
+        assert w._ch341a_capture.path.read_bytes() == seeded
+        assert w._ch341a_capture.variant is None
+        assert w._eeprom_variant is None
+        assert not w._ch341a_write_uncertain
+        assert not w.btn_ch341a_restore.isEnabled()
+        w.chk_eeprom_layout_override.setChecked(True)
+        w.cb_eeprom_layout.setCurrentIndex(w.cb_eeprom_layout.findData(variant))
+        assert w.btn_ch341a_restore.isEnabled() == restore_available
+        assert "in this session" not in w.btn_ch341a_restore.toolTip()
+        if not restore_available:
+            assert w._ch341a_preseed_capture is None
+            assert any(level == "warn" and "restore" in message.lower()
+                       for message, level in messages)
+            w._on_ch341a_restore()
+            assert backend.storage == seeded
+            assert not restore_layouts
+            return
+
+        assert w._ch341a_preseed_capture.image == original
+        assert w._ch341a_preseed_capture.path.read_bytes() == original
+        w._on_ch341a_restore()
+        assert restore_layouts == [(variant, variant)]
+        assert len(confirmations) == 1
+        assert bytes(backend.storage) == original
+        assert gui.eeprom_ram.changed_offsets(seeded, original) == service.RECOVERY_OFFSETS
+        assert w._ch341a_capture.path.read_bytes() == original
+        assert w._ch341a_capture.variant == variant
+        assert w._ch341a_preseed_capture is None
     finally:
         w.close()
 
@@ -2489,7 +2636,7 @@ def test_ecu_info_tab_has_new_field_set():
             "ECU Family", "Reported ECU Identifier", "BMW Program Part Number",
             "Calibration ID", "Program / Calibration Match", "Recorded ZB / ZUSB",
             "Programming Date", "Recorded Software Number", "Programming Count",
-            "BMW Program Lineage", "VIN", "DME Production Serial", "EWS2 ISN",
+            "BMW DATEN Lineage", "VIN", "DME Production Serial", "EWS2 ISN",
             "Transmission Mode", "BMW Hardware Number", "Coding Index",
             "Diagnostic Index", "Bus Index", "Software Index", "Change Index",
             "Manufacturing Week / Year", "Supplier Number",
@@ -2834,8 +2981,16 @@ def test_tune_guard_uses_program_compatibility_not_live_cal_id(monkeypatch):
         w._ecu_variant = "MS41.0"
         w._ecu_program_variant = "MS41.0"
         w._ecu_cal_id = "60"
-        w._ecu_program_compatibility_id = "0641"
+        w._ecu_program_compatibility_id = "0941"
+        monkeypatch.setattr(w, "_live_coding_family", lambda: b"909")
         monkeypatch.setattr(gui, "verify_checksum", lambda _data: (True, []))
+        corrected = []
+        monkeypatch.setattr(
+            gui,
+            "correct_checksums",
+            lambda data, **_kwargs:
+            (corrected.append(bytes(data)) or bytearray(data), []),
+        )
 
         questions = []
         monkeypatch.setattr(
@@ -2849,8 +3004,9 @@ def test_tune_guard_uses_program_compatibility_not_live_cal_id(monkeypatch):
 
         w._ds2_write_tune(tune, "recovery.bin")
         assert questions
+        assert MS41ECU.read_calibration_compatibility_id(corrected[-1]) == "0941"
 
-        w._ecu_program_compatibility_id = "0659"
+        w._ecu_program_compatibility_id = "0959"
         blocked = []
         monkeypatch.setattr(
             QMessageBox, "question",
@@ -2863,7 +3019,15 @@ def test_tune_guard_uses_program_compatibility_not_live_cal_id(monkeypatch):
 
         w._ds2_write_tune(tune, "wrong-family.bin")
         assert blocked
-        assert "ECU program '0659' vs tune calibration '0641'" in blocked[0][2]
+        assert "ECU program '0959' vs tune calibration '0941'" in blocked[0][2]
+
+        malformed = bytearray(tune)
+        malformed[0x0D] = ord("X")
+        blocked.clear()
+        w._ecu_program_compatibility_id = "0941"
+        w._ds2_write_tune(malformed, "malformed.bin")
+        assert blocked
+        assert "missing or invalid" in blocked[0][2]
     finally:
         w.close()
 
@@ -2877,6 +3041,7 @@ def test_low_or_unavailable_voltage_does_not_block_confirmed_tune_write(monkeypa
         w._ecu_variant = "MS41.0"
         w._ecu_program_variant = "MS41.0"
         w._ecu_program_compatibility_id = "0641"
+        monkeypatch.setattr(w, "_live_coding_family", lambda: b"606")
         monkeypatch.setattr(gui, "verify_checksum", lambda _data: (True, []))
         monkeypatch.setattr(w, "_auto_transfer_route", lambda: "legacy_ds2")
 
@@ -2994,7 +3159,7 @@ def test_patches_tab_warns_for_every_explicitly_untested_patch(monkeypatch):
         assert "experimental" in shown["message"]
         assert "configured fixed pulse width" in shown["message"]
         assert "fuel-adaptation and diagnostic guards" in shown["message"]
-        assert "emulator-verified" in shown["message"]
+        assert "offline exact-byte verified" in shown["message"]
         assert "not vehicle-validated" in shown["message"]
         assert "Never use it on a car with catalytic converters" in shown["message"]
     finally:
@@ -4537,7 +4702,7 @@ def test_bins_open_in_bsl_button_is_offline_local_action(monkeypatch):
         w.close()
 
 
-def test_bins_toolbar_labels_and_compare_selection_gate(monkeypatch):
+def test_bins_toolbar_labels_and_compare_selection_gate():
     app, w = _gui()
     try:
         assert [
@@ -4561,6 +4726,11 @@ def test_bins_toolbar_labels_and_compare_selection_gate(monkeypatch):
             == gui.QAbstractItemView.ExtendedSelection
         )
 
+        w._backup_mgr._entries = [
+            BackupEntry(name, "Full ROM", "MS41.3", True,
+                        MS41ECU.FULL_ROM_SIZE, "2026-08-29T00:00:00")
+            for name in ("first.bin", "second.bin")
+        ]
         w.backup_table.setRowCount(2)
         w.backup_table.setItem(0, 1, gui.QTableWidgetItem("first.bin"))
         w.backup_table.setItem(1, 1, gui.QTableWidgetItem("second.bin"))
@@ -4569,10 +4739,6 @@ def test_bins_toolbar_labels_and_compare_selection_gate(monkeypatch):
         selection.select(
             model.index(0, 0),
             QItemSelectionModel.Select | QItemSelectionModel.Rows)
-        monkeypatch.setattr(
-            w, "_selected_backup",
-            lambda: SimpleNamespace(file_type="Full ROM"),
-        )
         w._ds2 = object()
         w._set_backup_buttons_enabled()
         assert not w.btn_backup_compare.isEnabled()

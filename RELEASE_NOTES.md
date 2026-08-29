@@ -2,53 +2,46 @@
 
 ## 0.1.0 Beta 14
 
-Beta 14 adds human-readable vehicle diagnostics and coding, improves ECU
-identity reporting, and hardens recovery and flashing workflows. The packaged
-Ignition Cut and Launch Control payloads remain frozen to the exact Beta 13
-versions while newer development revisions are investigated.
+Beta 14 is a Windows x64 update focused on safer EEPROM work, easier diagnostics
+and coding, and more reliable recovery when an operation is interrupted.
 
 **OFF-ROAD, COMPETITION, RESEARCH, AND BENCH USE ONLY.** Do not use this software
 to modify a vehicle operated on public roads. The user is responsible for
 compliance with applicable emissions, safety, registration, and other laws.
 
-### Changes
+### Highlights
 
-- Added a Diagnostics tab that discovers the supported engine, transmission,
-  immobilizer, ABS/traction-control, climate-control, and cruise-control
-  modules over K-line, with exact-profile fault reading and clearing where
-  supported.
-- Added a human-readable Coding tab for reviewed GM3 window, lock, and memory
-  settings plus exact E46 driver-seat memory settings. Everyday controls are
-  shown first; technical references remain behind the Advanced switch.
-- Added guided one-click manual/automatic transmission conversion for exact
-  reviewed E39 MS41-family, E46 MS42 AM51, and late E46 MS43 EV51 profiles.
-  It verifies the complete fitted-car state before writing, archives every
-  changed owner, supports finish-or-restore recovery after restart, requires
-  the displayed ignition cycle, and independently verifies the final state.
-  E36 and unknown or inconsistent profiles are identified and refused before
-  coding.
-- Expanded ECU Info with programming history, program lineage, firmware-aware
-  transmission state, and clearer identity fields.
-- Added advisory battery-voltage checks before writes. Low or unavailable
-  voltage warns the user but does not enforce a programming block.
-- Relocated Soft-BSL V11 and CalGuard V5 outside the complete programming-history
-  area, with exact migration from V10/V4. Both require renewed bench testing.
-- Replaced AlphaN MAF-failsafe V2 with V3, correcting its fallback load path and
-  preserving diagnostic reason information. Physical validation is still
-  required.
-- Kept the exact packaged Beta 13 Ignition Cut V9 and Launch Control V7
-  descriptors in both Windows builds; newer development bytes are excluded.
+- A new PC EEPROM workspace reads, reviews, writes, seeds, and restores complete
+  images with guarded backups and full verification.
+- **Restore Pre-Seed State** now works after reconnecting the programmer or
+  restarting the app. It restores only the exact saved original; if that backup
+  is missing or conflicting, restore stays unavailable.
+- Diagnostics and self-contained vehicle coding now cover more reviewed E36,
+  E38, E39, and E46 modules, with common settings shown in plain language.
+- Guided transmission conversion now includes backup, ignition-cycle, recovery,
+  and final verification steps for reviewed MS41-, MS42-, and MS43-family cars.
+- ECU Info is more complete, and writes now show a clear battery-voltage warning.
+
+### Reliability
+
+- Older Bins catalogue entries are upgraded only when their stored files still
+  match, and an unreadable catalogue no longer risks replacing good records.
+- Tune, full-image, and conversion checks now reject mismatched or malformed
+  files before a save or write is prepared.
+- Interrupted reads, writes, coding, and conversions have clearer cleanup and
+  recovery paths.
+- Experimental firmware options were refreshed, with their test status kept
+  visible so offline checks are not mistaken for physical validation.
 
 ### Validation status
 
-- The frozen Ignition Cut V9 and Launch Control V7 payloads remain experimental,
-  retain their Beta 13 offline verification status, and still require on-car testing.
-- Soft-BSL V11, CalGuard V5, and AlphaN MAF-failsafe V3 passed exact firmware
-  execution checks; renewed physical testing is required.
-- Vehicle diagnostics and coding are restricted to reviewed exact profiles;
-  unknown module revisions remain read-only.
-- Transmission conversion and restart recovery passed the complete offline
-  automated test suite. Physical vehicle validation is still required.
+- Automated offline checks cover EEPROM seed/restore recovery, diagnostics,
+  coding, transmission conversion, catalogue upgrades, and release packaging.
+  Unknown or mismatched revisions remain non-writable.
+- Soft-BSL V11 and CalGuard V5 are **OFFLINE EXACT-BYTE VERIFIED - BENCH TEST
+  REQUIRED**.
+- Ignition Cut V9, Launch Control V7, and AlphaN MAF-failsafe V3 remain
+  experimental: **OFFLINE EXACT-BYTE VERIFIED - ON-CAR TESTING REQUIRED**.
 
 **IGNITION CUT HAZARD:** Ignition Cut V9 may suppress spark while injection
 continues at the stock or configured fixed pulse width. Unburned fuel can
@@ -63,4 +56,5 @@ the GPLv3 PyQt5 distribution path. PyInstaller and Nuitka Windows x64 builds are
 supplied as per-user installers and portable ZIPs, with
 `BimmerStein MS41 Patch Definitions.xml` beside the executable, release
 metadata, third-party notices and licenses, the user manual, and SHA-256
-manifests.
+manifests. Private reference ROMs and development-only execution inputs are not
+included.

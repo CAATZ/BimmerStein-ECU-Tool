@@ -1,11 +1,11 @@
 {
   "id": "alphan_failsafe",
   "version": "V3",
-  "status": "EMULATOR VERIFIED - ON-CAR TEST REQUIRED",
+  "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
   "title": "AlphaN MAF failsafe",
   "tested": false,
   "user_description": "Falls back to SS1v2's native expanded AlphaN load model when an active MAF fault is detected, while preserving manually selected AlphaN and Speed Density behavior.",
-  "description": "V3 routes fd30.1 (active MAF fault) through SS1v2's native expanded AlphaN producer before the shared load publisher and filter. It publishes coherent FC52/FC54, E80A/E80C and E8E4/E8E8 domains, preserves fd22.A manual AlphaN and fd22.9 Speed Density paths, converts the legacy DTC12 fallback table into SS1v2's reduced load domain, and restores fd22.A OR fd30.1 at both downstream load guards. Supersedes broken V1 and V2; emulator verified, physical/on-car behavior remains untested.",
+  "description": "V3 routes fd30.1 (active MAF fault) through SS1v2's native expanded AlphaN producer before the shared load publisher and filter. It publishes coherent FC52/FC54, E80A/E80C and E8E4/E8E8 domains, preserves fd22.A manual AlphaN and fd22.9 Speed Density paths, converts the legacy DTC12 fallback table into SS1v2's reduced load domain, and restores fd22.A OR fd30.1 at both downstream load guards. Supersedes broken V1 and V2; offline exact-byte verified, physical/on-car behavior remains untested.",
   "target": "MS41.3",
   "recompute": [
     "cal"

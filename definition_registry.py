@@ -33,7 +33,7 @@ class ImportResult:
 
 
 class DefinitionRegistry:
-    """Own registered XML files and remember the selected filename."""
+    """Own registered XML files and remember their enabled priority order."""
 
     SETTINGS_FILENAME = "registry.json"
 
@@ -50,26 +50,56 @@ class DefinitionRegistry:
             key=str.casefold,
         )
 
-    def active_name(self) -> str | None:
+    def active_names(self) -> list[str]:
         try:
             payload = json.loads(self.settings_path.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):
-            return None
-        name = payload.get("active_definition")
-        if not isinstance(name, str):
-            return None
-        return self._registered_name(name)
+            return []
+        requested = payload.get("active_definitions")
+        if not isinstance(requested, list):
+            legacy = payload.get("active_definition")
+            requested = [legacy] if isinstance(legacy, str) else []
+        active: list[str] = []
+        seen: set[str] = set()
+        for item in requested:
+            registered = self._registered_name(item) if isinstance(item, str) else None
+            if registered is not None and registered.casefold() not in seen:
+                active.append(registered)
+                seen.add(registered.casefold())
+        return active
+
+    def active_name(self) -> str | None:
+        return next(iter(self.active_names()), None)
+
+    def active_paths(self) -> list[Path]:
+        return [self.directory / name for name in self.active_names()]
 
     def active_path(self) -> Path | None:
         name = self.active_name()
         return self.directory / name if name else None
 
     def set_active(self, name: str | None) -> None:
-        registered = None if name is None else self._registered_name(name)
-        if name is not None and registered is None:
-            raise DefinitionRegistryError(f"Definition '{name}' is not registered.")
+        self.set_active_order([] if name is None else [name])
+
+    def set_active_order(self, names: list[str] | tuple[str, ...]) -> None:
+        if not isinstance(names, (list, tuple)):
+            raise DefinitionRegistryError("Definition priority must be a list of filenames.")
+        registered_names: list[str] = []
+        seen: set[str] = set()
+        for name in names:
+            registered = self._registered_name(name) if isinstance(name, str) else None
+            if registered is None:
+                raise DefinitionRegistryError(f"Definition '{name}' is not registered.")
+            key = registered.casefold()
+            if key in seen:
+                raise DefinitionRegistryError(f"Definition '{registered}' appears more than once.")
+            registered_names.append(registered)
+            seen.add(key)
         self.directory.mkdir(parents=True, exist_ok=True)
-        self._write_json({"active_definition": registered})
+        self._write_json({
+            "active_definition": next(iter(registered_names), None),
+            "active_definitions": registered_names,
+        })
 
     def import_file(self, source: Path | str, *, replace: bool = False) -> ImportResult:
         source_path = Path(source)
@@ -116,14 +146,13 @@ class DefinitionRegistry:
         registered = self._registered_name(name)
         if registered is None:
             raise DefinitionRegistryError(f"Definition '{name}' is not registered.")
-        was_active = self.active_name() == registered
+        remaining = [item for item in self.active_names() if item.casefold() != registered.casefold()]
         path = self.directory / registered
         try:
             path.unlink()
         except OSError as exc:
             raise DefinitionRegistryError(f"Could not delete the definition: {exc}") from exc
-        if was_active:
-            self.set_active(None)
+        self.set_active_order(remaining)
 
     def _registered_name(self, name: str) -> str | None:
         if not name or Path(name).name != name:

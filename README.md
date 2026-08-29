@@ -40,15 +40,15 @@ BimmerStein ECU Tool brings BMW MS41 flashing, diagnostics, configuration, patch
 - Honor the operator's backup and host read-back Verify selections.
 - Preserve an active recovery session after a post-erase write failure.
 - Read ECU information, DTCs, live data, coding, VIN, and EWS information.
-- Run guided manual/automatic transmission conversion on exact supported E39
-  MS41 and E46 MS42/MS43 vehicle profiles, with full-car preflight and
-  restart-safe recovery.
+- Diagnose and code supported vehicle modules from built-in exact profiles.
+- Run guided manual/automatic transmission conversion for exact supported vehicle profiles, with
+  preflight, durable recovery records, and final verification.
 - Analyze ROMs with user-managed definitions and a detachable parameter table.
 - Convert, catalogue, and patch ROM images offline.
 - Install and use Soft-BSL for supported high-speed operations.
 - Recover an unbootable ECU through the separate hardware-BSL workflow.
 
-The supported release target is **Windows x64**. PyInstaller and Nuitka builds are distributed as
+Beta 14 is a **Windows x64 desktop release only**. PyInstaller and Nuitka builds are distributed as
 per-user installers and complete portable packages. The PyInstaller executable must remain beside
 its `_internal` directory; the Nuitka build uses a flat application folder. The required Visual C++
 runtime is included in every Windows package, so no separate runtime installation is required.
@@ -78,7 +78,8 @@ least 10 seconds, then ignition ON.
 | --- | --- |
 | ECU software | BMW MS41.0, MS41.1, MS41.2, and MS41.3 |
 | Normal diagnostics | BMW DS2 over K-Line, 9600 baud, 8E2 |
-| Transmission conversion | Exact reviewed E39 MS41-family, E46 MS42 AM51, and late E46 MS43 EV51 profiles over K-Line |
+| Vehicle coding | 50 built-in module targets and 178 exact profiles across supported E36, E38, E39, and E46 modules; known ADS/L-line-only variants are identified before access |
+| Transmission conversion | Reviewed K-line-accessible E36 Compact/E39 MS41-family, E46 MS42 AM51, and late E46 MS43 EV51 profiles |
 | Stock fast transfer | Native-fast DS2 through FTDI D2XX, requesting the ECU-exact 187,500 baud rate |
 | Soft-BSL | Persistent loader and Intel/AMD RAM agents |
 | Hardware BSL | Intel 28F200 and AMD/JEDEC 29F200/29F400 through a separate direct ASC0 connection |
@@ -160,8 +161,10 @@ every successful DS2 write and is separate from optional host byte-for-byte veri
 Bins catalogs reads, imports, and generated images. Select exactly two entries and choose
 **Compare** for a read-only report covering SHA-256 identity, program/calibration variants,
 checksums, installed patches, and changed-byte ranges. Newly cataloged files retain their original
-SHA-256 so external replacement can be detected; legacy entries are clearly identified when no
-original hash exists.
+SHA-256 so external replacement can be detected. On first load, a legacy entry without a hash is
+migrated only after its stored file size matches; the file's current SHA-256 is then recorded.
+An unreadable catalogue stops application startup with an error and leaves the index and backup
+files unchanged.
 
 ## Firmware patches
 
@@ -170,8 +173,7 @@ collisions, corrects checksums, and archives the composed image in Bins.
 
 > [!WARNING]
 > **HIGHLY EXPERIMENTAL — ON-CAR TESTING REQUIRED.** Ignition Cut V9, Launch Control V7,
-> and AlphaN MAF-failsafe V3 passed exact firmware execution checks but have not completed
-> on-car validation.
+> and AlphaN MAF-failsafe V3 are offline exact-byte verified but have not completed on-car validation.
 > Unexpected engine behavior, stalling, failure to limit RPM, or other unintended results are
 > possible. Test only in controlled off-road or bench
 > conditions, begin conservatively, monitor the engine closely, and keep a verified stock image and
@@ -181,8 +183,7 @@ collisions, corrects checksums, and archives the composed image in Bins.
 > **IGNITION CUT HAZARD.** Ignition Cut V9 remains experimental. It may suppress spark while
 > injection continues at the stock or configured fixed pulse width. Unburned fuel can damage
 > catalytic converters and exhaust components; never use it on a car with catalytic converters.
-> Its fuel-adaptation and diagnostic guards passed offline execution checks but are not
-> vehicle-validated.
+> Its fuel-adaptation and diagnostic guards are offline exact-byte verified but not vehicle-validated.
 
 The Patches tab shows each revision's verification status. Deprecated revisions, including broken
 AlphaN MAF-failsafe V1/V2, non-working Ignition Cut V6, superseded Ignition Cut V7/V8, and Launch
@@ -261,7 +262,7 @@ The FTDI D2XX driver supplies `ftd2xx.dll`; no separate Python D2XX package is r
 .venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .venv\Scripts\python.exe -m pytest -q
 .venv\Scripts\python.exe -m engines.softbsl.verify_agent_artifacts
-.\build_windows.ps1
+.\build_windows.ps1 -Version 0.1.0b14
 ```
 
 The verified one-folder package is written to `dist\BimmerStein ECU Tool\`.

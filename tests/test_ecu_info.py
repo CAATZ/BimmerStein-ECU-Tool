@@ -149,7 +149,7 @@ def test_ident_and_aif_decode_exact_bmw_fields():
         "programming_count": 1,
     }
     assert ei.decode_aif_history(aif, "MS41.1") == {}
-    assert ei.format_program_lineage("1407151", "1406464") == (
+    assert ei.format_daten_lineage("1407151", "1406464") == (
         "Type 1406680; program 1406464 C; calibration 1407152DA — "
         "matches live program"
     )

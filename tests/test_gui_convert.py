@@ -22,6 +22,7 @@ from ms41 import (
     CODING_FAMILY_FILE_ADDR,
     CODING_FAMILY_PARTIAL_ADDRS,
     CODING_FAMILY_PROGRAM_ADDRS,
+    FIRMWARE_COMPAT_PROGRAM_ADDRS,
 )
 
 
@@ -55,6 +56,65 @@ def test_same_broad_variant_conversion_uses_program_version():
         "MS41.0", "MS41.0", "0659", "0641")
     assert not gui._is_firmware_conversion(
         "MS41.0", "MS41.0", "0641", "0641")
+
+
+def test_merge_normalizes_coding_family_but_rejects_invalid_partial(
+        tmp_path, monkeypatch):
+    app, w = _gui()
+    try:
+        donor = bytearray(b"\xFF" * gui.MS41ECU.FULL_ROM_SIZE)
+        for address in FIRMWARE_COMPAT_PROGRAM_ADDRS:
+            donor[address:address + 4] = b"0941"
+        donor[0x1400C:0x14016] = b"0941011110"
+        start = CODING_FAMILY_FILE_ADDR
+        donor[start:start + 3] = b"909"
+        partial = bytearray(b"\xFF" * gui.MS41ECU.TUNE_SIZE)
+        partial[0x0C:0x16] = b"0641011110"
+        w.chk_merge_fix.setChecked(False)
+
+        full_path = tmp_path / "donor-0941.bin"
+        part_path = tmp_path / "partial-0641.bin"
+        out_path = tmp_path / "merged.bin"
+        full_path.write_bytes(donor)
+        part_path.write_bytes(partial)
+        selections = iter(((str(full_path), ""), (str(part_path), "")))
+        monkeypatch.setattr(
+            QFileDialog, "getOpenFileName", lambda *a, **k: next(selections))
+        monkeypatch.setattr(
+            QFileDialog, "getSaveFileName", lambda *a, **k: (str(out_path), ""))
+        monkeypatch.setattr(
+            QMessageBox, "information", lambda *a, **k: QMessageBox.Ok)
+        blocked = []
+        monkeypatch.setattr(
+            QMessageBox, "critical",
+            lambda *a, **k: blocked.append((a[1], a[2])) or QMessageBox.Ok)
+
+        w._on_merge_partial()
+
+        merged = out_path.read_bytes()
+        assert not blocked
+        assert gui.MS41ECU.read_program_compatibility_id(merged) == "0941"
+        assert gui.MS41ECU.read_calibration_compatibility_id(merged) == "0941"
+        assert gui.MS41ECU.check_hybrid(merged) is None
+
+        for compatibility_id, expected in ((b"0X41", "missing or invalid"),
+                                            (b"0659", "ID59")):
+            invalid = bytearray(partial)
+            invalid[0x0C:0x10] = compatibility_id
+            part_path.write_bytes(invalid)
+            selections = iter(((str(full_path), ""), (str(part_path), "")))
+            blocked.clear()
+            monkeypatch.setattr(
+                QFileDialog, "getOpenFileName", lambda *a, **k: next(selections))
+            monkeypatch.setattr(
+                QFileDialog, "getSaveFileName",
+                lambda *a, **k: pytest.fail("blocked merge reached save dialog"))
+
+            w._on_merge_partial()
+
+            assert blocked and expected in blocked[0][1]
+    finally:
+        w.close()
 
 
 def _warning_router(monkeypatch, rules, default=None):

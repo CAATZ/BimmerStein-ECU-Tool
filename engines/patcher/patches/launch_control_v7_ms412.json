@@ -2,12 +2,12 @@
   "id": "launch_control_v7_ms412",
   "family_id": "launch_control_v7",
   "version": "V7",
-  "status": "EMULATOR VERIFIED - ON-CAR TEST REQUIRED",
+  "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
   "tested": false,
-  "verification": "The independent launch requester, separate launch hysteresis/fixed-IPW calibrations, relocated caves, on-car-proven native fuel path, and shared V9 ignition engine pass the canonical MS41.2 emulator gate. Vehicle validation remains required.",
+  "verification": "The independent launch requester, separate launch hysteresis/fixed-IPW calibrations, canonical-1406464-certified FDB6.6 launch latch, relocated caves, on-car-proven native fuel path, and shared V9 ignition engine pass the canonical MS41.2 exact-byte execution gate. Vehicle validation remains required.",
   "title": "Launch Control / 2-step",
   "user_description": "Adds independent MS41.2 launch control using native staged fuel cut or the shared Ignition Cut V9 engine with separate launch hysteresis and fixed injector pulse width.",
-  "description": "MS41.2 Launch Control V7. E847.1 is the launch-only spark-cut request and E847.2 records actual native launch fuel cut. LC_HYST is RPM/32 (FF means zero hysteresis), and LC_IPW is uint16 x0.00534 ms (FFFF preserves stock injection); both apply only to launch ignition mode. Ignition mode never clears standalone E847.0, and LC_IPW wins while both spark requests are active. Fuel mode and its native staged limiter are unchanged.",
+  "description": "MS41.2 Launch Control V7. E847.1 is the launch-only spark-cut request, E847.2 records actual native launch fuel cut, and the launch-arm latch uses IRAM FDB6.6, certified free on the canonical 1406464 image. LC_HYST is RPM/32 (FF means zero hysteresis), and LC_IPW is uint16 x0.00534 ms (FFFF preserves stock injection); both apply only to launch ignition mode. Ignition mode never clears standalone E847.0, and LC_IPW wins while both spark requests are active. Fuel mode and its native staged limiter are unchanged.",
   "target": "MS41.2",
   "recompute": ["program"],
   "requires": ["ignition_cut_v9_ms412"],
@@ -65,20 +65,23 @@
       "off": 237440,
       "upgrade_expect": [
         "ec00ecf4ecf5ecf6e6000400f3fa12e867faf00047faa0002d04e7faa000f7fa12e8f3f82c3547f8ff002d3149802d2df3f89af143f831359d2af3f8d0e843f832358d25f3f89af143f830359d21f3f82c3549813d04f3f861fd69820d0c49823d04f3f861fd69810d0649843d10f3f860fd67f88000f3fa2e3549a02d0349802d040d0649803d010d036f2d0d016e2df3f85afd67f840002d42f3f82d3549802d2c49813d3ce7f8fb0065f812e8f3f812e869822d14f3f8672a47f8ff002d06f3fa2f3541a88d0521a80d04f3fa2f350d01e10af3f83cfc418a8d0a0d05f3f83cfc43f82f358d04e12875f812e80d1be7f8fd0065f812e80d16e7f8fd0065f812e8f3f813fd67f880002d04e14875f812e80d09e7f8fb0065f812e80d04e7f8f90065f812e8fcf6fcf5fcf4fc00f3f89af1fa032c99",
-        "ec00ecf4ecf5ecf6e6000400f3fa12e867faf00047faa0002d04e7faa000f7fa12e8f3f82c3547f8ff002d3149802d2df3f89af143f831359d2af3f8d0e843f832358d25f3f89af143f830359d21f3f82c3549813d04f3f861fd69820d0c49823d04f3f861fd69810d0649843d10f3f860fd67f88000f3fa2e3549a02d0349802d040d0649803d010d036f2d0d016e2df3f85afd67f840002d42f3f82d3549802d2c49813d3ce7f8fb0065f812e8f3f812e869822d14f3f8343547f8ff002d06f3fa2f3541a88d0521a80d04f3fa2f350d01e10af3f83cfc418a8d0a0d05f3f83cfc43f82f358d04e12875f812e80d1be7f8fd0065f812e80d16e7f8fd0065f812e8f3f813fd67f880002d04e14875f812e80d09e7f8fb0065f812e80d04e7f8f90065f812e8fcf6fcf5fcf4fc00f3f89af1fa032c99"
+        "ec00ecf4ecf5ecf6e6000400f3fa12e867faf00047faa0002d04e7faa000f7fa12e8f3f82c3547f8ff002d3149802d2df3f89af143f831359d2af3f8d0e843f832358d25f3f89af143f830359d21f3f82c3549813d04f3f861fd69820d0c49823d04f3f861fd69810d0649843d10f3f860fd67f88000f3fa2e3549a02d0349802d040d0649803d010d036f2d0d016e2df3f85afd67f840002d42f3f82d3549802d2c49813d3ce7f8fb0065f812e8f3f812e869822d14f3f8343547f8ff002d06f3fa2f3541a88d0521a80d04f3fa2f350d01e10af3f83cfc418a8d0a0d05f3f83cfc43f82f358d04e12875f812e80d1be7f8fd0065f812e80d16e7f8fd0065f812e8f3f813fd67f880002d04e14875f812e80d09e7f8fb0065f812e80d04e7f8f90065f812e8fcf6fcf5fcf4fc00f3f89af1fa032c99",
+        "ec00ecf4ecf5ecf6e6000400f3fa47e867faf00047faa0002d04e7faa000f7fa47e8f3f82c3547f8ff002d3149802d2df3f89af143f831359d2af3f8d0e843f832358d25f3f89af143f830359d21f3f82c3549813d04f3f861fd69820d0c49823d04f3f861fd69810d0649843d10f3f860fd67f88000f3fa2e3549a02d0349802d040d0649803d010d036f2d0d016e2df3f85afd67f840002d42f3f82d3549802d2c49813d3ce7f8fb0065f847e8f3f847e869822d14f3f8343547f8ff002d07f3fa2f3541a88d032d0221a80d03f3fa2f350d00f3f83cfc418a8d0a0d05f3f83cfc43f82f358d04e12875f847e80d1be7f8fd0065f847e80d16e7f8fd0065f847e8f3f813fd67f880002d04e14875f847e80d09e7f8fb0065f847e80d04e7f8f90065f847e8fcf6fcf5fcf4fc00f3f89af1fa032c99"
       ],
       "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-      "data": "ec00ecf4ecf5ecf6e6000400f3fa47e867faf00047faa0002d04e7faa000f7fa47e8f3f82c3547f8ff002d3149802d2df3f89af143f831359d2af3f8d0e843f832358d25f3f89af143f830359d21f3f82c3549813d04f3f861fd69820d0c49823d04f3f861fd69810d0649843d10f3f860fd67f88000f3fa2e3549a02d0349802d040d0649803d010d036f2d0d016e2df3f85afd67f840002d42f3f82d3549802d2c49813d3ce7f8fb0065f847e8f3f847e869822d14f3f8343547f8ff002d07f3fa2f3541a88d032d0221a80d03f3fa2f350d00f3f83cfc418a8d0a0d05f3f83cfc43f82f358d04e12875f847e80d1be7f8fd0065f847e80d16e7f8fd0065f847e8f3f813fd67f880002d04e14875f847e80d09e7f8fb0065f847e80d04e7f8f90065f847e8fcf6fcf5fcf4fc00f3f89af1fa032c99"
+      "data": "ec00ecf4ecf5ecf6e6000400f3fa47e867faf00047faa0002d04e7faa000f7fa47e8f3f82c3547f8ff002d3149802d2df3f89af143f831359d2af3f8d0e843f832358d25f3f89af143f830359d21f3f82c3549813d04f3f861fd69820d0c49823d04f3f861fd69810d0649843d10f3f860fd67f88000f3fa2e3549a02d0349802d040d0649803d010d036f5b0d016e5bf3f8b6fd67f840002d42f3f82d3549802d2c49813d3ce7f8fb0065f847e8f3f847e869822d14f3f8343547f8ff002d07f3fa2f3541a88d032d0221a80d03f3fa2f350d00f3f83cfc418a8d0a0d05f3f83cfc43f82f358d04e12875f847e80d1be7f8fd0065f847e80d16e7f8fd0065f847e8f3f813fd67f880002d04e14875f847e80d09e7f8fb0065f847e80d04e7f8f90065f847e8fcf6fcf5fcf4fc00f3f89af1fa032c99"
     },
     {
       "off": 237824,
       "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-      "data": "ec00ecf4e6000400f3f85afd67f840002d0bf3f82d3549803d07f3f82f3543f814f09d02f7f814f0fcf4fc009a180240fa02d607fa02e807"
+      "upgrade_expect": ["ec00ecf4e6000400f3f85afd67f840002d0bf3f82d3549803d07f3f82f3543f814f09d02f7f814f0fcf4fc009a180240fa02d607fa02e807"],
+      "data": "ec00ecf4e6000400f3f8b6fd67f840002d0bf3f82d3549803d07f3f82f3543f814f09d02f7f814f0fcf4fc009a180240fa02d607fa02e807"
     },
     {
       "off": 237888,
       "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-      "data": "ec00ecf5e6000400f3fa5afd67fa40002d1af3fa2d3549a03d16f3fa333547faff003d0af3fa2f3547fafd008d03e7faff000d0709a30d0543fa2f359d02f3fa2f35418a0d0243f887dbfcf5fc00db00"
+      "upgrade_expect": ["ec00ecf5e6000400f3fa5afd67fa40002d1af3fa2d3549a03d16f3fa333547faff003d0af3fa2f3547fafd008d03e7faff000d0709a30d0543fa2f359d02f3fa2f35418a0d0243f887dbfcf5fc00db00"],
+      "data": "ec00ecf5e6000400f3fab6fd67fa40002d1af3fa2d3549a03d16f3fa333547faff003d0af3fa2f3547fafd008d03e7faff000d0709a30d0543fa2f359d02f3fa2f35418a0d0243f887dbfcf5fc00db00"
     }
   ]
 }

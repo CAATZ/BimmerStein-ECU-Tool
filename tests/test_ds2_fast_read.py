@@ -464,7 +464,7 @@ def test_eeprom_record_read_identity_mismatch_stops_before_selector():
     )
 
 
-def test_eeprom_record_read_service_passes_android_compatible_serial_factory():
+def test_eeprom_record_read_service_passes_injected_serial_factory():
     serial = ReadOnlyStockSerial()
     serial.eeprom[0x1CA : 0x1CE] = b"\x02\x00\x03\x00"
     calls = []

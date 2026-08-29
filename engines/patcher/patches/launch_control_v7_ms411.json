@@ -2,12 +2,12 @@
   "id": "launch_control_v7_ms411",
   "family_id": "launch_control_v7",
   "version": "V7",
-  "status": "EMULATOR VERIFIED - ON-CAR TEST REQUIRED",
+  "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
   "tested": false,
-  "verification": "The independent launch requester, separate launch hysteresis/fixed-IPW calibrations, F1BE vehicle-speed release, relocated caves, and shared V9 ignition engine pass the canonical MS41.1 emulator gate. F19A is poisoned in speed cases so the wrong source cannot pass. Vehicle validation remains required.",
+  "verification": "The independent launch requester, separate launch hysteresis/fixed-IPW calibrations, F1BE vehicle-speed release, canonical-1437806-certified FDB6.6 launch latch, relocated caves, and shared V9 ignition engine pass the canonical MS41.1 exact-byte execution gate. F19A is poisoned in speed cases so the wrong source cannot pass. Vehicle validation remains required.",
   "title": "Launch Control / 2-step",
   "user_description": "Adds independent MS41.1 launch control using native staged fuel cut or the shared Ignition Cut V9 engine with separate launch hysteresis and fixed injector pulse width.",
-  "description": "MS41.1 Launch Control V7. E847.1 is the launch-only spark-cut request and E847.2 records actual native launch fuel cut. Vehicle speed reads F1BE. LC_HYST is RPM/32 (FF means zero hysteresis), and LC_IPW is uint16 x0.00534 ms (FFFF preserves stock injection); both apply only to launch ignition mode. Ignition mode never clears standalone E847.0, and LC_IPW wins while both spark requests are active. Fuel mode and its native staged limiter are unchanged.",
+  "description": "MS41.1 Launch Control V7. E847.1 is the launch-only spark-cut request, E847.2 records actual native launch fuel cut, and the launch-arm latch uses IRAM FDB6.6, certified free on the canonical 1437806 image. Vehicle speed reads F1BE. LC_HYST is RPM/32 (FF means zero hysteresis), and LC_IPW is uint16 x0.00534 ms (FFFF preserves stock injection); both apply only to launch ignition mode. Ignition mode never clears standalone E847.0, and LC_IPW wins while both spark requests are active. Fuel mode and its native staged limiter are unchanged.",
   "target": "MS41.1",
   "recompute": ["program"],
   "requires": ["ignition_cut_v9_ms411"],
@@ -63,20 +63,23 @@
       "off": 244160,
       "upgrade_expect": [
         "ec00ecf4ecf5ecf6e6000400f3fa12e867faf00047faa0002d04e7faa000f7fa12e8f3f8103747f8ff002d3149802d2df3f8bef143f815379d2af3f8d0e843f816378d25f3f8bef143f814379d21f3f8103749813d04f3f861fd69820d0c49823d04f3f861fd69810d0649843d10f3f860fd67f88000f3fa123749a02d0349802d040d0649803d010d036f2d0d016e2df3f85afd67f840002d42f3f8113749802d2c49813d3ce7f8fb0065f812e8f3f812e869822d14f3f8023747f8ff002d06f3fa133741a88d0521a80d04f3fa13370d01e10af3f83cfc418a8d0a0d05f3f83cfc43f813378d04e12875f812e80d1be7f8fd0065f812e80d16e7f8fd0065f812e8f3f813fd67f880002d04e14875f812e80d09e7f8fb0065f812e80d04e7f8f90065f812e8fcf6fcf5fcf4fc00fa0340fb",
-        "ec00ecf4ecf5ecf6e6000400f3fa12e867faf00047faa0002d04e7faa000f7fa12e8f3f8103747f8ff002d3149802d2df3f8bef143f815379d2af3f8d0e843f816378d25f3f8bef143f814379d21f3f8103749813d04f3f861fd69820d0c49823d04f3f861fd69810d0649843d10f3f860fd67f88000f3fa123749a02d0349802d040d0649803d010d036f2d0d016e2df3f85afd67f840002d42f3f8113749802d2c49813d3ce7f8fb0065f812e8f3f812e869822d14f3f8183747f8ff002d06f3fa133741a88d0521a80d04f3fa13370d01e10af3f83cfc418a8d0a0d05f3f83cfc43f813378d04e12875f812e80d1be7f8fd0065f812e80d16e7f8fd0065f812e8f3f813fd67f880002d04e14875f812e80d09e7f8fb0065f812e80d04e7f8f90065f812e8fcf6fcf5fcf4fc00fa0340fb"
+        "ec00ecf4ecf5ecf6e6000400f3fa12e867faf00047faa0002d04e7faa000f7fa12e8f3f8103747f8ff002d3149802d2df3f8bef143f815379d2af3f8d0e843f816378d25f3f8bef143f814379d21f3f8103749813d04f3f861fd69820d0c49823d04f3f861fd69810d0649843d10f3f860fd67f88000f3fa123749a02d0349802d040d0649803d010d036f2d0d016e2df3f85afd67f840002d42f3f8113749802d2c49813d3ce7f8fb0065f812e8f3f812e869822d14f3f8183747f8ff002d06f3fa133741a88d0521a80d04f3fa13370d01e10af3f83cfc418a8d0a0d05f3f83cfc43f813378d04e12875f812e80d1be7f8fd0065f812e80d16e7f8fd0065f812e8f3f813fd67f880002d04e14875f812e80d09e7f8fb0065f812e80d04e7f8f90065f812e8fcf6fcf5fcf4fc00fa0340fb",
+        "ec00ecf4ecf5ecf6e6000400f3fa47e867faf00047faa0002d04e7faa000f7fa47e8f3f8103747f8ff002d3149802d2df3f8bef143f815379d2af3f8d0e843f816378d25f3f8bef143f814379d21f3f8103749813d04f3f861fd69820d0c49823d04f3f861fd69810d0649843d10f3f860fd67f88000f3fa123749a02d0349802d040d0649803d010d036f2d0d016e2df3f85afd67f840002d42f3f8113749802d2c49813d3ce7f8fb0065f847e8f3f847e869822d14f3f8183747f8ff002d07f3fa133741a88d032d0221a80d03f3fa13370d00f3f83cfc418a8d0a0d05f3f83cfc43f813378d04e12875f847e80d1be7f8fd0065f847e80d16e7f8fd0065f847e8f3f813fd67f880002d04e14875f847e80d09e7f8fb0065f847e80d04e7f8f90065f847e8fcf6fcf5fcf4fc00fa0340fb"
       ],
       "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-      "data": "ec00ecf4ecf5ecf6e6000400f3fa47e867faf00047faa0002d04e7faa000f7fa47e8f3f8103747f8ff002d3149802d2df3f8bef143f815379d2af3f8d0e843f816378d25f3f8bef143f814379d21f3f8103749813d04f3f861fd69820d0c49823d04f3f861fd69810d0649843d10f3f860fd67f88000f3fa123749a02d0349802d040d0649803d010d036f2d0d016e2df3f85afd67f840002d42f3f8113749802d2c49813d3ce7f8fb0065f847e8f3f847e869822d14f3f8183747f8ff002d07f3fa133741a88d032d0221a80d03f3fa13370d00f3f83cfc418a8d0a0d05f3f83cfc43f813378d04e12875f847e80d1be7f8fd0065f847e80d16e7f8fd0065f847e8f3f813fd67f880002d04e14875f847e80d09e7f8fb0065f847e80d04e7f8f90065f847e8fcf6fcf5fcf4fc00fa0340fb"
+      "data": "ec00ecf4ecf5ecf6e6000400f3fa47e867faf00047faa0002d04e7faa000f7fa47e8f3f8103747f8ff002d3149802d2df3f8bef143f815379d2af3f8d0e843f816378d25f3f8bef143f814379d21f3f8103749813d04f3f861fd69820d0c49823d04f3f861fd69810d0649843d10f3f860fd67f88000f3fa123749a02d0349802d040d0649803d010d036f5b0d016e5bf3f8b6fd67f840002d42f3f8113749802d2c49813d3ce7f8fb0065f847e8f3f847e869822d14f3f8183747f8ff002d07f3fa133741a88d032d0221a80d03f3fa13370d00f3f83cfc418a8d0a0d05f3f83cfc43f813378d04e12875f847e80d1be7f8fd0065f847e80d16e7f8fd0065f847e8f3f813fd67f880002d04e14875f847e80d09e7f8fb0065f847e80d04e7f8f90065f847e8fcf6fcf5fcf4fc00fa0340fb"
     },
     {
       "off": 244544,
       "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-      "data": "ec00ecf4e6000400f3f85afd67f840002d0bf3f8113749803d07f3f8133743f82cf09d02f7f82cf0fcf4fc009a180240fa02da07fa02ec07"
+      "upgrade_expect": ["ec00ecf4e6000400f3f85afd67f840002d0bf3f8113749803d07f3f8133743f82cf09d02f7f82cf0fcf4fc009a180240fa02da07fa02ec07"],
+      "data": "ec00ecf4e6000400f3f8b6fd67f840002d0bf3f8113749803d07f3f8133743f82cf09d02f7f82cf0fcf4fc009a180240fa02da07fa02ec07"
     },
     {
       "off": 244608,
       "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-      "data": "ec00ecf5e6000400f3fa5afd67fa40002d1af3fa113749a03d16f3fa173747faff003d0af3fa133747fafd008d03e7faff000d0709a30d0543fa13379d02f3fa1337418a0d0243f8db02fcf5fc00db00"
+      "upgrade_expect": ["ec00ecf5e6000400f3fa5afd67fa40002d1af3fa113749a03d16f3fa173747faff003d0af3fa133747fafd008d03e7faff000d0709a30d0543fa13379d02f3fa1337418a0d0243f8db02fcf5fc00db00"],
+      "data": "ec00ecf5e6000400f3fab6fd67fa40002d1af3fa113749a03d16f3fa173747faff003d0af3fa133747fafd008d03e7faff000d0709a30d0543fa13379d02f3fa1337418a0d0243f8db02fcf5fc00db00"
     }
   ]
 }

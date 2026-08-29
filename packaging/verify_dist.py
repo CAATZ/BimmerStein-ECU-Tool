@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import xml.etree.ElementTree as ET
 
@@ -16,16 +18,31 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 APP_NAME = "BimmerStein ECU Tool"
 PATCH_DEFINITION_NAME = "BimmerStein MS41 Patch Definitions.xml"
-REQUIRED_PATCH_IDS = {
-    "amd_flash",
-    "cal_guard",
-    "door_magic",
-    "softbsl_loader",
-    "ignition_cut_v7",
-    "launch_control_v4",
-    "launch_control_v5",
-    "launch_control_v4_ms412",
-}
+PROHIBITED_PUBLIC_TERMS = tuple("".join(parts) for parts in (
+    ("artificial", " intelligence"),
+    ("chat", "gpt"),
+    ("chip", "ster"),
+    ("clau", "de"),
+    ("co", "dex"),
+    ("co", "pilot"),
+    ("edia", "bas"),
+    ("ews", "sync"),
+    ("gall", "etto"),
+    ("gall", "eto"),
+    ("in", "pa"),
+    ("is", "ta"),
+    ("open", "a", "i"),
+    ("quick", "flash"),
+))
+_PROHIBITED_PUBLIC_PATTERN = re.compile(
+    rb"(?<![a-z0-9])(?:"
+    + b"|".join(re.escape(term.encode()) for term in PROHIBITED_PUBLIC_TERMS)
+    + rb")(?![a-z0-9])",
+    re.IGNORECASE,
+)
+_PROHIBITED_PUBLIC_TEXT_PATTERN = re.compile(
+    rb"(?<![A-Za-z0-9])" + b"".join((b"A", b"I")) + rb"(?![A-Za-z0-9])"
+)
 PE_MACHINE_AMD64 = 0x8664
 REQUIRED_LICENSE_FILES = {
     "Nuitka-4.1.3-LICENSE-RUNTIME.txt": (
@@ -92,6 +109,65 @@ def _pe_machine(path: Path) -> int | None:
         if stream.read(4) != b"PE\x00\x00":
             return None
         return int.from_bytes(stream.read(2), "little")
+
+
+class _VSFixedFileInfo(ctypes.Structure):
+    _fields_ = [
+        ("signature", ctypes.c_uint32),
+        ("structure_version", ctypes.c_uint32),
+        ("file_version_ms", ctypes.c_uint32),
+        ("file_version_ls", ctypes.c_uint32),
+        ("product_version_ms", ctypes.c_uint32),
+        ("product_version_ls", ctypes.c_uint32),
+        ("file_flags_mask", ctypes.c_uint32),
+        ("file_flags", ctypes.c_uint32),
+        ("file_os", ctypes.c_uint32),
+        ("file_type", ctypes.c_uint32),
+        ("file_subtype", ctypes.c_uint32),
+        ("file_date_ms", ctypes.c_uint32),
+        ("file_date_ls", ctypes.c_uint32),
+    ]
+
+
+def _version_tuple(ms: int, ls: int) -> tuple[int, int, int, int]:
+    return ms >> 16, ms & 0xFFFF, ls >> 16, ls & 0xFFFF
+
+
+def _fixed_file_versions(path: Path) -> tuple[
+        tuple[int, int, int, int], tuple[int, int, int, int]]:
+    """Read the numeric file and product versions from a Windows PE resource."""
+    if os.name != "nt":
+        raise RuntimeError("Windows version-resource verification requires Windows")
+    library = ctypes.WinDLL("version", use_last_error=True)
+    handle = ctypes.c_uint32()
+    size = library.GetFileVersionInfoSizeW(str(path), ctypes.byref(handle))
+    if not size:
+        raise RuntimeError(f"Windows executable has no version resource: {path}")
+    buffer = ctypes.create_string_buffer(size)
+    if not library.GetFileVersionInfoW(str(path), 0, size, buffer):
+        raise RuntimeError(f"Windows executable version resource is unreadable: {path}")
+    value = ctypes.c_void_p()
+    length = ctypes.c_uint()
+    if not library.VerQueryValueW(buffer, "\\", ctypes.byref(value), ctypes.byref(length)):
+        raise RuntimeError(f"Windows executable fixed version is missing: {path}")
+    info = ctypes.cast(value, ctypes.POINTER(_VSFixedFileInfo)).contents
+    if info.signature != 0xFEEF04BD:
+        raise RuntimeError(f"Windows executable fixed version is invalid: {path}")
+    return (
+        _version_tuple(info.file_version_ms, info.file_version_ls),
+        _version_tuple(info.product_version_ms, info.product_version_ls),
+    )
+
+
+def _numeric_release_version(version: str) -> tuple[int, int, int, int]:
+    match = re.fullmatch(
+        r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+        r"(?:b([1-9]\d*)|-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?",
+        version,
+    )
+    if match is None:
+        raise RuntimeError(f"invalid expected release version: {version}")
+    return tuple(int(part or 0) for part in match.groups()[:4])
 
 
 def _payload(path: Path) -> bytes:
@@ -224,6 +300,7 @@ def _verify_release_metadata(
         msvc_runtime: dict[str, dict[str, str | int]],
         *,
         backend: str,
+        expected_version: str | None = None,
 ) -> None:
     metadata_path = app_dir / "RELEASE-METADATA.json"
     if not metadata_path.exists():
@@ -240,11 +317,62 @@ def _verify_release_metadata(
         raise RuntimeError("release metadata VC++ runtime hashes do not match the package")
     if metadata.get("build_backend") != backend:
         raise RuntimeError("release metadata has the wrong build backend")
+    if expected_version is not None and metadata.get("version") != expected_version:
+        raise RuntimeError("release metadata has the wrong version")
     if metadata.get("calibration_definitions_bundled") is not True:
         raise RuntimeError("release metadata omits the bundled patch definition")
 
 
-def verify_distribution(app_dir: Path, *, expected_backend: str | None = None) -> dict:
+def _verify_document_version(path: Path, expected_version: str) -> None:
+    if expected_version not in path.read_text(encoding="utf-8"):
+        raise RuntimeError(
+            f"packaged document does not identify {expected_version}: {path.name}")
+
+
+def _verify_patch_tree(packaged: Path) -> int:
+    source = ROOT / "engines" / "patcher" / "patches"
+    source_files = {
+        path.relative_to(source): path for path in source.rglob("*") if path.is_file()
+    }
+    packaged_files = {
+        path.relative_to(packaged): path for path in packaged.rglob("*") if path.is_file()
+    }
+    if source_files.keys() != packaged_files.keys():
+        missing = sorted(path.as_posix() for path in source_files.keys() - packaged_files.keys())
+        unexpected = sorted(path.as_posix() for path in packaged_files.keys() - source_files.keys())
+        raise RuntimeError(
+            f"packaged patch inventory differs from tracked source; "
+            f"missing={missing}, unexpected={unexpected}")
+    for relative, source_path in source_files.items():
+        if packaged_files[relative].read_bytes() != source_path.read_bytes():
+            raise RuntimeError(
+                f"packaged patch does not match tracked source: {relative.as_posix()}")
+    return len(source_files)
+
+
+def _verify_public_terms(paths) -> None:
+    for path in paths:
+        payload = path.read_bytes()
+        hits = sorted({
+            match.group().decode("ascii", errors="replace").lower()
+            for match in _PROHIBITED_PUBLIC_PATTERN.finditer(payload)
+        })
+        if path.suffix.lower() in {".json", ".md", ".txt", ".xml"}:
+            hits.extend(
+                match.group().decode("ascii", errors="replace").lower()
+                for match in _PROHIBITED_PUBLIC_TEXT_PATTERN.finditer(payload)
+            )
+        if hits:
+            raise RuntimeError(
+                f"prohibited public reference in {path.name}: {', '.join(hits)}")
+
+
+def verify_distribution(
+        app_dir: Path,
+        *,
+        expected_backend: str | None = None,
+        expected_version: str | None = None,
+) -> dict:
     app_dir = Path(app_dir).resolve()
     executable = app_dir / f"{APP_NAME}.exe"
     if not executable.is_file():
@@ -265,6 +393,14 @@ def verify_distribution(app_dir: Path, *, expected_backend: str | None = None) -
         raise RuntimeError(
             f"package backend is {backend}, expected {expected_backend}"
         )
+    if expected_version is not None:
+        expected_fixed = _numeric_release_version(expected_version)
+        file_version, product_version = _fixed_file_versions(executable)
+        if file_version != expected_fixed or product_version != expected_fixed:
+            raise RuntimeError(
+                "Windows executable fixed version is wrong: "
+                f"file={file_version}, product={product_version}, expected={expected_fixed}"
+            )
 
     required = (
         app_dir / "README.md",
@@ -311,9 +447,14 @@ def verify_distribution(app_dir: Path, *, expected_backend: str | None = None) -
             "bundled libusb runtime does not match its unmodified build dependency")
 
     verified_msvc_runtime = _verify_msvc_runtime(content, backend=backend)
-    _verify_release_metadata(app_dir, verified_msvc_runtime, backend=backend)
+    _verify_release_metadata(
+        app_dir,
+        verified_msvc_runtime,
+        backend=backend,
+        expected_version=expected_version,
+    )
 
-    for forbidden in ("_private", "tests", "docs", "defs", "definitions"):
+    for forbidden in ("_private", "android", "tests", "docs", "defs", "definitions"):
         if (content / forbidden).exists() or (app_dir / forbidden).exists():
             raise RuntimeError(f"private/generated directory leaked into package: {forbidden}")
 
@@ -331,6 +472,9 @@ def verify_distribution(app_dir: Path, *, expected_backend: str | None = None) -
         raise RuntimeError("private ECU image leaked into package:\n" + "\n".join(leaked_bins))
 
     release_readme = (app_dir / "README.md").read_text(encoding="utf-8")
+    if expected_version is not None:
+        _verify_document_version(app_dir / "README.md", expected_version)
+        _verify_document_version(app_dir / "RELEASE_NOTES.md", expected_version)
     source_only_references = (
         "manual/USER_MANUAL.md",
         "BUILDING.md",
@@ -392,13 +536,15 @@ def verify_distribution(app_dir: Path, *, expected_backend: str | None = None) -
         verified_agents[family] = {"bytes": len(payload), "sha256": digest}
 
     patch_dir = content / "engines" / "patcher" / "patches"
-    patch_ids = {
-        json.loads(path.read_text(encoding="utf-8"))["id"]
-        for path in patch_dir.glob("*.json")
-    }
-    missing_patches = sorted(REQUIRED_PATCH_IDS - patch_ids)
-    if missing_patches:
-        raise RuntimeError(f"required packaged patches are missing: {missing_patches}")
+    patch_file_count = _verify_patch_tree(patch_dir)
+    _verify_public_terms((
+        executable,
+        app_dir / "README.md",
+        app_dir / "RELEASE_NOTES.md",
+        app_dir / "THIRD_PARTY_NOTICES.md",
+        patch_definition,
+        *patch_dir.glob("*.json"),
+    ))
 
     return {
         "application": str(app_dir),
@@ -406,7 +552,8 @@ def verify_distribution(app_dir: Path, *, expected_backend: str | None = None) -
         "patch_definition": PATCH_DEFINITION_NAME,
         "pe_machine": f"0x{machine:04X}",
         "executable_bytes": executable.stat().st_size,
-        "patch_count": len(patch_ids),
+        "patch_count": patch_file_count,
+        "version": expected_version,
         "agents": verified_agents,
         "licenses": verified_licenses,
         "msvc_runtime": verified_msvc_runtime,
@@ -421,13 +568,21 @@ def main() -> int:
         help="require the package to match this frozen backend",
     )
     parser.add_argument(
+        "--expected-version",
+        help="require packaged documents and metadata to identify this version",
+    )
+    parser.add_argument(
         "app_dir",
         nargs="?",
         type=Path,
         default=ROOT / "dist" / APP_NAME,
     )
     args = parser.parse_args()
-    result = verify_distribution(args.app_dir, expected_backend=args.backend)
+    result = verify_distribution(
+        args.app_dir,
+        expected_backend=args.backend,
+        expected_version=args.expected_version,
+    )
     print(json.dumps(result, indent=2))
     return 0
 

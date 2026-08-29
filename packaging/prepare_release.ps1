@@ -23,7 +23,8 @@ $root = Split-Path -Parent $PSScriptRoot
 $python = Join-Path $root ".venv\Scripts\python.exe"
 $standardBuildScript = Join-Path $root "build_windows.ps1"
 $nuitkaBuildScript = Join-Path $root "build_windows_nuitka.ps1"
-$releaseRoot = Join-Path $root "release"
+$releaseRoot = [System.IO.Path]::GetFullPath((Join-Path $root "release"))
+$releaseBoundary = $releaseRoot.TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar
 $buildStartedAtUtc = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
 $sourceCommit = ""
 $sourceDirty = $null
@@ -53,7 +54,8 @@ function Stage-ReleasePackage {
     $checksum = "$archive.sha256"
     foreach ($target in @($releaseDir, $archive, $checksum)) {
         $fullTarget = [System.IO.Path]::GetFullPath($target)
-        if (-not $fullTarget.StartsWith($releaseRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        if ($fullTarget -ne $releaseRoot -and
+                -not $fullTarget.StartsWith($releaseBoundary, [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "Refusing to replace a release path outside the release directory: $fullTarget"
         }
         if (Test-Path -LiteralPath $fullTarget) {
@@ -63,7 +65,7 @@ function Stage-ReleasePackage {
 
     Copy-Item -LiteralPath $SourceApp -Destination $releaseDir -Recurse
 
-    $verificationLines = & $python "packaging\verify_dist.py" --backend $Backend $releaseDir
+    $verificationLines = & $python "packaging\verify_dist.py" --backend $Backend --expected-version $Version $releaseDir
     if ($LASTEXITCODE -ne 0) { throw "Initial $Backend release staging verification failed." }
     $verification = ($verificationLines -join [Environment]::NewLine) | ConvertFrom-Json
 
@@ -87,7 +89,7 @@ function Stage-ReleasePackage {
     }
     $metadata | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $releaseDir "RELEASE-METADATA.json") -Encoding utf8
 
-    & $python "packaging\verify_dist.py" --backend $Backend $releaseDir | Out-Host
+    & $python "packaging\verify_dist.py" --backend $Backend --expected-version $Version $releaseDir | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "$Backend release staging verification failed." }
 
     Compress-Archive -LiteralPath $releaseDir -DestinationPath $archive -CompressionLevel Optimal

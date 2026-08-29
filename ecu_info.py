@@ -58,18 +58,18 @@ MS413_CAL_MARKER = b"SS1v2"
 MS413_CREDIT_ADDR = 0x15F60
 MS413_CREDIT_MARKER = b"ABHISHEK"
 
-# Exact MS41.2 AIF geometry recovered from the stock application status path.
-# MS41.3 inherits this region from 1406464; it is deliberately not projected
-# onto MS41.0/.1.
+# Exact MS41.2 AIF geometry recovered from the application status builder and
+# 10MDS412.prg. MS41.3 inherits this region from 1406464; it is deliberately
+# not projected onto MS41.0/.1.
 AIF_FILE_ADDR = 0x5D07
 AIF_DS2_ADDR = AIF_FILE_ADDR ^ 0x4000
 AIF_RECORD_SIZE = 0x2E
 AIF_RECORD_COUNT = 14
 AIF_LEN = AIF_RECORD_SIZE * AIF_RECORD_COUNT
 
-# Compact, packaged subset of the exact MS41.2 assembly relationships needed
-# to explain an AIF ZB. Values are (type/hardware, program, program index,
-# calibration data).
+# Compact, packaged subset of the normalized BMW DATEN assembly table. These
+# are the exact MDS412 rows needed to explain an AIF ZB without parsing DATEN at
+# runtime. Values are (type/hardware, program, program index, calibration data).
 _MDS412_ZB = {
     "7831585": ("1405968", "1406464", "C", "7831586DA"),
     "7830455": ("1405548", "1406464", "C", "7830456DA"),
@@ -324,11 +324,11 @@ def decode_aif_history(raw: bytes, family: str | None) -> dict:
     }
 
 
-def format_program_lineage(recorded_zb, program_part) -> str:
-    """Explain a recorded MS41.2 ZB using the packaged program table."""
+def format_daten_lineage(recorded_zb, program_part) -> str:
+    """Explain a recorded MS41.2 ZB using the packaged normalized DATEN row."""
     row = _MDS412_ZB.get(str(recorded_zb or ""))
     if row is None:
-        return "Not found in bundled MS41.2 program table" if recorded_zb else "Unavailable"
+        return "Not found in bundled MS41.2 DATEN" if recorded_zb else "Unavailable"
     type_number, program_number, program_index, calibration = row
     live_program = str(program_part or "")
     verdict = (

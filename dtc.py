@@ -46,7 +46,7 @@ def format_dtc_table(dtcs: list) -> str:
 # ---------------------------------------------------------------------------
 # DS2 single-byte DTC database (BMW MS41 / MS42 / MS43)
 # Primary source: openms41.sites.google.com DTC reference table (verified).
-# Code 46 is supplemented from the exact MS41.1 diagnostic text table.
+# Code 46 is supplemented from hash-bound BMW MS411DS2.PRG FORTTEXTE.
 # Code = single byte integer (1–255), matches byte[0] of each 10-byte DS2 record
 # ---------------------------------------------------------------------------
 
@@ -272,6 +272,16 @@ _DS2_FLAG_RECORDED = 0x20
 _DS2_FLAG_ACTIVE = 0x40
 _DS2_FLAG_HISTORY = 0x80
 
+# Named bits for archived views; bit 0x08 has no admitted BMW text.
+SAVED_STATUS_FLAGS = (
+    (0x20, "Stored after debounce"), (0x40, "Present at save"),
+    (0x80, "Sporadic"), (0x10, "Emissions relevant"),
+)
+FAULT_QUALIFIER_FLAGS = (
+    (0x01, "Short circuit to battery positive"),
+    (0x02, "Short circuit to ground"), (0x04, "Open circuit"),
+)
+
 # Hash-bound BMW FUMWELTTEXTE values.  The BEST jobs apply raw * A + B.
 _ENVIRONMENT = {
     0x01: ("Engine speed", "rpm", 32.0, 0.0),
@@ -417,6 +427,15 @@ _VARIANT_ENVIRONMENT_ADDITIONS = {
 }
 
 
+def environment_definition(identifier: int) -> tuple | None:
+    """Return the canonical (label, unit, factor, offset) for an explicit source ID.
+
+    The caller must establish which physical source was captured. This does not
+    choose a per-code BMW environment row or validate an ECU's source mapping.
+    """
+    return _ENVIRONMENT.get(identifier)
+
+
 @dataclass(frozen=True)
 class DTCEnvironmentValue:
     identifier: int
@@ -513,12 +532,7 @@ def _qualifiers(variant: str | None, code: int, status: int) -> tuple:
     values.append("Sporadic" if status & 0x80 else "Static")
     if status & 0x10:
         values.append("Emissions relevant")
-    if status & 0x01:
-        values.append("Short circuit to battery positive")
-    if status & 0x02:
-        values.append("Short circuit to ground")
-    if status & 0x04:
-        values.append("Open circuit")
+    values.extend(label for mask, label in FAULT_QUALIFIER_FLAGS if status & mask)
     return tuple(values)
 
 
@@ -528,7 +542,7 @@ def _freeze_frame(variant: str | None, code: int, raw_values: bytes) -> tuple:
         return ()
     decoded = []
     for identifier, raw in zip(identifiers, raw_values):
-        definition = _ENVIRONMENT.get(identifier)
+        definition = environment_definition(identifier)
         if definition is None:
             continue
         label, unit, factor, offset = definition

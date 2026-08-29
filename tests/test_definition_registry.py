@@ -56,6 +56,33 @@ def test_registry_import_select_persist_and_delete(tmp_path):
     assert reopened.active_path() is None
 
 
+def test_registry_preserves_order_migrates_legacy_and_removes_deleted_entries(tmp_path):
+    first = _definition(tmp_path / "First.xml", "41")
+    second = _definition(tmp_path / "Second.xml", "60")
+    registry = DefinitionRegistry(tmp_path / "registered")
+    registry.import_file(first)
+    registry.import_file(second)
+
+    registry.set_active_order(["Second.xml", "First.xml"])
+    reopened = DefinitionRegistry(registry.directory)
+    assert reopened.active_names() == ["Second.xml", "First.xml"]
+    assert reopened.active_paths() == [
+        registry.directory / "Second.xml",
+        registry.directory / "First.xml",
+    ]
+
+    reopened.delete("Second.xml")
+    assert reopened.active_names() == ["First.xml"]
+
+    reopened.settings_path.write_text(
+        '{"active_definition": "First.xml"}\n', encoding="utf-8"
+    )
+    assert reopened.active_names() == ["First.xml"]
+
+    with pytest.raises(DefinitionRegistryError, match="more than once"):
+        reopened.set_active_order(["First.xml", "first.XML"])
+
+
 def test_identical_import_reuses_registered_copy(tmp_path):
     source = _definition(tmp_path / "MS41.xml")
     registry = DefinitionRegistry(tmp_path / "registered")

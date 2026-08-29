@@ -5,6 +5,25 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import bsl_service
 import ecu_info
 from engines.bsl import bsl_unbrick as engine
+from operation_log import emit, operation_log_sink
+
+
+def test_operation_log_does_not_retry_a_sink_that_raises_type_error():
+    calls = []
+
+    def broken_sink(message, level):
+        calls.append((message, level))
+        raise TypeError("sink bug")
+
+    try:
+        with operation_log_sink(broken_sink):
+            emit("once", level="warn")
+    except TypeError as error:
+        assert str(error) == "sink bug"
+    else:
+        raise AssertionError("sink TypeError was hidden")
+
+    assert calls == [("once", "warn")]
 
 
 def test_hardware_bsl_prefers_d2xx_and_configures_raw_8n1(monkeypatch):
@@ -70,7 +89,7 @@ def test_hardware_bsl_injected_factory_bypasses_desktop_backends(monkeypatch):
     calls = []
 
     class InjectedSerial:
-        transport_name = "android_usb"
+        transport_name = "injected_usb"
 
         def __init__(self, **kwargs):
             calls.append(kwargs)
@@ -89,12 +108,12 @@ def test_hardware_bsl_injected_factory_bypasses_desktop_backends(monkeypatch):
     monkeypatch.setattr(engine, "serial", None)
 
     bsl = engine.BSL(
-        "android-ft232:1043", baud=19200, reset_line="dtr",
+        "injected-ft232:1043", baud=19200, reset_line="dtr",
         serial_factory=InjectedSerial)
     try:
-        assert bsl.transport_name == "android_usb"
+        assert bsl.transport_name == "injected_usb"
         assert calls == [{
-            "port": "android-ft232:1043", "baudrate": 19200,
+            "port": "injected-ft232:1043", "baudrate": 19200,
             "timeout": 2.0, "write_timeout": 3.0, "two_stop": False,
         }]
         assert bsl.ser.dtr is False

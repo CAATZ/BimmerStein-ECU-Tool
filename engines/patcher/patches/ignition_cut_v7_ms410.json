@@ -4,7 +4,7 @@
   "version": "V7",
   "deprecated": true,
   "superseded_by": "ignition_cut_v8_ms410",
-  "status": "EMULATOR VERIFIED - ON-CAR TEST REQUIRED",
+  "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
   "tested": false,
   "verification": "Canonical ms41emu executes both real MS41.0 CC6 CALLS hooks, switch/RPM/launch-request cases, all six native single-cylinder masks, stock ANDB replay, cut suppression, and stack/DPP/register hygiene. Physical spark interruption remains an on-car validation item.",
   "title": "Ignition Cut",

@@ -122,7 +122,7 @@ try {
     Copy-Item -LiteralPath "THIRD_PARTY_NOTICES.md" -Destination $appDir
     Copy-Item -LiteralPath "output\pdf\BimmerStein-ECU-Tool-User-Manual.pdf" -Destination $appDir
 
-    & $python "packaging\verify_dist.py"
+    & $python "packaging\verify_dist.py" --backend pyinstaller --expected-version $Version $appDir
     if ($LASTEXITCODE -ne 0) { throw "Packaged-runtime verification failed." }
 
     Write-Host "Windows package ready: dist\BimmerStein ECU Tool"

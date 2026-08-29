@@ -377,7 +377,7 @@ def test_slim_partial_finalizer_failure_disables_destructive_replay(
 
     assert session.failure_state is SessionState.WRITE_FINALIZE_HIGH
     assert session.can_recover_in_place is False
-    with pytest.raises(PartialWriteStateError, match="no longer qualified"):
+    with pytest.raises(PartialWriteStateError, match="replay is no longer qualified"):
         session.recover_in_place()
 
 
@@ -428,7 +428,7 @@ def test_slim_full_finalizer_failure_disables_destructive_replay(
 
     assert session.failure_state is SessionState.WRITE_FINALIZE_HIGH
     assert session.can_recover_in_place is False
-    with pytest.raises(FullWriteError, match="no longer qualified"):
+    with pytest.raises(FullWriteError, match="replay is no longer qualified"):
         session.recover_in_place()
 
 

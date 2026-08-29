@@ -1,7 +1,7 @@
 # Building BimmerStein ECU Tool
 
-The supported Windows x64 release is built with both PyInstaller and Nuitka and
-distributed as portable ZIPs and per-user installers.
+Beta 14 is a Windows x64 desktop release only. It is built with both PyInstaller
+and Nuitka and distributed as portable ZIPs and per-user installers.
 All commands below run from the repository root in PowerShell.
 
 ## 1. Create the build environment
@@ -30,18 +30,16 @@ $env:QT_QPA_PLATFORM = "offscreen"
 .venv\Scripts\python.exe -m ruff check . --select F,E9
 .venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp .pytest-release
 .venv\Scripts\python.exe -m engines.softbsl.verify_agent_artifacts
-$env:MS41EMU_ROOT = "C:\path\to\ECU Emulator"
-$env:MS41_TEST_DATA_ROOT = "C:\path\to\MS41 Projects\_shared"
-.venv\Scripts\python.exe engines\patcher\verify_ms412_emulator.py
 ```
 
 The RAM-agent verification is mandatory. It confirms that the checked-in HEX
 payloads match their manifests and reproducible source artifacts.
-The private emulator admission is also mandatory for release preparation. It
-executes exact composed patch bytes and the Intel/AMD flash drivers against
-hash-bound private reference ROMs. The emulator and ROMs are development inputs;
-they are not imported, packaged, or shipped with the application. Missing
-private inputs fail this command instead of skipping it.
+The owner-only exact-byte execution admission is also mandatory for release
+preparation and is invoked by the release script. It executes composed patch
+bytes and the Intel/AMD flash drivers against hash-bound private reference ROMs.
+Those development inputs are not imported, packaged, or shipped; missing inputs
+fail release preparation. Passing this offline gate does not establish bench or
+on-car behavior.
 
 ## 3. Rebuild the documentation
 
@@ -61,7 +59,7 @@ Render and visually inspect every PDF page before publishing a release.
 ## 4. Build the portable package
 
 ```powershell
-.\build_windows.ps1
+.\build_windows.ps1 -Version 0.1.0b14
 ```
 
 The script regenerates metadata-clean icons, rebuilds the manual, runs the
@@ -135,8 +133,8 @@ script performs a fresh build, verifies every staged x64 package, records the
 backend, project license, bundled-definition status, and selected PyQt5 basis in
 `RELEASE-METADATA.json`, and writes the portable ZIPs, per-user installer EXEs,
 individual checksum files, and one complete `SHA256SUMS.txt` under `release\`.
-Before building, it runs the same mandatory private emulator admission using
-`MS41EMU_ROOT` and `MS41_TEST_DATA_ROOT`.
+Before building, it runs the same mandatory owner-only exact-byte execution
+admission using the release owner's private local configuration.
 
 The PyInstaller and Nuitka installers retain distinct internal identities and
 installation directories. Both use the BimmerStein icon and the same

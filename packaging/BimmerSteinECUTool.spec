@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import json
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_dynamic_libs
@@ -36,11 +37,14 @@ add_file(
 )
 
 softbsl_root = ROOT / "engines" / "softbsl"
+agent_manifest = json.loads(
+    (softbsl_root / "agent_manifest.json").read_text(encoding="utf-8")
+)
+agent_payloads = sorted({
+    entry["payload"] for entry in agent_manifest["agents"].values()
+})
 for filename in (
-    "agent.hex",
-    "agent_28f.hex",
-    "eeprom_agent.hex",
-    "st9030_agent.hex",
+    *agent_payloads,
     "stage1_payload.hex",
     "stage1_manifest.json",
     "agent_manifest.json",

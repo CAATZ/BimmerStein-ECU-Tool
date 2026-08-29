@@ -1,14 +1,4 @@
-"""
-gui.py — PyQt5 graphical interface for BimmerStein ECU Tool.
-
-Tabs:
-  1. Flash       — Read/Write full ROM (256KB) or tune region (24KB)
-  2. Diagnostics — Discover compatible modules and manage MS41 fault memory
-  3. Coding      — Human-readable exact module settings
-  4. ECU Info    — Firmware ID, part numbers, chip identification
-
-Connection bar is shared across all tabs.
-"""
+"""PyQt5 desktop interface for BimmerStein ECU Tool."""
 
 import sys
 import os
@@ -67,7 +57,7 @@ import ecu_info
 from live_data import (LiveDataPoller, PROFILE_DISPLAY_NAMES,
                        TELEGRAM_PARAM_NAMES, display_rows, read_adaptations)
 from rom_analyzer import analyze as analyze_rom
-from backup_manager import BackupManager, BACKUP_DIR
+from backup_manager import BackupIndexError, BackupManager, BACKUP_DIR
 import bin_compare
 from support_bundle import (
     create_support_bundle as _create_support_bundle,
@@ -929,7 +919,7 @@ def _populate_aif_info(raw: bytes, family: str, program_part: str, labels: dict)
             history.get("recorded_software_number") or "Unavailable"
         ),
         "Programming Count": str(history["programming_count"]) if history else "Unavailable",
-        "BMW Program Lineage": ecu_info.format_program_lineage(
+        "BMW DATEN Lineage": ecu_info.format_daten_lineage(
             history.get("recorded_zb_zusb"), program_part
         ),
     }
@@ -1861,7 +1851,7 @@ class MS41FlashGUI(QMainWindow):
         ])
         add_group("BMW Programming Record", [
             "Recorded ZB / ZUSB", "Programming Date", "Recorded Software Number",
-            "Programming Count", "BMW Program Lineage",
+            "Programming Count", "BMW DATEN Lineage",
         ])
         add_group("DME Identity", [
             "VIN", "DME Production Serial", "EWS2 ISN", "Transmission Mode",
@@ -3389,26 +3379,7 @@ class MS41FlashGUI(QMainWindow):
 
     def _ds2_write_tune(self, data: bytearray, filename: str):
         """DS2 path for writing the 24 KB tune partition (write_partial)."""
-        # Optionally correct calibration checksums before flashing.
         image = bytearray(data)
-        if self.chk_correct_cksum.isChecked():
-            image, cdet = correct_checksums(image, correct_program=False)
-            for d in cdet:
-                self._log(d)
-
-        # Verify checksums on what we're about to write.
-        ok, cs_details = verify_checksum(image)
-        for d in cs_details:
-            self._log(d)
-        if not ok:
-            ans = QMessageBox.warning(self, "Checksum Not Valid",
-                "The tune file checksum is not valid after correction.\n\n"
-                "Flashing a tune with a bad checksum may prevent the ECU from booting.\n\n"
-                "Proceed anyway?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if ans != QMessageBox.Yes:
-                self._log("DS2 write cancelled — checksum not valid.", "warn")
-                return
 
         retained_recovery = self._softbsl_entry_mode() == "retained"
         if retained_recovery:
@@ -3418,7 +3389,7 @@ class MS41FlashGUI(QMainWindow):
         # A partial calibration that does not match the live program can brick the ECU.
         from ms41 import MS41ECU
         file_variant = MS41ECU.detect_variant(image)      # cal-region identity of the tune file
-        file_compatibility_id = MS41ECU.read_calibration_compatibility_id(image)
+        raw_file_compatibility_id = MS41ECU.read_calibration_compatibility_id(image)
         # Prefer the program-confirmed variant (set after a full ROM read); fall back
         # to the connect-time identify response, which can't distinguish MS41.2 from
         # MS41.3 on ECUs that report ECU ID "1406464" instead of "SHINDE1".
@@ -3429,6 +3400,7 @@ class MS41FlashGUI(QMainWindow):
 
         confirmed_mismatch = None
         uncertain_warn     = None
+        coding_family      = None
 
         if file_variant and ecu_variant:
             if file_variant != ecu_variant:
@@ -3450,18 +3422,65 @@ class MS41FlashGUI(QMainWindow):
                         f"Writing a {file_variant} calibration to a {ecu_variant} ECU "
                         f"will brick it.")
         if not confirmed_mismatch:
-            if not file_compatibility_id:
+            if not raw_file_compatibility_id:
                 confirmed_mismatch = (
                     "The tune Firmware Compatibility ID is missing or invalid.")
             elif not ecu_program_compatibility_id:
                 confirmed_mismatch = (
                     "The connected ECU program Firmware Compatibility ID could not "
                     "be read consistently.")
-            elif file_compatibility_id != ecu_program_compatibility_id:
+
+        if not confirmed_mismatch:
+            # Prepare before comparing: the writer preserves the live boot coding
+            # family, so the guard must inspect those exact normalized bytes too.
+            if self._poller is not None:
+                self._on_live_stop()
+            try:
+                coding_family = self._live_coding_family()
+                prepared = MS41ECU.graft_coding_family(image, coding_family)
+            except Exception as error:
+                self._log(f"Tune compatibility preparation failed: {error}", "error")
                 confirmed_mismatch = (
-                    "Firmware compatibility mismatch — ECU program "
-                    f"'{ecu_program_compatibility_id}' vs tune calibration "
-                    f"'{file_compatibility_id}'.")
+                    "The connected ECU coding family could not be read safely, so "
+                    "tune compatibility cannot be confirmed.")
+            else:
+                family_changed = prepared != image
+                image = prepared
+                if family_changed:
+                    self._log(
+                        "Calibration coding family normalized to live boot family "
+                        f"{coding_family.decode('ascii')}.",
+                        "warn",
+                    )
+                if self.chk_correct_cksum.isChecked() or family_changed:
+                    image, cdet = correct_checksums(image, correct_program=False)
+                    for d in cdet:
+                        self._log(d)
+
+                # Verify and compare the exact prepared image passed to the writer.
+                ok, cs_details = verify_checksum(image)
+                for d in cs_details:
+                    self._log(d)
+                if not ok:
+                    ans = QMessageBox.warning(self, "Checksum Not Valid",
+                        "The tune file checksum is not valid after correction.\n\n"
+                        "Flashing a tune with a bad checksum may prevent the ECU from booting.\n\n"
+                        "Proceed anyway?",
+                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                    if ans != QMessageBox.Yes:
+                        self._log("DS2 write cancelled — checksum not valid.", "warn")
+                        return
+
+                file_compatibility_id = (
+                    MS41ECU.read_calibration_compatibility_id(image))
+                if not file_compatibility_id:
+                    confirmed_mismatch = (
+                        "The prepared tune Firmware Compatibility ID is invalid.")
+                elif file_compatibility_id != ecu_program_compatibility_id:
+                    confirmed_mismatch = (
+                        "Firmware compatibility mismatch — ECU program "
+                        f"'{ecu_program_compatibility_id}' vs tune calibration "
+                        f"'{file_compatibility_id}'.")
         if (not confirmed_mismatch and not ecu_variant
                 and not ecu_program_compatibility_id):
             uncertain_warn = ("Connected ECU variant could not be determined — "
@@ -3525,8 +3544,6 @@ class MS41FlashGUI(QMainWindow):
             return
 
         image_bytes = bytes(image)
-        retained_coding_family = (
-            self._live_coding_family() if retained_recovery else None)
         backup_entry_box = [None]
         self._invalidate_current_full_read("calibration write started")
 
@@ -3545,7 +3562,7 @@ class MS41FlashGUI(QMainWindow):
                 verify_write=verify_write,
                 route=transfer_route,
                 entry_mode=entry_mode,
-                coding_family=retained_coding_family,
+                coding_family=coding_family,
             )
             if verify_write:
                 return "Calibration write completed and read-back verification passed."
@@ -6532,8 +6549,8 @@ class MS41FlashGUI(QMainWindow):
             "A previous mutation has an uncertain result. Read and save the complete "
             "EEPROM before writing again.")
         self.btn_ch341a_restore.setToolTip(
-            "Available only after Seed ECU in this session, using its exact saved "
-            "pre-seed image. No progression is inferred.")
+            "After reconnecting or restarting, Read EEPROM to recover the exact "
+            "saved pre-seed image. No progression is inferred.")
     def _on_eeprom_load(self):
         path, _ = QFileDialog.getOpenFileName(
             self,
@@ -6612,10 +6629,6 @@ class MS41FlashGUI(QMainWindow):
             return
         self._ch341a_capture = None
         self._ch341a_status = ch341a_eeprom_service.detect_status()
-        preseed = self._ch341a_preseed_capture
-        if (preseed is not None and self._ch341a_status.ready
-                and self._ch341a_status.devices[0] != preseed.device):
-            self._ch341a_preseed_capture = None
         self._log(self._ch341a_status.message,
                   "ok" if self._ch341a_status.ready else "warn")
         self._update_eeprom_buttons()
@@ -6649,8 +6662,38 @@ class MS41FlashGUI(QMainWindow):
                 return
             capture = replace(capture, path=Path(entry.path))
             preseed = self._ch341a_preseed_capture
-            if preseed is not None and capture.device != preseed.device:
-                self._ch341a_preseed_capture = None
+            self._ch341a_preseed_capture = None
+            if capture.marker == ch341a_eeprom_service.RECOVERY_PROGRESSION:
+                try:
+                    candidates = []
+                    if preseed is not None and preseed.path is not None:
+                        candidates.append(preseed.path)
+                    candidates.extend(sorted(
+                        Path(EEPROM_BACKUP_DIR).glob("ch341a_before_seed_*.bin")))
+                    candidates.extend(
+                        entry.path for entry in self._backup_mgr.entries
+                        if entry.file_type == "EEPROM" and entry.source in (
+                            "CH341A EEPROM before Seed ECU",
+                            "CH341A EEPROM before uncertain write",
+                        ))
+                    self._ch341a_preseed_capture = (
+                        ch341a_eeprom_service.recover_pre_seed_capture(
+                            capture, candidates))
+                except (OSError, ch341a_eeprom_service.SeedRefused) as error:
+                    self._log(
+                        f"Seeded EEPROM detected; Restore unavailable: {error}",
+                        "warn")
+                else:
+                    if self._ch341a_preseed_capture is None:
+                        self._log(
+                            "Seeded EEPROM detected, but no exact pre-seed backup "
+                            "was found; Restore remains unavailable.", "warn")
+                    else:
+                        self._log(
+                            "Exact pre-seed backup recovered: "
+                            f"{self._ch341a_preseed_capture.path}", "ok")
+            self._ch341a_status = replace(
+                self._ch341a_status, devices=(capture.device,))
             self._ch341a_capture = capture
             self._ch341a_write_uncertain = False
             self._show_eeprom_image(
@@ -6783,8 +6826,10 @@ class MS41FlashGUI(QMainWindow):
     def _on_ch341a_restore(self):
         if not self.btn_ch341a_restore.isEnabled():
             return
-        expected = self._ch341a_capture
-        original = self._ch341a_preseed_capture
+        expected = replace(
+            self._ch341a_capture, variant=self._eeprom_variant)
+        original = replace(
+            self._ch341a_preseed_capture, variant=self._eeprom_variant)
         path = self._automatic_eeprom_path("ch341a_before_preseed_restore")
 
         def task(log_fn, progress_fn):
@@ -7216,6 +7261,12 @@ class MS41FlashGUI(QMainWindow):
 
         full_compat = MS41ECU.read_calibration_compatibility_id(full)
         part_compat = MS41ECU.read_calibration_compatibility_id(partial)
+        if not part_compat:
+            QMessageBox.critical(
+                self, "Invalid Partial — Merge Blocked",
+                "The partial Firmware Compatibility ID is missing or invalid.")
+            self._log("Merge blocked — invalid partial compatibility ID.", "error")
+            return
         if (full_compat and part_compat
                 and full_compat[-2:] != part_compat[-2:]):
             QMessageBox.critical(
@@ -10594,7 +10645,7 @@ class MS41FlashGUI(QMainWindow):
                     "\n\nIgnition Cut V9 is experimental. It may suppress spark while "
                     "injection continues at the stock or configured fixed pulse width. "
                     "Unburned fuel can damage catalytic converters and exhaust components. "
-                    "Its fuel-adaptation and diagnostic guards are emulator-verified but "
+                    "Its fuel-adaptation and diagnostic guards are offline exact-byte verified but "
                     "not vehicle-validated. Never use it on a car with catalytic converters."
                 )
             if QMessageBox.warning(
@@ -13439,7 +13490,11 @@ def run_gui() -> int:
     app = QApplication(sys.argv)
     configure_application(app)
     install_exception_handler()
-    window = MS41FlashGUI()
+    try:
+        window = MS41FlashGUI()
+    except BackupIndexError as error:
+        QMessageBox.critical(None, "Backup Catalogue Error", str(error))
+        return 1
     window.show_fitted()
     return app.exec_()
 

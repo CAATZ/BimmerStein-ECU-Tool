@@ -623,7 +623,12 @@ def test_flash_image_verifies_with_1k_crc_reads(monkeypatch):
 
     sb.flash_image(bytes(image), scope="tune", baud="low", do_verify=True)
 
-    assert reads == [(0x14000, sh.CHUNK_SIZE), (0x14400, sh.CHUNK_SIZE)]
+    _sectors, lo, hi = sh._flash_scope("tune")
+    assert reads == [
+        (file_offset ^ sh.DESCR, sh.CHUNK_SIZE)
+        for file_offset in range(lo, hi, sh.CHUNK_SIZE)
+        if not sh._in_hole(file_offset ^ sh.DESCR)
+    ]
 
 
 def test_read_range_crc_reads_and_reports_progress(monkeypatch):
@@ -753,10 +758,29 @@ def test_write_tune_partial_skips_all_ff_chunks(monkeypatch):
     # a partition that is FF except the first 1 KB chunk -> only that chunk is programmed
     partial = bytearray(b"\xFF" * sh.TUNE_PARTIAL_SIZE)
     partial[:0x400] = b"\x5A" * 0x400
-    monkeypatch.setattr(sb, "crc_read", lambda cpu, n: bytes(partial[cpu - 0x10000: cpu - 0x10000 + n]))
+    reads = []
+    monkeypatch.setattr(
+        sb, "crc_read",
+        lambda cpu, n: reads.append(cpu)
+        or bytes(partial[cpu - 0x10000: cpu - 0x10000 + n]),
+    )
 
     sb.write_tune_partial(bytes(partial), do_verify=True)
     assert progs == [0x10000]     # only the single non-FF chunk was written; the FF tail was skipped
+    assert len(reads) == sh.TUNE_PARTIAL_SIZE // sh.CHUNK_SIZE
+
+
+def test_write_tune_partial_verify_rejects_residue_in_erased_ff_chunk(monkeypatch):
+    sh, sb = _fake_softbsl(monkeypatch)
+    partial = b"\xFF" * sh.TUNE_PARTIAL_SIZE
+    monkeypatch.setattr(
+        sb, "crc_read",
+        lambda cpu, n: (b"\x00" + b"\xFF" * (n - 1))
+        if cpu == 0x10000 else b"\xFF" * n,
+    )
+
+    with pytest.raises(sh.SoftBSLError, match="verify failed"):
+        sb.write_tune_partial(partial, do_verify=True)
 
 
 def test_write_tune_partial_rejects_wrong_size(monkeypatch):

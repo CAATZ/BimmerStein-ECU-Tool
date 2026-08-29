@@ -9,6 +9,7 @@ is involved in the desktop application path.
 """
 from engines.softbsl import softbsl_host as _sb
 from ds2 import DS2Interface as AppDS2Interface
+from operation_log import send_to_sink
 
 
 class SoftBSLInstallError(RuntimeError):
@@ -97,10 +98,7 @@ def _install_log(log):
             return
         plain = message.lower().lstrip("- ")
         if plain.startswith(_NOISY_INSTALL_PREFIXES):
-            try:
-                log(message, "debug")
-            except TypeError:
-                log(message)
+            send_to_sink(log, message, "debug")
             return
         if "phase 1/3:" in plain:
             message = "Phase 1/3: preparing the temporary DS2 entry path."
@@ -142,10 +140,7 @@ def _install_log(log):
             "verified" in plain or "complete" in plain or "install done" in plain
         ):
             level = "ok"
-        try:
-            log(message, level)
-        except TypeError:
-            log(message)
+        send_to_sink(log, message, level)
     return forward
 
 

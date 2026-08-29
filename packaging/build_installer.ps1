@@ -31,10 +31,13 @@ if (-not $OutputDir) {
 $sourcePath = [System.IO.Path]::GetFullPath($SourceDir)
 $outputPath = [System.IO.Path]::GetFullPath($OutputDir)
 $releasePath = [System.IO.Path]::GetFullPath($releaseRoot)
-if (-not $sourcePath.StartsWith($releasePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+$releaseBoundary = $releasePath.TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar
+if ($sourcePath -ne $releasePath -and
+        -not $sourcePath.StartsWith($releaseBoundary, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Installer source must be inside the repository release directory: $sourcePath"
 }
-if (-not $outputPath.StartsWith($releasePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+if ($outputPath -ne $releasePath -and
+        -not $outputPath.StartsWith($releaseBoundary, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Installer output must be inside the repository release directory: $outputPath"
 }
 if (-not (Test-Path -LiteralPath $sourcePath -PathType Container)) {
@@ -63,7 +66,7 @@ $compiler = [System.IO.Path]::GetFullPath($compiler)
 
 Push-Location $root
 try {
-    & $python "packaging\verify_dist.py" --backend $Backend $sourcePath
+    & $python "packaging\verify_dist.py" --backend $Backend --expected-version $Version $sourcePath
     if ($LASTEXITCODE -ne 0) { throw "Installer source-package verification failed." }
 
     $match = [regex]::Match(
@@ -89,7 +92,8 @@ try {
     $installerChecksum = "$installer.sha256"
     foreach ($target in @($installer, $installerChecksum)) {
         $fullTarget = [System.IO.Path]::GetFullPath($target)
-        if (-not $fullTarget.StartsWith($releasePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+        if ($fullTarget -ne $releasePath -and
+                -not $fullTarget.StartsWith($releaseBoundary, [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "Refusing to replace an installer artifact outside the release directory: $fullTarget"
         }
         if (Test-Path -LiteralPath $fullTarget) {

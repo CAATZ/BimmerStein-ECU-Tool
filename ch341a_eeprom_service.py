@@ -148,7 +148,7 @@ def _load_backend():
 
 
 def configure_backend(backend) -> None:
-    """Install a platform backend before discovery (Android supplies UsbManager I/O)."""
+    """Install an injected platform backend before discovery."""
     global _ch341a
     _ch341a = backend
 

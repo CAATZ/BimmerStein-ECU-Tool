@@ -8,9 +8,22 @@ parsing console text.
 from contextlib import contextmanager
 from contextvars import ContextVar
 import builtins
+import inspect
 
 
 _SINK = ContextVar("ms41_operation_log_sink", default=None)
+
+
+def send_to_sink(sink, message, level="info"):
+    """Call a one- or two-argument log sink exactly once."""
+    try:
+        inspect.signature(sink).bind(message, level)
+    except TypeError:
+        sink(message)
+    except ValueError:
+        sink(message, level)
+    else:
+        sink(message, level)
 
 
 @contextmanager
@@ -37,10 +50,7 @@ def emit(*values, level="info", sep=" ", end="\n", **print_options):
         line = line.strip()
         if not line:
             continue
-        try:
-            sink(line, level)
-        except TypeError:
-            sink(line)
+        send_to_sink(sink, line, level)
 
 
 def event(message, level="info"):
