@@ -107,10 +107,10 @@ _REFERENCE_VARIANTS = {
 }
 _BOUND_VARIANTS = {}
 _LAUNCH_LATCH_BY_VARIANT = {
-    "1429861": 0xFD5A,
-    "1437806": 0xFD5A,
-    "1406464": 0xFD5A,
-    "SS1v2": 0xFD5A,
+    "1429861": 0xFD80,
+    "1437806": 0xFDB6,
+    "1406464": 0xFDB6,
+    "SS1v2": 0xFDB6,
 }
 _WATCHDOG_LAYOUTS = {
     # pending flag, dispatcher entry/exit, task, SRVWDT
@@ -445,7 +445,7 @@ OLDER_FEATURE_LAYOUTS = {
         "paired_selector": 0xFD4E,
         "input_bytes": (0xFD50, 0xFD51),
         "input_latch": (0x2364, 0x2370),
-        "launch_latch": 0xFD5A,
+        "launch_latch": 0xFD80,
         "launch_hook": 0x0710,
         "launch_continuations": (0x0714, 0x0726),
         "soft_limit_address": 0xED52,
@@ -475,7 +475,7 @@ OLDER_FEATURE_LAYOUTS = {
         "speed_address": 0xF1BE,
         "paired_selector": 0xFD5E,
         "input_bytes": (0xFD60, 0xFD61),
-        "launch_latch": 0xFD5A,
+        "launch_latch": 0xFDB6,
         "launch_hook": 0x07D6,
         "launch_continuations": (0x07DA, 0x07EC),
         "soft_limit_address": 0xF02C,

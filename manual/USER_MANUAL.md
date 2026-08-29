@@ -134,17 +134,19 @@ The shared log and progress controls remain visible below it.
 - Choose the wiring mode before connecting. It is locked while a session owns the port.
 - Hardware BSL has its own COM selector because it normally uses a separate adapter and wiring.
 
+<!-- pagebreak -->
+
 ### Tab order
 
 | Tab | Primary purpose |
 | --- | --- |
 | Flash | Full and tune reads/writes through the automatically selected transfer path. |
 | ECU Info | Live identity, firmware, calibration, VIN, chip, and loader information. |
-| Diagnostics | Discover supported modules, then read, export, and clear exact-profile faults. |
-| Coding | Review and change supported module behavior using plain-English settings. |
+| Diagnostics | Scan verified vehicle-module addresses and read, export, or clear supported fault memories. |
+| Coding | Read and change recognized module settings, or run the guided transmission conversion. |
 | Live Data | Poll selected MS41 values and record CSV data. |
-| Adaptations | Read, reset, and inspect supported MS41 adaptation values. |
-| EEPROM | Guarded 24C04 read, inspect, archive, and write workflows. |
+| Adaptations | Read fuel, throttle, and knock adaptations or reset selected learned values. |
+| EEPROM | Inspect an exact 512-byte image and use the guarded ECU Agent or CH341A workflows. |
 | Partial / Full | Convert between 24 KB tune and 256 KB full images. |
 | Bins | Catalog reads, backups, generated images, and notes. |
 | Patches | Compose, detect, migrate, or remove supported firmware patches. |
@@ -224,9 +226,9 @@ available. Hardware BSL runs from CPU bootstrap ROM and does not depend on valid
 
 <!-- pagebreak -->
 
-## ECU Info, DTC Codes, and Live Data
+## ECU Info, Diagnostics, and Live Data
 
-![Synthetic ECU information and diagnostics workspace](images/diagnostics.png)
+![Synthetic ECU information workspace](images/diagnostics.png)
 
 ### ECU Info
 
@@ -237,67 +239,20 @@ and Soft-BSL marker when available.
 If MS41.2 and MS41.3 identification is ambiguous, use a full image or the stronger program and
 calibration markers rather than relying only on the shared ECU ID.
 
-### DTC Codes
+### Diagnostics
 
-1. Connect through normal DS2.
-2. Select **Read DTCs**.
-3. Review code, occurrence/state information, and the MS41 description.
-4. Export the report if it is needed for service records.
-5. Clear codes only after recording them and correcting the cause.
-
-### Vehicle Diagnostics
-
-The **Diagnostics** tab can discover the supported engine, automatic-transmission,
-immobilizer, ABS/traction-control, climate-control, and cruise-control modules over
-K-line. Fault reading and clearing are enabled only for exact built-in profiles.
-A module that does not respond may require a different vehicle interface or may not
-be fitted; it is not treated as a fault by itself.
-
-### Vehicle Coding
-
-The **Coding** tab presents plain-English settings and reads the connected module
-before enabling changes. The current exact profiles cover supported GM3 window,
-lock, confirmation, and memory options plus E46 driver-seat memory behavior.
-Everyday settings are shown by default; **Show advanced options** reveals equipment
-flags and technical references. Writes preserve unrelated bits and require exact
-readback. Unknown module revisions remain read-only.
-
-### Guided Transmission Conversion
-
-The transmission panel performs a complete guided manual/automatic conversion only
-when the entire connected car matches an exact built-in profile. Current write support
-covers reviewed E39 MS41-family profiles, E46 MS42 vehicle type AM51 using the early
-vehicle-order format, and late E46 MS43 vehicle type EV51 using the version-2 vehicle
-order. E36 is identified but refused because its Concept-1 cluster requires ADS/L-line
-access. Early MS43, M3 sequential-gearbox, unknown revisions, and unreviewed vehicle
-types are also refused before any coding write.
-
-1. Complete the mechanical transmission swap, connect through normal K-Line, keep the
-   engine stopped, choose the target transmission, and select **Check Compatibility**.
-2. The check is read-only. It compares the engine computer, every vehicle-order copy,
-   immobilizer starter coding, instrument cluster, traction/stability control, current
-   transmission state, and the automatic-transmission computer when required. MS41
-   also checks the complete 512-byte EEPROM and its live transmission state.
-3. For a manual target, the automatic-transmission computer must be disconnected. For
-   an automatic target, the exact reviewed transmission computer must be fitted and
-   communicating. Any mismatch stops the process before a write.
-4. Review the plain-English changes, confirm that the physical swap is complete, and
-   select **Convert**. The tool durably archives the original owner data, records each
-   write before sending it, preserves unrelated bytes, and requires exact readback.
-5. When prompted, turn ignition **OFF**, wait at least **10 seconds**, then turn it
-   **ON** with the engine still stopped. Confirm the cycle and select **Verify
-   Conversion**. Success is shown only after every changed owner and the final engine
-   state match the selected transmission.
-
-If the application or computer stops mid-process, keep the recovery files intact.
-Reconnect the same car and use **Recover Interrupted Conversion** to either finish the
-reviewed target or restore the exact archived originals. Other writes remain disabled
-until recovery is verified.
-
-For manual coding, the tool disables the immobilizer's transmission starter-interlock
-input to avoid a no-crank condition. A retained clutch-start switch will therefore no
-longer block cranking. MS42 clears engine adaptations after coding; MS43 resets only
-its learned transmission variant.
+1. Leave **Direct tap** clear and connect through normal K-Line.
+2. Select **Scan Vehicle** for a read-only identification scan of the six verified module
+   addresses. Cabin OBD may expose only powertrain modules; use the BMW 20-pin diagnostic path
+   when applicable.
+3. Select the responding module. For ABS/traction-control or automatic-transmission fault memory,
+   select the exact fitted system profile. If no embedded profile matches, fault reading and
+   clearing remain unavailable rather than using an assumed record layout.
+4. Select **Read Faults**, then review the code, reference, system, status, description, and
+   selected-fault detail.
+5. Select **Export to Text** when a service record is required.
+6. Record the faults and correct their cause before selecting **Clear Faults**. Read the module
+   again after a non-engine clear request to confirm the result.
 
 ### Live Data
 
@@ -334,12 +289,139 @@ feedback-resistor code 56, but contain no dedicated per-cylinder DTC 238-243
 descriptors. The shared guard bypasses the detector and downstream diagnostic
 calls during an intentional cut; no synthetic DTC 238-243 path is added.
 MS41.1 and MS41.2 also guard rear O2, catalyst, and misfire paths; MS41.3
-guards front/rear O2, catalyst, misfire, and coil/resistor paths. Exact firmware
-execution checks verify the descriptors and prove the native DTC manager can mature
-real coil and misfire records immediately after release. O2-heater electrical
+guards front/rear O2, catalyst, misfire, and coil/resistor paths. Offline
+exact-byte execution verifies the descriptors and native fault-manager release
+path. O2-heater electrical
 diagnostics remain active on every version.
 
 Live Data is read-only with respect to flash memory.
+
+<!-- pagebreak -->
+
+## Coding and guided transmission conversion
+
+### Vehicle module coding
+
+Module coding requires normal K-Line mode; Direct Tap reaches only the Engine ECU.
+
+1. Choose the vehicle chassis and module, then select **Read Settings**.
+2. The application identifies the connected coding version and exposes only an exact built-in
+   profile. An unknown module version remains unavailable.
+3. Change only understood settings. **Show advanced options** reveals reviewed
+   equipment-specific settings and references; it does not enable raw-byte editing.
+4. Select **Write Changes** and review the exact old-to-new values and battery-voltage notice.
+5. Keep ignition ON and the engine OFF while writing. A successful operation reads the module
+   back and requires the decoded settings to match. Cycle ignition before testing the change.
+
+### Guided transmission conversion
+
+The compatibility check is read-only. It admits only an exact built-in chassis, engine-computer,
+vehicle-order, fitted-module, and transmission-computer combination; unresolved or conflicting
+state stops before a write.
+
+1. Connect through normal K-Line, choose **Manual transmission** or **Automatic transmission**,
+   and select **Check Compatibility**.
+2. Review every reported owner, warning, blocking reason, and planned change. Complete the
+   mechanical transmission and wiring work before continuing.
+3. Select **I confirm the physical transmission swap is complete and the vehicle is safely
+   parked**, then select **Convert to Manual** or **Convert to Automatic**.
+4. Keep ignition ON and the engine OFF until the application explicitly requests a cycle. Before
+   the first module write, the application durably archives the admitted before-state and starts
+   a recovery journal. Each written owner is read back before the workflow advances.
+5. When instructed, turn ignition OFF, wait at least 10 seconds, then turn ignition ON with the
+   engine stopped.
+6. Confirm the completed cycle and select **Verify Conversion**. Final verification independently
+   reads every changed module and the applicable DME transmission record.
+
+If a conversion is interrupted, do not start another plan. Use **Recover Interrupted Conversion...**
+to load the checked local record and either finish the reviewed target or restore the archived
+original coding. If the DME transmission-record result is unresolved, keep ignition ON and use the
+guided recovery; no success or rollback is assumed.
+
+<!-- pagebreak -->
+
+## Adaptations
+
+![Adaptations tab with synthetic values](images/adaptations.png)
+
+**Read Adaptations** reads stored fuel, throttle, and six 16-by-4 knock-adaptation tables from the
+connected Engine ECU. The exact ECU ID must have packaged address and axis mappings; the operation
+stops when those mappings are unavailable instead of estimating them. Fuel values without an exact
+mapping remain shown as `—`. The knock tables use load columns, RPM rows, and degrees of correction.
+
+**Reset Adaptations** changes learned ECU state and requires confirmation. MS41.0 offers
+**All adaptations** only. Other supported families offer **All adaptations**, **Idle adaptation**,
+**Knock adaptation**, **Lambda / fuel trim adaptation**, or **Throttle adaptation**. The ECU
+relearns the selected values during subsequent operation.
+
+<!-- pagebreak -->
+
+## EEPROM
+
+![Synthetic offline EEPROM workspace](images/eeprom.png)
+
+The EEPROM tab works with one displayed 512-byte physical 24C04 image. Loading a file or an
+`EEPROM` entry from Bins replaces that same target; neither action writes to hardware.
+
+> [!DANGER]
+> Do not write a short live RAM mirror padded to 512 bytes, a uniform failed capture, or an image
+> whose exact MS41 layout is unknown. EEPROM data can contain vehicle identity and coding; keep
+> captures private.
+
+### Load and inspect an image
+
+1. Select **Open EEPROM File...**, or select an `EEPROM` entry in **Bins** and choose
+   **Load EEPROM**.
+2. Confirm the detected MS41 layout. If it is unresolved, enable **Manual override** and select the
+   exact MS41.0, MS41.1, MS41.2, or MS41.3 program layout before editing or writing.
+3. Select **View / Edit...**. Raw byte editing is disabled by default. Prefer the named
+   transmission shortcut over arbitrary byte edits.
+4. For edited checked records, select **Update Checks for Edited Records**. Existing invalid
+   records that were not edited remain unchanged.
+5. Select **Apply Changes** to return the edited image to the EEPROM tab. This updates the displayed
+   target only; it does not write to hardware.
+6. Use **Save Copy...** when an additional offline copy is required.
+
+<!-- pagebreak -->
+
+### ECU Agent
+
+The ECU Agent requires a connected, recognized MS41.0-MS41.3 program with its matching installed
+Soft-BSL entry and live identity evidence.
+
+1. Select **Read EEPROM...**. A successful stable 512-byte capture is archived in Bins before an
+   additional external copy is offered.
+2. Load or edit the exact target and verify that its selected layout matches the connected program.
+3. Select **Write Loaded Image...**, review the source and layout, then type `WRITE EEPROM`.
+4. The writer saves an immutable before-image, compares before writing, writes only changed bytes
+   with checked-record checks last, and requires an exact full-device readback. If the EEPROM
+   already matches, no write is sent.
+
+If a write becomes uncertain, keep ignition ON and do not disconnect the adapter. Select
+**Resolve Pending Write...**. The retained session first queries the current state; if remaining
+prepared operations are required, it asks for `RESUME EEPROM`. After resolution, perform and save
+a fresh full read before another change.
+
+### CH341A Programmer
+
+Disconnect the normal ECU session and keep the ECU unpowered and isolated.
+
+1. Select **Detect CH341A**. Detection enumerates USB devices; it does not read EEPROM.
+2. Select **Read EEPROM...** to obtain and archive a stable full-device capture.
+3. Load or edit the intended target and confirm its exact layout.
+4. Select **Write Loaded Image...** and type `WRITE EEPROM`. The same programmer session performs
+   a stable pre-read, saves the before-image, writes only changed bytes, and verifies the complete
+   target.
+5. **Seed ECU Recovery...** is available only for the displayed verified capture when its marker
+   is eligible. **Restore Pre-Seed State...** uses only the exact original bytes captured by that
+   seed operation; it never guesses them.
+
+After reconnecting the programmer or restarting the app, detect and read the EEPROM again.
+Restore becomes available only when the exact saved original is found; missing or conflicting
+backups stay blocked.
+
+After an uncertain CH341A write result, perform and save a fresh full read before any further
+mutation.
 
 <!-- pagebreak -->
 
@@ -436,7 +518,7 @@ behavior on an engine.
 > **IGNITION CUT HAZARD.** Ignition Cut V9 remains experimental. It may suppress spark while
 > injection continues at the stock or configured fixed pulse width. Unburned fuel can damage
 > catalytic converters and exhaust components; never use it on a car with catalytic converters.
-> Its fuel-adaptation and diagnostic guards passed exact firmware execution checks but are not vehicle-validated.
+> Its fuel-adaptation and diagnostic guards are offline exact-byte verified but not vehicle-validated.
 
 <!-- pagebreak -->
 

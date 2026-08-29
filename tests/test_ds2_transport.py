@@ -22,6 +22,26 @@ from ds2_write_authorization import (
 _LEGACY_SEED = bytes(range(42))
 
 
+def test_write_retry_accepts_one_argument_log_sink(monkeypatch):
+    interface = DS2Interface(port="COM_TEST")
+    attempts = []
+    messages = []
+
+    def flash_sub(*_args):
+        attempts.append(None)
+        if len(attempts) == 1:
+            raise ds2.DS2Error("transient")
+        return bytes((0x02, 0, 0, 0, 0, 0x01))
+
+    monkeypatch.setattr(interface, "_flash_sub", flash_sub)
+    monkeypatch.setattr(ds2.time, "sleep", lambda _seconds: None)
+
+    interface._write_block(0x10000, b"\x01", log_fn=messages.append)
+
+    assert len(attempts) == 2
+    assert len(messages) == 1 and "Write retry 1/" in messages[0]
+
+
 class _LegacyAuthorizationHarness(DS2Interface):
     def __init__(
         self,
@@ -533,7 +553,7 @@ def test_injected_serial_factory_bypasses_desktop_backends(monkeypatch):
     calls = []
 
     class InjectedSerial:
-        transport_name = "android_usb"
+        transport_name = "injected_usb"
         native_fast_capable = True
 
         def __init__(self, **kwargs):
@@ -571,7 +591,7 @@ def test_injected_serial_factory_bypasses_desktop_backends(monkeypatch):
         "write_timeout": 3.0,
         "two_stop": True,
     }]
-    assert d.transport_name == "android_usb"
+    assert d.transport_name == "injected_usb"
     assert d.native_fast_capable is True
     assert d.uses_d2xx is False
 
@@ -757,8 +777,8 @@ def test_kline_echo_true_consumes_exact_transmitted_frame(monkeypatch):
 
 
 def test_kline_echo_uses_transport_specific_timeout(monkeypatch):
-    d = DS2Interface(port="android-ft232:7", baud=9600, echo=True)
-    d._ser = type("AndroidSerial", (), {"echo_read_timeout": 0.050})()
+    d = DS2Interface(port="injected-ft232:7", baud=9600, echo=True)
+    d._ser = type("InjectedSerial", (), {"echo_read_timeout": 0.050})()
     seen = []
     monkeypatch.setattr(ds2.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(

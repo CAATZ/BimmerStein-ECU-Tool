@@ -58,13 +58,14 @@ active_high:
         jmpr cc_NE,arm
         jmpr cc_UC,request_gate
 
-arm:    bset 0xFD5A.6
+; FDB6 is hash-certified free post-startup IRAM on canonical 1406464.
+arm:    bset 0xFDB6.6
         jmpr cc_UC,request_gate
 disarm:
-        bclr 0xFD5A.6
+        bclr 0xFDB6.6
 
 request_gate:
-        movb RL4,0xFD5A
+        movb RL4,0xFDB6
         andb RL4,#0x40
         jmpr cc_EQ,clear_both
         movb RL4,0x352D

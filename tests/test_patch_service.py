@@ -81,12 +81,12 @@ def test_available_patches_filters_by_version():
     assert amd["status"] == "TESTED"
     assert amd["tested"] is True
     alphan = next(p for p in avail if p["id"] == "alphan_failsafe")
-    assert alphan["status"] == "EMULATOR VERIFIED - ON-CAR TEST REQUIRED"
+    assert alphan["status"] == "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED"
     assert alphan["tested"] is False
     assert next(p for p in avail if p["id"] == "softbsl_loader")["tested"] is False
     assert next(p for p in avail if p["id"] == "door_magic")["tested"] is True
     ic = next(p for p in avail if p["id"] == "ignition_cut_v9")
-    assert ic["status"] == "EMULATOR VERIFIED - ON-CAR TEST REQUIRED"
+    assert ic["status"] == "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED"
     assert ic["tested"] is False
     assert ic["legacy"] == []                          # clean ref base has no predecessor installed
 
@@ -556,7 +556,7 @@ def test_deprecated_calguard_is_detected_removed_and_replaced_by_v5(
     assert available[legacy_id]["removable"] is True
     assert available["cal_guard"]["installed"] is False
     assert available["cal_guard"]["version"] == "V5"
-    assert available["cal_guard"]["status"] == "EMULATOR VERIFIED - BENCH TEST REQUIRED"
+    assert available["cal_guard"]["status"] == "OFFLINE EXACT-BYTE VERIFIED - BENCH TEST REQUIRED"
     assert available["cal_guard"]["tested"] is False
     assert available["cal_guard"]["legacy"] == [{
         "id": legacy_id,

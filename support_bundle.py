@@ -1,4 +1,4 @@
-"""Privacy-scoped support bundle shared by desktop and Android."""
+"""Privacy-scoped support bundle."""
 
 from __future__ import annotations
 

@@ -176,19 +176,30 @@ compiler. Inno Setup is not bundled as a standalone application or compiler.
 
 ## Drivers and external software
 
-### usb-serial-for-android 3.10.0
-
-- Project: https://github.com/mik3y/usb-serial-for-android
-- Copyright: Google Inc., Mike Wakerly, Kai Morich, and contributors
-- License: MIT
-- Use: Android USB-host serial driver for one-shot FT232/DS2 identification and stored-DTC reads
-
 ### FTDI D2XX
 
 BimmerStein ECU Tool can call the system-installed FTDI D2XX driver directly.
 The project does not need a Python D2XX package and does not intentionally
 bundle `ftd2xx.dll`. If the DLL is redistributed in the future, review FTDI's
 current redistribution terms first.
+
+## Vendored source code
+
+### BimmerStein Tuning Suite editor core
+
+- Project: BimmerStein Tuning Suite (`ECU Editor-Dev`)
+- Source: https://github.com/CAATZ/bimmerstein-tuning-suite
+- Vendored snapshot basis: commit `80edb10`
+- Copyright: Copyright (C) 2026 CAATZ and contributors
+- Upstream license: GNU General Public License version 2 or, at the recipient's
+  option, any later version (`GPL-2.0-or-later`)
+- Use: Qt-free definition, ROM-table, scaling, Map Studio, and MAF-scaling core
+  packaged under `android/app/src/main/python/ecueditor/`
+
+The Android copy retains the upstream attribution and may include documented
+Android-specific compatibility changes. The combined application selects GNU
+GPL version 3 under the upstream "or later" permission; the complete GPLv3 text
+is shipped in `LICENSE`.
 
 ## Definition data
 

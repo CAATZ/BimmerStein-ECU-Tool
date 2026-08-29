@@ -4,7 +4,7 @@ from typing import Callable, Optional
 import os
 
 from engines.bsl import bsl_unbrick as engine
-from operation_log import operation_log_sink
+from operation_log import operation_log_sink, send_to_sink
 import ecu_info
 from app_paths import mutable_path
 
@@ -142,10 +142,7 @@ def _event_forwarder(log, concise=False):
             level = "warn"
         elif "complete" in plain or "verified" in plain or "result: all" in plain:
             level = "ok"
-        try:
-            log(message, level)
-        except TypeError:
-            log(message)
+        send_to_sink(log, message, level)
     return forward
 
 

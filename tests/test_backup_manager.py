@@ -87,8 +87,29 @@ def test_old_index_entries_without_new_fields_load_cleanly(tmp_path, monkeypatch
     assert len(mgr.entries) == 1
     assert mgr.entries[0].program_variant == ""
     assert mgr.entries[0].cal_variant == ""
-    assert mgr.entries[0].sha256 == ""
+    digest = hashlib.sha256(b"\xFF" * 262144).hexdigest()
+    assert mgr.entries[0].sha256 == digest
     assert mgr.entries[0].folder == ""
+    assert mgr.read_data("old.bin", digest) == b"\xFF" * 262144
+
+
+@pytest.mark.parametrize("broken", [b'{"incomplete"', b'["not an object"]'])
+def test_unreadable_index_is_not_replaced_or_treated_as_empty(
+        tmp_path, monkeypatch, broken):
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    image = backups / "important.bin"
+    image.write_bytes(b"important")
+    index_path = backups / "index.json"
+    index_path.write_bytes(broken)
+    monkeypatch.setattr(backup_manager, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(backup_manager, "INDEX_FILE", str(index_path))
+
+    with pytest.raises(backup_manager.BackupIndexError, match="left unchanged"):
+        backup_manager.BackupManager()
+
+    assert index_path.read_bytes() == broken
+    assert image.read_bytes() == b"important"
 
 
 def test_catalog_exact_crud_is_content_checked_and_collision_safe(tmp_path, monkeypatch):

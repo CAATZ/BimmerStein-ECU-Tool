@@ -29,7 +29,7 @@ def _numeric_version(version: str) -> tuple[int, int, int, int]:
         int(match.group("major")),
         int(match.group("minor")),
         int(match.group("patch")),
-        0,
+        int(match.group("beta")[1:]) if match.group("beta") else 0,
     )
 
 

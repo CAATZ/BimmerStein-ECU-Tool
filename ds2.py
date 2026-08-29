@@ -45,6 +45,7 @@ import logging
 from enum import IntEnum
 
 from ds2_fast_contracts import MAX_FLASH_DATA
+from operation_log import send_to_sink
 
 try:
     import serial
@@ -773,7 +774,11 @@ class DS2Interface:
                 except DS2Error as e:
                     err = e
                     if log_fn:
-                        log_fn(f"Read retry {attempt+1}/3 at 0x{start+off:06X}: {e}", "warn")
+                        send_to_sink(
+                            log_fn,
+                            f"Read retry {attempt+1}/3 at 0x{start+off:06X}: {e}",
+                            "warn",
+                        )
                     time.sleep(0.05)
             if err:
                 raise err
@@ -828,7 +833,7 @@ class DS2Interface:
             except DS2Error as e:
                 failed.append(a)
                 if log_fn:
-                    log_fn(f"DS2 block 0x{a:05X} unreadable ({e})", "error")
+                    send_to_sink(log_fn, f"DS2 block 0x{a:05X} unreadable ({e})", "error")
             if progress_cb:
                 progress_cb((blk + 1) * self._BLOCK, self.FULL_SIZE, "DS2 full read")
         # NEVER return a partially-read image as if it were a valid backup — a
@@ -852,7 +857,10 @@ class DS2Interface:
         # swap, DS2 0xC000-0xFFFF (block 3) lands at file 0x8000-0xBFFF (block 2).
         out[0x8000:0xC000] = b"\xff" * 0x4000
         if log_fn:
-            log_fn("0xFF-filled unmapped DS2 0xC000-0xFFFF (file 0x8000-0xBFFF)", "info")
+            send_to_sink(
+                log_fn,
+                "0xFF-filled unmapped DS2 0xC000-0xFFFF (file 0x8000-0xBFFF)",
+            )
         return bytes(out)
 
     # ── MS41 write-unlock (seed-key) ─────────────────────────────────────────
@@ -930,10 +938,7 @@ class DS2Interface:
             message = f"MS41 flash-mode marker ({label}): E740=0x{marker:02X}"
             log.info(message)
             if log_fn:
-                try:
-                    log_fn(message, "info")
-                except TypeError:
-                    log_fn(message)
+                send_to_sink(log_fn, message)
             return marker
 
         state, wrong_keys = read_authorization_state()
@@ -1007,10 +1012,7 @@ class DS2Interface:
                 )
                 log.info(wait_message)
                 if log_fn:
-                    try:
-                        log_fn(wait_message, "warn")
-                    except TypeError:
-                        log_fn(wait_message)
+                    send_to_sink(log_fn, wait_message, "warn")
                 if progress_cb:
                     progress_cb(0, 0, wait_message)
                 time.sleep(seed_retry_delay)
@@ -1089,7 +1091,7 @@ class DS2Interface:
         self._flash_sub(0x06, a3, timeout=ERASE_TIMEOUT)   # erase
         time.sleep(settle)
         if log_fn:
-            log_fn(f"Flash sector at DS2 0x{ds2_addr:06X} erased")
+            send_to_sink(log_fn, f"Flash sector at DS2 0x{ds2_addr:06X} erased")
 
     def _write_block(self, ds2_addr: int, data: bytes, log_fn=None) -> None:
         """Write one flash block (1..243 bytes) at ds2_addr.
@@ -1113,8 +1115,12 @@ class DS2Interface:
                 # comms-level failure (timeout / NAK / checksum) — retryable
                 last_err = e
                 if log_fn:
-                    log_fn(f"Write retry {attempt+1}/{self.WRITE_RETRIES} at "
-                           f"0x{ds2_addr:06X}: {last_err}", "warn")
+                    send_to_sink(
+                        log_fn,
+                        f"Write retry {attempt+1}/{self.WRITE_RETRIES} at "
+                        f"0x{ds2_addr:06X}: {last_err}",
+                        "warn",
+                    )
                 time.sleep(WRITE_RETRY_DELAY)
                 continue
             if resp and resp[0] == 0x02:
@@ -1134,8 +1140,12 @@ class DS2Interface:
             last_err = DS2NegativeResponse(
                 f"Write block at 0x{ds2_addr:06X} NAK: {resp.hex(' ')}")
             if log_fn:
-                log_fn(f"Write retry {attempt+1}/{self.WRITE_RETRIES} at "
-                       f"0x{ds2_addr:06X}: {last_err}", "warn")
+                send_to_sink(
+                    log_fn,
+                    f"Write retry {attempt+1}/{self.WRITE_RETRIES} at "
+                    f"0x{ds2_addr:06X}: {last_err}",
+                    "warn",
+                )
             time.sleep(WRITE_RETRY_DELAY)
         raise last_err
 
@@ -1197,7 +1207,7 @@ class DS2Interface:
         """
         def _log(message, level="info"):
             if log_fn:
-                log_fn(message, level) if level != "info" else log_fn(message)
+                send_to_sink(log_fn, message, level)
 
         _log(f"Program verify: re-open + FLASH_OP verify "
              f"@DS2 0x{self.PROGRAM_VERIFY_DS2_ADDR:06X} ...")
@@ -1231,10 +1241,7 @@ class DS2Interface:
         """
         def report(message, level="info"):
             if log_fn:
-                try:
-                    log_fn(message, level)
-                except TypeError:
-                    log_fn(message)
+                send_to_sink(log_fn, message, level)
 
         ranges = ((0x2000, 0x6000), (0x20000, 0x40000))
         verify_total = sum(hi - lo for lo, hi in ranges)
@@ -1294,7 +1301,7 @@ class DS2Interface:
 
         def _log(msg, level="info"):
             if log_fn:
-                log_fn(msg, level) if level != "info" else log_fn(msg)
+                send_to_sink(log_fn, msg, level)
 
         start = self.PARTIAL_DS2_ADDR   # 0x10000
 
@@ -1433,7 +1440,7 @@ class DS2Interface:
 
         def _log(msg, level="info"):
             if log_fn:
-                log_fn(msg, level) if level != "info" else log_fn(msg)
+                send_to_sink(log_fn, msg, level)
 
         # ── Build DS2 address space from file (inverse block-swap) ──────────
         # File uses the XOR-0x4000 layout: file block N ↔ DS2 block N^1.

@@ -1,6 +1,6 @@
 ; Launch Control V7 - MS41.3 arm state and independent cut requests.
 ;
-; FD5A.6 remains the launch-armed latch. E847.1 is the launch ignition-cut
+; FDB6.6 is the collision-safe launch-armed latch. E847.1 is the launch ignition-cut
 ; request consumed by Ignition Cut V9; E847.2 marks actual launch fuel cut.
 ; Each request is owned here and remains stable until its release condition.
 base 0x3DF80
@@ -63,13 +63,14 @@ active_high:
         jmpr cc_NE,arm
         jmpr cc_UC,request_gate
 
-arm:    bset 0xFD5A.6
+; FDB6 is hash-certified free post-startup IRAM on canonical SS1v2.
+arm:    bset 0xFDB6.6
         jmpr cc_UC,request_gate
 disarm:
-        bclr 0xFD5A.6
+        bclr 0xFDB6.6
 
 request_gate:
-        movb RL4,0xFD5A
+        movb RL4,0xFDB6
         andb RL4,#0x40
         jmpr cc_EQ,clear_both
         movb RL4,0x47E1              ; LC_CUTTYPE

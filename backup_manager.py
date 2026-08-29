@@ -44,7 +44,7 @@ class BackupEntry:
     cal_variant:     str = ""    # cal-side variant (same detector as `variant`, kept separately
                                   # so a hybrid ROM's two sides are both on record)
     hybrid:          str = ""    # human-readable program/cal mismatch description, or ""
-    sha256:          str = ""    # immutable catalogue identity; blank for legacy entries
+    sha256:          str = ""    # immutable catalogue identity; migrated on load for legacy entries
     folder:          str = ""    # logical user folder; files remain flat on disk
 
     @property
@@ -57,6 +57,11 @@ class BackupEntry:
             return datetime.datetime.fromisoformat(self.date).strftime("%Y-%m-%d  %H:%M")
         except Exception:
             return self.date
+
+
+class BackupIndexError(RuntimeError):
+    """The catalogue index could not be read without risking metadata loss."""
+
 
 class BackupManager:
     """Manages the ROM backup catalogue on disk."""
@@ -368,14 +373,39 @@ class BackupManager:
         try:
             with open(INDEX_FILE, "r", encoding="utf-8") as f:
                 raw = json.load(f)
+            if not isinstance(raw, list):
+                raise ValueError("catalogue index root must be a list")
+            if not all(isinstance(row, dict) for row in raw):
+                raise ValueError("catalogue index entries must be objects")
             fields = set(BackupEntry.__dataclass_fields__)
-            self._entries = [
+            loaded = [
                 BackupEntry(**{k: v for k, v in r.items() if k in fields})
                 for r in raw
             ]
-            self.refresh()
-        except Exception:
+            changed = False
             self._entries = []
+            for entry in loaded:
+                path = self._entry_path(entry.filename)
+                if not os.path.exists(path):
+                    changed = True
+                    continue
+                if not entry.sha256:
+                    with open(path, "rb") as stream:
+                        data = stream.read()
+                    if len(data) != entry.size:
+                        raise ValueError(
+                            f"legacy catalogue file has changed size: {entry.filename}")
+                    entry.sha256 = hashlib.sha256(data).hexdigest()
+                    changed = True
+                self._entries.append(entry)
+            if changed:
+                self._save()
+        except (OSError, TypeError, ValueError) as error:
+            self._entries = []
+            raise BackupIndexError(
+                f"Backup catalogue index is unreadable: {INDEX_FILE}. "
+                "The index and backup files were left unchanged."
+            ) from error
 
     def _load_folders(self):
         stored = []

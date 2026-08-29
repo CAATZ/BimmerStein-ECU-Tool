@@ -109,6 +109,39 @@ def test_csv_rows_are_buffered_between_periodic_flushes(tmp_path):
     assert p._csv_file.flushes == 0
 
 
+def test_completed_sample_cursor_returns_exact_ordered_rows(tmp_path):
+    p = live_data.LiveDataPoller(ecu_id="1437806")
+    p._open_csv(str(tmp_path / "deltas.csv"))
+    for rpm in ("812", "824"):
+        row = p._csv_row_base()
+        row["Engine RPM"] = rpm
+        p._write_csv_row(row)
+
+    sequence, dropped, csv_rows, channels, samples = p.completed_samples_since(0)
+    rpm_index = channels.index(("Engine RPM", "RPM"))
+    assert (sequence, dropped, csv_rows) == (2, 0, 2)
+    assert [sample[0] for sample in samples] == [1, 2]
+    assert [sample[2][rpm_index] for sample in samples] == ["812", "824"]
+    assert [sample[0] for sample in p.completed_samples_since(1)[4]] == [2]
+    assert p.completed_samples_since(2)[4] == ()
+    p._close_csv()
+
+
+def test_completed_sample_cursor_reports_ring_overflow():
+    p = live_data.LiveDataPoller(ecu_id="1437806")
+    p._sample_started = live_data.time.monotonic()
+    for rpm in range(257):
+        p._write_csv_row({"Engine RPM": str(rpm)})
+
+    sequence, dropped, _csv_rows, _channels, samples = p.completed_samples_since(0)
+    assert sequence == 257
+    assert dropped == 1
+    assert len(samples) == 256
+    assert (samples[0][0], samples[-1][0]) == (2, 257)
+    with pytest.raises(ValueError, match="ahead"):
+        p.completed_samples_since(258)
+
+
 def _batch_payload(layout, values):
     raw = bytearray(38)
     offset = 2
@@ -175,6 +208,26 @@ def test_display_omits_dead_lambda_and_names_measured_vanos_angle():
     assert "Lambda Upstream" not in names
     assert "VANOS Advance" not in names
     assert "VANOS Measured Angle" in names
+
+
+def test_live_display_specs_cover_packaged_rows_and_unknowns_fail_closed():
+    groups = [
+        set(live_data._LIVE_DIAL_SPECS),
+        set(live_data._LIVE_STATUS_CHANNELS),
+        set(live_data._LIVE_VALUE_CHANNELS),
+        set(live_data._LIVE_RAW_CHANNELS),
+    ]
+    assert tuple(map(len, groups)) == (30, 20, 19, 4)
+    assert sum(map(len, groups)) == len(set().union(*groups))
+    assert set(live_data.display_rows()) == set().union(*groups)
+    for minimum, maximum, step, _source, _evidence in live_data._LIVE_DIAL_SPECS.values():
+        assert minimum < maximum
+        assert 0 < step <= maximum - minimum
+    assert live_data.live_display_spec("Engine RPM", "RPM")["kind"] == "dial"
+    assert live_data.live_display_spec("Engine RPM", "rpm")["kind"] == "value"
+    assert live_data.live_display_spec("Future Channel", "psi") == {
+        "kind": "value", "evidence": "unknown",
+    }
 
 
 def test_wideband_batch_preserves_the_proven_38_byte_response_shape():

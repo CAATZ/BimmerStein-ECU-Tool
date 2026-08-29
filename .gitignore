@@ -10,6 +10,9 @@ __pycache__/
 /release/
 /tmp/
 /.tmp/
+/output/ms41_definition_audit_*/
+/output/ms41_txt_id41_*/
+/.codex-remote-attachments/
 
 # Virtual environments
 .venv/

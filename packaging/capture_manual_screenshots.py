@@ -92,7 +92,7 @@ def _synthetic_patch_records() -> list[dict]:
             "description": "Independent ignition-cut limiter with hysteresis and fixed-IPW control.",
             "user_description": "Adds an independent ignition-cut limiter.",
             "target": "MS41.3",
-            "status": "EMULATOR VERIFIED - ON-CAR TEST REQUIRED",
+            "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
             "tested": False,
             "requires": [],
             "conflicts": [],
@@ -111,7 +111,7 @@ def _synthetic_patch_records() -> list[dict]:
             "description": "Independent launch requester using fuel cut or the shared V9 ignition engine.",
             "user_description": "Adds independently armed staged launch control.",
             "target": "MS41.3",
-            "status": "EMULATOR VERIFIED - ON-CAR TEST REQUIRED",
+            "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
             "tested": False,
             "requires": ["ignition_cut_v9"],
             "conflicts": [],
@@ -199,6 +199,7 @@ def main() -> int:
         window.btn_write_full,
         window.btn_write_tune,
         window.btn_reset_adapt,
+        window.btn_read_adaptations,
     ):
         button.setEnabled(True)
     window.log_view.setPlainText(
@@ -227,7 +228,7 @@ def main() -> int:
         "Programming Date": "2026-08-22 (synthetic)",
         "Recorded Software Number": "0000000 (synthetic)",
         "Programming Count": "1 (synthetic)",
-        "BMW Program Lineage": "MS41.3 documentation example",
+        "BMW DATEN Lineage": "MS41.3 documentation example",
         "VIN": "WBAZZ0000TEST0001",
         "DME Production Serial": "900000001 (synthetic)",
         "EWS2 ISN": "0000 (synthetic)",
@@ -237,6 +238,52 @@ def main() -> int:
         window._info_labels[key].setText(value)
     _select_tab(window, "ECU Info")
     _save_window(window, app, images / "diagnostics.png")
+
+    synthetic_adaptations = {
+        "ecu_id": "1437806 (synthetic)",
+        "additive": (0.18, -0.11),
+        "ltft": (1.42, -0.76),
+        "throttle": 2.35,
+        "load": (180.0, 440.0, 700.0, 960.0),
+        "rpm": tuple(800.0 + 400.0 * index for index in range(16)),
+        "knock": tuple(
+            tuple(
+                tuple(-0.75 + 0.25 * ((table + row + column) % 7)
+                      for column in range(4))
+                for row in range(16)
+            )
+            for table in range(6)
+        ),
+    }
+    window._show_adaptations(synthetic_adaptations)
+    window.lbl_adapt_status.setText(
+        "Synthetic documentation data — no ECU read"
+    )
+    _select_tab(window, "Adaptations")
+    _save_window(window, app, images / "adaptations.png")
+
+    synthetic_eeprom = bytearray(
+        (index * 37 + 11) & 0xFF for index in range(gui.eeprom_ram.EEPROM_SIZE)
+    )
+    for field in gui.eeprom_ram.fields_for_variant("MS41.3"):
+        if not field.checked:
+            continue
+        payload_end = field.offset + field.length - 2
+        synthetic_eeprom[payload_end:payload_end + 2] = (
+            gui.eeprom_ram.additive_check(
+                synthetic_eeprom[field.offset:payload_end]
+            ).to_bytes(2, "little")
+        )
+    synthetic_eeprom = gui.eeprom_ram.set_transmission_mode(
+        synthetic_eeprom, "mt", "MS41.3"
+    )
+    window._show_eeprom_image(
+        synthetic_eeprom,
+        "Synthetic_MS41_3_EEPROM_Documentation.bin",
+        variant="MS41.3",
+    )
+    _select_tab(window, "EEPROM")
+    _save_window(window, app, images / "eeprom.png")
 
     original_available = patch_service.available_patches
     try:

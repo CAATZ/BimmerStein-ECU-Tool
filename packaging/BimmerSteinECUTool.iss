@@ -5,7 +5,7 @@
   #define AppDisplayVersion "0.1.0 Beta 14"
 #endif
 #ifndef AppNumericVersion
-  #define AppNumericVersion "0.1.0.13"
+  #define AppNumericVersion "0.1.0.14"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\release\BimmerStein-ECU-Tool-0.1.0b14-Windows-x64"

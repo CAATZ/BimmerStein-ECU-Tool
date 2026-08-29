@@ -42,7 +42,7 @@ def test_open_session_forwards_qualified_injected_serial_factory(monkeypatch):
 
     class FakeDS2:
         native_fast_capable = True
-        transport_name = "android_usb"
+        transport_name = "injected_usb"
 
         def open(self):
             pass

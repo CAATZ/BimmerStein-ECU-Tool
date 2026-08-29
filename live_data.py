@@ -5,16 +5,10 @@ Standard mode: DS2 command 0x06 range reads from RAM.
 Telegram mode: MS41 DS2 command 0x0B/0x01 — one registered-address response
   containing every displayed RAM parameter.
 
-Standard mode note:
-  Byte layouts, offsets, and scaling factors are packaged compatibility
-  profiles selected for the detected firmware.
-
-Telegram mode note:
-  Addresses are 24-bit C166 logical addresses for the Siemens 80C166
-  processor (little-endian).  Source: community-reverse-engineered ECU
-  definition XML (ba114/Siemens-MS41, v0.46.0, covers MS41.0–MS41.3).
-  Some parameters have different addresses across software revisions. This
-  module selects the table for the detected ECU ID when one is available.
+Standard and telegram modes use the same built-in firmware-specific RAM address
+and scaling tables. Addresses are 24-bit C166 logical addresses for the Siemens
+80C166 processor (little-endian). Some parameters differ across software
+revisions, so the detected ECU ID selects the applicable table.
 
   Parameters without a mapped RAM address show "—". Standard and telegram
   acquisition use the same selected address/scaling table; standard mode is a
@@ -26,6 +20,7 @@ import time
 import csv
 import os
 import datetime
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Tuple, List
 
@@ -64,8 +59,8 @@ class MS41Parameter:
         return "—" if value is None else self.fmt.format(value)
 
 
-# Legacy standard-mode scaling is approximate; verify critical measurements
-# against a calibrated instrument.
+# Legacy display schema retained for compatibility; acquisition uses the
+# firmware-specific RAM tables below.
 
 MS41_PARAMETERS: List[MS41Parameter] = [
     # LID 0x01 — Basic engine values
@@ -231,6 +226,94 @@ PROFILE_DISPLAY_NAMES = frozenset(name for name, _unit in _PROFILE_DISPLAY_ROWS)
 _PROFILE_STATUS_NAMES = frozenset({
     "Wideband Mode", "Wideband Input Source", "Narrowband Emulation",
 })
+
+# Neutral presentation scales from the packaged RomRaider logger definition.
+# They are dial ranges only, never normal/safe/warning thresholds. Keys are
+# exact (name, unit) pairs so imported or renamed columns cannot inherit a
+# misleading range from their unit alone.
+_LIVE_DIAL_SPECS = {
+    ("Engine RPM", "RPM"): (0.0, 10000.0, 1000.0, "P8", "direct"),
+    ("Coolant Temp", "°C"): (-50.0, 150.0, 10.0, "P2", "direct"),
+    ("Throttle Position", "%"): (0.0, 100.0, 10.0, "P13", "direct"),
+    ("Intake Air Temp", "°C"): (-50.0, 150.0, 10.0, "P11", "direct"),
+    ("Mass Air Flow", "kg/h"): (0.0, 2048.0, 25.0, "P12", "direct"),
+    ("Fuel Trim ST", "%"): (-32.0, 32.0, 12.0, "E13", "direct"),
+    ("Fuel Trim LT", "%"): (-32.0, 32.0, 12.0, "E21", "direct"),
+    ("Ignition Advance", "°"): (-20.0, 50.0, 5.0, "P10", "direct"),
+    ("Knock Retard", "°"): (-50.0, 50.0, 10.0, "E217", "direct"),
+    ("VANOS Measured Angle", "°"): (0.0, 50.0, 10.0, "E11", "direct"),
+    ("Vehicle Speed", "km/h"): (0.0, 300.0, 30.0, "P9", "direct"),
+    ("Idle Valve Pos", "%"): (-50.0, 50.0, 10.0, "E9", "direct"),
+    ("Knock Retard (Global)", "°"): (-50.0, 50.0, 10.0, "E24", "direct"),
+    ("Fuel Trim ST B2", "%"): (-32.0, 32.0, 12.0, "E14", "direct"),
+    ("Fuel Trim LT B2", "%"): (-32.0, 32.0, 12.0, "E22", "direct"),
+    ("Engine Load", "mg/st"): (0.0, 1389.0, 100.0, "E2", "direct"),
+    ("EVAP Purge Duty", "%"): (0.0, 100.0, 10.0, "E202:PWM_Evap", "direct"),
+    ("Wideband AFR", "AFR"): (8.0, 22.0, 1.0, "P58", "direct"),
+    ("AFR Target", "AFR"): (8.0, 22.0, 1.0, "P60", "direct"),
+    ("Fuel Trim Additive", "ms"): (-5.0, 5.0, 1.0, "E19", "direct"),
+    ("Fuel Trim Additive B2", "ms"): (-5.0, 5.0, 1.0, "E20", "direct"),
+    ("O2 Heater Front B1", "%"): (0.0, 100.0, 10.0, "E15", "direct"),
+    ("O2 Heater Front B2", "%"): (0.0, 100.0, 10.0, "E16", "direct"),
+    ("O2 Heater Rear B1", "%"): (0.0, 100.0, 10.0, "E17", "direct"),
+    ("O2 Heater Rear B2", "%"): (0.0, 100.0, 10.0, "E18", "direct"),
+    # Same definition scale, with the app's reviewed working-RAM/ADC mirror.
+    ("Battery Voltage", "V"): (0.0, 20.0, 2.0, "P17:working-RAM", "reviewed-semantic"),
+    ("Front O2 B1 Voltage", "V"): (0.0, 5.0, 0.5, "E101:ADC10-mirror", "reviewed-semantic"),
+    ("Front O2 B2 Voltage", "V"): (0.0, 5.0, 0.5, "E102:ADC10-mirror", "reviewed-semantic"),
+    ("MAF Sensor Voltage", "V"): (0.0, 5.0, 0.5, "P18:ADC10-mirror", "reviewed-semantic"),
+    ("Wideband Input Voltage", "V"): (0.0, 5.0, 0.5, "reviewed:ADC10-selected-source", "reviewed-semantic"),
+}
+
+_LIVE_STATUS_CHANNELS = frozenset({
+    ("Closed Throttle", ""), ("Part Load", ""), ("Full Load", ""),
+    ("Decel Fuel Cut", ""), ("Engine Start", ""),
+    ("Wideband Mode", ""), ("Narrowband Emulation", ""),
+    ("Cut Input 80", ""), ("Cut Input 81", ""), ("Cut Input 82", ""),
+    ("Ignition Cut Request", ""), ("Launch Ignition Request", ""),
+    ("Launch Fuel Cut Active", ""), ("Intentional Combustion Cut", ""),
+    ("Cut Patch Runtime", ""), ("Launch Armed", ""),
+    ("Launch Legacy FD5A.7", ""), ("Stock Limiter Active", ""),
+    ("Lambda Regulation B1", ""), ("Lambda Regulation B2", ""),
+})
+
+_LIVE_VALUE_CHANNELS = frozenset({
+    ("Injector PW", "ms"), ("Wideband Input Source", ""),
+    ("Ignition Cut Switch", ""), ("Ignition Cut RPM", "RPM"),
+    ("Cut Hysteresis", "RPM"), ("Cut Fixed IPW", "ms"),
+    ("Launch Control Switch", ""), ("Launch Cut Type", ""),
+    ("Launch Clutch Polarity", ""), ("Launch Control RPM", "RPM"),
+    ("Launch Arm Speed", "km/h"), ("Launch Max Speed", "km/h"),
+    ("Launch Min TPS", "%"), ("Launch Hard Cut RPM", "RPM"),
+    ("Launch Ignition Hysteresis", "RPM"),
+    ("Launch Ignition Fixed IPW", "ms"), ("Cut RPM", "RPM"),
+    ("Launch TPS", "%"), ("Launch Speed", "km/h"),
+})
+
+_LIVE_RAW_CHANNELS = frozenset({
+    ("Fuel Cut Stage Count", ""), ("Lambda Monitor Counter", ""),
+    ("Lambda Functions FD0E", ""), ("Lambda Functions FD10", ""),
+})
+
+
+def live_display_spec(name: str, unit: str) -> dict:
+    """Return evidence-bounded viewer metadata for an exact live-data channel."""
+    key = (name, unit)
+    dial = _LIVE_DIAL_SPECS.get(key)
+    if dial:
+        minimum, maximum, step, source, evidence = dial
+        return {
+            "kind": "dial", "minimum": minimum, "maximum": maximum,
+            "step": step, "source": source, "evidence": evidence,
+        }
+    if key in _LIVE_STATUS_CHANNELS:
+        return {"kind": "status", "evidence": "core"}
+    if key in _LIVE_RAW_CHANNELS:
+        return {"kind": "raw", "evidence": "core"}
+    return {
+        "kind": "value",
+        "evidence": "core" if key in _LIVE_VALUE_CHANNELS else "unknown",
+    }
 
 _PARAM_META = {
     "Engine RPM":            ("RPM",  2, False, lambda x: x,                "{:.0f}"),
@@ -887,6 +970,9 @@ class LiveDataPoller:
         self._csv_last_flush = 0.0
         self._samples = 0
         self._sample_started = 0.0
+        self._sample_sequence = 0
+        self._sample_channels = ()
+        self._completed_samples = deque(maxlen=256)
         self._pending_log_path = None
         self._terminal_error = None
 
@@ -900,6 +986,10 @@ class LiveDataPoller:
             self._latest.clear()
             self._errors.clear()
             self._terminal_error = None
+            self._csv_rows = 0
+            self._sample_sequence = 0
+            self._sample_channels = ()
+            self._completed_samples.clear()
         self._samples = 0
         self._sample_started = time.monotonic()
         self._pending_log_path = log_path
@@ -940,6 +1030,30 @@ class LiveDataPoller:
         with self._lock:
             errs, self._errors = list(self._errors), []
         return errs
+
+    def completed_samples_since(self, after_sequence: int):
+        """Return exact completed poll cycles newer than a bounded sequence cursor."""
+        if type(after_sequence) is not int or after_sequence < 0:
+            raise ValueError("Live Data sample cursor must be a non-negative integer")
+        with self._lock:
+            if after_sequence > self._sample_sequence:
+                raise ValueError("Live Data sample cursor is ahead of the poller")
+            oldest = (
+                self._completed_samples[0][0]
+                if self._completed_samples else self._sample_sequence + 1
+            )
+            dropped = max(0, oldest - after_sequence - 1)
+            samples = tuple(
+                sample for sample in self._completed_samples
+                if sample[0] > after_sequence
+            )
+            return (
+                self._sample_sequence,
+                dropped,
+                self._csv_rows,
+                self._sample_channels,
+                samples,
+            )
 
     @property
     def terminal_error(self):
@@ -1168,6 +1282,8 @@ class LiveDataPoller:
         self._log_start = time.time()
         self._csv_rows  = 0
         self._csv_last_flush = time.monotonic()
+        if not self._sample_started:
+            self._sample_started = time.monotonic()
         # Fixed schema regardless of polling mode so any CSV can be opened in MLV:
         #   Time     — elapsed seconds (float); MLV uses this as the primary time axis
         #   Datetime — human-readable full timestamp for post-processing reference
@@ -1197,9 +1313,11 @@ class LiveDataPoller:
         return row
 
     def _write_csv_row(self, row: dict):
+        if not self._sample_started:
+            self._sample_started = time.monotonic()
+        wrote_csv = self._csv_writer is not None
         if self._csv_writer:
             self._csv_writer.writerow(row)
-            self._csv_rows += 1
             # Match RomRaider's buffered logger behavior: avoid a synchronous disk flush
             # in the serial acquisition loop for every sample, while still making an active
             # log visible on disk at least once per second.
@@ -1207,6 +1325,20 @@ class LiveDataPoller:
             if now - self._csv_last_flush >= 1.0:
                 self._csv_file.flush()
                 self._csv_last_flush = now
+        channels = tuple(self.resolved_rows())
+        elapsed = max(0.0, time.monotonic() - self._sample_started)
+        with self._lock:
+            if wrote_csv:
+                self._csv_rows += 1
+            self._sample_sequence += 1
+            self._sample_channels = channels
+            values = tuple(
+                row.get(name) if row.get(name) not in (None, "") else None
+                for name, _unit in channels
+            )
+            self._completed_samples.append(
+                (self._sample_sequence, elapsed, values)
+            )
 
     def _close_csv(self):
         self._pending_log_path = None

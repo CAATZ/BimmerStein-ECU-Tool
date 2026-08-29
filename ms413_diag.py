@@ -500,7 +500,7 @@ def _recovery_evidence_snapshot(ds2) -> dict:
             "note": "Captured immediately after exact-identity reconnect; "
                     "EC30/EC31 are authoritative and E732 is support-only. "
                     "Do not require bit 0x2000 as the sole reset signature; "
-                    "exact emulator watchdog resets can latch reason 0x0003.",
+                    "controlled watchdog reset checks can latch reason 0x0003.",
         },
     }
 
@@ -537,7 +537,7 @@ def _slow_snapshot(ds2, phase: str) -> dict:
             "note": "EC30/EC31 in the 12-byte record are authoritative; "
                     "EA0C is volatile and E732 is support-only boot scratch. "
                     "Do not require bit 0x2000 as the sole reset signature; "
-                    "exact emulator watchdog resets can latch reason 0x0003.",
+                    "controlled watchdog reset checks can latch reason 0x0003.",
         },
         "slow_values": {
             "softbsl_phase_e740": raw["softbsl_phase"][0],
@@ -980,7 +980,7 @@ def run(ctx):
     """Developer-test API 1 entrypoint; the app owns USB and result storage."""
     report = _ContextReport(ctx)
     args = argparse.Namespace(
-        port="android",
+        port="in-process",
         seconds=ctx.duration_seconds,
         interval=0.12,
         output=None,
@@ -1008,7 +1008,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Read-only MS41.3 patch/limiter/fueling/self-test capture",
         epilog=(
-            "Close BimmerStein, RomRaider, and anything else using the "
+            "Close BimmerStein and every other diagnostic application using the "
             "adapter first.\nExample: python ms413_diag.py COM7 --seconds 45"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,

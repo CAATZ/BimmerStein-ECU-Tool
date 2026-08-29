@@ -5,7 +5,7 @@
   "title": "CalGuard compatibility + recovery guard",
   "user_description": "Exact compatibility guard with a short K-Line boot-recovery window, relocated outside BMW AIF programming history.",
   "description": "The untouched stock E740 branch runs first. A boot-local marker trampoline bypasses a missing program-side guard after ordinary program replacement; the exact-ID gate and bounded recovery poll live in a common program-high cave.",
-  "status": "EMULATOR VERIFIED - BENCH TEST REQUIRED",
+  "status": "OFFLINE EXACT-BYTE VERIFIED - BENCH TEST REQUIRED",
   "tested": false,
   "target": "MS41.3",
   "targets": [

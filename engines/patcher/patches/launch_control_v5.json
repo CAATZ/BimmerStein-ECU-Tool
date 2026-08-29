@@ -3,7 +3,7 @@
   "version": "V5",
   "deprecated": true,
   "superseded_by": "launch_control_v6",
-  "status": "EMULATOR VERIFIED - ON-CAR RETEST REQUIRED",
+  "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR RETEST REQUIRED",
   "tested": false,
   "verification": "V5 relocates the MS41.3 controls to the erased calibration tail at 0x47E0-0x47E7, leaving the live 0x352C-0x356B boost knock-compensation table untouched. LC_HARDRPM at 0x47E7 independently controls both native DB87 compare sites. Canonical ms41emu gates configured thresholds, below-soft clamping, 0xFF fallback and saturation, stock fallback, both real hard-limit call sites, soft entry, recovery, and Ignition Cut V7 composition. Fuel mode held the configured 4000 RPM setpoint on-car in V4 before this calibration relocation; V5 and V7 ignition mode require on-car retesting.",
   "title": "Launch Control / 2-step",

@@ -53,7 +53,8 @@ DESCR     = 0x4000                      # file <-> CPU/DS2 descramble (XOR per 1
 # UNMAPPED BUS HOLE: CPU 0xC000-0xFFFF is the BUSCON1 peripheral window, not flash. A raw read there
 #   returns a floating address-ramp ("00 01 02..."), not data -- the true content is blank 0xFF. The
 #   'K' agent read has no bus awareness, so the HOST FF-fills this window on dump/read (as Flasher and
-#   BSL-Unbricker do). Write/verify are already safe (they FF-skip blank blocks). == FILE 0x8000-0xBFFF.
+#   BSL-Unbricker do). Programming skips blank blocks; verification skips only this unmapped hole.
+#   == FILE 0x8000-0xBFFF.
 HOLE_CPU  = (0xC000, 0x10000)           # unmapped CPU window == FILE 0x8000-0xBFFF after ^DESCR
 def _in_hole(cpu):                      # is a linear/CPU address inside the unmapped bus window?
     return HOLE_CPU[0] <= cpu < HOLE_CPU[1]
@@ -354,7 +355,8 @@ def flash_dry_run(image, *, scope="full", write_bootloader=False, chip=None, log
             log(f"    erase {name} @ DS2 0x{addr:05X}")
     prog = ffskip = p1skip = tot = 0
     for f in range(prog_lo, prog_hi, CHUNK_SIZE):
-        if not _scope_prog_ok(scope, f ^ DESCR):
+        cpu = f ^ DESCR
+        if not _scope_prog_ok(scope, cpu) or _in_hole(cpu):
             continue
         if not write_bootloader and (
                 (half == "upper" and f < 0x10000)
@@ -369,7 +371,7 @@ def flash_dry_run(image, *, scope="full", write_bootloader=False, chip=None, log
         tot += len(blk)
     log(f"  PROGRAM file 0x{prog_lo:05X}-0x{prog_hi:05X}: {prog} non-FF chunks ({tot} B); "
         f"{ffskip} FF-skipped, {p1skip} param1-skipped")
-    log(f"  VERIFY: CRC read-back each programmed 0x{CHUNK_SIZE:X}-B chunk")
+    log(f"  VERIFY: CRC read-back each mapped target 0x{CHUNK_SIZE:X}-B chunk")
     log("  (nothing sent; drop --dry-run + add --port/--yes to execute)")
     return prog
 
@@ -389,8 +391,12 @@ def crossbank_dry_run(image, log=_emit):
     tot = 0
     for addr, name, prot in order:
         lo, hi = addr, addr + 0x10000
-        n = sum(1 for f in range(lo, hi, CHUNK_SIZE)
-                if image[f:f + CHUNK_SIZE] and image[f:f + CHUNK_SIZE] != b"\xFF" * len(image[f:f + CHUNK_SIZE]))
+        n = sum(
+            1 for f in range(lo, hi, CHUNK_SIZE)
+            if not _in_hole(f ^ DESCR)
+            and image[f:f + CHUNK_SIZE]
+            and image[f:f + CHUNK_SIZE] != b"\xFF" * len(image[f:f + CHUNK_SIZE])
+        )
         tot += n
         tag = "   [BRICK-CLASS: fused vectors/bootloader/param2, LAST]" if prot else ""
         log(f"     {name:16s} erase @DS2 0x{addr:05X}  +  program file 0x{lo:05X}-0x{hi:05X}  ({n} non-FF chunks){tag}")
@@ -583,8 +589,8 @@ class SoftBSL:
                 self.ds2._read_exact(len(data), timeout)
             return
 
-        # Android has no background USB reader while a long UART write drains.
-        # Keep each echoed burst below the FT232 FIFO, and drain+validate it
+        # Injected USB transports may not have a background reader while a long
+        # UART write drains. Keep each echoed burst below the FT232 FIFO and validate it
         # before sending the next bytes. This is one forward stream: no purge
         # between chunks and no byte is retransmitted.
         timeout = 2.0 + len(data) * 12 / max(self.ds2.baud, 1)
@@ -1092,7 +1098,7 @@ class SoftBSL:
                 if progress_cb:
                     progress_cb(off, TUNE_PARTIAL_SIZE, "verify")
                 blk = partial[off:off + CHUNK_SIZE]
-                if not blk or blk == b"\xFF" * len(blk):
+                if not blk:
                     continue
                 back = self.crc_read(base + off, len(blk))
                 if back != blk:
@@ -1328,8 +1334,8 @@ class SoftBSL:
             self.arm_bootloader()
 
         # scope: full / program (SA5+SA6) / tune (SA4) / sa1 (param1). Erasing a sector clears the
-        # whole 64K, so we reprogram the whole scope range; FF blocks are skipped so the blank tail
-        # stays cheap (FIX(FIE-1): whole-sector reprogram, not just the used head).
+        # whole 64K, so we reprogram the whole scope range. FF blocks are skipped during programming,
+        # while verification still reads every mapped target block to confirm the erase state.
         half = "upper" if target == "T" and chip != "28f200" else "lower"
         sectors, prog_lo, prog_hi = _flash_scope(scope, half=half, chip=chip)
 
@@ -1374,10 +1380,12 @@ class SoftBSL:
                     (half == "upper" and f < 0x10000)
                     or (half != "upper" and PARAM1_FILE[0] <= f < PARAM1_FILE[1])):
                 continue                                      # CHUNK_SIZE divides param1's 8K boundary
+            cpu = f ^ DESCR
+            if _in_hole(cpu):
+                continue
             blk = image[f:f + CHUNK_SIZE]
             if not blk or blk == b"\xFF" * len(blk):
                 continue                                      # FF-skip (sector already erased to FF)
-            cpu = f ^ DESCR
             st = self.program_chunk(cpu, blk)
             tries = 0
             # 0 (status-timeout) / 2 (program-fail) / 4 (CRC mismatch) are transient: a CRC-fail or
@@ -1423,10 +1431,13 @@ class SoftBSL:
                         (half == "upper" and f < 0x10000)
                         or (half != "upper" and PARAM1_FILE[0] <= f < PARAM1_FILE[1])):
                     continue
-                blk = image[f:f + CHUNK_SIZE]
-                if not blk or blk == b"\xFF" * len(blk):
+                cpu = f ^ DESCR
+                if _in_hole(cpu):
                     continue
-                back = self.crc_read(f ^ DESCR, len(blk))         # CRC-verified 1 KB read-back
+                blk = image[f:f + CHUNK_SIZE]
+                if not blk:
+                    continue
+                back = self.crc_read(cpu, len(blk))               # CRC-verified 1 KB read-back
                 if back != blk:
                     bad += 1
                     if vbar:
@@ -1522,10 +1533,12 @@ class SoftBSL:
                     progress_cb(
                         sector_index * SEC + f - lo, IMAGE_SIZE, "program",
                     )
+                cpu = f ^ DESCR
+                if _in_hole(cpu):
+                    continue
                 blk = image[f:f + CHUNK_SIZE]
                 if not blk or blk == b"\xFF" * len(blk):
-                    continue                                      # FF (incl. the SA7 bus-hole) skipped
-                cpu = f ^ DESCR
+                    continue                                      # erased flash already reads FF
                 st = self.program_chunk(cpu, blk); tries = 0
                 while st in (0, 2, 4) and tries < PROG_RETRIES:
                     tries += 1
@@ -1556,10 +1569,13 @@ class SoftBSL:
                         progress_cb(
                             sector_index * SEC + f - lo, IMAGE_SIZE, "verify",
                         )
-                    blk = image[f:f + CHUNK_SIZE]
-                    if not blk or blk == b"\xFF" * len(blk):
+                    cpu = f ^ DESCR
+                    if _in_hole(cpu):
                         continue
-                    back = self.crc_read(f ^ DESCR, len(blk))
+                    blk = image[f:f + CHUNK_SIZE]
+                    if not blk:
+                        continue
+                    back = self.crc_read(cpu, len(blk))
                     if back != blk:
                         bad += 1
                         self.log(f"  MISMATCH @file 0x{f:05X} ({name})")
@@ -4147,7 +4163,7 @@ def main():
     pin.add_argument("--with-calguard", action="store_true",
                      help="compose mode: add the cal_guard no-brick version gate to the target (recommended).")
     pin.add_argument("--with-alphan", action="store_true",
-                     help="compose mode: add the emulator-verified, on-car-untested "
+                     help="compose mode: add the offline exact-byte verified, on-car-untested "
                           "alphan_failsafe MAF fallback (MS41.3 only)")
     pin.add_argument("--dry-run", action="store_true", help="plan both phases, no serial I/O / no key-cycles "
                                                             "(compose mode needs --base + --chip for a dry-run)")

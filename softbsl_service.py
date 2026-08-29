@@ -12,6 +12,7 @@ import ds2 as _sbds2
 import ecu_info
 from ms41 import MS41ECU
 from engines.softbsl.softbsl_host import SoftBSLError  # stable ref (tests monkeypatch _sb)
+from operation_log import send_to_sink
 
 
 class CrossBankSafetyError(RuntimeError):
@@ -166,10 +167,7 @@ def _agent_log(log):
         plain = message.strip().lower()
         if level == "info" and plain.startswith(_AGENT_DETAIL_PREFIXES):
             level = "debug"
-        try:
-            log(message, level)
-        except TypeError:
-            log(message)
+        send_to_sink(log, message, level)
     return forward
 
 
@@ -269,10 +267,7 @@ def _recover_marker0(sb, log, finalize_sent=False):
 def _recover_staged_entry_marker0(ds2, log):
     """Use the still-open stock DS2 owner to restore and prove E740=0."""
     def emit(message, level="info"):
-        try:
-            log(message, level)
-        except TypeError:
-            log(message)
+        send_to_sink(log, message, level)
 
     try:
         marker = bytes(ds2.read_mem(0xE740, 1))

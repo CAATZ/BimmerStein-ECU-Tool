@@ -6,36 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Release numbers use a `major.minor.patch` base and the compact `bN` beta suffix
 shared by BimmerStein applications.
 
-## [0.1.0b14] - 2026-08-22
+## [0.1.0b14] - 2026-08-23
 
 ### Added
 
-- Added curated multi-module K-line diagnostics with plain-English discovery,
-  fault reading, and clearing for exact supported profiles.
-- Added human-readable GM3 and E46 driver-seat coding with an optional Advanced
-  view for technical references.
-- Added guided manual/automatic conversion for exact reviewed E39 MS41-family,
-  E46 MS42 AM51, and late E46 MS43 EV51 profiles, including complete preflight,
-  durable owner archives, restart recovery, mandatory ignition-cycle handoff,
-  and independent final verification.
-- Added programming-history and program-lineage fields to ECU Info and advisory
-  pre-write voltage warnings.
+- Added a PC EEPROM workspace for reading, reviewing, writing, seeding, and
+  restoring complete images with guarded backups and verification.
+- Expanded diagnostics and self-contained vehicle coding for reviewed E36,
+  E38, E39, and E46 modules, with everyday settings shown in plain language.
+- Added guided manual and automatic transmission conversion for reviewed
+  MS41-, MS42-, and MS43-family vehicles, including backup and recovery steps.
+- Expanded ECU Info and added a clear battery-voltage warning before writes.
 
 ### Fixed
 
-- Relocated Soft-BSL V11 and CalGuard V5 outside the complete BMW AIF history
-  area. Exact V10/V4 installations migrate to the new layout; both replacements
-  passed exact firmware execution checks and require renewed bench testing.
-- Replaced broken AlphaN MAF-failsafe V2 with V3 for MS41.3. V3 uses the native
-  SS1v2 AlphaN producer and load publisher for DTC8 fallback, corrects DTC12 load
-  scaling, and upgrades exact V1/V2 installations. Physical/on-car validation
-  is still required.
+- Fixed **Restore Pre-Seed State** after disconnecting and reconnecting the
+  programmer, or after restarting the app. Restore uses only the exact saved
+  original; missing or conflicting backups remain blocked.
+- Made the Bins catalogue safer when older entries are upgraded or a stored
+  file no longer matches its record.
+- Tightened tune, full-image, and conversion compatibility checks so a
+  different or malformed image cannot be presented as compatible.
+- Improved cleanup and recovery after interrupted reads, writes, coding, and
+  conversion operations.
 
 ### Changed
 
-- Retained the exact packaged Beta 13 Ignition Cut V9 and Launch Control V7
-  descriptors in Windows release builds while development revisions remain
-  private for further testing.
+- Refreshed the experimental firmware options and made their test status clear
+  in the app and release notes.
+- Refreshed the Windows x64 manual and release packaging for Beta 14.
 
 ## [0.1.0b13] - 2026-07-27
 
@@ -45,7 +44,7 @@ shared by BimmerStein applications.
   and MS41.3, with independent standalone and launch requests, separate RPM
   hysteresis and fixed injector-pulse-width settings, and matching bundled
   patch definitions.
-- Added exact-image emulator admission to release preparation for the
+- Added exact-image exact-byte execution admission to release preparation for the
   supported patch suite and Intel/AMD flash drivers; missing private reference
   inputs now fail the release gate instead of skipping it.
 - Restored AlphaN MAF-failsafe V2 with the historical A14-XOR transfer error
@@ -83,7 +82,7 @@ shared by BimmerStein applications.
   tooltips. A selected full-ROM Bin can now be opened directly in Patches.
 - Shortened Bins toolbar labels and made single-Bin actions unambiguous when
   two rows are selected for comparison.
-- Ignition Cut V9 and Launch Control V7 are emulator verified but still require
+- Ignition Cut V9 and Launch Control V7 are offline exact-byte verified but still require
   on-car testing; AlphaN MAF-failsafe remains untested.
 
 ## [0.1.0b12] - 2026-07-26

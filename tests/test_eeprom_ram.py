@@ -85,11 +85,11 @@ def test_variant_field_offsets_and_descriptions(variant, offsets, transmission):
     ) == offsets
     assert by_key["transmission"]["offset"] == transmission
     assert by_key["load_model_correction"]["label"] == (
-        "Learned load-model correction (units unknown)")
+        "Learned load-model correction (signed Q8.8)")
     assert by_key["vanos_adaptation"]["label"] == (
         "VANOS learned reference and controller state")
     assert by_key["engine_roughness_segment_adaptation"]["label"] == (
-        "Learned crankshaft segment corrections (misfire detection)")
+        "Learned relative ignition/dwell gains")
     assert by_key["idle_regulator_adaptation"]["label"] == (
         "Idle-control learned factor and integrator values")
     assert by_key["identity_gate"]["category"] == "system"

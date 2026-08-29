@@ -1,4 +1,4 @@
-import hashlib, os, re, sys
+import os, re, sys
 from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from engines.patcher import patch_ms41
@@ -84,31 +84,12 @@ def test_patch_asm_has_no_odd_direct_word_operands():
     assert offenders == []
 
 
-def test_release_launch_sources_use_the_beta13_fd5a_latch():
+def test_current_launch_sources_have_no_fd5a_latch_reader():
     patcher = Path(__file__).resolve().parents[1] / "engines" / "patcher"
     for path in patcher.glob("launch_control_v7*.asm"):
         source = path.read_text(encoding="utf-8")
-        assert "bset 0xFD5A.6" in source, path.name
-        assert "bclr 0xFD5A.6" in source, path.name
-        assert re.search(r"\bmovb\s+RL4,0xFD5A\b", source), path.name
-
-
-def test_release_patch_descriptors_match_the_beta13_distribution():
-    patches = Path(__file__).resolve().parents[1] / "engines" / "patcher" / "patches"
-    expected = {
-        "ignition_cut_v9.json": "358c38c71ee89c2796f639582169b8830c063adfe6b38ebf47e30d0fd52b99b6",
-        "ignition_cut_v9_ms410.json": "c45a387d8a3985b969fe14594733d6057c7ead4c0b311c45d48ba677c9444d06",
-        "ignition_cut_v9_ms411.json": "b8f8cf8b21796fac07e2a25bf33f64c757e6bde0b5ee202f0d4f2dc6cf3369f7",
-        "ignition_cut_v9_ms412.json": "91ca6e9c0c5c83c6868da531535a9e9859e541795074c2a77c47e76e9c758f95",
-        "launch_control_v7.json": "c3c0648f45573efbec0dcabb5e0d0cf3e09ded8622d8d0ab8a3cce154cf67db8",
-        "launch_control_v7_ms410.json": "5808447f2080565dc891b707a4b1b4a7eafdd2e6c75641f9c400ad9331a8950d",
-        "launch_control_v7_ms411.json": "42054970be0cd1c8fe502cb031604c47fadc4337b3d413266a12909639212702",
-        "launch_control_v7_ms412.json": "187abd24f7ad729e3662d070b03d9e55953c56ffdc40264015c226d3ef11cebb",
-    }
-    assert {
-        name: hashlib.sha256((patches / name).read_bytes()).hexdigest()
-        for name in expected
-    } == expected
+        assert "0xFD5A.6" not in source, path.name
+        assert not re.search(r"\bmovb\s+RL[45],0xFD5A\b", source), path.name
 
 
 def test_vendored_module_loads_all_patches():
@@ -204,7 +185,7 @@ def test_alphan_v3_registers_and_upgrades_only_exact_v1_v2_bytes():
     assert current["supersedes"] == [
         "alphan_failsafe_v1", "alphan_failsafe_v2"]
     assert current.get("deprecated") is not True
-    assert current["status"] == "EMULATOR VERIFIED - ON-CAR TEST REQUIRED"
+    assert current["status"] == "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED"
     assert all(patch["deprecated"] for patch in predecessors)
     assert all("BROKEN" in patch["status"] for patch in predecessors)
     assert patch_ms41.validate_splices(current) == []
@@ -271,6 +252,37 @@ def test_previous_local_v8_v6_revision_upgrades_in_place(
     assert patch_ms41.is_applied(upgraded, patches[ignition_id])
     assert patch_ms41.is_applied(upgraded, patches[launch_id])
     assert sum("exact prior revision" in line for line in log) == 4
+
+
+@pytest.mark.parametrize(
+    "variant,ignition_id,launch_id,offsets",
+    [
+        ("MS41.0", "ignition_cut_v9_ms410", "launch_control_v7_ms410",
+         (0x36B00, 0x36C80, 0x36CC0)),
+        ("MS41.1", "ignition_cut_v9_ms411", "launch_control_v7_ms411",
+         (0x3B9C0, 0x3BB40, 0x3BB80)),
+        ("MS41.2", "ignition_cut_v9_ms412", "launch_control_v7_ms412",
+         (0x39F80, 0x3A100, 0x3A140)),
+        ("MS41.3", "ignition_cut_v9", "launch_control_v7",
+         (0x39F80, 0x3A100, 0x3A140)),
+    ],
+)
+def test_launch_latch_revision_upgrades_all_sites(
+        variant, ignition_id, launch_id, offsets):
+    patches = patch_ms41.load_patches()
+    patch_ids = [ignition_id, launch_id]
+    current, _ = patch_ms41.build(ref(variant), patch_ids, patches=patches)
+    prior = bytearray(current)
+    launch = patches[launch_id]
+    for offset in offsets:
+        edit = next(item for item in launch["edits"] if item["off"] == offset)
+        payload = bytes.fromhex(edit["upgrade_expect"][-1])
+        prior[offset:offset + len(payload)] = payload
+
+    upgraded, log = patch_ms41.build(bytes(prior), patch_ids, patches=patches)
+
+    assert upgraded == current
+    assert sum("exact prior revision" in line for line in log) == 3
 
 
 def test_check_base_accepts_ms41_3_and_rejects_blank():
@@ -466,12 +478,12 @@ def test_relocated_loader_and_latest_patch_descriptors_use_built_hex_artifacts()
     ).read_text().strip().lower()
     cave_b = next(edit["data"] for edit in launch["edits"] if edit["off"] == 0x3A100)
     assert cave_b == (
-        root / "engines" / "patcher" / "launch_control_v4_ms412_cave_b.hex"
+        root / "engines" / "patcher" / "launch_control_v7_ms412_cave_b.hex"
     ).read_text().strip().lower()
     comparator = next(edit["data"] for edit in launch["edits"] if edit["off"] == 0x3A140)
     assert comparator == (
         root / "engines" / "patcher"
-        / "launch_control_v4_hard_compare.hex"
+        / "launch_control_v7_ms412_hard_compare.hex"
     ).read_text().strip().lower()
 
     launch_413 = patches["launch_control_v7"]
@@ -494,25 +506,27 @@ def test_relocated_loader_and_latest_patch_descriptors_use_built_hex_artifacts()
     cave_b_413 = next(
         edit["data"] for edit in launch_413["edits"] if edit["off"] == 0x3A100)
     assert cave_b_413 == (
-        root / "engines" / "patcher" / "launch_control_v5_ms413_cave_b.hex"
+        root / "engines" / "patcher" / "launch_control_v7_ms413_cave_b.hex"
     ).read_text().strip().lower()
     comparator_413 = next(
         edit["data"] for edit in launch_413["edits"] if edit["off"] == 0x3A140)
     assert comparator_413 == (
         root / "engines" / "patcher"
-        / "launch_control_v5_ms413_hard_compare.hex"
+        / "launch_control_v7_ms413_hard_compare.hex"
     ).read_text().strip().lower()
 
     launch_411 = patches["launch_control_v7_ms411"]
-    for offset, expected_sha256 in (
-        (0x3BB40, "95827ad805a95ce1b26e807f9055780e3dcab1a9fd5943968786a6b1ea710ff5"),
-        (0x3BB80, "53be6c9dab10c05016eb482bc4c8277d72a2ed16a51c3bacf71d49f2c402a827"),
+    for offset, artifact_name in (
+        (0x3BB40, "launch_control_v7_ms411_cave_b.hex"),
+        (0x3BB80, "launch_control_v7_ms411_hard_compare.hex"),
     ):
         payload = next(
             edit["data"] for edit in launch_411["edits"]
             if edit["off"] == offset
         )
-        assert hashlib.sha256(bytes.fromhex(payload)).hexdigest() == expected_sha256
+        assert payload == (
+            root / "engines" / "patcher" / artifact_name
+        ).read_text().strip().lower()
 
     for patch_id, artifact_name, cave_offset in (
         ("ignition_cut_v9_ms410", "ignition_cut_v9_ms410_guards.hex", 0x36D20),
