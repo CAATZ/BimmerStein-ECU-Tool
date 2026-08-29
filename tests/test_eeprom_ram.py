@@ -164,6 +164,16 @@ def test_transmission_shortcut_changes_only_mode_bits_and_check(variant):
     assert eeprom_ram.transmission_record(target, variant)["check_ok"]
 
 
+def test_four_byte_transmission_record_helper_preserves_unrelated_bits():
+    before = bytes.fromhex("AD A5 53 01")
+    target = eeprom_ram.make_transmission_record_from_record(before, "mt")
+
+    decoded = eeprom_ram.decode_transmission_record(target)
+    assert decoded["mode"] == "manual"
+    assert decoded["preserved_bits"] == 0xA5AC
+    assert decoded["check_ok"]
+
+
 @pytest.mark.parametrize("variant", tuple(eeprom_ram.FIELDS_BY_VARIANT))
 def test_check_update_only_touches_records_with_edited_payloads(variant):
     before = bytearray(_valid_image(variant))

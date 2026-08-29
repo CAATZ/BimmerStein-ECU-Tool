@@ -71,6 +71,9 @@ TOKEN_READ_A_LENGTH = 32
 TOKEN_READ_B_ADDRESS = 0x2060
 TOKEN_READ_B_LENGTH = 18
 
+EEPROM_READ_SELECTOR = 0x03
+EEPROM_RECORD_LENGTH = 4
+
 IDENTITY_LENGTH = 42
 BITS_PER_CHARACTER_8E2 = 12
 
@@ -139,6 +142,18 @@ PRODUCTION_RATE_PROFILE = RateProfile(
 class FastPartialReadResult:
     data: bytes
     identity: bytes
+    final_link: LinkRate
+    rate_profile: RateProfile
+    request_count: int
+    recovery_used: bool
+
+
+@dataclass(frozen=True)
+class EepromRecordReadResult:
+    record: bytes
+    identity: bytes
+    variant: str
+    offset: int
     final_link: LinkRate
     rate_profile: RateProfile
     request_count: int
@@ -1048,6 +1063,61 @@ class NativeFastReadSession:
             recovery_used=self.recovery_used,
         )
 
+    def read_eeprom_record(
+        self,
+        variant: str,
+        offset: int,
+        *,
+        expected_identity: bytes | None = None,
+    ) -> EepromRecordReadResult:
+        """Read only the family-specific four-byte transmission record."""
+
+        from engines.softbsl import eeprom_ram
+
+        if int(offset) != eeprom_ram.transmission_offset(variant):
+            raise ValueError("EEPROM record offset does not match the ECU variant")
+        if expected_identity is not None:
+            expected_identity = bytes(expected_identity)
+            if len(expected_identity) != IDENTITY_LENGTH:
+                raise ValueError(
+                    f"expected identity must be exactly {IDENTITY_LENGTH} bytes"
+                )
+
+        try:
+            self._begin()
+            if (
+                expected_identity is not None
+                and self.identity != expected_identity
+            ):
+                raise FastReadStateError(
+                    "live ECU identity differs from the identity bound to the request"
+                )
+            self._wait_for_native_fast_reentry()
+            self._enter_high()
+            # Selector 0x01 stages the variant marker (F18E/F728/F732) to 0x55;
+            # stock READ_MEM selector 0x03 is rejected outside that state.
+            address = (EEPROM_READ_SELECTOR << 24) | int(offset)
+            data = self._read_mem(
+                ReadRequest(address, EEPROM_RECORD_LENGTH),
+                label=f"eeprom_transmission_record_0x{offset:03X}",
+            )
+            self._cleanup_to_low()
+            self._finish_success()
+        except Exception:
+            self._recover_after_failure()
+            raise
+
+        return EepromRecordReadResult(
+            record=data,
+            identity=bytes(self.identity or b""),
+            variant=str(variant),
+            offset=int(offset),
+            final_link=self.link,
+            rate_profile=self.rates,
+            request_count=sum(self.transport.command_counts.values()),
+            recovery_used=self.recovery_used,
+        )
+
     def read_full(self) -> FastFullReadResult:
         """Read the accessible 240 KiB once and return normal 256 KiB layout."""
 
@@ -1111,6 +1181,9 @@ def _read_d2xx(
     port: str,
     *,
     operation: FastOperation,
+    eeprom_variant: str | None = None,
+    eeprom_offset: int | None = None,
+    expected_identity: bytes | None = None,
     progress_cb: Optional[ProgressCallback] = None,
     event_cb: Optional[EventCallback] = None,
     echo: bool = True,
@@ -1136,11 +1209,21 @@ def _read_d2xx(
                 reentry_ready_cb=lambda: clear_reentry_required(port),
             )
             phase = operation.value
-            result = (
-                session.read_full()
-                if operation is FastOperation.FULL_READ
-                else session.read_partial()
-            )
+            if eeprom_variant is not None:
+                if eeprom_offset is None:
+                    raise ValueError("EEPROM record offset is required")
+                phase = "eeprom_record_read"
+                result = session.read_eeprom_record(
+                    eeprom_variant,
+                    eeprom_offset,
+                    expected_identity=expected_identity,
+                )
+            else:
+                result = (
+                    session.read_full()
+                    if operation is FastOperation.FULL_READ
+                    else session.read_partial()
+                )
         finally:
             if (
                 session is not None
@@ -1195,6 +1278,38 @@ def read_full_d2xx(
     return _read_d2xx(
         port,
         operation=FastOperation.FULL_READ,
+        progress_cb=progress_cb,
+        event_cb=event_cb,
+        echo=echo,
+        serial_factory=serial_factory,
+    )
+
+
+def read_eeprom_record_d2xx(
+    port: str,
+    variant: str,
+    *,
+    expected_identity: bytes | None = None,
+    progress_cb: Optional[ProgressCallback] = None,
+    event_cb: Optional[EventCallback] = None,
+    echo: bool = True,
+    serial_factory=None,
+) -> EepromRecordReadResult:
+    """Read one known four-byte transmission record through stock native DS2."""
+
+    from engines.softbsl import eeprom_ram
+
+    offset = eeprom_ram.transmission_offset(variant)
+    if expected_identity is not None and len(bytes(expected_identity)) != IDENTITY_LENGTH:
+        raise ValueError(
+            f"expected identity must be exactly {IDENTITY_LENGTH} bytes"
+        )
+    return _read_d2xx(
+        port,
+        operation=FastOperation.PARTIAL_READ,
+        eeprom_variant=variant,
+        eeprom_offset=offset,
+        expected_identity=expected_identity,
         progress_cb=progress_cb,
         event_cb=event_cb,
         echo=echo,

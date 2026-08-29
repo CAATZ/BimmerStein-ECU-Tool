@@ -177,6 +177,11 @@ class PartialWriteTiming:
 
 CAPTURED_PARTIAL_WRITE_TIMING = PartialWriteTiming()
 
+# Stock command-0x07/subcommand-0x03 is intentionally exposed only for the
+# four-byte checked transmission record.  These are the exact physical 24C04
+# offsets used by MS41.0, MS41.1, and MS41.2/MS41.3 respectively.
+TRANSMISSION_RECORD_OFFSETS = frozenset((0x196, 0x1CC, 0x1CA))
+
 
 class NativeFastPartialWriteTransport:
     """One-request-at-a-time native transport with a partial-only allowlist."""
@@ -358,6 +363,20 @@ class NativeFastPartialWriteTransport:
     @staticmethod
     def _validate_flash(request: FlashRequest, state: SessionState) -> None:
         operation = request.operation
+        if operation == int(FlashOperation.EEPROM_WRITE):
+            if (
+                request.address not in TRANSMISSION_RECORD_OFFSETS
+                or request.count != 4
+            ):
+                raise UnsafePartialWriteCommand(
+                    "EEPROM writes are restricted to one known four-byte "
+                    "transmission record"
+                )
+            if state is not SessionState.HIGH_PARTIAL_WRITE:
+                raise PartialWriteStateError(
+                    "EEPROM transmission write requires HIGH_PARTIAL_WRITE"
+                )
+            return
         if operation == int(FlashOperation.ERASE):
             if request.address != TUNE_START or request.count != 0:
                 raise UnsafePartialWriteCommand(

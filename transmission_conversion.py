@@ -762,7 +762,7 @@ def read_ms41_cluster_store(ds2, chassis: str) -> ClusterStoreState:
         268 if chassis == "E36" else 140,
         308 if chassis == "E36" else 180,
         mask, manual, five_speed, first_word,
-        first_word + 1, last_word, None, profile,
+        first_word + 1, last_word, 0xD9 if chassis == "E36" else None, profile,
     )
 
 
@@ -1332,6 +1332,9 @@ def _write_cluster_target_words(ds2, state: ClusterStoreState,
     intermediate[checksum] = before[checksum]
     _write_words(ds2, state.first_word, before, intermediate)
     _write_words(ds2, state.first_word, intermediate, target)
+    if state.chassis == "E36":
+        _positive(ds2, bytes.fromhex("80 04 12"), 0x80)
+        time.sleep(5.0)
 
 
 def read_e46_cluster_store(ds2, *, validate: bool = True) -> ClusterStoreState:
@@ -2170,17 +2173,12 @@ def plan_ms41_conversion(request: MS41ConversionRequest) -> ConversionPlan:
                 f"for a {target.value} gearbox, preserving bits 2-15 and rebuilding "
                 "only that record's additive check."
             )
-            if request.softbsl_installed is not True:
-                reasons.append(
-                    "Installed Soft-BSL is required for the dynamic EEPROM change."
-                    if request.softbsl_installed is False else
-                    "Confirm that Soft-BSL is installed before the dynamic EEPROM change."
-                )
             if request.eeprom_writer_available is not True:
-                reasons.append("The exact family-specific EEPROM writer is not available.")
+                reasons.append(
+                    "The stock K-Line transmission-record writer is not available.")
             warnings.append(
-                "MT Only or AT Only will not be substituted when the dynamic EEPROM "
-                "path is unavailable."
+                "The tool changes only the checked transmission record; it does not "
+                "replace the calibration with MT Only or AT Only."
             )
     else:
         fixed_transmission = (
@@ -2189,8 +2187,9 @@ def plan_ms41_conversion(request: MS41ConversionRequest) -> ConversionPlan:
         )
         if fixed_transmission is not target:
             unsupported.append(
-                f"The calibration selector is fixed for a {fixed_transmission.value} "
-                "gearbox. This planner will not use another fixed selector as a fallback."
+                f"This custom tune is fixed for a {fixed_transmission.value} gearbox. "
+                "Set its Transmission option to AT/MT, flash the tune, then check "
+                "compatibility again."
             )
         else:
             warnings.append(
@@ -2295,15 +2294,34 @@ class ConnectedSwapSession:
         }
 
 
+def ms41_eeprom_record(data: bytes, family: str) -> bytes:
+    """Return the four-byte transmission record from a record or legacy dump."""
+    data = bytes(data)
+    if len(data) == 4:
+        return data
+    if len(data) == 512:
+        offset = MS41_EEPROM_RECORD_ADDRESS[family]
+        return data[offset:offset + 4]
+    raise ValueError("DME transmission record must be exactly four bytes")
+
+
+def connected_swap_eeprom_record(
+        session: ConnectedSwapSession, *, target: bool = False) -> bytes:
+    data = session.eeprom_target if target else session.eeprom_before
+    if data is None or session.family not in MS41_EEPROM_RECORD_ADDRESS:
+        raise ValueError("this conversion has no MS41 transmission record")
+    return ms41_eeprom_record(data, session.family)
+
+
 def _require_supported_connected_swap(session: ConnectedSwapSession) -> None:
-    if session.chassis == "E39" and session.family in {
+    if session.chassis in {"E36", "E39"} and session.family in {
             "MS41.0", "MS41.1", "MS41.2", "MS41.3"}:
         return
     if session.chassis == "E46" and session.family in {"MS42", "MS43"}:
         return
     raise ValueError(
         "this K-line build supports complete transmission conversion only on "
-        "reviewed E39 MS41 and E46 MS42/MS43 profiles")
+        "reviewed K-line-accessible E36/E39 MS41 and E46 MS42/MS43 profiles")
 
 
 def _blocked_swap(target: Transmission, title: str, reason: str,
@@ -2328,11 +2346,13 @@ def _classify_ms41_chassis(raw_zcs: bytes) -> str:
 
 
 def _read_ms41_stability(ds2, chassis: str) -> CodingState:
+    from ds2 import DS2Timeout
+
     if chassis == "E39":
         return read_asc5_transmission(ds2, chassis)
     try:
         return read_asc5_transmission(ds2, chassis)
-    except ValueError as asc_error:
+    except (ValueError, DS2Timeout) as asc_error:
         try:
             return read_mk20_transmission(ds2)
         except Exception:
@@ -2363,6 +2383,7 @@ def _probe_egs(ds2) -> tuple[str, bytes] | None:
 def _prepare_ms41_swap(ds2, dme_ident: bytes, program: str, family: str,
                        target: Transmission,
                        eeprom_image: bytes | None) -> ConnectedSwapSession:
+    from ds2 import DS2Timeout
     from engines.softbsl import eeprom_ram
 
     ews = read_ews_zcs(ds2)
@@ -2375,14 +2396,6 @@ def _prepare_ms41_swap(ds2, dme_ident: bytes, program: str, family: str,
     zcs_target = derive_ms41_zcs_target(ews.raw, chassis, target, production)
     if zcs_target.requires_ews3_ci82 and ews.coding_index != 82:
         raise ValueError("this E36 vehicle type requires the exact EWS3 coding profile")
-    if chassis == "E36":
-        return _blocked_swap(
-            target, "E36 requires ADS/L-line access",
-            "The E36 Concept-1 instrument cluster cannot be completed through "
-            "this tool's K-line-only connection. No coding was changed.",
-            family=family, chassis=chassis, source=zcs_target.source,
-        )
-
     ews_coding = read_ews_transmission(ds2)
     if (ews_coding.ident != ews.ident
             or ews_coding.coding_index != ews.coding_index):
@@ -2391,12 +2404,50 @@ def _prepare_ms41_swap(ds2, dme_ident: bytes, program: str, family: str,
             and not ews_starter_interlock_active(ews_coding)):
         raise ValueError("automatic vehicle order requires the immobilizer starter interlock")
 
-    cluster = read_ms41_cluster_store(ds2, chassis)
+    try:
+        cluster = read_ms41_cluster_store(ds2, chassis)
+    except DS2Timeout:
+        if chassis != "E36":
+            raise
+        return _blocked_swap(
+            target, "E36 requires ADS/L-line access",
+            "The fitted instrument cluster did not answer through the supported "
+            "Compact K-line route. Ordinary E36 clusters require ADS/L-line access. "
+            "No coding was changed.",
+            family=family, chassis=chassis, source=zcs_target.source,
+        )
+    except ValueError as error:
+        if chassis != "E36":
+            raise
+        return _blocked_swap(
+            target, "E36 instrument cluster is not compatible",
+            f"{error}. No coding was changed.",
+            family=family, chassis=chassis, source=zcs_target.source,
+        )
     if encode_zcs(cluster_zcs(cluster)) != ews.raw:
         raise ValueError("the immobilizer and instrument cluster contain different vehicle orders")
     if cluster_transmission(cluster) is not zcs_target.source:
         raise ValueError("instrument-cluster transmission coding disagrees with the vehicle order")
-    stability = _read_ms41_stability(ds2, chassis)
+    try:
+        stability = _read_ms41_stability(ds2, chassis)
+    except DS2Timeout:
+        if chassis != "E36":
+            raise
+        return _blocked_swap(
+            target, "E36 traction control requires ADS/L-line access",
+            "The fitted traction-control module is not available through the "
+            "supported ASC5/MK20 K-line routes. ASC+T requires ADS/L-line access. "
+            "No coding was changed.",
+            family=family, chassis=chassis, source=zcs_target.source,
+        )
+    except ValueError as error:
+        if chassis != "E36":
+            raise
+        return _blocked_swap(
+            target, "E36 traction control is not compatible",
+            f"{error}. No coding was changed.",
+            family=family, chassis=chassis, source=zcs_target.source,
+        )
     if coding_transmission(stability) is not zcs_target.source:
         raise ValueError("traction/stability-control coding disagrees with the vehicle order")
 
@@ -2405,25 +2456,32 @@ def _prepare_ms41_swap(ds2, dme_ident: bytes, program: str, family: str,
         fixed = (Transmission.MANUAL if selector is MS41Selector.MANUAL_ONLY
                  else Transmission.AUTOMATIC)
         raise ValueError(
-            f"the DME calibration is fixed for {fixed.value}; install an exact dynamic "
-            "AT/MT calibration before vehicle conversion")
+            f"this custom tune is fixed for {fixed.value}; set its Transmission "
+            "option to AT/MT, flash the tune, then check compatibility again")
     if eeprom_image is None:
-        raise ValueError("read the exact 512-byte DME EEPROM before compatibility checking")
-    eeprom_image = eeprom_ram.validate_write_image(eeprom_image, family)
-    layouts = eeprom_ram.detect_layouts(eeprom_image)
-    if family not in layouts and not (
-            family in {"MS41.2", "MS41.3"}
-            and set(layouts) == {"MS41.2", "MS41.3"}):
-        raise ValueError("DME identity and EEPROM layout do not agree")
-    record = eeprom_ram.transmission_record(eeprom_image, family)
+        raise ValueError(
+            "read the exact four-byte DME transmission record before compatibility checking")
+    if len(eeprom_image) == 512:
+        # Legacy archives/callers may still supply a physical dump. New coding
+        # sessions retain only the exact record this operation can change.
+        eeprom_image = eeprom_ram.validate_write_image(eeprom_image, family)
+        layouts = eeprom_ram.detect_layouts(eeprom_image)
+        if family not in layouts and not (
+                family in {"MS41.2", "MS41.3"}
+                and set(layouts) == {"MS41.2", "MS41.3"}):
+            raise ValueError("DME identity and EEPROM layout do not agree")
+    eeprom_before = ms41_eeprom_record(eeprom_image, family)
+    record = eeprom_ram.decode_transmission_record(eeprom_before)
     if not record["check_ok"]:
         raise ValueError("the DME EEPROM transmission record checksum is invalid")
     if record["mode"] != zcs_target.source.value:
         raise ValueError("DME EEPROM transmission mode disagrees with the vehicle order")
     if read_ms41_runtime_transmission(ds2, family) is not zcs_target.source:
         raise ValueError("engine-computer runtime transmission mode disagrees with the vehicle order")
-    eeprom_target = eeprom_ram.set_transmission_mode(
-        eeprom_image, "at" if target is Transmission.AUTOMATIC else "mt", family)
+    eeprom_target = eeprom_ram.make_transmission_record_from_record(
+        eeprom_before,
+        "at" if target is Transmission.AUTOMATIC else "mt",
+    )
 
     egs = _probe_egs(ds2)
     egs_family = egs[0] if egs else None
@@ -2486,7 +2544,7 @@ def _prepare_ms41_swap(ds2, dme_ident: bytes, program: str, family: str,
         stability=stability, target_zcs=zcs_target.raw,
         target_ews_coding=ews_coding_target, target_cluster=cluster_target,
         target_stability=bytes(stability_target), selector=selector,
-        eeprom_before=eeprom_image, eeprom_target=eeprom_target,
+        eeprom_before=eeprom_before, eeprom_target=eeprom_target,
         eeprom_variant=family, egs_family=egs_family,
         egs_ident=egs_ident, egs_zb=egs_zb,
     )
@@ -2739,9 +2797,11 @@ def deserialize_connected_swap(payload: dict) -> ConnectedSwapSession:
     if session.phase != "prepared" or session.written:
         raise ValueError("immutable recovery plan contains mutable progress")
     if family.startswith("MS41"):
-        if (session.eeprom_variant != family
-                or len(session.eeprom_before or b"") != 512
-                or len(session.eeprom_target or b"") != 512):
+        lengths = {
+            len(session.eeprom_before or b""),
+            len(session.eeprom_target or b""),
+        }
+        if session.eeprom_variant != family or lengths not in ({4}, {512}):
             raise ValueError("recovery DME EEPROM plan is incomplete")
     elif session.eeprom_before is not None or session.eeprom_target is not None:
         raise ValueError("unexpected DME EEPROM data in E46 recovery plan")
@@ -2801,7 +2861,10 @@ def archive_connected_swap(session: ConnectedSwapSession,
         "akmb_fa": _hex(session.akmb_fa.before) if session.akmb_fa else None,
         "alsz_fa": _hex(session.alsz_fa.before) if session.alsz_fa else None,
         "stability": _hex(session.stability.data) if session.stability else None,
-        "eeprom": _hex(session.eeprom_before),
+        "eeprom_record": (
+            _hex(connected_swap_eeprom_record(session))
+            if session.family in MS41_EEPROM_RECORD_ADDRESS else None
+        ),
         "egs": ({
             "family": session.egs_family,
             "ident": _hex(session.egs_ident),
@@ -2988,12 +3051,14 @@ def write_connected_modules(ds2, session: ConnectedSwapSession,
         raise RuntimeError("conversion plan is not ready for writing")
     _assert_session_fresh(ds2, session)
     if session.family and session.family.startswith("MS41"):
-        if eeprom_current is None or len(eeprom_current) != 512:
+        if eeprom_current is None:
             raise RuntimeError(
-                "read the complete DME EEPROM again immediately before coding")
-        if bytes(eeprom_current) != session.eeprom_before:
+                "read the DME transmission record again immediately before coding")
+        if ms41_eeprom_record(eeprom_current, session.family) != (
+                connected_swap_eeprom_record(session)):
             raise RuntimeError(
-                "DME EEPROM changed since compatibility checking; no module was written")
+                "DME transmission record changed since compatibility checking; "
+                "no module was written")
     operation_id = journal_id or session.token
     if reuse_archive:
         if not session.archive_path or not Path(session.archive_path).is_file():
@@ -3074,9 +3139,8 @@ def mark_eeprom_write_intent(session: ConnectedSwapSession, journal,
                              *, journal_id: str | None = None,
                              backup_path: str | os.PathLike | None = None,
                              restoring_original: bool = False) -> None:
-    target = session.eeprom_before if restoring_original else session.eeprom_target
-    if target is None:
-        raise RuntimeError("this conversion has no DME EEPROM write")
+    target = connected_swap_eeprom_record(
+        session, target=not restoring_original)
     details = {"target_sha256": sha256(target).hexdigest()}
     if backup_path is not None:
         details["backup_path"] = str(Path(backup_path).resolve())
@@ -3091,7 +3155,8 @@ def mark_eeprom_written(session: ConnectedSwapSession, after: bytes,
                         *, journal=None, journal_id: str | None = None) -> dict:
     if session.phase != "modules_written" or session.eeprom_target is None:
         raise RuntimeError("DME EEPROM write is not expected for this conversion")
-    if bytes(after) != session.eeprom_target:
+    if ms41_eeprom_record(after, session.family) != connected_swap_eeprom_record(
+            session, target=True):
         raise RuntimeError("DME EEPROM writeback does not match the reviewed target")
     if journal is not None:
         operation_id = journal_id or session.token
@@ -3123,8 +3188,11 @@ def verify_connected_swap(ds2, session: ConnectedSwapSession,
                 != _connected_owner_target(session, name)):
             raise RuntimeError(f"{name} final verification failed")
     if session.family and session.family.startswith("MS41"):
-        if eeprom_after is None or bytes(eeprom_after) != session.eeprom_target:
-            raise RuntimeError("read the DME EEPROM again for final verification")
+        if (eeprom_after is None
+                or ms41_eeprom_record(eeprom_after, session.family)
+                != connected_swap_eeprom_record(session, target=True)):
+            raise RuntimeError(
+                "read the DME transmission record again for final verification")
         if read_ms41_runtime_transmission(ds2, session.family) is not session.target:
             raise RuntimeError("engine-computer runtime transmission mode is incorrect")
     _verify_egs(ds2, session)
@@ -3374,29 +3442,21 @@ def recover_connected_modules(ds2, session: ConnectedSwapSession, action: str,
     }]
     eeprom_attempted = bool(eeprom_attempts)
     if session.family and session.family.startswith("MS41"):
-        if eeprom_current is None or len(eeprom_current) != 512:
-            raise RuntimeError("read the complete DME EEPROM before recovery")
-        eeprom_current = bytes(eeprom_current)
-        before = session.eeprom_before
-        target = session.eeprom_target
+        if eeprom_current is None:
+            raise RuntimeError("read the DME transmission record before recovery")
+        eeprom_current = ms41_eeprom_record(eeprom_current, session.family)
+        before = connected_swap_eeprom_record(session)
+        target = connected_swap_eeprom_record(session, target=True)
         if not eeprom_attempted and eeprom_current != before:
             raise RuntimeError(
-                "DME EEPROM changed after compatibility checking; no recovery write was made")
+                "DME transmission record changed after compatibility checking; "
+                "no recovery write was made")
         if eeprom_attempted and eeprom_current not in {before, target}:
-            record_address = MS41_EEPROM_RECORD_ADDRESS[session.family]
-            outside_current = (eeprom_current[:record_address]
-                               + eeprom_current[record_address + 4:])
-            outside_before = (before[:record_address]
-                              + before[record_address + 4:])
-            current_record = eeprom_current[record_address:record_address + 4]
-            before_record = before[record_address:record_address + 4]
-            target_record = target[record_address:record_address + 4]
-            if (outside_current != outside_before
-                    or all(write.complete for write in eeprom_attempts)
+            if (all(write.complete for write in eeprom_attempts)
                     or any(value not in {old, new} for value, old, new
-                           in zip(current_record, before_record, target_record))):
+                           in zip(eeprom_current, before, target))):
                 raise RuntimeError(
-                    "DME EEPROM contains changes outside a recoverable interrupted record")
+                    "DME transmission record is not a recoverable interrupted state")
         runtime_mode = read_ms41_runtime_transmission(ds2, session.family)
         allowed_modes = ({session.source, session.target}
                          if eeprom_attempted else {session.source})
@@ -3496,8 +3556,9 @@ def mark_original_eeprom_written(session: ConnectedSwapSession, after: bytes,
                                  *, journal, journal_id: str) -> dict:
     if session.phase != "rollback_modules_written" or session.eeprom_before is None:
         raise RuntimeError("original DME EEPROM restoration is not expected")
-    if bytes(after) != session.eeprom_before:
-        raise RuntimeError("DME EEPROM does not match the archived original")
+    if ms41_eeprom_record(after, session.family) != connected_swap_eeprom_record(session):
+        raise RuntimeError(
+            "DME transmission record does not match the archived original")
     journal.mark_write_complete(journal_id, "restore_dme_eeprom")
     journal.mark_awaiting_cycle(journal_id)
     session.phase = "rollback_awaiting_cycle"
@@ -3522,8 +3583,10 @@ def verify_connected_original(ds2, session: ConnectedSwapSession,
                 != _connected_owner_before(session, name)):
             raise RuntimeError(f"{name} original coding was not restored")
     if session.family and session.family.startswith("MS41"):
-        if eeprom_after is None or bytes(eeprom_after) != session.eeprom_before:
-            raise RuntimeError("DME EEPROM original image was not restored")
+        if (eeprom_after is None
+                or ms41_eeprom_record(eeprom_after, session.family)
+                != connected_swap_eeprom_record(session)):
+            raise RuntimeError("DME transmission record was not restored")
         if read_ms41_runtime_transmission(ds2, session.family) is not session.source:
             raise RuntimeError("engine-computer original runtime mode was not restored")
     _verify_egs(ds2, session)

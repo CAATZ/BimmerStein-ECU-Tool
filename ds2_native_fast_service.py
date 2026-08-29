@@ -20,6 +20,7 @@ from ds2_fast_plans import TUNE_SIZE
 from ds2_fast_slim_write import (
     SlimNativeFastFullWriteSession,
     SlimNativeFastPartialWriteSession,
+    validate_eeprom_record_change,
 )
 from ds2_fast_safety import (
     NATIVE_JOURNAL_DIR,
@@ -250,6 +251,69 @@ def write_partial_d2xx(
             mark_reentry_required(port)
         transport.close()
         return result
+
+
+def write_eeprom_record_d2xx(
+    port: str,
+    variant: str,
+    expected_record: bytes,
+    target_record: bytes,
+    *,
+    expected_identity: bytes | None = None,
+    progress_cb=None,
+    event_cb=None,
+    serial_factory=None,
+):
+    """Write only one checked four-byte transmission record; never retry it."""
+
+    # Reject malformed/local requests before opening the adapter.
+    _offset, expected_record, target_record = validate_eeprom_record_change(
+        variant,
+        expected_record,
+        target_record,
+    )
+    if expected_identity is not None and len(bytes(expected_identity)) != 42:
+        raise ValueError("expected identity must be exactly 42 bytes")
+
+    journal = _new_journal(port, FastOperation.PARTIAL_WRITE)
+    try:
+        open_kwargs = {"event_cb": _event_sink(journal, event_cb)}
+        if serial_factory is not None:
+            open_kwargs["serial_factory"] = serial_factory
+        transport = NativeFastPartialWriteTransport.open_d2xx(port, **open_kwargs)
+    except Exception as error:
+        _finish_setup_failure(journal, error, phase="transport_open")
+        raise
+
+    pending = reentry_required(port)
+    try:
+        session = SlimNativeFastPartialWriteSession(
+            transport,
+            b"\xFF" * TUNE_SIZE,
+            journal,
+            verify_write=False,
+            reentry_required=pending,
+            reentry_ready_cb=lambda: clear_reentry_required(port),
+            progress_cb=_progress_adapter(progress_cb),
+        )
+    except Exception as error:
+        transport.close()
+        _finish_setup_failure(journal, error, phase="session_setup")
+        raise
+    try:
+        return session.execute_eeprom_record(
+            variant,
+            expected_record,
+            target_record,
+            expected_identity=expected_identity,
+        )
+    finally:
+        if (
+            bool(getattr(session, "fast_write_armed", False))
+            and getattr(session, "link", None) is LinkRate.LOW
+        ):
+            mark_reentry_required(port)
+        transport.close()
 
 
 def qualify_partial_write_entry_d2xx(

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 import transmission_conversion as tx
+from ds2 import DS2Timeout
 from transmission_swap_journal import SwapOperationJournal
 
 from transmission_conversion import (
@@ -318,7 +319,7 @@ def test_e36_ms41_never_claims_complete_k_line_readiness():
 @pytest.mark.parametrize(
     "source", (Transmission.MANUAL, Transmission.AUTOMATIC),
 )
-def test_connected_ms41_e36_stops_at_k_line_boundary(monkeypatch, source):
+def test_connected_ms41_e36_reports_ordinary_cluster_boundary(monkeypatch, source):
     ews = tx.ZcsHolderState("EWS", b"ews-ident", 2, b"z" * 20)
     counterpart = tx.Ms41ZcsTarget(
         "E36", source, Transmission.AUTOMATIC,
@@ -328,8 +329,13 @@ def test_connected_ms41_e36_stops_at_k_line_boundary(monkeypatch, source):
     monkeypatch.setattr(tx, "_classify_ms41_chassis", lambda _raw: "E36")
     monkeypatch.setattr(tx, "derive_ms41_zcs_target", lambda *_args: counterpart)
     monkeypatch.setattr(
-        tx, "read_ms41_cluster_store",
-        lambda *_args: pytest.fail("E36 cluster must not be addressed over K-line"),
+        tx, "read_ews_transmission",
+        lambda _ds2: tx.CodingState("EWS", ews.ident, ews.coding_index, b"\x00" * 5),
+    )
+    def unavailable_cluster(*_args):
+        raise DS2Timeout("no Compact cluster response")
+    monkeypatch.setattr(
+        tx, "read_ms41_cluster_store", unavailable_cluster,
     )
 
     result = tx._prepare_ms41_swap(
@@ -341,6 +347,74 @@ def test_connected_ms41_e36_stops_at_k_line_boundary(monkeypatch, source):
     assert result.title == "E36 requires ADS/L-line access"
     assert result.chassis == "E36"
     assert "No coding was changed" in result.reasons[0]
+
+
+def test_connected_ms41_e36_compact_k_line_path_reaches_all_preflight_gates(
+        monkeypatch):
+    from engines.softbsl import eeprom_ram
+
+    calls = []
+    zcs = tx.Zcs(b"\x01\x02\x03\x04", b"\x00" * 8, b"\x05" * 5)
+    raw = tx.encode_zcs(zcs)
+    ews = tx.ZcsHolderState("EWS", b"ews-ident", 2, raw)
+    ews_coding = tx.CodingState("EWS", ews.ident, 2, b"\x01" + b"\x00" * 4)
+    counterpart = tx.Ms41ZcsTarget(
+        "E36", Transmission.MANUAL, Transmission.MANUAL,
+        "BF51", "BF51", raw, False, False, False,
+    )
+    cluster = SimpleNamespace()
+    stability = tx.CodingState("ASC5", b"asc-ident", 1, b"\x00")
+    eeprom = bytes.fromhex("AE A5 54 01")
+
+    monkeypatch.setattr(tx, "read_ews_zcs", lambda _ds2: calls.append("ews") or ews)
+    monkeypatch.setattr(tx, "_classify_ms41_chassis", lambda _raw: "E36")
+    monkeypatch.setattr(tx, "derive_ms41_zcs_target", lambda *_args: counterpart)
+    monkeypatch.setattr(
+        tx, "read_ews_transmission",
+        lambda _ds2: calls.append("ews_coding") or ews_coding,
+    )
+    monkeypatch.setattr(
+        tx, "read_ms41_cluster_store",
+        lambda *_args: calls.append("cluster") or cluster,
+    )
+    monkeypatch.setattr(tx, "cluster_zcs", lambda _cluster: zcs)
+    monkeypatch.setattr(
+        tx, "cluster_transmission",
+        lambda _cluster: calls.append("cluster_mode") or Transmission.MANUAL,
+    )
+    monkeypatch.setattr(
+        tx, "_read_ms41_stability",
+        lambda *_args: calls.append("stability") or stability,
+    )
+    monkeypatch.setattr(
+        tx, "ms41_selector",
+        lambda _ds2: calls.append("selector") or MS41Selector.DYNAMIC,
+    )
+    monkeypatch.setattr(
+        eeprom_ram, "decode_transmission_record",
+        lambda *_args: calls.append("eeprom") or {"check_ok": True, "mode": "manual"},
+    )
+    monkeypatch.setattr(
+        tx, "read_ms41_runtime_transmission",
+        lambda *_args: calls.append("runtime") or Transmission.MANUAL,
+    )
+    monkeypatch.setattr(
+        eeprom_ram, "make_transmission_record_from_record",
+        lambda record, *_args: calls.append("target") or bytes(record),
+    )
+    monkeypatch.setattr(tx, "_probe_egs", lambda _ds2: calls.append("egs") or None)
+
+    result = tx._prepare_ms41_swap(
+        object(), b"dme-ident", "1406464", "MS41.2",
+        Transmission.MANUAL, eeprom,
+    )
+
+    assert not result.ready
+    assert result.title == "Already configured for a manual transmission"
+    assert calls == [
+        "ews", "ews_coding", "cluster", "cluster_mode", "stability",
+        "selector", "eeprom", "runtime", "target", "egs",
+    ]
 
 
 def test_connected_ms41_same_target_finishes_every_read_only_gate(monkeypatch):
@@ -357,7 +431,7 @@ def test_connected_ms41_same_target_finishes_every_read_only_gate(monkeypatch):
     )
     cluster = SimpleNamespace()
     stability = tx.CodingState("ASC5", b"asc-ident", 6, b"\x00")
-    eeprom = bytes(range(256)) * 2
+    eeprom = bytes.fromhex("AE A5 54 01")
 
     monkeypatch.setattr(
         tx, "read_ews_zcs", lambda _ds2: calls.append("ews_zcs") or ews)
@@ -397,7 +471,7 @@ def test_connected_ms41_same_target_finishes_every_read_only_gate(monkeypatch):
         lambda _image: calls.append("eeprom_layout") or ("MS41.2",),
     )
     monkeypatch.setattr(
-        eeprom_ram, "transmission_record",
+        eeprom_ram, "decode_transmission_record",
         lambda *_args: calls.append("eeprom_record")
         or {"check_ok": True, "mode": "manual"},
     )
@@ -406,8 +480,8 @@ def test_connected_ms41_same_target_finishes_every_read_only_gate(monkeypatch):
         lambda *_args: calls.append("dme_runtime") or Transmission.MANUAL,
     )
     monkeypatch.setattr(
-        eeprom_ram, "set_transmission_mode",
-        lambda image, *_args: calls.append("eeprom_target") or bytes(image),
+        eeprom_ram, "make_transmission_record_from_record",
+        lambda record, *_args: calls.append("eeprom_target") or bytes(record),
     )
     monkeypatch.setattr(
         tx, "_probe_egs", lambda _ds2: calls.append("egs") or None)
@@ -421,8 +495,8 @@ def test_connected_ms41_same_target_finishes_every_read_only_gate(monkeypatch):
     assert result.title == "Already configured for a manual transmission"
     assert calls == [
         "ews_zcs", "production", "ews_coding", "cluster", "cluster_mode",
-        "stability", "selector", "eeprom_validate", "eeprom_layout",
-        "eeprom_record", "dme_runtime", "eeprom_target", "egs",
+        "stability", "selector", "eeprom_record", "dme_runtime",
+        "eeprom_target", "egs",
     ]
 
 
@@ -503,12 +577,12 @@ def test_ms41_runtime_verification_metadata_is_family_specific(family, address):
     assert f"0x{address:04X} bit 7" in plan.changes[-1]
 
 
-def test_ms41_dynamic_mode_blocks_without_softbsl_and_never_uses_fixed_fallback():
+def test_ms41_dynamic_mode_uses_stock_kline_without_softbsl():
     plan = plan_ms41_conversion(_ms41_request(softbsl=False))
-    assert plan.status is PlanStatus.ACTION_REQUIRED
-    assert not plan.can_write
-    assert any("Installed Soft-BSL is required" in reason for reason in plan.reasons)
-    assert any("will not be substituted" in warning for warning in plan.warnings)
+    assert plan.status is PlanStatus.READY
+    assert plan.can_write
+    assert not any("Soft-BSL" in reason for reason in plan.reasons)
+    assert any("checked transmission record" in warning for warning in plan.warnings)
 
     unread = plan_ms41_conversion(replace(
         _ms41_request(), eeprom_transmission=None,
@@ -524,7 +598,7 @@ def test_ms41_fixed_selector_conflict_is_unsupported_not_silently_changed():
     plan = plan_ms41_conversion(request)
     assert plan.status is PlanStatus.UNSUPPORTED
     assert not plan.can_write
-    assert any("will not use another fixed selector as a fallback" in reason
+    assert any("Set its Transmission option to AT/MT" in reason
                for reason in plan.reasons)
 
 
@@ -682,6 +756,42 @@ def test_cluster_storage_publishes_checksum_word_last(monkeypatch):
     ]
 
 
+def test_e36_compact_cluster_uses_second_checksum_byte_then_resets(monkeypatch):
+    data = bytearray(0xA8)
+    data[2:] = bytes((index * 7) & 0xFF for index in range(0xA6))
+    state = tx.ClusterStoreState(
+        "E36", b"identity", 2, 0x6C, bytes(data),
+        268, 308, 0xC0, 0, 0x40, 0x6C, 0x6D, 0xBF, 0xD9, "KMB",
+    )
+    target = bytearray(state.data)
+    target[10] ^= 1
+    tx._cluster_checksum_image(state, target)
+    assert target[0] == state.data[0]
+    assert target[1] == tx._xor(target[2:])
+
+    writes = []
+    resets = []
+    waits = []
+    monkeypatch.setattr(
+        tx, "_write_words",
+        lambda _ds2, start, before, after: writes.append(
+            (start, bytes(before), bytes(after))),
+    )
+    monkeypatch.setattr(
+        tx, "_positive",
+        lambda _ds2, frame, address: resets.append((bytes(frame), address)),
+    )
+    monkeypatch.setattr(tx.time, "sleep", waits.append)
+
+    tx._write_cluster_target_words(object(), state, state.data, bytes(target))
+
+    assert len(writes) == 2
+    assert writes[0][2][:2] == state.data[:2]
+    assert writes[1][2] == bytes(target)
+    assert resets == [(bytes.fromhex("80 04 12"), 0x80)]
+    assert waits == [5.0]
+
+
 def test_module_transaction_rolls_back_in_reverse_order(monkeypatch, tmp_path):
     ews = tx.ZcsHolderState("EWS", b"ews", 1, b"z" * 20)
     cluster = tx.ClusterStoreState(
@@ -744,7 +854,7 @@ def test_ms41_stale_eeprom_refuses_before_archive_or_module_write(
         lambda *_args: pytest.fail("stale EEPROM must stop before module writes"),
     )
 
-    with pytest.raises(RuntimeError, match="EEPROM changed"):
+    with pytest.raises(RuntimeError, match="transmission record changed"):
         tx.write_connected_modules(
             object(), session, archive_dir=tmp_path,
             eeprom_current=b"\x02" * 512,
@@ -795,8 +905,8 @@ def test_mk60_write_enters_coding_session_before_verified_update():
 
 def test_connected_swap_archive_round_trips_complete_recovery_plan(
         monkeypatch, tmp_path):
-    before = bytes(range(256)) * 2
-    target = before[:0x1CA] + b"\x02\x00\x03\x00" + before[0x1CE:]
+    before = bytes.fromhex("AD A5 53 01")
+    target = bytes.fromhex("AE A5 54 01")
     session = tx.ConnectedSwapSession(
         "0123456789abcdef0123456789abcdef", "ready", "Ready", (), (), (),
         Transmission.AUTOMATIC, Transmission.MANUAL, "MS41.2", "E39",
@@ -819,7 +929,9 @@ def test_connected_swap_archive_round_trips_complete_recovery_plan(
     assert restored == session
     assert restored is not session
     assert restored.archive_path == str(path.resolve())
-    assert json.loads(path.read_text(encoding="utf-8"))["schema"] == 2
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["schema"] == 2
+    assert payload["eeprom_record"] == before.hex().upper()
     assert published == [(path, path.read_bytes())]
     assert published[0][1].endswith(b"\n")
 
@@ -1021,7 +1133,7 @@ def test_recovery_changed_untouched_owner_refuses_before_new_journal_or_write(
     assert not journal.record_path(recovery_id).exists()
 
 
-def test_ms41_recovery_rejects_unrelated_eeprom_drift_before_module_write(
+def test_ms41_recovery_rejects_transmission_record_drift_before_module_write(
         monkeypatch, tmp_path):
     before = bytes(range(256)) * 2
     target = bytearray(before)
@@ -1068,9 +1180,9 @@ def test_ms41_recovery_rejects_unrelated_eeprom_drift_before_module_write(
             return session.dme_ident
 
     changed = bytearray(before)
-    changed[0x20] ^= 1
+    changed[0x1CA] ^= 1
     recovery_id = f"{session.token}-restore"
-    with pytest.raises(RuntimeError, match="EEPROM changed"):
+    with pytest.raises(RuntimeError, match="transmission record changed"):
         tx.recover_connected_modules(
             Ds2(), recovered, "original", journal=journal,
             journal_id=recovery_id, supersedes=session.token,
@@ -1133,7 +1245,7 @@ def test_ms41_zero_write_crash_closes_as_verified_noop(monkeypatch, tmp_path):
     assert not journal.record_path(recovery_id).exists()
 
 
-def test_destructive_entry_refuses_constructed_e36_session_before_archive(
+def test_destructive_entry_refuses_stale_constructed_e36_session_before_archive(
         monkeypatch, tmp_path):
     session = tx.ConnectedSwapSession(
         "token", "ready", "Ready", (), (), (),
@@ -1141,10 +1253,11 @@ def test_destructive_entry_refuses_constructed_e36_session_before_archive(
     )
     monkeypatch.setattr(
         tx, "archive_connected_swap",
-        lambda *_args: pytest.fail("unsupported chassis must not be archived"),
+        lambda *_args: pytest.fail("stale session must not be archived"),
     )
-    with pytest.raises(ValueError, match="K-line build"):
+    ds2 = SimpleNamespace(identify=lambda: b"different-dme")
+    with pytest.raises(RuntimeError, match="identity changed"):
         tx.write_connected_modules(
-            object(), session, archive_dir=tmp_path,
+            ds2, session, archive_dir=tmp_path,
             eeprom_current=b"\x00" * 512,
         )

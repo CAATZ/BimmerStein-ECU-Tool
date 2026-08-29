@@ -111,6 +111,7 @@ class ResponseStatus(IntEnum):
 class FlashOperation(IntEnum):
     PARTIAL_PROGRAM = 0x00
     FULL_PROGRAM = 0x02
+    EEPROM_WRITE = 0x03
     ERASE = 0x06
     POLL = 0x0F
 
@@ -309,7 +310,9 @@ class FlashRequest:
             raise ValueError(
                 f"program payload must be 1..{MAX_FLASH_DATA} bytes, got {len(data)}"
             )
-        if not is_program and data:
+        if operation == int(FlashOperation.EEPROM_WRITE) and len(data) != 4:
+            raise ValueError("EEPROM transmission record must be exactly four bytes")
+        if not is_program and operation != int(FlashOperation.EEPROM_WRITE) and data:
             raise ValueError("poll and erase requests cannot contain program data")
 
     @property
@@ -325,7 +328,14 @@ class FlashRequest:
 
     @property
     def destructive(self) -> bool:
-        return self.is_program or self.operation == int(FlashOperation.ERASE)
+        return self.is_program or self.operation in (
+            int(FlashOperation.EEPROM_WRITE),
+            int(FlashOperation.ERASE),
+        )
+
+    @property
+    def advances_cursor(self) -> bool:
+        return self.is_program
 
     @property
     def payload(self) -> bytes:
@@ -357,7 +367,7 @@ class FlashReplyContract:
     name: str
     operation: int
     address: int
-    count: int
+    count: Optional[int]
     allowed_statuses: FrozenSet[int] = frozenset((0x01,))
 
     def validate(self, response: DS2Response) -> FlashReply:
@@ -380,7 +390,7 @@ class FlashReplyContract:
                 f"{self.name}: address/cursor 0x{address:06X}, expected "
                 f"0x{self.address:06X}"
             )
-        if count != self.count:
+        if self.count is not None and count != self.count:
             raise ContractViolation(
                 f"{self.name}: count {count}, expected {self.count}"
             )
@@ -416,14 +426,25 @@ def flash_reply_contract(
     elif mode is FastOperation.FULL_WRITE:
         if request.operation == int(FlashOperation.PARTIAL_PROGRAM):
             raise ValueError("operation 0x00 is not valid in the full-write state")
+        if request.operation == int(FlashOperation.EEPROM_WRITE):
+            raise ValueError("operation 0x03 is not valid in the full-write state")
         response_operation = request.operation
     else:
         raise ValueError("flash reply contracts require a write operation mode")
 
     expected_address = (
-        request.address + request.count if request.is_program else request.address
+        request.address + request.count
+        if request.advances_cursor
+        else request.address
     )
-    expected_count = request.count if request.is_program else 0
+    # Stock EEPROM operation 0x03 leaves EA00:EA02 unchanged and copies an
+    # otherwise stale RL6 into the reply count byte.  Bind its operation,
+    # original address, status, and immediate readback; do not invent a count.
+    expected_count = (
+        None
+        if request.operation == int(FlashOperation.EEPROM_WRITE)
+        else request.count if request.advances_cursor else 0
+    )
     return FlashReplyContract(
         name=(
             f"{mode.value} operation 0x{request.operation:02X} "
