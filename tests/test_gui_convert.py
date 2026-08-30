@@ -154,12 +154,13 @@ def _stub_run_task(monkeypatch, w):
     return captured
 
 
-def test_full_write_blocks_built_amd_patch_on_connected_intel(monkeypatch):
+def test_full_write_blocks_unapplied_amd_boot_patch_when_boot_is_preserved(monkeypatch):
     app, w = _gui()
     try:
         image, _log = patch_service.build_image(ref("MS41.3"), ["amd_flash"])
         w._ecu_variant = "MS41.3"
         w._ecu_chip_sig = bytes.fromhex("e6f45000b84c6fe0")
+        w._last_full_read = ref("MS41.3")
         blocked = []
         monkeypatch.setattr(
             QMessageBox, "critical",
@@ -170,32 +171,46 @@ def test_full_write_blocks_built_amd_patch_on_connected_intel(monkeypatch):
         w._ds2_write_full(bytearray(image), "ms413-amd.bin")
 
         assert captured.get("ran") is not True
-        assert blocked and blocked[-1][0] == "Flash-Chip Family Mismatch"
-        assert "AMD/JEDEC" in blocked[-1][1] and "Intel 28F" in blocked[-1][1]
+        assert blocked and blocked[-1][0] == "Boot-Region Patch — Flash Blocked"
     finally:
         w.close()
 
 
-def test_full_write_blocks_intel_image_on_connected_amd(monkeypatch):
+def test_native_full_write_allows_intel_image_on_amd_when_boot_is_preserved(
+        monkeypatch):
     app, w = _gui()
     try:
         image = ref("MS41.3")
         assert ecu_info.image_chip_family(image) == "intel"
         w._ecu_variant = "MS41.3"
         w._ecu_chip_sig = bytes.fromhex("e00e0d58f04ec084")
+        w._ds2 = _CodingFamilyDS2(b"909")
         blocked = []
         monkeypatch.setattr(
             QMessageBox, "critical",
             lambda *args, **_kwargs: blocked.append((args[1], args[2])) or QMessageBox.Ok)
         monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: QMessageBox.Yes)
+        monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
+        monkeypatch.setattr(w, "_auto_transfer_route", lambda: "native_ds2")
+        monkeypatch.setattr(w, "_finish_flash_success", lambda *args, **kwargs: None)
+        native = {}
+        monkeypatch.setattr(
+            w,
+            "_native_fast_write_with_fallback",
+            lambda kind, target, family, *args, **kwargs: native.update(
+                kind=kind, target=target, family=family, kwargs=kwargs),
+        )
         captured = _stub_run_task(monkeypatch, w)
 
         w._ds2_write_full(bytearray(image), "ms413-intel.bin")
 
-        assert captured.get("ran") is not True
-        assert blocked and blocked[-1][0] == "Flash-Chip Family Mismatch"
-        assert "Intel 28F" in blocked[-1][1] and "AMD/JEDEC" in blocked[-1][1]
+        assert captured.get("ran") is True
+        assert not blocked
+        assert native["kind"] == "full"
+        assert native["family"] == "amd"
+        assert ecu_info.image_chip_family(native["target"]) == "intel"
     finally:
+        w._ds2 = None
         w.close()
 
 

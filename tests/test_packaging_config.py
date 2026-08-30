@@ -102,6 +102,12 @@ def test_distribution_verifier_checks_document_version_and_public_terms(tmp_path
         module._verify_public_terms((document,))
     document.write_text("AIF and Path.joinpath remain ordinary code", encoding="utf-8")
     module._verify_public_terms((document,))
+    document.write_text("Ignition Cut " + "".join(("V", "9")), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="prohibited public reference"):
+        module._verify_public_terms((document,))
+    document.write_text("Launch ignition fixed IPW", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="prohibited public reference"):
+        module._verify_public_terms((document,))
     assert module._numeric_release_version("0.1.0b14") == (0, 1, 0, 14)
 
 
@@ -217,6 +223,7 @@ def test_release_packaging_requires_explicit_license_gates():
     assert "DefinitionRedistributionApproved" not in text
     assert "calibration_definitions_bundled = $true" in text
     assert "verify_dist.py" in text
+    assert '"packaging\\verify_dist.py" --source-only' in text
     assert "b[1-9]\\d*" in text
     assert '"BimmerStein-ECU-Tool-$Version-Windows-x64"' in text
     assert '"BimmerStein-ECU-Tool-$Version-Windows-x64-Nuitka"' in text

@@ -2,7 +2,7 @@
   "id": "launch_control_v4",
   "label": "V4",
   "deprecated": true,
-  "superseded_by": "launch_control_v6",
+  "superseded_by": "launch_control_v5",
   "status": "DEPRECATED - REMOVE BEFORE V5",
   "tested": false,
   "version": "V4",

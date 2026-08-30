@@ -1,0 +1,54 @@
+{
+  "id": "cal_guard_v3_compatibility",
+  "label": "V3 exact-ID guard (rollback)",
+  "deprecated": true,
+  "status": "HARDWARE-PROVEN ROLLBACK",
+  "version": "V3",
+  "title": "CalGuard compatibility guard",
+  "user_description": "Hardware-proven CalGuard V3 retained for rollback and installed-state detection.",
+  "description": "Boot->app handoff splice @0x493A -> SA1 cave @0x5E10 (436-B universal gate). Reloads E740; a real flash session (E740==1) enters stock flash-listen recovery. Otherwise it requires the strict SS1v2 calibration marker to match the SS1v2 program signature, or a supported legacy CAL-ID suffix, then compares all four native program/cal Firmware Compatibility ID bytes exactly using C166-safe byte reads. Any exact-ID mismatch, cross-version, foreign, blank, or hybrid image is routed to DS2 flash-listen recovery instead of engine operation (no EEPROM wear; self-clearing after a correct re-flash). SA1 (re-apply on SA1 write).",
+  "target": "MS41.3",
+  "targets": [
+    "MS41.0",
+    "MS41.1",
+    "MS41.2",
+    "MS41.3"
+  ],
+  "recompute": [
+    "boot_crc"
+  ],
+  "requires": [
+    "softbsl_loader_v2"
+  ],
+  "conflicts": [
+    "cal_guard"
+  ],
+  "supersedes": [
+    "cal_guard_v1",
+    "cal_guard_v2"
+  ],
+  "cave": {
+    "region": "sa1",
+    "base": 24080,
+    "splice_off": 18746,
+    "splice_op": "jmpa",
+    "relocatable": false
+  },
+  "edits": [
+    {
+      "off": 18746,
+      "expect": "f3fa40e749a12d04",
+      "upgrade_expect": "ea00101ecc00cc00",
+      "data": "ea00101ecc00cc00"
+    },
+    {
+      "off": 24080,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "upgrade_expect": [
+        "f3fa40e749a1ea204a09e6000400e6f4bb33a9a447fa53003d260841a9a447fa53003d210841a9a447fa31003d1c0841a9a447fa76003d170841a9a447fa32003d12e6020f00f2f59a9af2f49c9ae602000046f59a11ea304a0946f46390ea304a09ea004209e0e4a9a447fa31003d240841a9a447fa32003d1fe6020f00f2f59a9ae602000046f59a11ea204a09e6f427a0a9a447fa3000ea304a090841a9a447fa3600ea304a090841a9a447fa3400ea304a09ea004209e0e4a9a447fa36003d250841a9a447fa30003d20e6f427a0a9a447fa3300ea304a090841a9a447fa37002d0c47fa3800ea304a090841a9a447fa3000ea204209ea004a090841a9a447fa3800ea204209ea004a09e0e4a9a40841a9b447fa34003d0847fb31002d1547fb32002d12ea004a0947fa35003d0547fb39002d0aea004a0947fa3800ea304a0947fb3500ea304a09e6f427a0a9a447fa32002d1d47fa3300ea304a090841a9a447fa32002d0c47fa3800ea304a090841a9a447fa3100ea204209ea004a090841a9a447fa3400ea204209ea004a090841a9a447fa3900ea304a090841a9a447fa3800ea20420947fa3300ea204209ea004a09",
+        "f3fa40e747fa0100ea204a09e6000400f3fabb3347fa53003d25f3fabc3347fa53003d20f3fabd3347fa31003d1bf3fabe3347fa76003d16f3fabf3347fa32003d11e6020f00f2f49a9af2f59c9ae602000046f49a11ea304a0946f56390ea304a090d25e6020f00f2f49a9af2f59c9ae602000046f49a113d0446f56390ea204a09f2f40e0046f431322d1146f436302d0e46f434312d0b46f434322d0846f435392d0546f438352d02ea004a09ecf2ecf3f2f20c00f2f30e00f2f407a0f2f509a040243d0640353d04fcf3fcf2ea004209fcf3fcf2ea004a09ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      ],
+      "data": "f3fa40e747fa0100ea204a09e6000400f3fabb3347fa53003d25f3fabc3347fa53003d20f3fabd3347fa31003d1bf3fabe3347fa76003d16f3fabf3347fa32003d11e6020f00f2f49a9af2f59c9ae602000046f49a11ea304a0946f56390ea304a090d25e6020f00f2f49a9af2f59c9ae602000046f49a113d0446f56390ea204a09f2f40e0046f431322d1146f436302d0e46f434312d0b46f434322d0846f435392d0546f438352d02ea004a09f3f80c00f3fa07a0418a3d14f3f80d00f3fa08a0418a3d0ef3f80e00f3fa09a0418a3d08f3f80f00f3fa0aa0418a3d02ea004209ea004a09ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  ]
+}

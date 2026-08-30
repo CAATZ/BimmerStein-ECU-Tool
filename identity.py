@@ -196,6 +196,8 @@ def graft_identity(target: bytes, source: bytes) -> bytearray:
     """
     if len(target) < 0x6100 or len(source) < 0x6100:
         raise ValueError("target and source must contain the complete identity ranges")
+    from engines.patcher import patch_ms41
+    source, _restored = patch_ms41.restore_exact_deprecated_aif_payloads(source)
     out = bytearray(target)
     for start, end in IDENTITY_GRAFT_RANGES:
         out[start:end] = source[start:end]

@@ -14,15 +14,11 @@ import xml.etree.ElementTree as ET
 
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_FRAGMENT = HERE / "ms412_ignition_cut_v9_launch_control_v7.xml"
+DEFAULT_FRAGMENT = HERE / "ms412_ignition_cut_v7_launch_control_v4.xml"
 DEFAULT_OUTPUT = HERE / "BimmerStein MS41 Patch Definitions.xml"
-BEGIN = "<!-- OPENMS41 V9/V7 PATCH TABLES BEGIN -->"
-END = "<!-- OPENMS41 V9/V7 PATCH TABLES END -->"
+BEGIN = "<!-- OPENMS41 V7/V4 PATCH TABLES BEGIN -->"
+END = "<!-- OPENMS41 V7/V4 PATCH TABLES END -->"
 LEGACY_MARKERS = [
-    (
-        "<!-- OPENMS41 V7/V4 PATCH TABLES BEGIN -->",
-        "<!-- OPENMS41 V7/V4 PATCH TABLES END -->",
-    ),
     (
         "<!-- OPENMS41 V6/V4 PATCH TABLES BEGIN -->",
         "<!-- OPENMS41 V6/V4 PATCH TABLES END -->",
@@ -68,7 +64,7 @@ DTD = """<!DOCTYPE roms [
 VANOS_TABLE_MS410 = """<table type="2D" name="VANOS Retrofit - Minimum RPM (Closed Throttle)" category="VANOS Retrofit" storagetype="uint8" sizey="1" storageaddress="0x3000">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Engage Above" sizey="1"><data>RPM</data></table>
-  <description>Minimum RPM for closed-throttle VANOS engagement added by the tested MS41.0 V2 retrofit. Marker VANOSRT3 identifies the checksum-correct revision; raw 0xFF preserves stock behavior.</description>
+  <description>Minimum RPM for closed-throttle VANOS engagement added by the tested, checksum-correct MS41.0 VANOSRT3 retrofit. Raw 0xFF preserves stock behavior; use only after that patch is installed.</description>
 </table>"""
 
 VANOS_TABLE_MS411 = """<table type="2D" name="VANOS Retrofit - Minimum RPM (Closed Throttle)" category="VANOS Retrofit" storagetype="uint8" sizey="1" storageaddress="0x3720">
@@ -78,15 +74,15 @@ VANOS_TABLE_MS411 = """<table type="2D" name="VANOS Retrofit - Minimum RPM (Clos
 </table>"""
 
 MS410_ADDRESS_MAP = {
-    0x2A65: 0x3010, 0x2A66: 0x3011, 0x2A67: 0x3012, 0x2A68: 0x3013,
-    **{0x352C + index: 0x3020 + index for index in range(10)},
+    0x2A65: 0x3010, 0x2A66: 0x3011,
+    **{0x352C + index: 0x3020 + index for index in range(8)},
 }
 MS411_ADDRESS_MAP = {
-    0x2A65: 0x3700, 0x2A66: 0x3701, 0x2A67: 0x3702, 0x2A68: 0x3703,
-    **{0x352C + index: 0x3710 + index for index in range(10)},
+    0x2A65: 0x3700, 0x2A66: 0x3701,
+    **{0x352C + index: 0x3710 + index for index in range(8)},
 }
 MS413_ADDRESS_MAP = {
-    0x352C + index: 0x47E0 + index for index in range(10)
+    0x352C + index: 0x47E0 + index for index in range(8)
 }
 
 IGNITION_LAUNCH_VARIANTS = (
@@ -101,8 +97,8 @@ IGNITION_LAUNCH_VARIANTS = (
 )
 
 VANOS_VARIANTS = (
-    ("BIMMERSTEIN_MS410_VANOSRT3_24K", "3008", "VANOSRT3", "1429861", "MS41.0 1429861 + VANOS V2 / VANOSRT3 (24KB)", "24kb", False, MS410_ADDRESS_MAP, VANOS_TABLE_MS410),
-    ("BIMMERSTEIN_MS410_VANOSRT3_256K", "17008", "VANOSRT3", "1429861", "MS41.0 1429861 + VANOS V2 / VANOSRT3 (256KB)", "256kb", True, MS410_ADDRESS_MAP, VANOS_TABLE_MS410),
+    ("BIMMERSTEIN_MS410_VANOSRT3_24K", "3008", "VANOSRT3", "1429861", "MS41.0 1429861 + VANOSRT3 (24KB)", "24kb", False, MS410_ADDRESS_MAP, VANOS_TABLE_MS410),
+    ("BIMMERSTEIN_MS410_VANOSRT3_256K", "17008", "VANOSRT3", "1429861", "MS41.0 1429861 + VANOSRT3 (256KB)", "256kb", True, MS410_ADDRESS_MAP, VANOS_TABLE_MS410),
     ("BIMMERSTEIN_MS411_VANOSRT2_24K", "3728", "VANOSRT2", "1437806", "MS41.1 1437806 + VANOSRT2 (24KB)", "24kb", False, MS411_ADDRESS_MAP, VANOS_TABLE_MS411),
     ("BIMMERSTEIN_MS411_VANOSRT2_256K", "17728", "VANOSRT2", "1437806", "MS41.1 1437806 + VANOSRT2 (256KB)", "256kb", True, MS411_ADDRESS_MAP, VANOS_TABLE_MS411),
 )
@@ -148,15 +144,6 @@ def _remap_addresses(fragment: str, address_map: dict[int, int] | None) -> str:
     return ADDRESS_RE.sub(replace, fragment)
 
 
-def _ms410_pin_labels(fragment: str) -> str:
-    return (
-        fragment
-        .replace("SIR fd60.9", "MS41.0 FD51.1")
-        .replace("SIR fd60.8", "MS41.0 FD51.0")
-        .replace("SIR fd60.7", "MS41.0 FD50.7")
-    )
-
-
 def _payload(
     fragment: str,
     *,
@@ -174,7 +161,7 @@ def _payload(
     )
     return (
         f"{BEGIN}\n"
-        "<!-- Ignition Cut V9 + Launch Control V7 controls. "
+        "<!-- Ignition Cut V7 + current Launch Control controls. "
         f"{address_note} -->\n"
         f"{tables}\n"
         f"{END}"
@@ -215,8 +202,6 @@ def build_standalone_definition(fragment: str) -> str:
         address_map, vanos_table,
     ) in VANOS_VARIANTS:
         tables = f"{_remap_addresses(patch_tables, address_map)}\n\n{vanos_table}"
-        if "MS410" in xmlid:
-            tables = _ms410_pin_labels(tables)
         if full_read:
             tables = _for_full_read(tables)
         roms.append(_rom(
@@ -228,8 +213,6 @@ def build_standalone_definition(fragment: str) -> str:
         address_map,
     ) in IGNITION_LAUNCH_VARIANTS:
         tables = _remap_addresses(patch_tables, address_map)
-        if "MS410" in xmlid:
-            tables = _ms410_pin_labels(tables)
         if full_read:
             tables = _for_full_read(tables)
         roms.append(_rom(

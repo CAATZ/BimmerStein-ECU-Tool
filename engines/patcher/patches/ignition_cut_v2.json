@@ -1,7 +1,7 @@
 {
   "id": "ignition_cut_v2",
   "status": "DEPRECATED",
-  "superseded_by": "ignition_cut_v8",
+  "superseded_by": "ignition_cut_v7",
   "tested": false,
   "version": "V2",
   "title": "Ignition Cut",

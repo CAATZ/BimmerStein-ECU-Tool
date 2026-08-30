@@ -2,59 +2,66 @@
 
 ## 0.1.0 Beta 14
 
-Beta 14 is a Windows x64 update focused on safer EEPROM work, easier diagnostics
-and coding, and more reliable recovery when an operation is interrupted.
+Beta 14 makes recovery, EEPROM work, diagnostics, coding, and full-file
+flashing easier and more predictable.
 
-**OFF-ROAD, COMPETITION, RESEARCH, AND BENCH USE ONLY.** Do not use this software
-to modify a vehicle operated on public roads. The user is responsible for
-compliance with applicable emissions, safety, registration, and other laws.
+**OFF-ROAD, COMPETITION, RESEARCH, AND BENCH USE ONLY.** Do not use this
+software to modify a vehicle operated on public roads. The user is responsible
+for compliance with applicable emissions, safety, registration, and other laws.
 
 ### Highlights
 
-- A new PC EEPROM workspace reads, reviews, writes, seeds, and restores complete
-  images with guarded backups and full verification.
-- **Restore Pre-Seed State** now works after reconnecting the programmer or
-  restarting the app. It restores only the exact saved original; if that backup
-  is missing or conflicting, restore stays unavailable.
-- Diagnostics and self-contained vehicle coding now cover more reviewed E36,
-  E38, E39, and E46 modules, with common settings shown in plain language.
-- Guided transmission conversion now includes backup, ignition-cycle, recovery,
-  and final verification steps for reviewed MS41-, MS42-, and MS43-family cars.
-- ECU Info is more complete, and writes now show a clear battery-voltage warning.
+- A complete PC EEPROM workspace can read, review, write, seed, compare, and
+  restore 512-byte images with guided backups and verification.
+- **Restore Pre-Seed State** can recover the exact saved original after the
+  programmer is reconnected or the application is restarted.
+- ECU Info is clearer, and diagnostics cover more reviewed vehicle modules.
+- Guided coding and transmission-conversion workflows use plain-language
+  choices, backups, read-back checks, and recovery steps.
+- Soft-BSL and CalGuard can be reinstalled or updated from recognized older
+  versions when the ECU boot region is healthy. A damaged boot region still
+  requires recovery from a known-good backup.
+- Boot-preserving full-file writes no longer stop because the file and ECU use
+  different flash-chip families; that distinction matters only when the boot
+  region will actually be written.
+- Interrupted operations now provide clearer recovery instructions and retain
+  the prepared recovery path whenever it is still safe to continue.
 
-### Reliability
+### Important warnings
 
-- Older Bins catalogue entries are upgraded only when their stored files still
-  match, and an unreadable catalogue no longer risks replacing good records.
-- Tune, full-image, and conversion checks now reject mismatched or malformed
-  files before a save or write is prepared.
-- Interrupted reads, writes, coding, and conversions have clearer cleanup and
-  recovery paths.
-- Experimental firmware options were refreshed, with their test status kept
-  visible so offline checks are not mistaken for physical validation.
+> **HIGHLY EXPERIMENTAL — NOT VEHICLE TESTED.** The Coding tab can change
+> configuration in multiple vehicle modules. Built-in profiles and read-back
+> checks reduce mistakes, but they do not prove a change is safe for a
+> particular vehicle. Back up first, use stable power, keep the engine off,
+> change only settings you understand, and be prepared to restore the original
+> coding.
 
-### Validation status
+Ignition Cut and Launch Control are unchanged from Beta 13: Ignition Cut V7;
+Launch Control V4 on MS41.0, MS41.1, and MS41.2; and Launch Control V5 on
+MS41.3. They remain highly experimental and require controlled vehicle testing.
+AlphaN MAF-failsafe V3 also remains experimental and requires vehicle testing.
 
-- Automated offline checks cover EEPROM seed/restore recovery, diagnostics,
-  coding, transmission conversion, catalogue upgrades, and release packaging.
-  Unknown or mismatched revisions remain non-writable.
-- Soft-BSL V11 and CalGuard V5 are **OFFLINE EXACT-BYTE VERIFIED - BENCH TEST
-  REQUIRED**.
-- Ignition Cut V9, Launch Control V7, and AlphaN MAF-failsafe V3 remain
-  experimental: **OFFLINE EXACT-BYTE VERIFIED - ON-CAR TESTING REQUIRED**.
+**IGNITION CUT HAZARD:** Ignition Cut may suppress spark while injection
+continues. Unburned fuel can damage catalytic converters and exhaust components;
+never use it on a car with catalytic converters. Offline validation does not
+establish safe behavior on an engine.
 
-**IGNITION CUT HAZARD:** Ignition Cut V9 may suppress spark while injection
-continues at the stock or configured fixed pulse width. Unburned fuel can
-damage catalytic converters and exhaust components; never use it on a car with
-catalytic converters. Offline validation does not establish safe behavior on
-an engine.
+### Validation
 
-### Distribution status
+- Automated offline checks cover EEPROM recovery, diagnostics, coding,
+  transmission conversion, file validation, Soft-BSL and CalGuard migration,
+  packaging, and interrupted-operation recovery.
+- Soft-BSL V11 and CalGuard V5 still require bench confirmation, including the
+  newly broadened reinstall and update path.
+- The Coding tab has not completed vehicle testing and must be treated as
+  highly experimental.
 
-Version `0.1.0b14` is prepared under GNU GPL version 3 (`GPL-3.0-only`) using
-the GPLv3 PyQt5 distribution path. PyInstaller and Nuitka Windows x64 builds are
-supplied as per-user installers and portable ZIPs, with
-`BimmerStein MS41 Patch Definitions.xml` beside the executable, release
-metadata, third-party notices and licenses, the user manual, and SHA-256
-manifests. Private reference ROMs and development-only execution inputs are not
+### Distribution
+
+Version `0.1.0b14` contains the Windows x64 PC application only. PyInstaller
+and Nuitka builds are supplied as per-user installers and portable ZIPs. Each
+package includes the user manual, `BimmerStein MS41 Patch Definitions.xml`,
+placed beside the executable, plus release metadata, third-party notices and
+licenses, and SHA-256 checksums. The application is distributed under
+`GPL-3.0-only`. Development-only material and private reference ROMs are not
 included.

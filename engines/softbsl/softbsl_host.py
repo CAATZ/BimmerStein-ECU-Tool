@@ -97,9 +97,17 @@ _DEPRECATED_LOADER_IDS = (
     "softbsl_loader_legacy",
     "softbsl_loader_relocated_v1",
     "softbsl_loader_v2",
+    "softbsl_loader_v3_bench_failed",
+    "softbsl_loader_v9",
     "softbsl_loader_v10",
 )
-_DEPRECATED_CAL_GUARD_IDS = ("cal_guard_v1", "cal_guard_v2", "cal_guard_v4")
+_DEPRECATED_CAL_GUARD_IDS = (
+    "cal_guard_v1",
+    "cal_guard_v2",
+    "cal_guard_v3_compatibility",
+    "cal_guard_v4_bench_failed",
+    "cal_guard_v4",
+)
 _DOOR_PATCH_IDS = {
     "MS41.0": ("door_0x43_ms410", "door_magic_ms410"),
     "MS41.1": ("door_0x43_ms411", "door_magic_ms411"),
@@ -3038,18 +3046,29 @@ def _verify_post_keycycle_bootstrap(args, probe, identity):
         )
 
 
-def _patch_state(image, patch):
-    """Return absent/applied/legacy/partial for one patch's exact edit bytes."""
+def _patch_state(image, patch, file_range=None):
+    """Return absent/applied/legacy/partial for exact edit bytes, optionally in one file range."""
     states = []
     for edit in patch["edits"]:
         offset = int(edit["off"])
         expected = bytes.fromhex(edit["expect"])
         applied = bytes.fromhex(edit["data"])
+        if file_range is not None:
+            lo = max(offset, file_range[0])
+            hi = min(offset + len(applied), file_range[1])
+            if lo >= hi:
+                continue
+            rel_lo, rel_hi = lo - offset, hi - offset
+            offset = lo
+            expected = expected[rel_lo:rel_hi]
+            applied = applied[rel_lo:rel_hi]
         current = bytes(image[offset:offset + len(applied)])
         legacy = edit.get("upgrade_expect", [])
         if isinstance(legacy, str):
             legacy = [legacy]
         legacy = [bytes.fromhex(value) for value in legacy]
+        if file_range is not None:
+            legacy = [value[rel_lo:rel_hi] for value in legacy]
         if current in legacy:
             states.append("legacy")
         elif applied == expected and current == applied:
@@ -3120,20 +3139,12 @@ def _door_bootstrap_conflicts_are_exact(base, patch_defs, door_id="door_0x43"):
 
 def _confirm_reinstall(
         args, base, patch_defs, patch_ids, bootstrap_door_id="door_0x43"):
-    """Confirm a complete existing install; reject ambiguous partial patches."""
+    """Confirm an existing loader after the shared planner validates boot state."""
     states = {patch_id: _patch_state(base, patch_defs[patch_id])
               for patch_id in patch_ids}
-    partial = [patch_id for patch_id, state in states.items()
-               if state == "partial"
-               and not (patch_id == bootstrap_door_id
-                        and _door_bootstrap_conflicts_are_exact(
-                            base, patch_defs, bootstrap_door_id))]
-    if partial:
-        raise SoftBSLError(
-            "partial/inconsistent patch state detected for "
-            + ", ".join(partial)
-            + "; refusing to treat this as a safe reinstall")
-    if states.get(bootstrap_door_id) == "partial":
+    if (states.get(bootstrap_door_id) == "partial"
+            and _door_bootstrap_conflicts_are_exact(
+                base, patch_defs, bootstrap_door_id)):
         _emit("  0x43 bootstrap cave is occupied by an exact persistent patch; "
               "Phase 1 will displace it temporarily and Phase 2 will restore it.")
 
@@ -3220,28 +3231,24 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
                 "there is no AMD-to-Intel reverse patch")
         driver_patches = []
 
-    from engines.patcher.patch_ms41 import load_patches, is_applied, revert
+    from engines.patcher.patch_ms41 import (
+        deprecated_aif_patch_state,
+        is_applied,
+        load_patches,
+        restore_exact_deprecated_aif_payloads,
+        revert,
+    )
     patch_defs = load_patches()
     bootstrap_door_id, persistent_door_id = _door_patch_ids(version)
     clean_base = base
-    current_guard = patch_defs["cal_guard"]
-    normalized_guard = _normalize_patch_marker_for_match(
-        clean_base, current_guard, marker)
-    guard_states = {}
+    exact_guards = []
     for old_guard_id in _DEPRECATED_CAL_GUARD_IDS:
         old_guard = patch_defs.get(old_guard_id)
         normalized = (
             _normalize_patch_marker_for_match(clean_base, old_guard, marker)
             if old_guard else clean_base)
-        if old_guard:
-            guard_states[old_guard_id] = _patch_state(normalized, old_guard)
-    exact_guards = [pid for pid, state in guard_states.items() if state == "applied"]
-    if (_patch_state(normalized_guard, current_guard) != "applied"
-            and not exact_guards
-            and any(state == "partial" for state in guard_states.values())):
-        raise SoftBSLError(
-            "a deprecated CalGuard is partial/corrupt; restore its boot region "
-            "from a known-good backup before migration")
+        if old_guard and is_applied(normalized, old_guard):
+            exact_guards.append(old_guard_id)
     for old_guard_id in exact_guards:
         old_guard = patch_defs[old_guard_id]
         normalized = (
@@ -3257,6 +3264,84 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
             # Exact installed-state matching restores each revision's declared
             # pre-patch bytes before composing the current AIF-safe loader.
             clean_base = bytes(revert(normalized, old_loader))
+
+    deprecated_ids = (*_DEPRECATED_LOADER_IDS, *_DEPRECATED_CAL_GUARD_IDS)
+    clean_base, restored_aif = restore_exact_deprecated_aif_payloads(
+        clean_base, patch_defs, deprecated_ids)
+    if restored_aif:
+        _emit("  restored exact identity-graft AIF residue: "
+              + ", ".join(restored_aif))
+
+    guard_states = {
+        patch_id: deprecated_aif_patch_state(
+            _normalize_patch_marker_for_match(
+                clean_base, patch_defs[patch_id], marker),
+            patch_defs[patch_id],
+        )
+        for patch_id in _DEPRECATED_CAL_GUARD_IDS
+    }
+    if any(state == "partial" for state in guard_states.values()):
+        raise SoftBSLError(
+            "a deprecated CalGuard is partial/corrupt (active/unknown hook); "
+            "restore its boot region from a known-good backup before migration")
+
+    current_loader = patch_defs["softbsl_loader"]
+    normalized_loader = _normalize_patch_marker_for_match(
+        clean_base, current_loader, marker)
+    loader_boot = {
+        **current_loader,
+        "edits": [edit for edit in current_loader["edits"]
+                  if int(edit["off"]) != MARKER_OFF],
+    }
+    loader_boot_state = _patch_state(clean_base, loader_boot, PARAM1_FILE)
+    loader_marker = next(
+        edit for edit in current_loader["edits"]
+        if int(edit["off"]) == MARKER_OFF)
+    marker_bytes = clean_base[MARKER_OFF:MARKER_OFF + 4]
+    if (marker_bytes != bytes.fromhex(loader_marker["expect"])
+            and image_marker(clean_base) is None):
+        loader_boot_state = "partial"
+    current_guard = patch_defs["cal_guard"]
+    guard_program = {
+        **current_guard,
+        "edits": [edit for edit in current_guard["edits"]
+                  if not (PARAM1_FILE[0] <= int(edit["off"])
+                          and int(edit["off"]) + len(bytes.fromhex(edit["data"]))
+                          <= PARAM1_FILE[1])],
+    }
+    current_boot_states = {
+        "softbsl_loader": loader_boot_state,
+        "cal_guard": _patch_state(clean_base, current_guard, PARAM1_FILE),
+        "amd_flash": _patch_state(
+            clean_base, patch_defs["amd_flash"], PARAM1_FILE),
+    }
+    bad_boot = [patch_id for patch_id, state in current_boot_states.items()
+                if state == "partial"]
+    if bad_boot:
+        raise SoftBSLError(
+            "partial/inconsistent boot patch state detected for "
+            + ", ".join(bad_boot)
+            + "; restore the boot region from a known-good backup before migration")
+    if (current_boot_states["cal_guard"] == "applied"
+            and _patch_state(clean_base, guard_program) not in ("absent", "applied")):
+        raise SoftBSLError(
+            "the active CalGuard boot trampoline has an unknown program body; "
+            "restore a complete program or boot region before migration")
+
+    loader_states = {
+        patch_id: deprecated_aif_patch_state(
+            _normalize_patch_marker_for_match(
+                clean_base, patch_defs[patch_id], marker),
+            patch_defs[patch_id],
+        )
+        for patch_id in _DEPRECATED_LOADER_IDS
+    }
+    if (_patch_state(normalized_loader, current_loader) != "applied"
+            and any(state == "partial" for state in loader_states.values())):
+        raise SoftBSLError(
+            "a deprecated Soft-BSL loader has an active/unknown hook with a corrupt body; "
+            "restore its boot region from a known-good backup before migration")
+
     if is_applied(clean_base, patch_defs[bootstrap_door_id]):
         clean_base = bytes(revert(clean_base, patch_defs[bootstrap_door_id]))
     patch_ids = (["softbsl_loader", persistent_door_id]

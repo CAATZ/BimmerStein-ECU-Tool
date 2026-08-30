@@ -123,6 +123,11 @@ function Build-ReleaseInstaller {
 
 Push-Location $root
 try {
+    & $python "packaging\verify_dist.py" --source-only
+    if ($LASTEXITCODE -ne 0) {
+        throw "Public release source verification failed."
+    }
+
     & $python "engines\patcher\verify_ms412_emulator.py"
     if ($LASTEXITCODE -ne 0) {
         throw "Private MS41 patch-admission verification failed."

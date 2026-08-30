@@ -1,0 +1,92 @@
+{
+  "id": "cal_guard_v4_bench_failed",
+  "label": "V4 integrity guard (bench failed)",
+  "deprecated": true,
+  "version": "V4",
+  "title": "CalGuard integrity guard",
+  "status": "BENCH FAILED - ROLLBACK REQUIRED",
+  "tested": false,
+  "user_description": "Bench-failed CalGuard V4 retained only to detect affected ECUs and roll them back to the hardware-proven CalGuard V3 / Soft-BSL V2 pair. Never install this revision.",
+  "description": "Bench failure on 2026-07-24: a host-valid MS41.3 image was routed to the stock DS2 listener with E740=0, so the application-owned 0x2A door was unavailable. The exact bytes are retained only for installed-state detection, direct 0x5A recovery, and rollback.",
+  "target": "MS41.3",
+  "targets": [
+    "MS41.0",
+    "MS41.1",
+    "MS41.2",
+    "MS41.3"
+  ],
+  "recompute": [
+    "boot_crc",
+    "program"
+  ],
+  "requires": [],
+  "conflicts": [
+    "cal_guard"
+  ],
+  "supersedes": [],
+  "cave": {
+    "region": "sa1-fragmented-softbsl-compatible",
+    "base": 24080,
+    "splice_off": 18746,
+    "splice_op": "jmpa",
+    "relocatable": false,
+    "main_cpu": 7696,
+    "main_limit": 436,
+    "main_used": 436,
+    "helpers": {
+      "cal_ids": {
+        "file_base": 23692,
+        "cpu_base": 7308,
+        "used": 12
+      },
+      "compatibility_loop": {
+        "file_base": 23712,
+        "cpu_base": 7328,
+        "used": 14
+      },
+      "compatibility_entry": {
+        "file_base": 24064,
+        "cpu_base": 7680,
+        "used": 16
+      },
+      "find_end": {
+        "file_base": 24554,
+        "cpu_base": 8170,
+        "used": 18
+      }
+    },
+    "shared_crc_core": 7258
+  },
+  "edits": [
+    {
+      "off": 18746,
+      "expect": "f3fa40e749a12d04",
+      "data": "ea00101ecc00cc00"
+    },
+    {
+      "off": 23692,
+      "expect": "ffffffffffffffffffffffff",
+      "data": "313236303431343235393835"
+    },
+    {
+      "off": 23712,
+      "expect": "ffffffffffffffffffffffffffff",
+      "data": "9964994541643d0228713dfacb00"
+    },
+    {
+      "off": 24064,
+      "expect": "ffffffffffffffffffffffffffffffff",
+      "data": "e6f40c00e6f507a0e047ca00a01ccb00"
+    },
+    {
+      "off": 24554,
+      "expect": "ffffffffffffffffffffffffffffffffffff",
+      "data": "40452d062851a96547f6ff002df90851cb00"
+    },
+    {
+      "off": 24080,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "f3fa40e747fa0100ea204a09ecf2ecf3ecf6ecf7ecf8ecf9e6000400f3f8bb3347f853003d23f3f8bc3347f853003d1ef3f8bd3347f831003d19f3f8be3347f876003d14f3f8bf3347f832003d0fe6020f00f2f69a9af2f79c9ae602000046f69a113d1f46f763903d1c0d1fe6020f00f2f69a9af2f79c9ae602000046f69a113d0346f763902d0df2f60e00e6000000e6f48c1ce065987440672d0528513dfb0d00ea009e1fe6000400e6020000ca00001e3df7e6000000e004e6f5141ce6f61147ca005a1cf2f3801c40633d60f3fd6620f3fc6720e6f40021e6f50040ca00ea1fca005a1ce6010100e6f40040e6f50080ca00ea1fca005a1ce0f7ecf7fc02e6f40080e6f500c0ca00ea1f40453d05287146f708009df20d13f087f095e087ecf7fc02e6f4008040783d02f0590d02e6f500c0ca005a1c40782d0208710df0f2f3502040633d23e6000400f2f4000046f44e003d1ce004e6f71400a85446f5ffff2d1346f500409d124054fd10f3fd0e00f3fc0f00ca005a1ca83540633d07f045084228713dea0d02e0150d01e005e6000400e6010500e6020000fcf9fcf8fcf7fcf6fcf3fcf246f50100ea204209ea004a09"
+    }
+  ]
+}

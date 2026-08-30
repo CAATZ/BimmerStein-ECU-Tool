@@ -100,36 +100,24 @@ def test_agent_log_downgrades_mechanics_but_preserves_actionable_messages():
     ]
 
 
-def test_amd_image_is_blocked_on_intel_before_agent_entry(monkeypatch):
-    monkeypatch.setattr(
-        softbsl_service, "_open_session",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("family gate entered the RAM agent")))
-
-    try:
-        softbsl_service.run_flash(
-            "COM1", AMD_IMAGE, "full", prompt=lambda _message: "",
-            log=lambda *_args: None, chip_family="intel")
-        assert False, "AMD image was accepted for an Intel ECU"
-    except softbsl_service.FlashFamilyMismatchError as error:
-        assert "blocked before agent entry" in str(error)
-        assert "built and saved" in str(error)
+@pytest.mark.parametrize(
+    "image,connected_family,expected_image_family",
+    ((AMD_IMAGE, "intel", "amd"), (INTEL_IMAGE, "amd", "intel")),
+    ids=("amd-image-on-intel", "intel-image-on-amd"),
+)
+def test_cross_family_image_is_allowed_when_boot_is_preserved(
+        image, connected_family, expected_image_family):
+    assert softbsl_service.validate_flash_image_family(
+        image, connected_family, write_bootloader=False
+    ) == expected_image_family
 
 
-def test_intel_image_is_blocked_on_amd_before_agent_entry(monkeypatch):
-    monkeypatch.setattr(
-        softbsl_service, "_open_session",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("family gate entered the RAM agent")))
-
-    try:
-        softbsl_service.run_flash(
-            "COM1", INTEL_IMAGE, "full", prompt=lambda _message: "",
-            log=lambda *_args: None, chip_family="amd")
-        assert False, "Intel image was accepted for an AMD ECU"
-    except softbsl_service.FlashFamilyMismatchError as error:
-        assert "Intel 28F" in str(error)
-        assert "AMD/JEDEC 29F" in str(error)
+def test_known_image_requires_a_known_live_family_even_when_boot_is_preserved():
+    with pytest.raises(
+            softbsl_service.FlashFamilyMismatchError,
+            match="connected ECU flash family could not be identified"):
+        softbsl_service.validate_flash_image_family(
+            INTEL_IMAGE, None, write_bootloader=False)
 
 
 def test_hybrid_image_is_blocked_before_agent_entry(monkeypatch):
@@ -611,7 +599,7 @@ def test_run_flash_recovers_to_marker0_in_finally(monkeypatch):
     _install_fakes(monkeypatch, sb)
 
     softbsl_service.run_flash("COM1", VALID_IMAGE, "full", prompt=lambda m: "", log=lambda *a: None,
-                              do_verify=True)
+                              do_verify=True, chip_family="intel")
 
     assert any(isinstance(c, tuple) and c[0] == "flash_image" for c in sb.calls)
     # a write must ALWAYS end at marker 0, reboots into the app, no key-cycle
@@ -624,7 +612,7 @@ def test_run_flash_recovers_to_marker0_even_with_verify_off(monkeypatch):
     _install_fakes(monkeypatch, sb)
 
     softbsl_service.run_flash("COM1", VALID_IMAGE, "full", prompt=lambda m: "", log=lambda *a: None,
-                              do_verify=False)
+                              do_verify=False, chip_family="intel")
 
     # the old behavior left verify-off writes stuck in flash mode (E740=1); now they still recover.
     assert "reset" in sb.calls
@@ -678,7 +666,9 @@ def test_open_session_uses_steady_state_door_not_the_disposable_43_door(monkeypa
     sb = _RecordingSB()
     _install_fakes(monkeypatch, sb)
 
-    softbsl_service.run_flash("COM1", VALID_IMAGE, "tune", prompt=lambda m: "", log=lambda *a: None)
+    softbsl_service.run_flash(
+        "COM1", VALID_IMAGE, "tune", prompt=lambda m: "", log=lambda *a: None,
+        chip_family="intel")
 
     assert sb.calls[0] == ("ensure_flash_mode", {"poll_ready": True})
     assert sb.calls[1] == ("enter_retry", "5a")
@@ -975,7 +965,9 @@ def test_open_session_recovers_and_closes_when_entry_fails_after_the_door(monkey
     _install_fakes(monkeypatch, sb, close_rec=events)
 
     try:
-        softbsl_service.run_flash("COM1", VALID_IMAGE, "tune", prompt=lambda m: "", log=lambda *a: None)
+        softbsl_service.run_flash(
+            "COM1", VALID_IMAGE, "tune", prompt=lambda m: "", log=lambda *a: None,
+            chip_family="intel")
         assert False, "expected the entry failure to propagate"
     except RuntimeError:
         pass
@@ -1170,7 +1162,7 @@ def test_run_flash_full_program_write_falls_back_when_not_bootloader(monkeypatch
     _install_fakes(monkeypatch, sb)
 
     softbsl_service.run_flash("COM1", VALID_IMAGE, "full", prompt=lambda m: "", log=lambda *a: None,
-                              baud="high", write_bootloader=False)
+                              baud="high", write_bootloader=False, chip_family="intel")
     assert attempts["n"] == 2                        # program write (no boot) DID fall back
 
 

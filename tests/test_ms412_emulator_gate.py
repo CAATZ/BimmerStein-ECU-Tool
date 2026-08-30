@@ -65,6 +65,5 @@ def test_admission_list_needs_no_private_inputs():
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == [
         "cal-guard", "loader-doors", "intel-flash", "amd-flash",
-        "st9030-proxy",
         "features-ms410", "features-ms411", "features-ms412", "features-ms413",
     ]

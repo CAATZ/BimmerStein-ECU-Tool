@@ -1,0 +1,86 @@
+{
+  "id": "softbsl_loader_v9",
+  "label": "V9 shared-CRC loader",
+  "version": "V9",
+  "title": "Soft-BSL 0x5A loader",
+  "user_description": "Hardware-proven Soft-BSL V9 retained only for exact installed-state detection and safe migration to the AIF-safe V11 loader.",
+  "description": "Prior shared-CRC V9 loader retained for exact detection and removal. Its main body overlaps BMW AIF programming history.",
+  "status": "DEPRECATED - MIGRATE TO V11",
+  "tested": true,
+  "target": "MS41.3",
+  "targets": [
+    "MS41.0",
+    "MS41.1",
+    "MS41.2",
+    "MS41.3"
+  ],
+  "recompute": [
+    "boot_crc"
+  ],
+  "requires": [],
+  "conflicts": [
+    "softbsl_loader"
+  ],
+  "supersedes": [
+    "softbsl_loader_legacy",
+    "softbsl_loader_relocated_v1",
+    "softbsl_loader_v2",
+    "softbsl_loader_v3_bench_failed"
+  ],
+  "edits": [
+    {
+      "off": 21922,
+      "expect": "440a",
+      "data": "921d"
+    },
+    {
+      "off": 17426,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ca00ea1fe6000400f3f927e4f3f828e440643d02e108db00e118db00ffff"
+    },
+    {
+      "off": 23602,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "000001cc01d8001401f0003c002801e401a0006c007801b40050019c01880044"
+    },
+    {
+      "off": 23634,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "40452d13996451c6f0365cc37cb3d433321c7c465063f0365cc37cb3d433321c7c465063a758a7a70debcb00ffff"
+    },
+    {
+      "off": 23954,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "f3f853e647f85a003d2ff3f823e447f89c003d2af3f824e447f89c003d25be88e168da00d81fc2fc25e45c8cc2f426e470c4e6f500d848c02d06da00c41fb985085128c10df8da00120449803d08e168da00d81fa758a7a7da0000d80dffe7f81500da00d81f0dfada00440adb00"
+    },
+    {
+      "off": 24516,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "4fd87eb7a758a7a79ab7fc70f3f8b2fe7eb7db004ed8f7f8b0fea758a7a79ab6fc707eb6db00"
+    },
+    {
+      "off": 24554,
+      "expect": "ffffffffffffffffffffffffffffffffffff",
+      "data": "e6000000e6f400d8e6f6ffffea00521cffff"
+    },
+    {
+      "off": 24572,
+      "expect": "ffffffff",
+      "data": "a55a42bd"
+    }
+  ],
+  "shared_crc": {
+    "entry": 1042,
+    "core": 7250,
+    "file_base": 23634,
+    "limit": 46,
+    "used": 44,
+    "prepare": 8170,
+    "algorithm": "CRC-16/IBM reflected, boot-flash nibble table",
+    "table_file": 23602,
+    "table_cpu": 7218,
+    "table_size": 32,
+    "table_ram": null
+  },
+  "deprecated": true
+}

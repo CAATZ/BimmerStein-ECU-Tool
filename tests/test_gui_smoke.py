@@ -3113,9 +3113,9 @@ def test_patches_tab_lists_the_ms41_3_patches():
         assert len(w._patch_checkboxes) == 7   # 7 user-facing MS41.3 patches
         pending_badges = {
             label.text()
-            for label in w._patch_rows["ignition_cut_v9"].findChildren(gui.QLabel)
+            for label in w._patch_rows["ignition_cut_v7"].findChildren(gui.QLabel)
         }
-        assert "V9" in pending_badges
+        assert "V7" in pending_badges
         assert "UNTESTED" in pending_badges
         calguard_badges = {
             label.text()
@@ -3132,9 +3132,9 @@ def test_patches_tab_lists_the_ms41_3_patches():
         assert not w._patch_checkboxes["softbsl_loader"].isChecked()
         w._patch_checkboxes["cal_guard"].setChecked(True)
         assert w._patch_checkboxes["softbsl_loader"].isChecked()
-        assert "0x3992A" not in w._patch_checkboxes["ignition_cut_v9"].toolTip()
-        assert "independent ignition-cut limiter" in (
-            w._patch_checkboxes["ignition_cut_v9"].toolTip())
+        assert "0x3992A" not in w._patch_checkboxes["ignition_cut_v7"].toolTip()
+        assert "configurable ignition-cut rev limiter" in (
+            w._patch_checkboxes["ignition_cut_v7"].toolTip())
     finally:
         w.close()
 
@@ -3143,7 +3143,7 @@ def test_patches_tab_warns_for_every_explicitly_untested_patch(monkeypatch):
     app, w = _gui()
     try:
         w._set_patch_base(ref("MS41.3"), "test")
-        w._patch_checkboxes["ignition_cut_v9"].setChecked(True)
+        w._patch_checkboxes["ignition_cut_v7"].setChecked(True)
         shown = {}
 
         def warning(_parent, title, message, *_args):
@@ -3170,17 +3170,17 @@ def test_patch_dependency_is_labeled_and_selected_automatically():
     app, w = _gui()
     try:
         w._set_patch_base(ref("MS41.3"), "test")
-        launch = w._patch_checkboxes["launch_control_v7"]
-        ignition = w._patch_checkboxes["ignition_cut_v9"]
+        launch = w._patch_checkboxes["launch_control_v5"]
+        ignition = w._patch_checkboxes["ignition_cut_v7"]
 
         labels = {
             label.text()
-            for label in w._patch_rows["launch_control_v7"].findChildren(gui.QLabel)
+            for label in w._patch_rows["launch_control_v5"].findChildren(gui.QLabel)
         }
-        assert "V7" in labels
+        assert "V5" in labels
         assert "UNTESTED" in labels
-        assert "REQUIRES IGNITION CUT V9" in labels
-        assert "Required patch: Ignition Cut V9" in launch.toolTip()
+        assert "REQUIRES IGNITION CUT V7" in labels
+        assert "Required patch: Ignition Cut V7" in launch.toolTip()
 
         launch.setChecked(True)
         assert launch.isChecked()
@@ -3200,15 +3200,15 @@ def test_patch_dependency_never_removes_a_conflicting_selection(monkeypatch):
         monkeypatch.setattr(
             gui.patch_service,
             "collisions",
-            lambda selected: {"ignition_cut_v9"}
-            if "launch_control_v7" in selected else set(),
+            lambda selected: {"ignition_cut_v7"}
+            if "launch_control_v5" in selected else set(),
         )
 
-        launch = w._patch_checkboxes["launch_control_v7"]
+        launch = w._patch_checkboxes["launch_control_v5"]
         launch.setChecked(True)
 
         assert launch.isChecked()
-        assert not w._patch_checkboxes["ignition_cut_v9"].isChecked()
+        assert not w._patch_checkboxes["ignition_cut_v7"].isChecked()
         assert not w.btn_patches_build.isEnabled()
         assert "Required patch unavailable" in w.btn_patches_build.toolTip()
     finally:
@@ -3221,25 +3221,25 @@ def test_installed_dependency_remove_button_is_blocked_by_launch_control():
     app, w = _gui()
     try:
         combined, _ = patch_service.build_image(
-            ref("MS41.3"), ["ignition_cut_v9", "launch_control_v7"]
+            ref("MS41.3"), ["ignition_cut_v7", "launch_control_v5"]
         )
         w._set_patch_base(combined, "dependency-removal-test")
 
-        buttons = w._patch_rows["ignition_cut_v9"].findChildren(QPushButton)
+        buttons = w._patch_rows["ignition_cut_v7"].findChildren(QPushButton)
         remove = next(button for button in buttons if button.text() == "✕ Remove")
         labels = {
             label.text()
-            for label in w._patch_rows["ignition_cut_v9"].findChildren(gui.QLabel)
+            for label in w._patch_rows["ignition_cut_v7"].findChildren(gui.QLabel)
         }
         assert remove.isEnabled() is False
-        assert "Launch Control V7" in remove.toolTip()
+        assert "Launch Control V5" in remove.toolTip()
         assert "USED BY LAUNCH CONTROL" in labels
         used_by = next(
             label
-            for label in w._patch_rows["ignition_cut_v9"].findChildren(gui.QLabel)
+            for label in w._patch_rows["ignition_cut_v7"].findChildren(gui.QLabel)
             if label.text() == "USED BY LAUNCH CONTROL"
         )
-        assert "Launch Control V7" in used_by.toolTip()
+        assert "Launch Control V5" in used_by.toolTip()
     finally:
         w.close()
 
@@ -3277,7 +3277,7 @@ def test_patches_tab_removes_field_failed_v6_and_enables_v9(monkeypatch):
 
         assert w._patch_checkboxes["ignition_cut_v6"].isChecked()
         assert not w._patch_checkboxes["ignition_cut_v6"].isEnabled()
-        assert not w._patch_checkboxes["ignition_cut_v9"].isEnabled()
+        assert not w._patch_checkboxes["ignition_cut_v7"].isEnabled()
         badges = {
             label.text()
             for label in w._patch_rows["ignition_cut_v6"].findChildren(gui.QLabel)
@@ -3294,7 +3294,7 @@ def test_patches_tab_removes_field_failed_v6_and_enables_v9(monkeypatch):
         w._on_patch_remove("ignition_cut_v6")
 
         assert "ignition_cut_v6" not in w._patch_checkboxes
-        assert w._patch_checkboxes["ignition_cut_v9"].isEnabled()
+        assert w._patch_checkboxes["ignition_cut_v7"].isEnabled()
         assert w.btn_patches_build.isEnabled()
         assert "Removed ignition_cut_v6" in w.patches_log.toPlainText()
     finally:
