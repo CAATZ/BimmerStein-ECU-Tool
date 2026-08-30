@@ -323,6 +323,8 @@ Special thanks to the people who helped shape and validate BimmerStein ECU Tool.
 | [NXT-Tronic](https://github.com/NXT-Tronic) and [grantUser](https://github.com/grantUser) | Collaborative ideation and development feedback |
 | **Alpine** | Beta testing |
 | **roimaomanik** | Beta testing |
+| **Knotti** | Beta testing |
+| [**avail**](https://github.com/avail) | Linux testing |
 | **Alphamk4** | MS41.0 patch testing |
 | [**Siemens_MS41_Checksum**](https://github.com/kimfreding/Siemens_MS41_Checksum) (kimfreding) and [**pyms41**](https://github.com/OpenMS41/pyms41) (jpiccari) | MS41 CRC-16 checksum work that `ms41_checksum.py` builds on |
 | [**c166-ghidra-module**](https://github.com/keyhana/c166-ghidra-module) (keyhana) | C166 SLEIGH processor module for [**Ghidra**](https://github.com/NationalSecurityAgency/ghidra), used to disassemble and assemble the RAM monitor and the `0xFA40` stubs |
