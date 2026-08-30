@@ -327,6 +327,35 @@ def _verify_patch_tree(packaged: Path) -> int:
 
 
 
+def verify_public_source() -> dict:
+    """Reject private inputs before either frozen backend is built."""
+    for forbidden in ("android", "_private"):
+        if (ROOT / forbidden).exists():
+            raise RuntimeError(f"private source directory entered release source: {forbidden}")
+
+    patcher = ROOT / "engines" / "patcher"
+
+    romraider = patcher / "romraider"
+    inputs = [
+        ROOT / "gui.py",
+        ROOT / "patch_service.py",
+        ROOT / "live_data.py",
+        ROOT / "README.md",
+        ROOT / "CHANGELOG.md",
+        ROOT / "RELEASE_NOTES.md",
+        ROOT / "manual" / "USER_MANUAL.md",
+        ROOT / "packaging" / "capture_manual_screenshots.py",
+        romraider / "README.md",
+        romraider / "build_patch_definitions.py",
+        *romraider.glob("*.xml"),
+        *(patcher / "patches").glob("*.json"),
+    ]
+    missing = [str(path) for path in inputs if not path.is_file()]
+    if missing:
+        raise RuntimeError("public release input is missing:\n" + "\n".join(missing))
+    return {"source_inputs": len(inputs), "private_paths": 0}
+
+
 def verify_distribution(
         app_dir: Path,
         *,
@@ -524,12 +553,20 @@ def main() -> int:
         help="require packaged documents and metadata to identify this version",
     )
     parser.add_argument(
+        "--source-only",
+        action="store_true",
+        help="verify public release inputs without requiring a built application",
+    )
+    parser.add_argument(
         "app_dir",
         nargs="?",
         type=Path,
         default=ROOT / "dist" / APP_NAME,
     )
     args = parser.parse_args()
+    if args.source_only:
+        print(json.dumps(verify_public_source(), indent=2))
+        return 0
     result = verify_distribution(
         args.app_dir,
         expected_backend=args.backend,

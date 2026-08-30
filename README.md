@@ -85,6 +85,12 @@ least 10 seconds, then ignition ON.
 | Hardware BSL | Intel 28F200 and AMD/JEDEC 29F200/29F400 through a separate direct ASC0 connection |
 | Image sizes | 256 KB full ROM and 24 KB tune |
 
+> [!WARNING]
+> **HIGHLY EXPERIMENTAL — NOT VEHICLE TESTED.** The Coding tab can change configuration in multiple
+> vehicle modules. Built-in profiles and read-back checks reduce mistakes, but they do not prove a
+> change is safe for a particular vehicle. Back up first, use stable power, keep the engine off,
+> change only settings you understand, and be prepared to restore the original coding.
+
 Hardware-BSL and armed Soft-BSL boot-region operations are advanced recovery-sensitive workflows.
 Intel 28F200 erase/program also requires the correct external VPP/RP# supply; AMD/JEDEC parts do
 not use that Intel programming-voltage requirement.
@@ -172,31 +178,30 @@ The Patches tab detects installed and deprecated revisions, validates dependenci
 collisions, corrects checksums, and archives the composed image in Bins.
 
 > [!WARNING]
-> **HIGHLY EXPERIMENTAL — ON-CAR TESTING REQUIRED.** Ignition Cut V9, Launch Control V7,
-> and AlphaN MAF-failsafe V3 are offline exact-byte verified but have not completed on-car validation.
+> **HIGHLY EXPERIMENTAL — ON-CAR TESTING REQUIRED.** Ignition Cut V7, Launch Control V4/V5,
+> and AlphaN MAF-failsafe V3 have not completed on-car validation.
 > Unexpected engine behavior, stalling, failure to limit RPM, or other unintended results are
 > possible. Test only in controlled off-road or bench
 > conditions, begin conservatively, monitor the engine closely, and keep a verified stock image and
 > recovery path available. Do not rely on these patches for engine protection or any safety-critical
 > function.
 >
-> **IGNITION CUT HAZARD.** Ignition Cut V9 remains experimental. It may suppress spark while
-> injection continues at the stock or configured fixed pulse width. Unburned fuel can damage
+> **IGNITION CUT HAZARD.** Ignition Cut remains experimental. It may suppress spark while
+> injection continues. Unburned fuel can damage
 > catalytic converters and exhaust components; never use it on a car with catalytic converters.
-> Its fuel-adaptation and diagnostic guards are offline exact-byte verified but not vehicle-validated.
 
 The Patches tab shows each revision's verification status. Deprecated revisions, including broken
-AlphaN MAF-failsafe V1/V2, non-working Ignition Cut V6, superseded Ignition Cut V7/V8, and Launch
-Control V6, remain detectable and remove-only so an older installation can still be removed safely
-during migration.
+AlphaN MAF-failsafe V1/V2 and earlier variant-specific Ignition Cut and Launch Control releases,
+remain detectable and remove-only so an older installation can still be removed safely during
+migration.
 
 Every Windows package includes `BimmerStein MS41 Patch Definitions.xml` beside the executable for
 RomRaider or BimmerStein Tuning Suite. It covers the calibration items introduced by supported
 patches; install the matching firmware patch before editing those tables and verify the ECU variant,
 calibration ID, and patch revision. A mismatched definition can expose incorrect tables or write to
-the wrong calibration addresses. Standalone Ignition Cut and Launch ignition mode have separate RPM
-hysteresis and fixed injector-pulse-width settings. Launch fuel mode continues to use the stock
-staged fuel limiter and ignores the Launch ignition-only settings.
+the wrong calibration addresses. Ignition Cut provides switch and RPM controls. Launch Control adds
+its mode, clutch, speed, throttle, and limiter settings; fuel mode continues to use the stock staged
+fuel limiter.
 
 ## Installation
 

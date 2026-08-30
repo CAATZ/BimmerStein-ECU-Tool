@@ -35,7 +35,7 @@ _SWITCH_INPUT_CHOICES = (
 # also contains internal markers; keeping this allow-list separate prevents a
 # UI or caller from turning every symbolic address into a write primitive.
 _EDITABLE_PARAMETER_FAMILIES = {
-    "ignition_cut_v9": (
+    "ignition_cut_v7": (
         {
             "id": "CUTSW", "label": "Switch input", "kind": "choice",
             "codec": "choice", "choices": _SWITCH_INPUT_CHOICES,
@@ -47,23 +47,8 @@ _EDITABLE_PARAMETER_FAMILIES = {
             "maximum": "8160", "step": "32", "decimals": 0,
             "description": "Spark-cut threshold, stored in 32 RPM steps.",
         },
-        {
-            "id": "CUT_HYST", "label": "RPM hysteresis", "kind": "number",
-            "codec": "rpm_hysteresis_u8", "units": "RPM", "minimum": "0",
-            "maximum": "8128", "step": "32", "decimals": 0,
-            "specials": (("@legacy_zero", "Legacy zero hysteresis", 0xFF),),
-            "description": "Spark resumes below the cut RPM by this amount.",
-        },
-        {
-            "id": "CUT_IPW", "label": "Fixed injector pulse width",
-            "kind": "number", "codec": "ipw_u16le", "units": "ms",
-            "minimum": "0", "maximum": "349.95156", "step": "0.00534",
-            "decimals": 5,
-            "specials": (("@stock", "Preserve stock injection", 0xFFFF),),
-            "description": "Injector pulse width while standalone spark cut is active.",
-        },
     ),
-    "launch_control_v7": (
+    "launch_control_v4": (
         {
             "id": "LC_SW", "label": "Switch / mode", "kind": "choice",
             "codec": "choice", "choices": _SWITCH_INPUT_CHOICES,
@@ -73,7 +58,7 @@ _EDITABLE_PARAMETER_FAMILIES = {
             "id": "LC_CUTTYPE", "label": "Cut type", "kind": "choice",
             "codec": "choice", "choices": (
                 ("fuel", "Fuel cut (stock injector limiter)", 0x00),
-                ("ignition", "Ignition cut (shared V9 engine)", 0x01),
+                ("ignition", "Ignition cut (shared V7 engine)", 0x01),
             ),
             "description": "Selects the launch limiter strategy.",
         },
@@ -116,21 +101,6 @@ _EDITABLE_PARAMETER_FAMILIES = {
             "specials": (("@auto", "Automatic: soft cut + 96 RPM", 0xFF),),
             "description": "Upper fuel-cut threshold; ignition mode ignores it.",
         },
-        {
-            "id": "LC_HYST", "label": "Ignition RPM hysteresis",
-            "kind": "number", "codec": "rpm_hysteresis_u8", "units": "RPM",
-            "minimum": "0", "maximum": "8128", "step": "32", "decimals": 0,
-            "specials": (("@legacy_zero", "Legacy zero hysteresis", 0xFF),),
-            "description": "Spark resumes below the soft cut by this amount.",
-        },
-        {
-            "id": "LC_IPW", "label": "Ignition fixed injector pulse width",
-            "kind": "number", "codec": "ipw_u16le", "units": "ms",
-            "minimum": "0", "maximum": "349.95156", "step": "0.00534",
-            "decimals": 5,
-            "specials": (("@stock", "Preserve stock injection", 0xFFFF),),
-            "description": "Injector pulse width while launch spark cut is active.",
-        },
     ),
     "vanos_minrpm": (
         {
@@ -142,6 +112,9 @@ _EDITABLE_PARAMETER_FAMILIES = {
         },
     ),
 }
+_EDITABLE_PARAMETER_FAMILIES["launch_control_v5"] = (
+    _EDITABLE_PARAMETER_FAMILIES["launch_control_v4"]
+)
 
 
 def definitions():
@@ -385,7 +358,7 @@ def editable_parameters(data):
 
 
 def _validate_parameter_relationships(image, patch, specs):
-    if _parameter_family(patch) != "launch_control_v7":
+    if _parameter_family(patch) not in {"launch_control_v4", "launch_control_v5"}:
         return
     by_id = {spec["id"]: spec for spec in specs}
 

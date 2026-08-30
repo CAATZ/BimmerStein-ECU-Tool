@@ -26,6 +26,8 @@
   "supersedes": [
     "cal_guard_v1",
     "cal_guard_v2",
+    "cal_guard_v3_compatibility",
+    "cal_guard_v4_bench_failed",
     "cal_guard_v4"
   ],
   "cave": {

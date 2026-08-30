@@ -140,7 +140,6 @@ _WBO2_ENABLE_ADDR = 0xFD22
 _WBO2_ENABLE_MASK = 0x0100
 _NARROWBAND_EMULATION_ADDR = 0xFD5A
 _NARROWBAND_EMULATION_MASK = 0x0004
-_CUT_STATE_ADDR = 0xE847
 # Calibration SA 0x33C0 is visible to a DS2 CPU-memory read at 0x133C0.
 # Its little-endian word is the live 10-bit ADC source pointer used by FUN_024570.
 _WBO2_INPUT_SELECT_DS2_ADDR = 0x133C0
@@ -181,46 +180,6 @@ _PROFILE_DISPLAY_ROWS = [
     ("Wideband Input Voltage", "V"),
     ("Wideband AFR", "AFR"),
     ("AFR Target", "AFR"),
-    ("Cut Input 80", ""),
-    ("Cut Input 81", ""),
-    ("Cut Input 82", ""),
-    ("Ignition Cut Switch", ""),
-    ("Ignition Cut RPM", "RPM"),
-    ("Cut Hysteresis", "RPM"),
-    ("Cut Fixed IPW", "ms"),
-    ("Launch Control Switch", ""),
-    ("Launch Cut Type", ""),
-    ("Launch Clutch Polarity", ""),
-    ("Launch Control RPM", "RPM"),
-    ("Launch Arm Speed", "km/h"),
-    ("Launch Max Speed", "km/h"),
-    ("Launch Min TPS", "%"),
-    ("Launch Hard Cut RPM", "RPM"),
-    ("Launch Ignition Hysteresis", "RPM"),
-    ("Launch Ignition Fixed IPW", "ms"),
-    ("Ignition Cut Request", ""),
-    ("Launch Ignition Request", ""),
-    ("Launch Fuel Cut Active", ""),
-    ("Intentional Combustion Cut", ""),
-    ("Cut Patch Runtime", ""),
-    ("Launch Armed", ""),
-    ("Launch Legacy FD5A.7", ""),
-    ("Stock Limiter Active", ""),
-    ("Fuel Cut Stage Count", ""),
-    ("Cut RPM", "RPM"),
-    ("Launch TPS", "%"),
-    ("Launch Speed", "km/h"),
-    ("Fuel Trim Additive", "ms"),
-    ("Fuel Trim Additive B2", "ms"),
-    ("Lambda Regulation B1", ""),
-    ("Lambda Regulation B2", ""),
-    ("O2 Heater Front B1", "%"),
-    ("O2 Heater Front B2", "%"),
-    ("O2 Heater Rear B1", "%"),
-    ("O2 Heater Rear B2", "%"),
-    ("Lambda Monitor Counter", ""),
-    ("Lambda Functions FD0E", ""),
-    ("Lambda Functions FD10", ""),
 ]
 PROFILE_DISPLAY_NAMES = frozenset(name for name, _unit in _PROFILE_DISPLAY_ROWS)
 _PROFILE_STATUS_NAMES = frozenset({
@@ -251,12 +210,6 @@ _LIVE_DIAL_SPECS = {
     ("EVAP Purge Duty", "%"): (0.0, 100.0, 10.0, "E202:PWM_Evap", "direct"),
     ("Wideband AFR", "AFR"): (8.0, 22.0, 1.0, "P58", "direct"),
     ("AFR Target", "AFR"): (8.0, 22.0, 1.0, "P60", "direct"),
-    ("Fuel Trim Additive", "ms"): (-5.0, 5.0, 1.0, "E19", "direct"),
-    ("Fuel Trim Additive B2", "ms"): (-5.0, 5.0, 1.0, "E20", "direct"),
-    ("O2 Heater Front B1", "%"): (0.0, 100.0, 10.0, "E15", "direct"),
-    ("O2 Heater Front B2", "%"): (0.0, 100.0, 10.0, "E16", "direct"),
-    ("O2 Heater Rear B1", "%"): (0.0, 100.0, 10.0, "E17", "direct"),
-    ("O2 Heater Rear B2", "%"): (0.0, 100.0, 10.0, "E18", "direct"),
     # Same definition scale, with the app's reviewed working-RAM/ADC mirror.
     ("Battery Voltage", "V"): (0.0, 20.0, 2.0, "P17:working-RAM", "reviewed-semantic"),
     ("Front O2 B1 Voltage", "V"): (0.0, 5.0, 0.5, "E101:ADC10-mirror", "reviewed-semantic"),
@@ -269,31 +222,13 @@ _LIVE_STATUS_CHANNELS = frozenset({
     ("Closed Throttle", ""), ("Part Load", ""), ("Full Load", ""),
     ("Decel Fuel Cut", ""), ("Engine Start", ""),
     ("Wideband Mode", ""), ("Narrowband Emulation", ""),
-    ("Cut Input 80", ""), ("Cut Input 81", ""), ("Cut Input 82", ""),
-    ("Ignition Cut Request", ""), ("Launch Ignition Request", ""),
-    ("Launch Fuel Cut Active", ""), ("Intentional Combustion Cut", ""),
-    ("Cut Patch Runtime", ""), ("Launch Armed", ""),
-    ("Launch Legacy FD5A.7", ""), ("Stock Limiter Active", ""),
-    ("Lambda Regulation B1", ""), ("Lambda Regulation B2", ""),
 })
 
 _LIVE_VALUE_CHANNELS = frozenset({
     ("Injector PW", "ms"), ("Wideband Input Source", ""),
-    ("Ignition Cut Switch", ""), ("Ignition Cut RPM", "RPM"),
-    ("Cut Hysteresis", "RPM"), ("Cut Fixed IPW", "ms"),
-    ("Launch Control Switch", ""), ("Launch Cut Type", ""),
-    ("Launch Clutch Polarity", ""), ("Launch Control RPM", "RPM"),
-    ("Launch Arm Speed", "km/h"), ("Launch Max Speed", "km/h"),
-    ("Launch Min TPS", "%"), ("Launch Hard Cut RPM", "RPM"),
-    ("Launch Ignition Hysteresis", "RPM"),
-    ("Launch Ignition Fixed IPW", "ms"), ("Cut RPM", "RPM"),
-    ("Launch TPS", "%"), ("Launch Speed", "km/h"),
 })
 
-_LIVE_RAW_CHANNELS = frozenset({
-    ("Fuel Cut Stage Count", ""), ("Lambda Monitor Counter", ""),
-    ("Lambda Functions FD0E", ""), ("Lambda Functions FD10", ""),
-})
+_LIVE_RAW_CHANNELS = frozenset()
 
 
 def live_display_spec(name: str, unit: str) -> dict:
@@ -382,44 +317,6 @@ _ECU_FAMILY = {
     "SHINDE1": "1406464",   # MS41.3 bench build (shares MS41.2 RAM layout)
 }
 
-# Patch/runtime addresses are grounded in the four V9/V7 descriptors and the
-# matching RomRaider logger definitions. Full-read file offsets for patch
-# calibrations are converted to CPU-memory addresses with offset XOR 0x4000.
-_CUT_LIVE_LAYOUT = {
-    "1429861": {
-        "input": ((0xFD51, 0x02), (0xFD51, 0x01), (0xFD50, 0x80)),
-        "rpm": 0xFAE6, "speed": 0xEDF4, "tps": 0xE8D0, "stage": 0xED51,
-        "ignition_cals": 0x13010, "launch_cals": 0x13020,
-        "launch_latch": 0xFD80,
-        "sreg": (0xED58, 0xED92), "heater_front": (0xEDE3, 0xEDEB),
-    },
-    "1437806": {
-        "input": ((0xFD61, 0x02), (0xFD61, 0x01), (0xFD60, 0x80)),
-        "rpm": 0xFC3C, "speed": 0xF1BE, "tps": 0xE8D0, "stage": 0xF02B,
-        "ignition_cals": 0x13700, "launch_cals": 0x13710,
-        "launch_latch": 0xFDB6,
-        "sreg": (0xF032, 0xF0EE), "heater_front": (0xF1AF, 0xF1B7),
-        "heater_rear": (0xF07C, 0xF138), "lambda_counter": 0xEDE6,
-    },
-    "1406464": {
-        "input": ((0xFD61, 0x02), (0xFD61, 0x01), (0xFD60, 0x80)),
-        "rpm": 0xFC3C, "speed": 0xF19A, "tps": 0xE8D0, "stage": 0xF013,
-        "ignition_cals": 0x12A65, "launch_cals": 0x1352C,
-        "launch_latch": 0xFDB6,
-        "sreg": (0xF01A, 0xF0C6), "heater_front": (0xF189, 0xF191),
-        "heater_rear": (0xF064, 0xF110), "lambda_counter": 0xEDE6,
-        "lambda_functions": (0xFD0E, 0xFD10),
-    },
-    "SHINDE1": {
-        "input": ((0xFD61, 0x02), (0xFD61, 0x01), (0xFD60, 0x80)),
-        "rpm": 0xFC3C, "speed": 0xF19A, "tps": 0xE8D0, "stage": 0xF013,
-        "ignition_cals": 0x12A65, "launch_cals": 0x147E0,
-        "launch_latch": 0xFDB6,
-        "sreg": (0xF01A, 0xF0C6), "heater_front": (0xF189, 0xF191),
-        "heater_rear": (0xF064, 0xF110), "lambda_counter": 0xEDE6,
-        "lambda_functions": (0xFD0E, 0xFD10),
-    },
-}
 _LIVE_SHARED_IDS = frozenset({
     "1405854", "1406464", "SHINDE1", "1429373", "1429861", "1432401",
     "1437806", "1440176",
@@ -476,158 +373,8 @@ def _profile_telegram_params(profile: str, wideband_input_addr: int):
     ]
 
 
-def _cut_telegram_params(ecu_id, fam_map):
-    layout = _CUT_LIVE_LAYOUT.get(ecu_id)
-    if layout is None:
-        return []
-
-    def state_param(name, address, mask):
-        return TelegramParameter(
-            name, "", address, 1, False,
-            lambda x: _state(x & mask), "{}",
-        )
-
-    def selector(value):
-        return {
-            0x00: "Always", 0x01: "Input 80", 0x02: "Input 81",
-            0x04: "Input 82", 0xFF: "Off",
-        }.get(value, f"Invalid 0x{value:02X}")
-    ignition_cals = layout["ignition_cals"]
-    launch_cals = layout["launch_cals"]
-    params = [
-        *[
-            state_param(f"Cut Input {pin}", address, mask)
-            for pin, (address, mask) in zip((80, 81, 82), layout["input"])
-        ],
-        TelegramParameter(
-            "Ignition Cut Switch", "", ignition_cals, 1, False,
-            selector, "{}",
-        ),
-        TelegramParameter(
-            "Ignition Cut RPM", "RPM", ignition_cals + 1, 1, False,
-            lambda x: x * 32, "{:.0f}",
-        ),
-        TelegramParameter(
-            "Cut Hysteresis", "RPM", ignition_cals + 2, 1, False,
-            lambda x: "Legacy (0)" if x == 0xFF else str(x * 32), "{}",
-        ),
-        TelegramParameter(
-            "Cut Fixed IPW", "ms", ignition_cals + 3, 2, False,
-            lambda x: "Stock" if x == 0xFFFF else f"{x * 0.00534:.2f}", "{}",
-        ),
-        TelegramParameter(
-            "Launch Control Switch", "", launch_cals, 1, False,
-            selector, "{}",
-        ),
-        TelegramParameter(
-            "Launch Cut Type", "", launch_cals + 1, 1, False,
-            lambda x: {0: "Fuel", 1: "Ignition"}.get(x, f"Invalid {x}"), "{}",
-        ),
-        TelegramParameter(
-            "Launch Clutch Polarity", "", launch_cals + 2, 1, False,
-            lambda x: "Active-low (0V)" if x else "Active-high (5V)", "{}",
-        ),
-        TelegramParameter(
-            "Launch Control RPM", "RPM", launch_cals + 3, 1, False,
-            lambda x: x * 32, "{:.0f}",
-        ),
-        TelegramParameter(
-            "Launch Arm Speed", "km/h", launch_cals + 4, 1, False,
-            lambda x: x, "{:.0f}",
-        ),
-        TelegramParameter(
-            "Launch Max Speed", "km/h", launch_cals + 5, 1, False,
-            lambda x: x, "{:.0f}",
-        ),
-        TelegramParameter(
-            "Launch Min TPS", "%", launch_cals + 6, 1, False,
-            lambda x: x * 0.47, "{:.0f}",
-        ),
-        TelegramParameter(
-            "Launch Hard Cut RPM", "RPM", launch_cals + 7, 1, False,
-            lambda x: "Soft + 96" if x == 0xFF else str(x * 32), "{}",
-        ),
-        TelegramParameter(
-            "Launch Ignition Hysteresis", "RPM", launch_cals + 8, 1, False,
-            lambda x: "Zero (0)" if x == 0xFF else str(x * 32), "{}",
-        ),
-        TelegramParameter(
-            "Launch Ignition Fixed IPW", "ms", launch_cals + 9, 2, False,
-            lambda x: "Stock" if x == 0xFFFF else f"{x * 0.00534:.2f}", "{}",
-        ),
-        state_param("Ignition Cut Request", _CUT_STATE_ADDR, 0x01),
-        state_param("Launch Ignition Request", _CUT_STATE_ADDR, 0x02),
-        state_param("Launch Fuel Cut Active", _CUT_STATE_ADDR, 0x04),
-        TelegramParameter(
-            "Intentional Combustion Cut", "", _CUT_STATE_ADDR, 1, False,
-            lambda x: _state((x & 0xF0) == 0xA0 and x & 0x07), "{}",
-        ),
-        TelegramParameter(
-            "Cut Patch Runtime", "", _CUT_STATE_ADDR, 1, False,
-            lambda x: _state((x & 0xF0) == 0xA0), "{}",
-        ),
-        state_param("Launch Armed", layout["launch_latch"], 0x40),
-        state_param("Launch Legacy FD5A.7", 0xFD5A, 0x80),
-        state_param("Stock Limiter Active", 0xFD13, 0x80),
-        TelegramParameter(
-            "Fuel Cut Stage Count", "", layout["stage"], 1, False,
-            lambda x: x, "{}",
-        ),
-        TelegramParameter(
-            "Cut RPM", "RPM", layout["rpm"], 1, False,
-            lambda x: x * 32, "{:.0f}",
-        ),
-        TelegramParameter(
-            "Launch TPS", "%", layout["tps"], 1, False,
-            lambda x: x * 0.47, "{:.1f}",
-        ),
-        TelegramParameter(
-            "Launch Speed", "km/h", layout["speed"], 1, False,
-            lambda x: x, "{:.0f}",
-        ),
-        TelegramParameter(
-            "Fuel Trim Additive", "ms", fam_map["Fuel Trim Additive"],
-            2, False, lambda x: (x - 32768) * 0.00534, "{:.2f}",
-        ),
-        TelegramParameter(
-            "Fuel Trim Additive B2", "ms", fam_map["Fuel Trim Additive B2"],
-            2, False, lambda x: (x - 32768) * 0.00534, "{:.2f}",
-        ),
-        state_param("Lambda Regulation B1", layout["sreg"][0], 0x08),
-        state_param("Lambda Regulation B2", layout["sreg"][1], 0x08),
-        *[
-            TelegramParameter(
-                f"O2 Heater Front B{bank}", "%", address, 1, False,
-                lambda x: x * 100 / 255, "{:.1f}",
-            )
-            for bank, address in enumerate(layout["heater_front"], 1)
-        ],
-    ]
-    params.extend(
-        TelegramParameter(
-            f"O2 Heater Rear B{bank}", "%", address, 1, False,
-            lambda x: x * 100 / 255, "{:.1f}",
-        )
-        for bank, address in enumerate(layout.get("heater_rear", ()), 1)
-    )
-    if "lambda_counter" in layout:
-        params.append(TelegramParameter(
-            "Lambda Monitor Counter", "", layout["lambda_counter"],
-            2, False, lambda x: x, "{}",
-        ))
-    params.extend(
-        TelegramParameter(
-            f"Lambda Functions FD{address & 0xFF:02X}", "", address,
-            2, False, lambda x: f"0x{x:04X}", "{}",
-        )
-        for address in layout.get("lambda_functions", ())
-    )
-    return params
-
-
 def telegram_params_for(ecu_id, profile: str = PROFILE_STANDARD,
                         wideband_input_addr: int = _DEFAULT_WBO2_INPUT_ADDR,
-                        include_cut: bool = False,
                         ) -> List["TelegramParameter"]:
     """
     Build the telegram parameter list for a given ECU ID. Shared parameters and
@@ -651,8 +398,6 @@ def telegram_params_for(ecu_id, profile: str = PROFILE_STANDARD,
             continue                                  # varying param, unknown for this ID
         params.append(TelegramParameter(name, unit, addr, length, signed, convert, fmt))
     params.extend(_profile_telegram_params(profile, wideband_input_addr))
-    if include_cut:
-        params.extend(_cut_telegram_params(ecu_id, fam_map))
     return params
 
 
@@ -950,7 +695,6 @@ class LiveDataPoller:
         self._ecu_variant  = ecu_variant
         self._profile      = PROFILE_STANDARD
         self._profile_ready = False
-        self._cut_patch_active = False
         self._wideband_input_addr = _DEFAULT_WBO2_INPUT_ADDR
         # Resolve only parameters explicitly mapped for this ECU ID.
         self._tel_params   = telegram_params_for(ecu_id)
@@ -1126,20 +870,9 @@ class LiveDataPoller:
                             "showing the Front O2 Bank 1 input")
 
         key = self._ecu_id
-        if self._ds2 is not None and str(key) in _CUT_LIVE_LAYOUT:
-            try:
-                cut_state = bytes(self._ds2.read_mem(_CUT_STATE_ADDR, 1))
-                if len(cut_state) != 1:
-                    raise ValueError(f"short read {len(cut_state)}/1")
-                self._cut_patch_active = (cut_state[0] & 0xF0) == 0xA0
-            except Exception as error:
-                with self._lock:
-                    self._errors.append(
-                        f"Cut-patch runtime status unavailable ({error})")
         self._profile = profile
         self._wideband_input_addr = input_addr
-        self._tel_params = telegram_params_for(
-            key, profile, input_addr, include_cut=self._cut_patch_active)
+        self._tel_params = telegram_params_for(key, profile, input_addr)
         self._tel_blocks = _build_telegram_blocks(self._tel_params)
         self._batch_layout = batch_layout_for(key, profile, input_addr)
         active_names = {
@@ -1219,10 +952,6 @@ class LiveDataPoller:
         """
         self._prepare_live_profile()
         self._ensure_csv()
-        if self._cut_patch_active:
-            self._telegram_unavailable(
-                "Cut-patch diagnostics require direct standard DS2 reads")
-            return
         if self._batch_layout is None:
             self._telegram_unavailable(
                 "Telegram logging is not mapped for this ECU ID")

@@ -17,6 +17,8 @@
     "softbsl_loader_legacy",
     "softbsl_loader_relocated_v1",
     "softbsl_loader_v2",
+    "softbsl_loader_v3_bench_failed",
+    "softbsl_loader_v9",
     "softbsl_loader_v10"
   ],
   "cave": null,

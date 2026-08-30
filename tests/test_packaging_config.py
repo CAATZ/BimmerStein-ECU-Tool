@@ -208,6 +208,7 @@ def test_release_packaging_requires_explicit_license_gates():
     assert "DefinitionRedistributionApproved" not in text
     assert "calibration_definitions_bundled = $true" in text
     assert "verify_dist.py" in text
+    assert '"packaging\\verify_dist.py" --source-only' in text
     assert "b[1-9]\\d*" in text
     assert '"BimmerStein-ECU-Tool-$Version-Windows-x64"' in text
     assert '"BimmerStein-ECU-Tool-$Version-Windows-x64-Nuitka"' in text

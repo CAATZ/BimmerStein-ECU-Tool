@@ -35,6 +35,7 @@ import checksum  # noqa: E402  (boot-CRC + cal recompute)
 
 PATCH_DIR = os.path.join(HERE, "patches")
 FULL = 262144
+AIF_FILE_RANGE = (0x5D07, 0x5F8B)
 
 # base fingerprints: coarse "is this the right version" gate (edits' `expect` do the fine check)
 FINGERPRINTS = {
@@ -87,6 +88,99 @@ def _ranges(patch):
 
 def _overlap(a, b):
     return not (a[1] <= b[0] or b[1] <= a[0])
+
+
+def restore_exact_deprecated_aif_payloads(data, patches=None, patch_ids=None):
+    """Restore exact deprecated patch bytes that occupy BMW's AIF array.
+
+    Old Soft-BSL and CalGuard revisions used erased AIF space for code.  An
+    identity graft can copy those exact bodies without their activation hooks.
+    Match every candidate against the immutable input, then restore only the
+    overlapping descriptor ``expect`` bytes.  Arbitrary AIF data is untouched.
+    """
+    library = load_patches() if patches is None else patches
+    candidates = tuple(library) if patch_ids is None else tuple(patch_ids)
+    original = bytes(data)
+    replacements = {}
+    replacement_owners = {}
+    matched = []
+    aif_lo, aif_hi = AIF_FILE_RANGE
+
+    for patch_id in candidates:
+        patch = library.get(patch_id)
+        if patch is None:
+            raise PatchError(f"no such patch: {patch_id}")
+        if not patch.get("deprecated"):
+            continue
+        patch_matched = False
+        for edit in patch.get("edits", ()):
+            offset = int(edit["off"])
+            expected = bytes.fromhex(edit["expect"])
+            applied = bytes.fromhex(edit["data"])
+            if len(expected) != len(applied):
+                raise PatchError(
+                    f"'{patch_id}' edit @0x{offset:05X} changes byte length")
+            lo = max(offset, aif_lo)
+            hi = min(offset + len(applied), aif_hi)
+            if lo >= hi:
+                continue
+            rel_lo, rel_hi = lo - offset, hi - offset
+            expected_slice = expected[rel_lo:rel_hi]
+            applied_slice = applied[rel_lo:rel_hi]
+            if applied_slice == expected_slice or original[lo:hi] != applied_slice:
+                continue
+            patch_matched = True
+            for address, value in zip(range(lo, hi), expected_slice):
+                prior = replacements.get(address)
+                if prior is not None and prior != value:
+                    owners = ", ".join((*replacement_owners[address], patch_id))
+                    raise PatchError(
+                        f"conflicting deprecated AIF preimages @0x{address:05X}: {owners}")
+                replacements[address] = value
+                replacement_owners.setdefault(address, []).append(patch_id)
+        if patch_matched:
+            matched.append(patch_id)
+
+    out = bytearray(original)
+    for address, value in replacements.items():
+        out[address] = value
+    return bytes(out), tuple(dict.fromkeys(matched))
+
+
+def deprecated_aif_patch_state(data, patch):
+    """Return applied/inactive/partial using stock-code hooks as activation owners.
+
+    Erased cave preimages are not ownership anchors because current patches can
+    legitimately reuse those bytes.  When every stock-code hook is unchanged,
+    arbitrary AIF bytes are programming history rather than a partial patch.
+    """
+    if is_applied(data, patch):
+        return "applied"
+
+    aif_lo, aif_hi = AIF_FILE_RANGE
+    owner_seen = False
+    for edit in patch.get("edits", ()):
+        offset = int(edit["off"])
+        expected = bytes.fromhex(edit["expect"])
+        applied = bytes.fromhex(edit["data"])
+        if len(expected) != len(applied):
+            return "partial"
+        edit_hi = offset + len(applied)
+        outside = ((offset, min(edit_hi, aif_lo)),
+                   (max(offset, aif_hi), edit_hi))
+        for lo, hi in outside:
+            if lo >= hi:
+                continue
+            rel_lo, rel_hi = lo - offset, hi - offset
+            expected_slice = expected[rel_lo:rel_hi]
+            applied_slice = applied[rel_lo:rel_hi]
+            if (expected_slice == applied_slice
+                    or all(value == 0xFF for value in expected_slice)):
+                continue
+            owner_seen = True
+            if bytes(data[lo:hi]) != expected_slice:
+                return "partial"
+    return "inactive" if owner_seen else "partial"
 
 
 def _xfer(data, i=0):

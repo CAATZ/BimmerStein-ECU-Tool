@@ -921,15 +921,10 @@ class SlimNativeFastFullWriteSession(
     def _validate_family(self) -> str:
         if self.connected_family not in ("amd", "intel"):
             raise FullWriteFamilyError("connected ECU flash-driver family is unknown")
-        target_family = ecu_info.image_chip_family(self.target_file_image)
-        if target_family != self.connected_family:
-            raise FullWriteFamilyError(
-                "live and target flash-driver families do not match: "
-                f"live={self.connected_family}, target={target_family}"
-            )
         self._record(
             "full_write_family_validated",
             chip_family=self.connected_family,
+            boot_region_preserved=True,
         )
         return self.connected_family
 

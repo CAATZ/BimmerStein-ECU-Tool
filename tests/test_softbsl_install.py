@@ -7,6 +7,93 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import softbsl_install
 
 
+DEPRECATED_AIF_PATCH_IDS = (
+    "softbsl_loader_legacy",
+    "softbsl_loader_relocated_v1",
+    "softbsl_loader_v2",
+    "softbsl_loader_v3_bench_failed",
+    "softbsl_loader_v9",
+    "softbsl_loader_v10",
+    "cal_guard_v1",
+    "cal_guard_v2",
+    "cal_guard_v3_compatibility",
+    "cal_guard_v4_bench_failed",
+    "cal_guard_v4",
+)
+
+
+def _deprecated_aif_fixture(patch, *, applied_hooks=False, corrupt_body=False):
+    from engines.patcher import patch_ms41
+
+    image = bytearray(b"\x00" * patch_ms41.FULL)
+    body_byte = None
+    for edit in patch["edits"]:
+        offset = int(edit["off"])
+        expected = bytes.fromhex(edit["expect"])
+        applied = bytes.fromhex(edit["data"])
+        image[offset:offset + len(expected)] = applied if applied_hooks else expected
+        lo = max(offset, patch_ms41.AIF_FILE_RANGE[0])
+        hi = min(offset + len(applied), patch_ms41.AIF_FILE_RANGE[1])
+        if lo < hi:
+            rel_lo, rel_hi = lo - offset, hi - offset
+            image[lo:hi] = applied[rel_lo:rel_hi]
+            body_byte = next(
+                (address for address in range(lo, hi)
+                 if applied[address - offset] != expected[address - offset]),
+                body_byte,
+            )
+    assert body_byte is not None
+    if corrupt_body:
+        image[body_byte] ^= 0x01
+    return bytes(image)
+
+
+@pytest.mark.parametrize("patch_id", DEPRECATED_AIF_PATCH_IDS)
+def test_every_exact_identity_graft_orphan_is_restored(patch_id):
+    from engines.patcher import patch_ms41
+
+    patches = patch_ms41.load_patches()
+    patch = patches[patch_id]
+    orphan = _deprecated_aif_fixture(patch)
+    restored, restored_ids = patch_ms41.restore_exact_deprecated_aif_payloads(
+        orphan, patches, [patch_id])
+
+    assert restored_ids == (patch_id,)
+    assert patch_ms41.deprecated_aif_patch_state(restored, patch) == "inactive"
+
+
+@pytest.mark.parametrize("patch_id", DEPRECATED_AIF_PATCH_IDS)
+def test_stock_legacy_hooks_do_not_claim_arbitrary_aif_as_corruption(patch_id):
+    from engines.patcher import patch_ms41
+
+    patches = patch_ms41.load_patches()
+    patch = patches[patch_id]
+    image = bytearray(_deprecated_aif_fixture(patch))
+    for edit in patch["edits"]:
+        offset = int(edit["off"])
+        applied = bytes.fromhex(edit["data"])
+        lo = max(offset, patch_ms41.AIF_FILE_RANGE[0])
+        hi = min(offset + len(applied), patch_ms41.AIF_FILE_RANGE[1])
+        if lo < hi:
+            image[lo:hi] = bytes([0x3C]) * (hi - lo)
+
+    unchanged, restored_ids = patch_ms41.restore_exact_deprecated_aif_payloads(
+        image, patches, [patch_id])
+    assert restored_ids == ()
+    assert unchanged == image
+    assert patch_ms41.deprecated_aif_patch_state(image, patch) == "inactive"
+
+
+@pytest.mark.parametrize("patch_id", DEPRECATED_AIF_PATCH_IDS)
+def test_active_legacy_hook_with_corrupt_aif_body_remains_blocked(patch_id):
+    from engines.patcher import patch_ms41
+
+    patch = patch_ms41.load_patches()[patch_id]
+    corrupt = _deprecated_aif_fixture(
+        patch, applied_hooks=True, corrupt_body=True)
+    assert patch_ms41.deprecated_aif_patch_state(corrupt, patch) == "partial"
+
+
 def test_d2xx_available_returns_bool_and_never_raises():
     assert softbsl_install.d2xx_available() in (True, False)
 
@@ -660,21 +747,6 @@ def test_complete_existing_loader_asks_and_allows_reinstall():
     assert questions and "already has" in questions[0]
 
 
-def test_partial_existing_loader_remains_blocked():
-    patch = {"id": "softbsl_loader", "edits": [
-        {"off": 0, "expect": "00", "data": "5a"},
-        {"off": 1, "expect": "00", "data": "a5"},
-    ]}
-    args = type("Args", (), {"confirm_reinstall": lambda *_args: True})()
-
-    try:
-        softbsl_install._sb._confirm_reinstall(
-            args, b"\x5A\x00", {"softbsl_loader": patch}, ["softbsl_loader"])
-        assert False, "partial loader state must be rejected"
-    except softbsl_install._sb.SoftBSLError as error:
-        assert "partial/inconsistent" in str(error)
-
-
 def test_28f_install_scope_erases_main_e_once_and_uses_intel_names():
     sectors, lo, hi = softbsl_install._sb._flash_scope("softbsl", chip="28f200")
 
@@ -776,6 +848,8 @@ def test_persistent_composer_builds_ms412_and_migrates_deprecated_loaders():
             "softbsl_loader_legacy",
             "softbsl_loader_relocated_v1",
             "softbsl_loader_v2",
+            "softbsl_loader_v3_bench_failed",
+            "softbsl_loader_v9",
             "softbsl_loader_v10",
     ):
         for marker in ("B", "T"):
@@ -792,6 +866,157 @@ def test_persistent_composer_builds_ms412_and_migrates_deprecated_loaders():
             assert migrated[0x5FFE:0x6000] == bytes(
                 [ord(marker), ord(marker) ^ 0xFF])
             assert migrated[0x5D07:0x5F8B] == ref("MS41.3")[0x5D07:0x5F8B]
+
+
+def test_persistent_composer_reinstalls_current_v11_idempotently():
+    from tests.conftest import ref
+
+    current, _ids, _log = softbsl_install.compose_persistent_target(
+        ref("MS41.2"), with_calguard=False, marker="B", chip="29f400")
+    reinstalled, _ids, _log = softbsl_install.compose_persistent_target(
+        current, with_calguard=False, marker="B", chip="29f400")
+
+    assert reinstalled == current
+
+
+def test_ms410_reinstall_repairs_calguard_after_a_boot_preserving_full_write():
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+
+    stock = ref("MS41.0")
+    installed, _ids, _log = softbsl_install.compose_persistent_target(
+        stock, with_calguard=True, marker="B", chip="29f400")
+    base = bytearray(stock)
+    lo, hi = softbsl_install._sb.PARAM1_FILE
+    base[lo:hi] = installed[lo:hi]
+    args = softbsl_install._sb.InstallRequest(
+        port="COM_TEST", prompt=lambda _message: None, base=bytes(base),
+        chip="29f400", with_calguard=True,
+        confirm_reinstall=lambda _message: True)
+
+    try:
+        softbsl_install._sb._install_resolve_images(args)
+        target = Path(args.target).read_bytes()
+        patches = patch_ms41.load_patches()
+        assert patch_ms41.is_applied(target, patches["softbsl_loader"])
+        assert patch_ms41.is_applied(target, patches["door_magic_ms410"])
+        assert patch_ms41.is_applied(target, patches["cal_guard"])
+    finally:
+        if args.target:
+            shutil.rmtree(Path(args.target).parent, ignore_errors=True)
+
+
+def test_ms410_reinstall_still_blocks_an_unknown_calguard_boot_byte():
+    from tests.conftest import ref
+
+    stock = ref("MS41.0")
+    installed, _ids, _log = softbsl_install.compose_persistent_target(
+        stock, with_calguard=True, marker="B", chip="29f400")
+    base = bytearray(stock)
+    lo, hi = softbsl_install._sb.PARAM1_FILE
+    base[lo:hi] = installed[lo:hi]
+    base[0x4942] ^= 0x01
+    args = softbsl_install._sb.InstallRequest(
+        port="COM_TEST", prompt=lambda _message: None, base=bytes(base),
+        chip="29f400", with_calguard=True,
+        confirm_reinstall=lambda _message: True)
+
+    with pytest.raises(
+            softbsl_install._sb.SoftBSLError,
+            match="partial/inconsistent boot patch state.*cal_guard"):
+        softbsl_install._sb._install_resolve_images(args)
+
+
+def test_reinstall_still_blocks_an_incomplete_active_loader():
+    from tests.conftest import ref
+
+    installed, _ids, _log = softbsl_install.compose_persistent_target(
+        ref("MS41.0"), with_calguard=False, marker="B", chip="29f400")
+    incomplete = bytearray(installed)
+    incomplete[0x5C32] = 0xFF
+
+    with pytest.raises(
+            softbsl_install.SoftBSLInstallError,
+            match="partial/inconsistent boot patch state.*softbsl_loader"):
+        softbsl_install.compose_persistent_target(
+            incomplete, with_calguard=False, marker="B", chip="29f400")
+
+
+def test_valid_bank_marker_without_a_loader_is_repairable():
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+
+    marker_only, _log = patch_ms41.build(ref("MS41.0"), [], marker="B")
+    migrated, _ids, _log = softbsl_install.compose_persistent_target(
+        marker_only, with_calguard=False, marker="B", chip="29f400")
+
+    assert patch_ms41.is_applied(
+        migrated, patch_ms41.load_patches()["softbsl_loader"])
+
+
+def test_active_calguard_with_an_unknown_program_body_remains_blocked():
+    from tests.conftest import ref
+
+    installed, _ids, _log = softbsl_install.compose_persistent_target(
+        ref("MS41.0"), with_calguard=True, marker="B", chip="29f400")
+    corrupt = bytearray(installed)
+    corrupt[0x3BE00] ^= 0x01
+
+    with pytest.raises(
+            softbsl_install.SoftBSLInstallError,
+            match="active CalGuard boot trampoline has an unknown program body"):
+        softbsl_install.compose_persistent_target(
+            corrupt, with_calguard=False, marker="B", chip="29f400")
+
+
+def test_partial_amd_boot_driver_remains_blocked_before_conversion():
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+
+    amd = patch_ms41.load_patches()["amd_flash"]
+    installed, _log = patch_ms41.build(ref("MS41.0"), ["amd_flash"])
+    base = bytearray(installed)
+    edit = next(edit for edit in amd["edits"] if int(edit["off"]) != 0x423C)
+    offset = int(edit["off"])
+    expected = bytes.fromhex(edit["expect"])
+    base[offset:offset + len(expected)] = expected
+
+    with pytest.raises(
+            softbsl_install.SoftBSLInstallError,
+            match="partial/inconsistent boot patch state.*amd_flash"):
+        softbsl_install.compose_persistent_target(
+            base, with_calguard=False, marker="B", chip="29f400")
+
+
+@pytest.mark.parametrize(
+    "guard_id,loader_ids",
+    [
+        ("cal_guard_v1", []),
+        ("cal_guard_v2", []),
+        ("cal_guard_v3_compatibility", ["softbsl_loader_v2"]),
+        ("cal_guard_v4_bench_failed", ["softbsl_loader_v3_bench_failed"]),
+        ("cal_guard_v4", ["softbsl_loader_v10"]),
+    ],
+)
+def test_persistent_composer_migrates_every_exact_deprecated_calguard(
+        guard_id, loader_ids):
+    import checksum
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+
+    stock = ref("MS41.2")
+    old, _log = patch_ms41.build(
+        stock, [*loader_ids, guard_id], allow_deprecated=True, marker="B")
+    migrated, _ids, _log = softbsl_install.compose_persistent_target(
+        old, with_calguard=True, marker="B", chip="29f400")
+    patches = patch_ms41.load_patches()
+
+    assert not patch_ms41.is_applied(migrated, patches[guard_id])
+    assert patch_ms41.is_applied(migrated, patches["softbsl_loader"])
+    assert patch_ms41.is_applied(migrated, patches["cal_guard"])
+    assert migrated[0x5D07:0x5F8B] == stock[0x5D07:0x5F8B]
+    status = checksum.checksum_status(migrated)
+    assert status["boot"] and status["program"] and status["cal"]
 
 
 @pytest.mark.parametrize(
@@ -829,6 +1054,54 @@ def test_persistent_composer_rejects_a_partial_deprecated_calguard():
             match="deprecated CalGuard is partial/corrupt"):
         softbsl_install.compose_persistent_target(
             old, with_calguard=True, marker="B", chip="29f400")
+
+
+def test_current_calguard_does_not_hide_a_corrupt_deprecated_guard():
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+
+    current, _ids, _log = softbsl_install.compose_persistent_target(
+        ref("MS41.2"), with_calguard=True, marker="B", chip="29f400")
+    old_guard = patch_ms41.load_patches()["cal_guard_v3_compatibility"]
+    corrupt = bytearray(current)
+    for edit in old_guard["edits"]:
+        offset = int(edit["off"])
+        data = bytes.fromhex(edit["data"])
+        corrupt[offset:offset + len(data)] = data
+    corrupt[0x5E20] ^= 0x01
+
+    with pytest.raises(
+            softbsl_install.SoftBSLInstallError,
+            match="deprecated CalGuard is partial/corrupt"):
+        softbsl_install.compose_persistent_target(
+            corrupt, with_calguard=True, marker="B", chip="29f400")
+
+
+def test_persistent_composer_repairs_the_old_identity_graft_orphan():
+    import identity
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+
+    stock = ref("MS41.2")
+    old, _ = patch_ms41.build(
+        stock, ["softbsl_loader_v10", "cal_guard_v4"],
+        allow_deprecated=True)
+    orphan = bytearray(stock)
+    for start, end in identity.IDENTITY_GRAFT_RANGES:
+        orphan[start:end] = old[start:end]
+
+    migrated, _ids, _log = softbsl_install.compose_persistent_target(
+        orphan, with_calguard=True, marker="B", chip="29f400")
+    patches = patch_ms41.load_patches()
+
+    assert migrated[identity.AIF_OFF:identity.AIF_END] == stock[
+        identity.AIF_OFF:identity.AIF_END]
+    assert patch_ms41.is_applied(
+        softbsl_install._sb._normalize_patch_marker_for_match(
+            migrated, patches["softbsl_loader"], "B"),
+        patches["softbsl_loader"],
+    )
+    assert patch_ms41.is_applied(migrated, patches["cal_guard"])
 
 
 def test_fixed_relocated_loader_restores_the_hardware_proven_crc_bytes():

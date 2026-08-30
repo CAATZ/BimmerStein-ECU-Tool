@@ -1,4 +1,5 @@
 import pytest
+import ecu_info
 
 from ds2_fast_contracts import (
     CommitUnknownError,
@@ -11,7 +12,6 @@ from ds2_fast_contracts import (
 )
 from ds2_fast_full_write import (
     FullWriteError,
-    FullWriteFamilyError,
     FullWriteTiming,
     NativeFastFullWriteTransport,
 )
@@ -806,16 +806,29 @@ def test_original_full_a2_never_qualifies_retained_replay(tmp_path, program_only
     assert len(serial.flash_requests) == requests_after_a2
 
 
-def test_full_write_family_mismatch_blocks_before_authorization_or_flash(tmp_path):
+def test_full_write_preserves_live_amd_driver_for_intel_target(tmp_path):
     session, serial, journal, _source = _session(
         tmp_path,
         connected_family="amd",
+        verify_write=False,
     )
-    with pytest.raises(FullWriteFamilyError, match="do not match"):
-        session.execute()
-    assert serial.flash_requests == []
-    assert not session.destructive_started
-    assert journal.outcome == "failed"
+    live_driver = bytes.fromhex("e00e0d58f04ec084")
+    target_driver = session.target_file_image[
+        ecu_info.DRV_SIG_FILE_OFFSET:
+        ecu_info.DRV_SIG_FILE_OFFSET + ecu_info.DRV_SIG_LEN
+    ]
+    assert ecu_info.chip_family(target_driver) == "intel"
+    serial.memory[
+        ecu_info.DRV_SIG_ADDR:ecu_info.DRV_SIG_ADDR + ecu_info.DRV_SIG_LEN
+    ] = live_driver
+
+    result = session.execute()
+
+    assert result.chip_family == "amd"
+    assert bytes(serial.memory[
+        ecu_info.DRV_SIG_ADDR:ecu_info.DRV_SIG_ADDR + ecu_info.DRV_SIG_LEN
+    ]) == live_driver
+    assert journal.outcome == "success"
 
 
 def test_full_write_expected_identity_mismatch_blocks_before_authorization(tmp_path):
@@ -834,16 +847,20 @@ def test_full_write_expected_identity_mismatch_blocks_before_authorization(tmp_p
 
 def test_amd_family_uses_same_stock_wire_contract_when_family_evidence_matches(
     tmp_path,
-    monkeypatch,
 ):
     session, serial, journal, _source = _session(
         tmp_path,
         connected_family="amd",
     )
-    monkeypatch.setattr(
-        "ds2_fast_slim_write.ecu_info.image_chip_family",
-        lambda _image: "amd",
-    )
+    target = bytearray(session.target_file_image)
+    target[
+        ecu_info.DRV_SIG_FILE_OFFSET:
+        ecu_info.DRV_SIG_FILE_OFFSET + ecu_info.DRV_SIG_LEN
+    ] = bytes.fromhex("e00e0d58f04ec084")
+    session.target_file_image = bytes(target)
+    serial.memory[
+        ecu_info.DRV_SIG_ADDR:ecu_info.DRV_SIG_ADDR + ecu_info.DRV_SIG_LEN
+    ] = bytes.fromhex("e00e0d58f04ec084")
     result = session.execute()
     assert result.chip_family == "amd"
     assert result.verified_bytes == 0x36000

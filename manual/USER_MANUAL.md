@@ -267,40 +267,17 @@ once when polling starts. If enabled, the profile automatically reports actual A
 the configured wideband input voltage; the table also identifies the selected input and whether
 narrowband emulation is active.
 
-For MS41.0, MS41.1, MS41.2, and MS41.3, Live Data checks the `E847` Ignition
-Cut V9 runtime marker once when polling starts. When active, it exposes the
-complete standalone and Launch calibration snapshot, physical inputs,
-independent requests, launch-arm and stock-limiter state, RPM/TPS/speed,
-both-bank fuel trims, lambda state, and O2-heater channels grounded for that
-firmware. The Launch snapshot includes clutch polarity, soft and hard cut RPM,
-arm and maximum speed, minimum TPS, ignition hysteresis, and fixed IPW. When
-the marker is absent or unavailable, these patch-specific rows stay hidden.
-Fast telegram mode automatically uses compatible direct reads while the marker
-is active so the extra channels are recorded in the CSV. `O2 Heater
-Front/Rear` values are commanded heater duty, not ignition-coil dwell.
-Rear-heater and raw lambda-monitor fields are omitted on firmware versions
-where the logger definitions do not provide a valid address.
-
-Cut-active diagnostic coverage follows the monitor paths present in each
-firmware: MS41.0 guards lambda regulation, upstream O2 voltage, and the shared
-routine containing per-cylinder roughness/misfire detection plus coil/resistor
-diagnostics. Its stock DTC descriptors identify coil codes 29/31/30/3/1/2 and
-feedback-resistor code 56, but contain no dedicated per-cylinder DTC 238-243
-descriptors. The shared guard bypasses the detector and downstream diagnostic
-calls during an intentional cut; no synthetic DTC 238-243 path is added.
-MS41.1 and MS41.2 also guard rear O2, catalyst, and misfire paths; MS41.3
-guards front/rear O2, catalyst, misfire, and coil/resistor paths. Offline
-exact-byte execution verifies the descriptors and native fault-manager release
-path. O2-heater electrical
-diagnostics remain active on every version.
-
-Live Data is read-only with respect to flash memory.
-
 <!-- pagebreak -->
 
 ## Coding and guided transmission conversion
 
 ### Vehicle module coding
+
+> [!WARNING]
+> **HIGHLY EXPERIMENTAL — NOT VEHICLE TESTED.** The Coding tab can change configuration in multiple
+> vehicle modules. Built-in profiles and read-back checks reduce mistakes, but they do not prove a
+> change is safe for a particular vehicle. Back up first, use stable power, keep the engine off,
+> change only settings you understand, and be prepared to restore the original coding.
 
 Module coding requires normal K-Line mode; Direct Tap reaches only the Engine ECU.
 
@@ -503,22 +480,20 @@ checksums, and archives the composed image into Bins.
 - **Untested** means physical vehicle testing has not been completed.
 - Boot-region patches require a transfer path that can actually deliver their bytes.
 
-Ignition Cut V9, Launch Control V7, and AlphaN MAF-failsafe intentionally remain
-marked **Untested**.
+Ignition Cut V7, Launch Control V4/V5, and AlphaN MAF-failsafe V3 intentionally
+remain marked **Untested**.
 Launch Control V4 fuel mode held its configured 4000 RPM setpoint during
-vehicle testing before the MS41.3 calibration relocation. V7 keeps that native
-fuel-limiter path but its independent request architecture and VMAX release
-still require vehicle validation. Field-failed Ignition Cut V6, superseded
-Ignition Cut V7/V8, and Launch Control V6 remain visible only when installed
-so they can be removed before V9/V7 is applied.
+vehicle testing before the MS41.3 calibration relocation. V5 keeps that native
+fuel-limiter path, but its relocated MS41.3 controls still require vehicle
+retesting. Historical variant-specific releases remain visible only when
+installed so they can be removed before the current Beta 13 revision is applied.
 Applying one requires an explicit confirmation. Do not treat offline validation as proof of safe
 behavior on an engine.
 
 > [!DANGER]
-> **IGNITION CUT HAZARD.** Ignition Cut V9 remains experimental. It may suppress spark while
-> injection continues at the stock or configured fixed pulse width. Unburned fuel can damage
+> **IGNITION CUT HAZARD.** Ignition Cut remains experimental. It may suppress spark while
+> injection continues. Unburned fuel can damage
 > catalytic converters and exhaust components; never use it on a car with catalytic converters.
-> Its fuel-adaptation and diagnostic guards are offline exact-byte verified but not vehicle-validated.
 
 <!-- pagebreak -->
 
@@ -528,13 +503,12 @@ The release includes `BimmerStein MS41 Patch Definitions.xml` beside the executa
 RomRaider or BimmerStein Tuning Suite to configure calibration items added by the matching patches.
 Install the firmware patch first and verify the ECU variant, calibration ID, and patch revision. A
 mismatched definition can expose incorrect tables or write to the wrong calibration addresses.
-Standalone Ignition Cut and Launch ignition mode have separate RPM hysteresis
-and fixed injector-pulse-width settings. Launch fuel mode ignores the Launch
-ignition-only settings and continues to use the native staged fuel limiter.
-MS41.3 Launch Control V7 uses its dedicated `0x47E0-0x47EA` block and can be
-configured with boost control. Only deprecated MS41.3 V4 overlapped boost
-knock-compensation cells; remove any detected predecessor before installing
-and configuring V7.
+Ignition Cut provides switch and RPM controls. Launch Control adds its mode,
+clutch, speed, throttle, and limiter settings; fuel mode continues to use the
+native staged fuel limiter. MS41.3 Launch Control V5 uses its dedicated
+`0x47E0-0x47E7` block and can be configured with boost control. Deprecated
+MS41.3 V4 overlapped boost knock-compensation cells; remove it before installing
+and configuring V5.
 
 ### Safe composition
 

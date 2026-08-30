@@ -1631,6 +1631,16 @@ class MS41FlashGUI(QMainWindow):
         scroll.setWidget(body)
         tab_lay.addWidget(scroll)
 
+        warning = QLabel(
+            "⚠ HIGHLY EXPERIMENTAL — NOT VEHICLE TESTED. The Coding tab can "
+            "change configuration in multiple vehicle modules. Back up first, "
+            "use stable power, keep the engine off, change only settings you "
+            "understand, and be prepared to restore the original coding."
+        )
+        warning.setWordWrap(True)
+        warning.setStyleSheet("color:#e8c46a; font-weight:bold; padding:4px;")
+        lay.addWidget(warning)
+
         intro = QLabel(
             "Plain-English settings from exact built-in module profiles. "
             "The tool reads fitted modules directly over K-Line and changes only "
@@ -10642,7 +10652,7 @@ class MS41FlashGUI(QMainWindow):
                     .startswith("ignition_cut")
                     for pid in untested):
                 ignition_cut_warning = (
-                    "\n\nIgnition Cut V9 is experimental. It may suppress spark while "
+                    "\n\nIgnition Cut is experimental. It may suppress spark while "
                     "injection continues at the stock or configured fixed pulse width. "
                     "Unburned fuel can damage catalytic converters and exhaust components. "
                     "Its fuel-adaptation and diagnostic guards are offline exact-byte verified but "

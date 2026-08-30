@@ -6,7 +6,7 @@
   "version": "V2",
   "title": "Launch Control / 2-step",
   "description": "DEPRECATED and remove-only. Retained so an installed MS41.2 V2 image can be detected and safely reverted before installing Launch Control V4. The replacement preserves the verified fd30.4 branch and adds an independent hard threshold plus Ignition Cut V7.",
-  "superseded_by": "launch_control_v6_ms412",
+  "superseded_by": "launch_control_v4_ms412",
   "target": "MS41.2",
   "recompute": ["program"],
   "requires": ["ignition_cut_v5"],

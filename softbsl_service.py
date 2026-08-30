@@ -102,25 +102,16 @@ class FlashImageCompatibilityError(RuntimeError):
 
 
 def validate_flash_image_family(image, connected_family, *, write_bootloader=False):
-    """Fail before agent entry when a full image would cross flash command sets.
-
-    A recognized Intel/AMD driver image is never flashable to a different or
-    unknown connected family. This remains true even when the boot region is not
-    armed, so an ordinary full-write route cannot bypass the geometry contract.
-    Any armed boot write is stricter and also rejects an unrecognized image driver.
-    Offline patch build/save does not call this live-operation gate.
-    """
+    """Require a known live family; compare image geometry only for boot writes."""
     image_family = ecu_info.image_chip_family(bytes(image))
     connected_family = connected_family if connected_family in ("amd", "intel") else None
     labels = {"amd": "AMD/JEDEC 29F", "intel": "Intel 28F"}
 
-    if image_family in labels and connected_family != image_family:
-        live = labels.get(connected_family, "an unknown flash family")
+    if connected_family is None:
         raise FlashFamilyMismatchError(
-            f"Flash blocked before agent entry: the image carries the {labels[image_family]} "
-            f"driver at file 0x423C, but the connected ECU reports {live}. "
-            "Cross-family images may be built and saved, but they cannot be flashed to "
-            "different flash geometry.")
+            "Flash blocked before agent entry: the connected ECU flash family could not "
+            "be identified. A recognized live Intel/AMD family is required to select the "
+            "resident driver or RAM agent safely.")
 
     if write_bootloader:
         if image_family is None or connected_family is None:

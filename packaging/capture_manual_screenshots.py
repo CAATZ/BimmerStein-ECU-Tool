@@ -50,12 +50,12 @@ def _synthetic_patch_records() -> list[dict]:
         {
             "id": "cal_guard",
             "title": "CalGuard compatibility + recovery guard",
-            "version": "V4",
+            "version": "V5",
             "description": "Adds a compatibility gate and boot-recovery window.",
             "user_description": "Adds a compatibility gate and boot-recovery window.",
             "target": "MS41.3",
-            "status": "BENCH PROVEN",
-            "tested": True,
+            "status": "OFFLINE VERIFIED - BENCH TEST REQUIRED",
+            "tested": False,
             "requires": ["softbsl_loader"],
             "conflicts": [],
             "ok": True,
@@ -86,10 +86,10 @@ def _synthetic_patch_records() -> list[dict]:
             "removable": True,
         },
         {
-            "id": "ignition_cut_v9",
+            "id": "ignition_cut_v7",
             "title": "Ignition Cut",
-            "version": "V9",
-            "description": "Independent ignition-cut limiter with hysteresis and fixed-IPW control.",
+            "version": "V7",
+            "description": "Independent ignition-cut limiter using the six-channel coil output gate.",
             "user_description": "Adds an independent ignition-cut limiter.",
             "target": "MS41.3",
             "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
@@ -105,15 +105,15 @@ def _synthetic_patch_records() -> list[dict]:
             "removable": False,
         },
         {
-            "id": "launch_control_v7",
+            "id": "launch_control_v5",
             "title": "Launch Control / 2-step",
-            "version": "V7",
-            "description": "Independent launch requester using fuel cut or the shared V9 ignition engine.",
+            "version": "V5",
+            "description": "Independent launch requester using fuel cut or the shared V7 ignition engine.",
             "user_description": "Adds independently armed staged launch control.",
             "target": "MS41.3",
             "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
             "tested": False,
-            "requires": ["ignition_cut_v9"],
+            "requires": ["ignition_cut_v7"],
             "conflicts": [],
             "ok": True,
             "badge": "",
@@ -126,12 +126,12 @@ def _synthetic_patch_records() -> list[dict]:
         {
             "id": "softbsl_loader",
             "title": "Soft-BSL 0x5A loader",
-            "version": "V10",
+            "version": "V11",
             "description": "Installs the persistent Soft-BSL entry loader.",
             "user_description": "Installs the persistent Soft-BSL entry loader.",
             "target": "MS41.3",
-            "status": "TESTED",
-            "tested": True,
+            "status": "OFFLINE VERIFIED - BENCH TEST REQUIRED",
+            "tested": False,
             "requires": [],
             "conflicts": [],
             "ok": True,
@@ -294,8 +294,8 @@ def main() -> int:
             "Base: Synthetic_MS41_3_Demo.bin — MS41.3 documentation example"
         )
         window._refresh_patch_list()
-        window._patch_checkboxes["ignition_cut_v9"].setChecked(True)
-        window._patch_checkboxes["launch_control_v7"].setChecked(True)
+        window._patch_checkboxes["ignition_cut_v7"].setChecked(True)
+        window._patch_checkboxes["launch_control_v5"].setChecked(True)
     finally:
         patch_service.available_patches = original_available
     _select_tab(window, "Patches")

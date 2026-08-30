@@ -16,22 +16,18 @@ FRAGMENT = (
     / "engines"
     / "patcher"
     / "romraider"
-    / "ms412_ignition_cut_v9_launch_control_v7.xml"
+    / "ms412_ignition_cut_v7_launch_control_v4.xml"
 )
 STANDALONE = FRAGMENT.parent / "BimmerStein MS41 Patch Definitions.xml"
 
 TABLE_TO_CAL = {
     "Ignition Cut - Switch Input": "CUTSW",
     "Ignition Cut - RPM Limit": "CUTRPM",
-    "Ignition Cut - RPM Hysteresis": "CUT_HYST",
-    "Ignition Cut - Fixed Injector Pulse Width": "CUT_IPW",
     "LC - Switch / Mode": "LC_SW",
     "LC - Cut Type": "LC_CUTTYPE",
     "LC - Clutch Polarity": "LC_CLUTCHPOL",
     "LC - Soft Cut RPM": "LC_MAXRPM",
     "LC - Hard Cut RPM": "LC_HARDRPM",
-    "LC - Ignition RPM Hysteresis": "LC_HYST",
-    "LC - Ignition Fixed Injector Pulse Width": "LC_IPW",
     "LC - Arm Speed": "LC_ARMSPEED",
     "LC - Max Speed": "LC_MAXSPEED",
     "LC - Min TPS": "LC_MINTPS",
@@ -53,9 +49,9 @@ def _tables():
 
 
 def test_source_fragment_matches_ms412_patch_calibration_addresses():
-    ignition = _patch("ignition_cut_v9_ms412")["cave"]["cals"]
-    launch_413 = _patch("launch_control_v7")["cave"]["cals"]
-    launch_412 = _patch("launch_control_v7_ms412")["cave"]["cals"]
+    ignition = _patch("ignition_cut_v7")["cave"]["cals"]
+    launch_413 = _patch("launch_control_v5")["cave"]["cals"]
+    launch_412 = _patch("launch_control_v4_ms412")["cave"]["cals"]
     assert launch_412 != launch_413
 
     expected = {**ignition, **launch_412}
@@ -80,7 +76,7 @@ def test_switch_encodings_match_runtime_pin_bits():
 def test_rpm_scalings_use_representable_increments():
     tables = _tables()
     for name in (
-        "Ignition Cut - RPM Limit", "LC - Soft Cut RPM", "LC - Hard Cut RPM",
+        "Ignition Cut - RPM Limit", "LC - Soft Cut RPM", "LC - Hard Cut RPM"
     ):
         scaling = tables[name].find("scaling")
         assert scaling is not None
@@ -88,50 +84,6 @@ def test_rpm_scalings_use_representable_increments():
         assert scaling.attrib["to_byte"] == "x/32"
         assert scaling.attrib["fineincrement"] == "32"
         assert scaling.attrib["coarseincrement"] == "320"
-
-    for name in (
-        "Ignition Cut - RPM Hysteresis",
-        "LC - Ignition RPM Hysteresis",
-    ):
-        scaling = tables[name].find("scaling")
-        assert scaling is not None
-        assert scaling.attrib["expression"] == "(x*32)%8160"
-        assert scaling.attrib["to_byte"] == "x/32"
-        assert scaling.attrib["fineincrement"] == "32"
-        assert scaling.attrib["coarseincrement"] == "320"
-        assert [
-            romraider_defs._eval(scaling.attrib["expression"], raw)
-            for raw in (0x00, 0x01, 0xFE, 0xFF)
-        ] == [0, 32, 8128, 0]
-
-
-def test_fixed_ipw_definitions_match_the_c166_word_and_scaling():
-    tables = _tables()
-    for name in (
-        "Ignition Cut - Fixed Injector Pulse Width",
-        "LC - Ignition Fixed Injector Pulse Width",
-    ):
-        table = tables[name]
-        scaling = table.find("scaling")
-        assert table.attrib["storagetype"] == "uint16"
-        assert table.attrib["endian"] == "little"
-        assert scaling.attrib["units"] == "ms (-0.00534 = stock)"
-        assert scaling.attrib["expression"] == "((x+1)%65536)*.00534-.00534"
-        assert scaling.attrib["to_byte"] == "if(x==-0.00534,65535,x/.00534)"
-        assert scaling.attrib["format"] == "0.00000"
-
-        displayed = {
-            raw: romraider_defs._eval(scaling.attrib["expression"], raw)
-            for raw in (0x0000, 0x0001, 0x1234, 0xFFFE, 0xFFFF)
-        }
-        assert displayed[0x0000] == 0
-        assert displayed[0x0001] == 0.00534
-        assert displayed[0x1234] == 24.8844
-        assert displayed[0xFFFF] == -0.00534
-
-        for raw, value in displayed.items():
-            restored = 0xFFFF if value == -0.00534 else round(value / 0.00534)
-            assert restored == raw
 
 
 def _synthetic_definition(marker=""):
@@ -183,10 +135,10 @@ def test_combined_builder_remaps_only_ms413_launch_controls():
     assert addresses[("12", "256kb")] == 0x1752C
 
 
-def test_ms413_v7_documentation_has_no_current_boost_conflict_warning():
+def test_ms413_v5_documentation_has_no_current_boost_conflict_warning():
     text = (FRAGMENT.parent / "README.md").read_text(encoding="utf-8")
     assert "current Launch and boost control may be configured together" in text
-    assert "This restriction does not apply to V7" in text
+    assert "This restriction does not apply to V5" in text
 
 
 def test_standalone_artifact_is_reproducible_and_patch_only():
@@ -217,17 +169,18 @@ def test_standalone_addresses_match_patch_descriptors_for_each_framing():
         xmlid = rid.findtext("xmlid")
         tables = {table.attrib["name"]: table for table in rom.findall("table")}
         if "MS410" in xmlid:
-            ignition_id = "ignition_cut_v9_ms410"
-            launch_id = "launch_control_v7_ms410"
+            ignition_id = "ignition_cut_v7_ms410"
+            launch_id = "launch_control_v4_ms410"
         elif "MS411" in xmlid:
-            ignition_id = "ignition_cut_v9_ms411"
-            launch_id = "launch_control_v7_ms411"
-        elif "MS412" in xmlid:
-            ignition_id = "ignition_cut_v9_ms412"
-            launch_id = "launch_control_v7_ms412"
+            ignition_id = "ignition_cut_v7_ms411"
+            launch_id = "launch_control_v4_ms411"
         else:
-            ignition_id = "ignition_cut_v9"
-            launch_id = "launch_control_v7"
+            ignition_id = "ignition_cut_v7"
+            launch_id = (
+                "launch_control_v4_ms412"
+                if "MS412" in xmlid
+                else "launch_control_v5"
+            )
         expected_full = {
             **_patch(ignition_id)["cave"]["cals"],
             **_patch(launch_id)["cave"]["cals"],
@@ -244,7 +197,7 @@ def test_standalone_addresses_match_patch_descriptors_for_each_framing():
         if "VANOSRT" in xmlid:
             vanos_id = (
                 "vanos_minrpm_v2_ms410"
-                if "MS410_VANOSRT3" in xmlid
+                if "MS410" in xmlid
                 else "vanos_minrpm_ms411"
             )
             vanos_full = _patch(vanos_id)["cave"]["cals"]["VANOSRPM"]
@@ -257,35 +210,9 @@ def test_standalone_addresses_match_patch_descriptors_for_each_framing():
             assert address == (vanos_full if full_read else _storage_address(vanos_full))
 
 
-def test_standalone_ms410_uses_grounded_input_latch_labels():
-    root = ET.parse(STANDALONE).getroot()
-    for rom in root.findall("rom"):
-        xmlid = rom.findtext("romid/xmlid")
-        if "MS410" not in xmlid:
-            continue
-        for name in ("Ignition Cut - Switch Input", "LC - Switch / Mode"):
-            table = next(
-                table for table in rom.findall("table")
-                if table.attrib.get("name") == name
-            )
-            states = {
-                state.attrib["data"]: state.attrib["name"]
-                for state in table.findall("state")
-            }
-            assert "FD51.1" in states["01"]
-            assert "FD51.0" in states["02"]
-            assert "FD50.7" in states["04"]
-
-
 def test_standalone_matches_every_declared_rom_variant():
     definitions = romraider_defs.load_definitions(STANDALONE)
     root = ET.parse(STANDALONE).getroot()
-    vanos_markers = {
-        rom.findtext("romid/internalidstring")
-        for rom in root.findall("rom")
-        if "VANOSRT" in rom.findtext("romid/xmlid")
-    }
-    assert vanos_markers == {"VANOSRT2", "VANOSRT3"}
     for rom in root.findall("rom"):
         rid = rom.find("romid")
         size = 262144 if rid.findtext("filesize") == "256kb" else 24576
@@ -300,37 +227,37 @@ def test_standalone_matches_real_images_after_each_tunable_patch_set():
     definitions = romraider_defs.load_definitions(STANDALONE)
     cases = (
         (
-            "MS41.3", ["ignition_cut_v9", "launch_control_v7"],
+            "MS41.3", ["ignition_cut_v7", "launch_control_v5"],
             "BIMMERSTEIN_MS413_SS1V2_24K", "BIMMERSTEIN_MS413_SS1V2_256K",
         ),
         (
-            "MS41.2", ["ignition_cut_v9_ms412", "launch_control_v7_ms412"],
+            "MS41.2", ["ignition_cut_v7", "launch_control_v4_ms412"],
             "BIMMERSTEIN_MS412_ID12_24K", "BIMMERSTEIN_MS412_ID12_256K",
         ),
         (
             "MS41.0",
-            ["ignition_cut_v9_ms410", "launch_control_v7_ms410"],
+            ["ignition_cut_v7_ms410", "launch_control_v4_ms410"],
             "BIMMERSTEIN_MS410_ID41_24K", "BIMMERSTEIN_MS410_ID41_256K",
         ),
         (
             "MS41.0",
             [
-                "ignition_cut_v9_ms410",
-                "launch_control_v7_ms410",
+                "ignition_cut_v7_ms410",
+                "launch_control_v4_ms410",
                 "vanos_minrpm_v2_ms410",
             ],
             "BIMMERSTEIN_MS410_VANOSRT3_24K", "BIMMERSTEIN_MS410_VANOSRT3_256K",
         ),
         (
             "MS41.1",
-            ["ignition_cut_v9_ms411", "launch_control_v7_ms411"],
+            ["ignition_cut_v7_ms411", "launch_control_v4_ms411"],
             "BIMMERSTEIN_MS411_ID60_24K", "BIMMERSTEIN_MS411_ID60_256K",
         ),
         (
             "MS41.1",
             [
-                "ignition_cut_v9_ms411",
-                "launch_control_v7_ms411",
+                "ignition_cut_v7_ms411",
+                "launch_control_v4_ms411",
                 "vanos_minrpm_ms411",
             ],
             "BIMMERSTEIN_MS411_VANOSRT2_24K", "BIMMERSTEIN_MS411_VANOSRT2_256K",
