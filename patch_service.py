@@ -320,7 +320,7 @@ def _public_parameter(image, patch, spec):
 
 
 def editable_parameters(data):
-    """Return controls for exact, current patches installed in a 256 KiB ROM.
+    """Return controls for compatible current patches in a 256 KiB ROM.
 
     Addresses and codecs remain private to this service. Consumers receive only
     stable patch/parameter ids and semantic values.
@@ -338,7 +338,7 @@ def editable_parameters(data):
     for patch_id, entry in available.items():
         patch = all_patches[patch_id]
         specs = _EDITABLE_PARAMETER_FAMILIES.get(_parameter_family(patch))
-        if not specs or not entry.get("installed") or entry.get("deprecated"):
+        if not specs or entry.get("deprecated"):
             continue
         parameters = [_public_parameter(data, patch, spec) for spec in specs]
         result.append({
@@ -401,6 +401,8 @@ def apply_parameter_changes(
     descriptor_token = _descriptor_token(patch)
     if expected_descriptor_token and expected_descriptor_token != descriptor_token:
         raise PatchError("the patch definition changed after its parameters were opened")
+    if not patch_ms41.is_applied(source, patch):
+        raise PatchError(f"patch '{patch_id}' is not an editable current installation")
 
     groups = {group["patch_id"]: group for group in editable_parameters(source)}
     group = groups.get(str(patch_id))

@@ -642,7 +642,7 @@ MONITOR_FLASH = bytes.fromhex(
 # data writes (strobe WE#); BYTE status reads (DQ6/DQ5 in the low byte).  Word cmd addrs 0x555/0x2AA
 # are byte offsets 0xAAA/0x554 (x16 flash, flash A0 = CPU A1).  E replies a synthesized Intel-style
 # SR (0x80 ok / 0x20 fail) so the host's _decode_sr/erase check is reused unchanged; F replies 'K'.
-# asm/monitor_flash_amd.asm, Ghidra-built; == .hex byte-for-byte.  MONITOR_FLASH (28F200) is untouched.
+# asm/monitor_flash_amd.asm, assembled; == .hex byte-for-byte.  MONITOR_FLASH (28F200) is untouched.
 MONITOR_FLASH_AMD = bytes.fromhex(
     "DFE3DFE29AB7FE70F3F0B2FE7EB747F05000EA2092FA47F05200EA20A0FA47F04500EA20F8FA47F04600EA2092FB"
     "EA0064FAE658A5009AB6FE707EB6EA0064FA9AB7FE70F3F4B2FE7EB79AB7FE70F3F5B2FE7EB79AB7FE70F3F8B2FE"
@@ -658,7 +658,7 @@ MONITOR_FLASH_AMD = bytes.fromhex(
 # READ_ID_ROUTINE (44 B, loaded to IRAM scratch 0xFC80 via the general monitor's 'W', run via
 # 'C'): enable WR# (bset DP3.13/P3.13) / DPP0=0x11 / write 0x90 (Read ID) / read chip words 0,1
 # through the +0x40000 alias / write 0xFF (read-array) / store the two ID words at 0xFCC0.
-# Non-destructive — no VPP, no erase/program.  asm/read_id.asm, Ghidra-built; does NOT touch
+# Non-destructive — no VPP, no erase/program.  asm/read_id.asm, assembled; does NOT touch
 # MONITOR_FLASH (the proven flash monitor stays byte-for-byte unchanged).
 READ_ID_ROUTINE = bytes.fromhex(
     "DFE3DFE2E6001100E004E6F59000B854A864E024A874E004E6F5FF00B854E6F4C0FCB864E6F4C2FCB874CB00")
@@ -669,7 +669,7 @@ READ_ID_ROUTINE = bytes.fromhex(
 # only inverts A14 (above A10) so the command decode is unaffected, and like the Intel routine it
 # goes through the +0x40000 shadow alias (chip0 = CPU 0x4000, BSL-shadowed).  Results land at
 # 0xFCE0/0xFCE2 (NOT 0xFCC0 — the longer AMD body would overwrite its own tail there).  Non-
-# destructive: no VPP, no erase/program; F0 restores read-array.  asm/read_id_amd.asm, Ghidra-built.
+# destructive: no VPP, no erase/program; F0 restores read-array.  asm/read_id_amd.asm, assembled.
 READ_ID_AMD_ROUTINE = bytes.fromhex(
     "DFE3DFE2E6001100E6F4AA0AE6F5AA00B854E6F45405E6F55500B854E6F4AA0AE6F59000B854E004A864E024"
     "A874E004E6F5F000B854E6F4E0FCB864E6F4E2FCB874CB00")

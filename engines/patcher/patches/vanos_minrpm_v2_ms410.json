@@ -4,7 +4,7 @@
   "version": "V2",
   "status": "TESTED",
   "tested": true,
-  "verification": "V2 retains the byte-identical V1 runtime logic proven on-car, uses a distinct VANOSRT3 marker, and recomputes the enforced MS41.0 program checksum. Exact V1 upgrade, V1 removal, isolated V2 composition, checksums, and RomRaider matching are regression-tested.",
+  "verification": "V2 retains the byte-identical V1 runtime logic proven on-car, uses a distinct VANOSRT3 marker, and recomputes the enforced MS41.0 program checksum. Exact V1 upgrade, V1 removal, isolated V2 composition, checksums, and definition matching are regression-tested.",
   "title": "VANOS minimum RPM",
   "user_description": "Adds a configurable minimum-RPM threshold for closed-throttle VANOS engagement on MS41.0. V2 retains the vehicle-tested runtime behavior and writes a valid program checksum.",
   "description": "MS41.0 VANOS minimum-RPM retrofit V2. Splices the fd14.4 VANOS state-machine branch at file 0x2B7FA into the existing cave at file 0x30000. The cave re-tests fd14.4/fd14.5, reads the native RPM/32 mirror at 0xE9E2, enters the stock engage path at file 0x2B80A only at or above VANOSRPM, and otherwise returns to the stock off path at file 0x2B802. VANOSRPM uses blank SA 0x3000 and defaults to 0xFF, preserving stock behavior until configured. Marker VANOSRT3 at SA 0x3008 distinguishes this checksum-correct V2 from deprecated MS41.0 VANOSRT1 and MS41.1 VANOSRT2. V2 recomputes the enforced MS41.0 program checksum and supersedes V1. fd14.2 flash-mode handling remains untouched.",

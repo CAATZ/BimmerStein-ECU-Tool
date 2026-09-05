@@ -30,6 +30,7 @@ def add_tree(source, destination):
 
 add_tree(ROOT / "assets", "assets")
 add_tree(ROOT / "engines" / "patcher" / "patches", "engines/patcher/patches")
+add_tree(ROOT / "logger_definitions", "logger_definitions")
 add_tree(ROOT / "THIRD_PARTY_LICENSES", "THIRD_PARTY_LICENSES")
 add_file(
     ROOT / "engines" / "patcher" / "romraider" / "BimmerStein MS41 Patch Definitions.xml",

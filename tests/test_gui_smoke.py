@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import zipfile
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # Set before importing PyQt5.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -46,6 +47,32 @@ def _set_bsl_chip(window, chip):
     index = window.cb_bsl_chip.findData(chip)
     assert index >= 0
     window.cb_bsl_chip.setCurrentIndex(index)
+
+
+@pytest.mark.parametrize("filename", ["rom.bin", "rom.BIN", "rom"])
+def test_checksum_correction_default_preserves_source_and_directory(
+        tmp_path, monkeypatch, filename):
+    directory = tmp_path / "original.bin.images"
+    directory.mkdir()
+    source = directory / filename
+    original = bytes(MS41ECU.TUNE_SIZE)
+    corrected = bytes([1]) * len(original)
+    source.write_bytes(original)
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileName", lambda *args: (str(source), ""))
+    monkeypatch.setattr(
+        gui, "correct_checksums", lambda _data: (corrected, []))
+
+    def save_dialog(_parent, _title, suggested, _filter):
+        assert suggested == str(directory / "rom_cksum.bin")
+        return suggested, ""
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", save_dialog)
+    window = SimpleNamespace(_log=lambda *args: None)
+    gui.MS41FlashGUI._on_fix_file(window)
+
+    assert source.read_bytes() == original
+    assert (directory / "rom_cksum.bin").read_bytes() == corrected
 
 
 def test_release_build_info_uses_packaged_metadata(tmp_path, monkeypatch):
@@ -354,7 +381,7 @@ def test_high_dpi_policy_and_small_screen_overflow_are_explicit():
         assert window.width() == 980
         assert window.height() == 960
         assert scroll.widget().minimumWidth() == 980
-        assert scroll.widget().minimumHeight() == 700
+        assert scroll.widget().minimumHeight() == 960
 
         window.show()
         app.processEvents()
@@ -365,6 +392,12 @@ def test_high_dpi_policy_and_small_screen_overflow_are_explicit():
         app.processEvents()
         assert scroll.horizontalScrollBar().maximum() > 0
         assert scroll.verticalScrollBar().maximum() > 0
+
+        window.tabs.setCurrentIndex(window._bsl_tab_index)
+        app.processEvents()
+        assert window._bsl_preview.height() >= (
+            2 * window._bsl_preview.fontMetrics().lineSpacing()
+        )
     finally:
         window.close()
 
@@ -3157,10 +3190,12 @@ def test_patches_tab_warns_for_every_explicitly_untested_patch(monkeypatch):
         assert "marked untested" in shown["message"]
         assert "Ignition Cut" in shown["message"]
         assert "experimental" in shown["message"]
-        assert "configured fixed pulse width" in shown["message"]
-        assert "fuel-adaptation and diagnostic guards" in shown["message"]
-        assert "offline exact-byte verified" in shown["message"]
-        assert "not vehicle-validated" in shown["message"]
+        assert "may suppress spark while injection continues" in shown["message"]
+        assert "Vehicle testing is still required" in shown["message"]
+        assert "Ignition Cut V9" not in shown["message"]
+        assert "configured fixed pulse width" not in shown["message"]
+        assert "fuel-adaptation and diagnostic guards" not in shown["message"]
+        assert "offline exact-byte verified" not in shown["message"]
         assert "Never use it on a car with catalytic converters" in shown["message"]
     finally:
         w.close()
@@ -4593,6 +4628,9 @@ def test_application_icon_asset_is_loaded():
 
 def test_shared_application_configuration_uses_dark_fusion_theme():
     app = QApplication.instance() or QApplication([])
+    font = app.font()
+    font.setPointSizeF(8.25)
+    app.setFont(font)
 
     gui.configure_application(app)
 
@@ -4600,7 +4638,7 @@ def test_shared_application_configuration_uses_dark_fusion_theme():
     assert app.applicationName() == "BimmerStein ECU Tool"
     assert app.style().objectName().lower() == "fusion"
     assert app.font().family() == "Segoe UI"
-    assert app.font().pointSize() == 10
+    assert app.font().pointSizeF() == pytest.approx(8.25)
     assert palette.color(QPalette.Window).name() == "#2b2b2b"
     assert palette.color(QPalette.Base).name() == "#1e1e1e"
     assert palette.color(QPalette.Disabled, QPalette.ButtonText).name() == "#888888"
@@ -5580,6 +5618,201 @@ def test_run_via_softbsl_failure_still_restores_ds2_when_success_would_disconnec
         assert w._port_owner.owner == "flasher"
     finally:
         w._port_owner.release("flasher")
+        w._port_owner.release("softbsl")
+        w.close()
+
+
+@pytest.mark.parametrize("restore_after_success", [False, True])
+def test_unconfirmed_softbsl_recovery_never_reopens_ds2(monkeypatch, restore_after_success):
+    app, w = _gui()
+    try:
+        w._ds2 = SimpleNamespace(close=lambda: None)
+        w._connection_port = "COM1"
+        w._port_owner.acquire("flasher")
+        monkeypatch.setattr(
+            w, "_reopen_ds2_with_retry",
+            lambda *_args: pytest.fail("unconfirmed recovery reopened DS2"))
+        error = gui.softbsl_service.SoftBSLRecoveryStateError("marker 0 unconfirmed")
+
+        def fail(*_args):
+            raise error
+
+        with pytest.raises(gui.softbsl_service.SoftBSLRecoveryStateError) as caught:
+            w._run_via_softbsl(
+                fail, lambda *_args: None, lambda *_args: None,
+                restore_after_success=restore_after_success)
+
+        assert caught.value is error
+        assert w._ds2 is None
+        assert w._port_owner.owner is None
+    finally:
+        w._connection_port = None
+        w.close()
+
+
+@pytest.mark.parametrize("size,file_type", [
+    (0, None), (3, None), (8192, "Unknown"), (16384, "Unknown"),
+    (24576, "Tune"), (65536, "Unknown"), (262144, "Full ROM"),
+])
+def test_softbsl_recovery_error_archives_complete_capture_without_accepting_state(
+        monkeypatch, tmp_path, size, file_type):
+    import backup_manager
+
+    directory = tmp_path / "bins"
+    monkeypatch.setattr(backup_manager, "BACKUP_DIR", str(directory))
+    monkeypatch.setattr(backup_manager, "INDEX_FILE", str(directory / "index.json"))
+    app, w = _gui()
+    try:
+        data = b"\x11" * size
+        original = OSError("original read failure")
+        error = gui.softbsl_service.SoftBSLRecoveryStateError(
+            "marker 0 unconfirmed", read_data=data)
+        error.__context__ = original
+        w._connection_port = "COM1"
+        w._ecu_id = "testecu"
+        w._session_backup_read = False
+
+        w._prepare_softbsl_recovery_failure(error)
+
+        assert "marker 0 unconfirmed" in str(error)
+        assert "original read failure" in str(error)
+        assert "10 seconds" in str(error)
+        assert error.__context__ is original
+        assert w._session_backup_read is False
+        assert w._last_full_read is None
+        assert w._connection_port is None
+        assert w.btn_connect.text() == "Connect"
+        entries = w._backup_mgr.entries
+        if file_type:
+            assert len(entries) == 1
+            entry = entries[0]
+            assert entry.file_type == file_type
+            assert entry.ecu_id == "testecu"
+            assert "recovery unconfirmed" in entry.source
+            assert str(size) in entry.filename
+            assert entry.path in str(error)
+            with open(entry.path, "rb") as capture:
+                assert capture.read() == data
+        else:
+            assert entries == []
+    finally:
+        w.close()
+
+
+def test_softbsl_recovery_archive_failure_preserves_operation_error_and_saved_path(monkeypatch):
+    app, w = _gui()
+    try:
+        path = "saved-capture.bin"
+        def fail_archive(*_args, **_kwargs):
+            raise RuntimeError(f"catalog failed; image retained at {path}")
+        monkeypatch.setattr(w._backup_mgr, "add_data", fail_archive)
+        error = gui.softbsl_service.SoftBSLRecoveryStateError(
+            "marker 0 unconfirmed", read_data=b"\x11" * MS41ECU.TUNE_SIZE)
+
+        w._prepare_softbsl_recovery_failure(error)
+
+        assert "marker 0 unconfirmed" in str(error)
+        assert path in str(error)
+        assert "10 seconds" in str(error)
+        assert error.read_data == b"\x11" * MS41ECU.TUNE_SIZE
+    finally:
+        w.close()
+
+
+def test_backup_from_ecu_catalog_failure_shows_durable_path_without_success(monkeypatch):
+    app, w = _gui()
+    shown = []
+    try:
+        w._ds2 = SimpleNamespace(close=lambda: None)
+        monkeypatch.setattr(
+            QInputDialog, "getItem", lambda *_args: ("Tune Region (24 KB)", True))
+        monkeypatch.setattr(
+            QMessageBox, "critical", lambda *_args: shown.append(_args))
+        monkeypatch.setattr(
+            QMessageBox, "information", lambda *_args: pytest.fail("reported saved backup"))
+        def fail_archive(*_args, **_kwargs):
+            raise RuntimeError("catalog failed; image retained at saved-capture.bin")
+        monkeypatch.setattr(w, "_backup_save_bytes", fail_archive)
+        monkeypatch.setattr(
+            w, "_run_task", lambda _task, on_success: on_success(bytes(MS41ECU.TUNE_SIZE)))
+
+        w._on_backup_from_ecu()
+
+        assert len(shown) == 1
+        assert shown[0][1] == "Backup Failed"
+        assert "saved-capture.bin" in shown[0][2]
+    finally:
+        w._ds2 = None
+        w.close()
+
+
+def test_task_handles_softbsl_recovery_before_existing_failure_callback(monkeypatch):
+    app, w = _gui()
+    error = gui.softbsl_service.SoftBSLRecoveryStateError("marker 0 unconfirmed")
+    events = []
+
+    class Signal:
+        def connect(self, callback): self.callback = callback
+        def emit(self, *args): self.callback(*args)
+
+    class ImmediateWorker:
+        def __init__(self, _task):
+            self.log_signal = Signal()
+            self.progress_signal = Signal()
+            self.done_signal = Signal()
+        def start(self): self.done_signal.emit(False, error)
+
+    try:
+        monkeypatch.setattr(gui, "WorkerThread", ImmediateWorker)
+        monkeypatch.setattr(
+            w, "_prepare_softbsl_recovery_failure",
+            lambda result: events.append(("prepare", result)))
+        w._run_task(
+            lambda *_args: None,
+            on_success=lambda _result: pytest.fail("unconfirmed recovery reported success"),
+            on_failure=lambda result: events.append(("failure", result)))
+
+        assert events == [("prepare", error), ("failure", error)]
+        assert w._task_busy is False
+    finally:
+        w._worker = None
+        w.close()
+
+
+def test_softbsl_recovery_retry_with_unconfirmed_finalize_stays_disconnected(monkeypatch):
+    app, w = _gui()
+    shown = []
+    recovery = SimpleNamespace(is_open=True, do_verify=False, operation="tune", port="COM1")
+    error = gui.softbsl_service.SoftBSLRecoveryStateError("marker 0 unconfirmed")
+    try:
+        w._softbsl_write_recovery = recovery
+        w._port_owner.acquire("softbsl")
+        def fail_finalize(received, **_kwargs):
+            received.is_open = False
+            raise error
+        def run(task, on_success, on_failure):
+            try:
+                task(lambda *_args: None, lambda *_args: None)
+            except gui.softbsl_service.SoftBSLRecoveryStateError as caught:
+                assert caught is error
+                on_failure(caught)
+            else:
+                pytest.fail("unconfirmed finalization completed successfully")
+        monkeypatch.setattr(gui.softbsl_service, "resume_write_recovery", fail_finalize)
+        monkeypatch.setattr(w, "_run_state_changing_task", run)
+        monkeypatch.setattr(
+            w, "_reopen_ds2_with_retry",
+            lambda *_args: pytest.fail("unconfirmed recovery reopened DS2"))
+        monkeypatch.setattr(QMessageBox, "critical", lambda *_args: shown.append(_args))
+
+        w._start_softbsl_flash_recovery(confirmed=True)
+
+        assert w._softbsl_write_recovery is None
+        assert w._port_owner.owner is None
+        assert w._ds2 is None
+        assert shown and "marker 0 unconfirmed" in shown[0][2]
+    finally:
+        w._softbsl_write_recovery = None
         w._port_owner.release("softbsl")
         w.close()
 

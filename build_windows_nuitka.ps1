@@ -96,6 +96,7 @@ try {
         "--include-data-file=$root\engines\softbsl\stage1_manifest.json=engines/softbsl/stage1_manifest.json",
         "--include-data-file=$root\engines\softbsl\agent_manifest.json=engines/softbsl/agent_manifest.json",
         "--include-data-file=$root\engines\patcher\romraider\BimmerStein MS41 Patch Definitions.xml=BimmerStein MS41 Patch Definitions.xml",
+        "--include-data-file=$root\logger_definitions\BimmerStein MS41 Logger Definitions.xml=logger_definitions/BimmerStein MS41 Logger Definitions.xml",
         "--windows-icon-from-ico=$root\assets\bimmerstein_ecu_tool.ico",
         "--output-filename=BimmerStein ECU Tool.exe",
         "--output-dir=$outputDir",

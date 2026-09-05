@@ -4,11 +4,13 @@ import sys
 import app_paths
 
 
-def test_source_mutable_path_is_anchored_to_repository_root():
+def test_source_mutable_path_is_anchored_to_repository_root(monkeypatch):
+    monkeypatch.delenv(app_paths.DATA_DIR_ENV, raising=False)
     assert app_paths.mutable_path("backups") == Path(app_paths.__file__).resolve().parent / "backups"
 
 
 def test_frozen_mutable_path_is_anchored_beside_executable(tmp_path, monkeypatch):
+    monkeypatch.delenv(app_paths.DATA_DIR_ENV, raising=False)
     executable = tmp_path / "BimmerStein ECU Tool.exe"
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(executable))
@@ -16,6 +18,7 @@ def test_frozen_mutable_path_is_anchored_beside_executable(tmp_path, monkeypatch
 
 
 def test_user_data_path_uses_local_app_data(tmp_path, monkeypatch):
+    monkeypatch.delenv(app_paths.DATA_DIR_ENV, raising=False)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     assert app_paths.user_data_path("definitions") == (
         tmp_path / "BimmerStein ECU Tool" / "definitions"

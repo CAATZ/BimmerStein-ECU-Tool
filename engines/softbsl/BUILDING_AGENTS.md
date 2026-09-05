@@ -8,7 +8,7 @@ The source tree contains four C166 RAM agents:
 - `st9030_agent.hex`: fixed-slot C166 ASC1 probe plus bounded,
   stock-derived ST9030 token-gate and telemetry operations.
 
-Their reviewed assembly sources, preprocessor, Ghidra assembly script, and exact
+Their reviewed assembly sources, preprocessor, headless assembly script, and exact
 SHA-256 values are kept together in this directory. Text hashes normalize line
 endings so Windows and Unix checkouts verify identically. `agent_manifest.json` binds
 each runtime payload to its source. This avoids relying on an unpublished build
@@ -17,7 +17,7 @@ folder or accepting a payload merely because it has the expected size.
 ## Required tools
 
 - Python 3.10 or newer.
-- Ghidra 12 with the C166 processor extension, language
+- A headless assembler with the C166 processor extension, language
   `C166:LE:16:default`, and compiler specification `tasking`.
 
 ## Rebuild
@@ -31,7 +31,7 @@ python engines/softbsl/preprocess_asm.py engines/softbsl/eeprom_agent_build.asm 
 python engines/softbsl/preprocess_asm.py engines/softbsl/st9030_agent_build.asm build/agent_st9030_ready.asm
 ```
 
-Create a small dummy binary for Ghidra to load, then invoke `analyzeHeadless` with
+Create a small dummy binary for the assembler to load, then invoke `analyzeHeadless` with
 the C166 language and the included script. The essential arguments are:
 
 ```text

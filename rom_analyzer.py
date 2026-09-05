@@ -1,7 +1,7 @@
 """
 rom_analyzer.py — Offline BMW MS41 ROM/tune analyzer.
 
-Data-driven: it loads a user-selected RomRaider-format MS41 ECU definition,
+Data-driven: it loads a user-selected XML-format MS41 ECU definition,
 matches the loaded .bin to the correct rom (FULL 256 KB vs PARTIAL 24 KB, and the
 right variant incl. MS41.3) by internalidaddress + internalidstring + filesize,
 resolves the inheritance chain, and lists every table — computing scalar values.
@@ -121,7 +121,7 @@ def analyze(data: bytes, definition_path=None) -> AnalysisResult:
     bl_ok    = bootloader_checksum_ok(data)
     _, cs_details = verify_checksum(data)
 
-    # ── RomRaider definition match + table extraction ─────────────────────────
+    # ── XML definition match + table extraction ─────────────────────────
     matched_label = None
     try:
         defs = rrd.get_definitions(definition_path)
@@ -173,7 +173,7 @@ def analyze(data: bytes, definition_path=None) -> AnalysisResult:
                 if rom is not None and rom.xmlid != trom.xmlid:
                     if prog_variant == "MS41.3" or prog_variant is None:
                         # Normal MS41.3 full ROM: program is also MS41.3 but has no
-                        # dedicated 256KB RomRaider def (falls back to MS41.2's ID12).
+                        # dedicated 256KB XML def (falls back to MS41.2's ID12).
                         matched_label += "  +  MS41.3 (256 KB) [definition unavailable]"
                     else:
                         # Hybrid: defs.match() is unreliable here because all 256KB
@@ -203,7 +203,7 @@ def analyze(data: bytes, definition_path=None) -> AnalysisResult:
                 matched_label = _def_str(trom)
 
         if rom is None and size != FULL_ROM_SIZE:
-            warns.append("No matching RomRaider definition for this file "
+            warns.append("No matching XML definition for this file "
                          "(unknown CAL ID or size).")
         params = sorted(rows, key=lambda r: (r[0].lower(), r[1].lower()))
 

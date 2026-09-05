@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build standalone or combined RomRaider definitions for current patches.
+"""Build standalone or combined XML definitions for current patches.
 
 Standalone output contains only BimmerStein patch controls.  Combined output
 keeps the input definition byte-for-byte apart from the target ROM blocks.

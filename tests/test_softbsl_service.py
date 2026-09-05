@@ -594,6 +594,110 @@ def test_read_image_recovers_even_when_the_read_itself_fails(monkeypatch):
     assert closed == [True]                        # and the port was closed
 
 
+def test_marker0_reset_write_failure_cannot_report_recovery_or_retry_reset():
+    from types import SimpleNamespace
+
+    class Serial:
+        writes = 0
+
+        def reset_input_buffer(self): pass
+        def flush(self): pass
+        def write(self, data):
+            self.writes += 1
+            if self.writes == 1:
+                raise OSError("first reset write failed")
+            return len(data)
+
+    serial = Serial()
+    reads = []
+    ds2 = SimpleNamespace(
+        _ser=serial, echo=True, baud=9600,
+        _read_exact=lambda length, timeout: b"\x00" * length,
+        execute=lambda *args, **kwargs: reads.append(args) or b"\x01",
+        verify_program_region=lambda **kwargs: (False, 0),
+    )
+    log = []
+    sb = softbsl_host.SoftBSL(ds2, log=lambda *_args: None)
+
+    assert softbsl_service._recover_marker0(sb, log.append) is False
+    assert serial.writes == 1
+    assert reads == []
+    assert "first reset write failed" in log[0]
+
+
+@pytest.mark.parametrize("operation,expected_length", [
+    ("tune", 24 * 1024), ("full", 256 * 1024),
+    ("read_identity_data", 16 * 1024), ("read_identity_sector", 8 * 1024),
+    ("read_cross_bank_image", 256 * 1024),
+])
+@pytest.mark.parametrize("read_fails", [False, True])
+def test_unconfirmed_read_recovery_preserves_data_or_error_and_stops_fallback(
+        monkeypatch, operation, expected_length, read_fails):
+    closed = []
+    prompts = []
+    sb = _RecordingSB()
+    sb.finalize_marker0 = lambda already_sent=False: False
+    guards = iter((b"\xA5\x5A\x42\xBD", b"\xA5\x5A\x54\xAB"))
+    sb.crc_read = lambda *_args: next(guards)
+    read_error = softbsl_service.SoftBSLError("read CRC retries exhausted")
+    if read_fails:
+        def fail_read(*_args, **_kwargs):
+            raise read_error
+        sb.read_range = fail_read
+    _install_fakes(monkeypatch, sb, close_rec=closed)
+
+    with pytest.raises(softbsl_service.SoftBSLRecoveryStateError) as caught:
+        if operation == "read_cross_bank_image":
+            softbsl_service.read_cross_bank_image(
+                "COM1", prompts.append, lambda *_args: None, baud="high")
+        elif operation.startswith("read_identity"):
+            getattr(softbsl_service, operation)(
+                "COM1", "high", None, lambda *_args: None, chip_family="amd")
+        else:
+            softbsl_service.read_image(
+                "COM1", operation, "high", None, lambda *_args: None)
+
+    error = caught.value
+    assert error.safe_legacy_fallback is False
+    assert error.power_cycle_required is True
+    assert error.read_data == (None if read_fails else b"\x11" * expected_length)
+    assert error.__context__ is (read_error if read_fails else None)
+    assert sb.calls.count(("set_baud", "high")) == 1
+    assert ("set_baud", "mid") not in sb.calls
+    assert closed == [True]
+    if operation == "read_cross_bank_image":
+        assert len(prompts) == 2
+        assert "UPPER" in prompts[0] and "LOWER" in prompts[1]
+
+
+@pytest.mark.parametrize("operation", ["tune", "full"])
+def test_completed_write_finalizer_exception_never_reports_success(monkeypatch, operation):
+    sb = _RecordingSB()
+    closed = []
+    finalizations = []
+
+    def fail_finalize(already_sent=False):
+        finalizations.append(already_sent)
+        raise OSError("finalizer transport failure")
+
+    sb.finalize_marker0 = fail_finalize
+    _install_fakes(monkeypatch, sb, close_rec=closed)
+
+    with pytest.raises(
+            softbsl_service.SoftBSLRecoveryStateError, match="finalization was not confirmed"):
+        if operation == "tune":
+            softbsl_service.write_tune(
+                "COM1", TUNE_24K, lambda *_args: None, baud="high", chip_family="intel")
+        else:
+            softbsl_service.run_flash(
+                "COM1", INTEL_IMAGE, "full", lambda _message: "", lambda *_args: None,
+                baud="high", chip_family="intel")
+
+    assert finalizations == [operation == "full"]
+    assert ("set_baud", "mid") not in sb.calls
+    assert closed == [True]
+
+
 def test_run_flash_recovers_to_marker0_in_finally(monkeypatch):
     sb = _RecordingSB()
     _install_fakes(monkeypatch, sb)

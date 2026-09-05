@@ -1,6 +1,8 @@
 import os
 import sys
 import hashlib
+import json
+from dataclasses import asdict
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -15,10 +17,11 @@ def _mgr(tmp_path, monkeypatch):
     return backup_manager.BackupManager()
 
 
-def test_backup_dir_is_absolute_and_anchored_to_install_dir():
+def test_backup_dir_is_absolute_and_anchored_to_configured_data_root():
     assert os.path.isabs(backup_manager.BACKUP_DIR)
     install_dir = os.path.dirname(os.path.abspath(backup_manager.__file__))
-    assert os.path.dirname(backup_manager.BACKUP_DIR) == install_dir
+    expected_root = os.environ.get("BIMMERSTEIN_DATA_DIR") or install_dir
+    assert os.path.dirname(backup_manager.BACKUP_DIR) == expected_root
 
 
 def test_add_data_full_rom_records_program_and_cal_variant(tmp_path, monkeypatch):
@@ -191,3 +194,164 @@ def test_empty_catalog_folders_persist_until_removed(tmp_path, monkeypatch):
     assert backup_manager.BackupManager().folders == ["Race day"]
     assert mgr.clear_folder("Race day") == 1
     assert backup_manager.BackupManager().folders == []
+
+
+def test_first_import_cannot_replace_catalog_index(tmp_path, monkeypatch):
+    mgr = _mgr(tmp_path, monkeypatch)
+    data = bytes(512)
+
+    entry = mgr.add_data(data, "index.json", variant="MS41.2")
+
+    assert entry.filename != "index.json"
+    assert mgr.read_data(entry.filename, entry.sha256) == data
+    reloaded = backup_manager.BackupManager()
+    assert reloaded.read_data(entry.filename, entry.sha256) == data
+
+
+def test_failed_index_commit_recovers_exact_image_and_metadata(tmp_path, monkeypatch):
+    mgr = _mgr(tmp_path, monkeypatch)
+    original = mgr.add_data(b"existing", "existing.bin")
+    index = tmp_path / "backups" / "index.json"
+    original_index = index.read_bytes()
+    replace = os.replace
+
+    def fail_index(source, destination):
+        if os.fspath(destination) == str(index):
+            raise PermissionError("index locked")
+        return replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_index)
+    image = tmp_path / "backups" / "capture.bin"
+    with pytest.raises(backup_manager.BackupIndexError) as failure:
+        mgr.add_data(
+            bytes(512), image.name, notes="durable original", source="ECU EEPROM Agent",
+            variant="MS41.2", ecu_id="test ECU", vin="test VIN", folder="Recovery",
+        )
+    expected = asdict(mgr.entries[-1])
+    assert str(image) in str(failure.value)
+    assert isinstance(failure.value.__cause__, PermissionError)
+    assert image.read_bytes() == bytes(512)
+    pending, = (image.parent / ".pending").glob("*.json")
+    assert json.loads(pending.read_text()) == expected
+    assert index.read_bytes() == original_index
+
+    with pytest.raises(backup_manager.BackupIndexError, match="restart to retry"):
+        backup_manager.BackupManager()
+    assert pending.exists() and image.read_bytes() == bytes(512)
+    assert index.read_bytes() == original_index
+
+    monkeypatch.setattr(os, "replace", replace)
+    reloaded = backup_manager.BackupManager()
+    assert [asdict(entry) for entry in reloaded.entries] == [asdict(original), expected]
+    assert reloaded.folders == ["Recovery"]
+    assert reloaded.read_data(image.name, expected["sha256"]) == bytes(512)
+    assert not pending.exists()
+    assert len(backup_manager.BackupManager().entries) == 2
+
+
+@pytest.mark.parametrize("damage", ["malformed", "image_changed", "path_escape", "index_corrupt"])
+def test_pending_recovery_does_not_guess_or_replace_corrupt_data(tmp_path, monkeypatch, damage):
+    mgr = _mgr(tmp_path, monkeypatch)
+    entry = mgr.add_data(b"original", "capture.bin", notes="original notes")
+    index = tmp_path / "backups" / "index.json"
+    pending = index.parent / ".pending" / "interrupted.json"
+    metadata = asdict(entry)
+    index.write_text("[]")
+    if damage == "path_escape":
+        metadata["filename"] = "../capture.bin"
+    pending.write_text("{" if damage == "malformed" else json.dumps(metadata))
+    if damage == "image_changed":
+        (index.parent / entry.filename).write_bytes(b"modified")
+    if damage == "index_corrupt":
+        index.write_text("{")
+    before = index.read_bytes(), pending.read_bytes()
+
+    with pytest.raises(backup_manager.BackupIndexError):
+        backup_manager.BackupManager()
+
+    assert (index.read_bytes(), pending.read_bytes()) == before
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+def test_stale_pending_record_preserves_newer_index_or_deleted_image(tmp_path, monkeypatch, deleted):
+    mgr = _mgr(tmp_path, monkeypatch)
+    entry = mgr.add_data(b"original", "capture.bin", notes="old notes")
+    pending = tmp_path / "backups" / ".pending" / "stale.json"
+    pending.write_text(json.dumps(asdict(entry)))
+    if deleted:
+        mgr.remove_exact(entry.filename, entry.sha256)
+    else:
+        mgr.update_notes(entry, "new notes")
+
+    reloaded = backup_manager.BackupManager()
+
+    assert not pending.exists()
+    assert [entry.notes for entry in reloaded.entries] == ([] if deleted else ["new notes"])
+
+
+def test_pending_metadata_must_be_saved_before_publishing_image(tmp_path, monkeypatch):
+    mgr = _mgr(tmp_path, monkeypatch)
+
+    def fail_metadata(*args):
+        raise PermissionError("storage unavailable")
+
+    monkeypatch.setattr(mgr, "_write_json", fail_metadata)
+    with pytest.raises(PermissionError):
+        mgr.add_data(b"original", "capture.bin")
+    assert not (tmp_path / "backups" / "capture.bin").exists()
+    assert mgr.entries == []
+
+
+def test_pending_directory_name_is_reserved_for_import_and_rename(tmp_path, monkeypatch):
+    mgr = _mgr(tmp_path, monkeypatch)
+    entry = mgr.add_data(b"original", ".pending")
+    assert entry.filename != ".pending"
+    assert mgr.read_data(entry.filename, entry.sha256) == b"original"
+    with pytest.raises(ValueError, match="portable"):
+        mgr.rename_exact(entry.filename, entry.sha256, ".pending")
+
+
+def test_retry_after_failed_image_publication_keeps_pending_identities_separate(tmp_path, monkeypatch):
+    mgr = _mgr(tmp_path, monkeypatch)
+    replace = os.replace
+    first_image = tmp_path / "backups" / "capture.bin"
+    index = first_image.parent / "index.json"
+
+    def fail_publication_or_index(source, destination):
+        if os.fspath(destination) in (str(first_image), str(index)):
+            raise PermissionError("storage unavailable")
+        return replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_publication_or_index)
+    with pytest.raises(PermissionError):
+        mgr.add_data(b"first capture", first_image.name)
+    with pytest.raises(backup_manager.BackupIndexError):
+        mgr.add_data(b"second capture", first_image.name)
+
+    monkeypatch.setattr(os, "replace", replace)
+    reloaded = backup_manager.BackupManager()
+    entry, = reloaded.entries
+    assert reloaded.read_data(entry.filename, entry.sha256) == b"second capture"
+    assert not first_image.exists()
+    assert not list((first_image.parent / ".pending").glob("*.json"))
+
+
+def test_rename_cannot_reuse_an_unresolved_pending_filename(tmp_path, monkeypatch):
+    mgr = _mgr(tmp_path, monkeypatch)
+    entry = mgr.add_data(b"stable", "stable.bin")
+    replace = os.replace
+    failed_image = tmp_path / "backups" / "capture.bin"
+
+    def fail_image_publication(source, destination):
+        if os.fspath(destination) == str(failed_image):
+            raise PermissionError("image unavailable")
+        return replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_image_publication)
+    with pytest.raises(PermissionError):
+        mgr.add_data(b"different capture", failed_image.name)
+    assert mgr.rename_exact(entry.filename, entry.sha256, entry.filename) is entry
+    with pytest.raises(ValueError, match="already exists"):
+        mgr.rename_exact(entry.filename, entry.sha256, failed_image.name)
+    reloaded = backup_manager.BackupManager()
+    assert reloaded.read_data(entry.filename, entry.sha256) == b"stable"

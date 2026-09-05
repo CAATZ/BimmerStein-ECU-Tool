@@ -130,7 +130,7 @@ try {
 
     & $python "engines\patcher\verify_ms412_emulator.py"
     if ($LASTEXITCODE -ne 0) {
-        throw "Private MS41 patch-admission verification failed."
+        throw "MS41 patch-admission verification failed."
     }
 
     & $standardBuildScript -Version $Version -SkipTests:$SkipTests

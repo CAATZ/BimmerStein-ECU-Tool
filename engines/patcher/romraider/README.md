@@ -1,6 +1,6 @@
-# RomRaider definitions for current patches
+# Calibration XML definitions for current patches
 
-`BimmerStein MS41 Patch Definitions.xml` is a standalone RomRaider ECU
+`BimmerStein MS41 Patch Definitions.xml` is a standalone ECU calibration XML
 definition containing only calibrations introduced by BimmerStein patches:
 
 - Ignition Cut V7 and Launch Control V4 for MS41.0 ID41, MS41.1 ID60,
@@ -9,7 +9,7 @@ definition containing only calibrations introduced by BimmerStein patches:
 - the VANOSRT1/MS41.0 and VANOSRT2/MS41.1 minimum-RPM retrofits
 
 Both 24 KB calibration files and 256 KB full reads are covered. Code-only
-patches are intentionally absent because they have no RomRaider calibration to
+patches are intentionally absent because they have no calibration parameter to
 edit. AlphaN MAF-failsafe continues to use the standard SS1v2 AlphaN tables; it
 does not add a calibration of its own.
 

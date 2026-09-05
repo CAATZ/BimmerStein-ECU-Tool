@@ -756,7 +756,7 @@ def read_ms41_cluster_store(ds2, chassis: str) -> ClusterStoreState:
                 f"E39 cluster family 0x{family_index:02X} is not supported")
     first_word, last_word = ((0x6C, 0xBF) if chassis == "E36" else (0x2C, 0x7F))
     data = _read_words(ds2, first_word, last_word - first_word + 1)
-    mask, manual, five_speed, four_speed = profiles[coding_index]
+    mask, manual, five_speed, _four_speed = profiles[coding_index]
     return ClusterStoreState(
         chassis, ident, coding_index, first_word, data,
         268 if chassis == "E36" else 140,

@@ -55,6 +55,8 @@ class DefinitionRegistry:
             payload = json.loads(self.settings_path.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):
             return []
+        if not isinstance(payload, dict):
+            return []
         requested = payload.get("active_definitions")
         if not isinstance(requested, list):
             legacy = payload.get("active_definition")

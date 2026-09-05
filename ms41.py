@@ -17,7 +17,7 @@ ROM layout:
   Full ROM    : 0x000000–0x03FFFF  (256 KB)
   Tune region : 0x014000–0x019FFF  (24 KB calibration/tune area)
 
-Identification (verified against real dumps + RomRaider MS41 definitions):
+Identification (verified against real dumps + MS41 XML definitions):
   CAL ID  — ASCII at 0x1400E (full ROM) / 0x0000E (24 KB tune file); first two
             chars identify the family (60=MS41.1, 12=MS41.2, 41/42/59/85=MS41.0).
   MS41.3  — shares the "12" CAL ID prefix with MS41.2. Calibration-side evidence is
@@ -32,7 +32,7 @@ Identification (verified against real dumps + RomRaider MS41 definitions):
 
 import identity
 
-# CAL ID location and variant mapping (RomRaider MS41 definitions, verified).
+# CAL ID location and variant mapping (MS41 XML definitions, verified).
 CALID_ADDR_256K = 0x1400E   # full 256 KB ROM
 CALID_ADDR_24K  = 0x0000E   # 24 KB tune-region file
 CALID_VARIANT = {
@@ -206,7 +206,7 @@ class MS41ECU:
         """Carve the 24 KB tune partition out of a FILE-order full ROM.
 
         The ECU tune partition is CPU/DS2-order (DS2 0x10000-0x15FFF) — the same layout
-        ds2.read_partial returns and RomRaider's cal-relative storageaddress expects.
+        ds2.read_partial returns and the XML cal-relative storageaddress expects.
         Because file = CPU XOR 0x4000 per 16 KB block, it is NOT a contiguous file slice:
         the two 16 KB halves are block-swapped.  A plain full[0x14000:0x1A000] slice
         silently drops the last 8 KB (extended AlphaN 16x20 @0x4048/0x4188/0x42C8 +

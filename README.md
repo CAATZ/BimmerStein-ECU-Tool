@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <strong><a href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b14">Download Beta 14</a></strong>
+  <strong><a href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b15">Download Beta 15</a></strong>
   &nbsp;&middot;&nbsp;
   <a href="manual/USER_MANUAL.md">User Manual</a>
   &nbsp;&middot;&nbsp;
@@ -48,10 +48,15 @@ BimmerStein ECU Tool brings BMW MS41 flashing, diagnostics, configuration, patch
 - Install and use Soft-BSL for supported high-speed operations.
 - Recover an unbootable ECU through the separate hardware-BSL workflow.
 
-Beta 14 is a **Windows x64 desktop release only**. PyInstaller and Nuitka builds are distributed as
+Beta 15 is a **Windows x64 desktop release only**. PyInstaller and Nuitka builds are distributed as
 per-user installers and complete portable packages. The PyInstaller executable must remain beside
 its `_internal` directory; the Nuitka build uses a flat application folder. The required Visual C++
 runtime is included in every Windows package, so no separate runtime installation is required.
+
+Beta 15 improves display scaling, preserves completed reads when recovery cannot be confirmed,
+and makes interrupted Bins catalogue saves recoverable after the storage problem is resolved.
+It also corrects checksum-output filenames and tightens saved-settings and identity validation.
+The published firmware patch set remains unchanged from Beta 14.
 
 ## Safety
 
@@ -114,9 +119,14 @@ RAM agents.
 
 Once detected, Soft-BSL is selected automatically by the Flash tab. It supports optimized full-ROM
 and tune reads and writes, starts at the highest supported baud tier, and can retry a lower tier only
-before erase begins. If a write fails after erase may have started, the application retains the live
+before erase begins and after recovery is confirmed. If a write fails after erase may have started, the application retains the live
 RAM-agent session and prepared image for a same-session recovery attempt instead of reopening the
 port or changing transports.
+
+If Soft-BSL cannot confirm the return to normal ECU operation, it reports an error and leaves the
+application disconnected. A completed read is retained in Bins when it can be saved; the error
+shows the capture location and any storage problem. Follow the displayed ignition-cycle and
+reconnection instructions before retrying.
 
 > [!WARNING]
 > Soft-BSL installation modifies ECU firmware and is recovery-sensitive. Use stable power, follow
@@ -132,8 +142,8 @@ trims, load, battery voltage, oxygen-sensor and MAF voltages, and operating stat
 wideband feature is enabled, the tab automatically adds actual AFR, target AFR, the selected
 wideband input voltage, and narrowband-emulation status.
 
-The RAM addresses and conversions are built-in, ECU-specific profiles derived from RomRaider MS41
-logger definitions. The connected ECU ID selects the appropriate address family; values without a
+The RAM addresses and conversions use bundled, ECU-specific MS41 logger profiles.
+The connected ECU ID selects the appropriate address family; values without a
 verified mapping remain unavailable instead of using a guessed address. These profiles are part of
 the application—the Live Data tab does not import user-selected logger-definition XML files.
 
@@ -148,7 +158,8 @@ Live Data polling is read-only with respect to ECU flash memory.
 Normal Flash-tab reads and writes select one route:
 
 1. Soft-BSL when a compatible persistent loader is available. It starts at the highest supported
-   tier and retries lower Soft-BSL tiers only while the operation remains pre-erase.
+   tier and retries lower Soft-BSL tiers only while the operation remains pre-erase and recovery
+   is confirmed.
 2. Stock native-fast DS2 on a compatible stock ECU through D2XX. If its pre-erase high-rate check
    fails after the ECU is confirmed back at normal state, the complete operation restarts over
    normal DS2 at 9600.
@@ -171,6 +182,10 @@ SHA-256 so external replacement can be detected. On first load, a legacy entry w
 migrated only after its stored file size matches; the file's current SHA-256 is then recorded.
 An unreadable catalogue stops application startup with an error and leaves the index and backup
 files unchanged.
+
+If an image is saved but its catalogue entry cannot be committed, the error identifies the saved
+file. Resolve the storage problem and restart the application to recover its original catalogue
+metadata. Conflicting or modified recovery records remain blocked instead of being guessed.
 
 ## Firmware patches
 
@@ -196,7 +211,7 @@ remain detectable and remove-only so an older installation can still be removed 
 migration.
 
 Every Windows package includes `BimmerStein MS41 Patch Definitions.xml` beside the executable for
-RomRaider or BimmerStein Tuning Suite. It covers the calibration items introduced by supported
+use in a compatible calibration editor. It covers the calibration items introduced by supported
 patches; install the matching firmware patch before editing those tables and verify the ECU variant,
 calibration ID, and patch revision. A mismatched definition can expose incorrect tables or write to
 the wrong calibration addresses. Ignition Cut provides switch and RPM controls. Launch Control adds
@@ -232,14 +247,12 @@ native-fast journal. Raw ROMs are excluded. Session logs require an explicit pri
 The illustrated manual covers normal flashing, recovery behavior, Soft-BSL, hardware BSL,
 diagnostics, offline tools, patches, and final checklists:
 
-- [Download BimmerStein ECU Tool 0.1.0 Beta 14](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b14)
+- [Download BimmerStein ECU Tool 0.1.0 Beta 15](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b15)
 - [Illustrated PDF manual](output/pdf/BimmerStein-ECU-Tool-User-Manual.pdf)
 - [User manual (web-readable Markdown)](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/manual/USER_MANUAL.md)
 - [Build and release instructions](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/BUILDING.md)
 - [Beta release notes](RELEASE_NOTES.md)
-- [Patch definitions and usage](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/engines/patcher/romraider/README.md)
 - [Hardware-BSL recovery companion](https://github.com/CAATZ/MS41-BSL-Unbricker)
-- [BimmerStein Tuning Suite](https://github.com/CAATZ/bimmerstein-tuning-suite)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
 - [GNU GPL license](LICENSE)
 - [Report a bug or request a feature](https://github.com/CAATZ/BimmerStein-ECU-Tool/issues)
@@ -267,7 +280,7 @@ The FTDI D2XX driver supplies `ftd2xx.dll`; no separate Python D2XX package is r
 .venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .venv\Scripts\python.exe -m pytest -q
 .venv\Scripts\python.exe -m engines.softbsl.verify_agent_artifacts
-.\build_windows.ps1 -Version 0.1.0b14
+.\build_windows.ps1 -Version 0.1.0b15
 ```
 
 The verified one-folder package is written to `dist\BimmerStein ECU Tool\`.
@@ -289,7 +302,7 @@ $env:QT_QPA_PLATFORM = "offscreen"
 | `engines/softbsl/` | Soft-BSL host, reproducible agents, manifests, and chip definitions |
 | `engines/bsl/` | Hardware bootstrap recovery engine |
 | `engines/patcher/` | Patch engine, descriptors, and verified patch artifacts |
-| `definition_registry.py`, `romraider_defs.py` | User-managed definition registry and parser |
+| `definition_registry.py` | User-managed calibration definition registry |
 | `manual/` | User-manual source and synthetic screenshots |
 | `packaging/` | Windows package and documentation build scripts |
 | `tests/` | Automated protocol, GUI, artifact, and packaging tests |
@@ -311,7 +324,7 @@ compliant with applicable emissions, safety, registration, competition, and othe
 off-road designation does not establish that a particular modification is lawful.
 
 BimmerStein ECU Tool is independent software and is not affiliated with or endorsed by BMW AG,
-FTDI, or RomRaider. Nothing in this disclaimer limits the rights granted under the GNU General
+or FTDI. Nothing in this disclaimer limits the rights granted under the GNU General
 Public License version 3.
 
 ## Acknowledgements
@@ -326,8 +339,8 @@ Special thanks to the people who helped shape and validate BimmerStein ECU Tool.
 | **Knotti** | Beta testing |
 | [**avail**](https://github.com/avail) | Linux testing |
 | **Alphamk4** | MS41.0 patch testing |
-| [**Siemens_MS41_Checksum**](https://github.com/kimfreding/Siemens_MS41_Checksum) (kimfreding) and [**pyms41**](https://github.com/OpenMS41/pyms41) (jpiccari) | MS41 CRC-16 checksum work that `ms41_checksum.py` builds on |
-| [**c166-ghidra-module**](https://github.com/keyhana/c166-ghidra-module) (keyhana) | C166 SLEIGH processor module for [**Ghidra**](https://github.com/NationalSecurityAgency/ghidra), used to disassemble and assemble the RAM monitor and the `0xFA40` stubs |
+| [**kimfreding**](https://github.com/kimfreding) and [**jpiccari**](https://github.com/jpiccari) | MS41 CRC-16 checksum work |
+| [**keyhana**](https://github.com/keyhana) | C166 processor-module support for RAM-monitor development |
 | [**handmade0octopus**](https://github.com/handmade0octopus) | DS2 protocol references and boot recovery idea |
 
 ## License and provenance

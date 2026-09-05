@@ -20,6 +20,7 @@ def test_windows_spec_uses_gui_entry_and_excludes_private_material():
     assert "disable_windowed_traceback=True" in text
     assert 'ROOT / "engines" / "patcher" / "patches"' in text
     assert '"BimmerStein MS41 Patch Definitions.xml"' in text
+    assert 'ROOT / "logger_definitions"' in text
     assert 'ROOT / "THIRD_PARTY_LICENSES"' in text
     assert 'agent_manifest = json.loads' in text
     assert 'entry["payload"] for entry in agent_manifest["agents"].values()' in text
@@ -102,12 +103,6 @@ def test_distribution_verifier_checks_document_version_and_public_terms(tmp_path
         module._verify_public_terms((document,))
     document.write_text("AIF and Path.joinpath remain ordinary code", encoding="utf-8")
     module._verify_public_terms((document,))
-    document.write_text("Ignition Cut " + "".join(("V", "9")), encoding="utf-8")
-    with pytest.raises(RuntimeError, match="prohibited public reference"):
-        module._verify_public_terms((document,))
-    document.write_text("Launch ignition fixed IPW", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="prohibited public reference"):
-        module._verify_public_terms((document,))
     assert module._numeric_release_version("0.1.0b14") == (0, 1, 0, 14)
 
 
@@ -126,6 +121,58 @@ def test_distribution_verifier_rejects_runtime_data_from_release_package():
     assert "vc_runtime_files_unmodified" in text
     assert "bundled patch definition does not match tracked source" in text
     assert "ET.parse(patch_definition)" in text
+    assert "bundled logger definition does not match tracked source" in text
+    assert "ET.parse(logger_definition)" in text
+
+
+def test_public_source_rejects_private_platform_docs(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location(
+        "bimmerstein_verify_source_docs", ROOT / "packaging" / "verify_dist.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+    for relative in (
+        "gui.py", "patch_service.py", "live_data.py", "README.md",
+        "CHANGELOG.md", "RELEASE_NOTES.md", "manual/USER_MANUAL.md",
+        "THIRD_PARTY_NOTICES.md",
+        "logger_definitions/BimmerStein MS41 Logger Definitions.xml",
+        "packaging/capture_manual_screenshots.py",
+        "engines/patcher/romraider/README.md",
+        "engines/patcher/romraider/build_patch_definitions.py",
+    ):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# Public source", encoding="utf-8")
+    for relative in (
+        "tests/README.md", "THIRD_PARTY_LICENSES/dependency.md",
+        "THIRD_PARTY_NOTICES.md", "tools/dependency.java",
+    ):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("Android dependency reference", encoding="utf-8")
+    module.verify_public_source()
+
+    document = tmp_path / "docs" / "EEPROM.md"
+    document.parent.mkdir()
+    document.write_text("Android EEPROM editor", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="private platform reference.*docs/EEPROM.md"):
+        module.verify_public_source()
+    document.write_text("Physical EEPROM record map", encoding="utf-8")
+    module.verify_public_source()
+
+
+def test_public_source_checks_decoded_python_strings(tmp_path):
+    spec = importlib.util.spec_from_file_location(
+        "bimmerstein_verify_decoded_strings", ROOT / "packaging" / "verify_dist.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    source = tmp_path / "message.py"
+    for message in ("Ignition Cut " + "V9", "Quick" + "flash"):
+        source.write_text("message = '\\n" + message + "'\n", encoding="utf-8")
+        with pytest.raises(RuntimeError, match="prohibited public reference"):
+            module._verify_public_terms((source,))
+    source.write_text("message = '\\nIgnition Cut V7'\n", encoding="utf-8")
+    module._verify_public_terms((source,))
 
 
 def test_msvc_runtime_verifier_rejects_modified_dependency_copy(tmp_path, monkeypatch):
@@ -223,7 +270,6 @@ def test_release_packaging_requires_explicit_license_gates():
     assert "DefinitionRedistributionApproved" not in text
     assert "calibration_definitions_bundled = $true" in text
     assert "verify_dist.py" in text
-    assert '"packaging\\verify_dist.py" --source-only' in text
     assert "b[1-9]\\d*" in text
     assert '"BimmerStein-ECU-Tool-$Version-Windows-x64"' in text
     assert '"BimmerStein-ECU-Tool-$Version-Windows-x64-Nuitka"' in text
@@ -253,8 +299,8 @@ def test_release_packaging_requires_explicit_license_gates():
     assert "b[1-9]\\d*" in build_text
 
     building = (ROOT / "BUILDING.md").read_text(encoding="utf-8")
-    assert "-Version 0.1.0b14" in building
-    assert "v0.1.0b14" in building
+    assert "-Version 0.1.0b15" in building
+    assert "v0.1.0b15" in building
     assert "BimmerStein ECU Tool Nuitka" in building
 
 
@@ -266,7 +312,7 @@ def test_inno_installer_uses_bimmerstein_identity_and_per_user_install():
     assert '#define SetupAppName "BimmerStein ECU Tool"' in installer
     assert '#define SetupShortcutSuffix " (Nuitka)"' in installer
     assert '#define SetupShortcutSuffix ""' in installer
-    assert '#define AppNumericVersion "0.1.0.14"' in installer
+    assert '#define AppNumericVersion "0.1.0.15"' in installer
     assert 'SetupAppName "BimmerStein ECU Tool (' not in installer
     assert "AppPublisher=CAATZ" in installer
     assert "PrivilegesRequired=lowest" in installer
@@ -332,6 +378,7 @@ def test_nuitka_build_is_explicit_and_separate():
     assert '"--file-description=BimmerStein ECU Tool"' in build
     assert "[guid]::NewGuid()" in build
     assert "BimmerStein MS41 Patch Definitions.xml" in build
+    assert "BimmerStein MS41 Logger Definitions.xml" in build
 
     entry = (ROOT / "packaging" / "nuitka_entry.py").read_text(encoding="utf-8")
     assert "sys.frozen = True" in entry
@@ -376,11 +423,12 @@ def test_readme_uses_canonical_product_logo_and_resource_links():
     text = (ROOT / "README.md").read_text(encoding="utf-8")
     assert '<img src="assets/bimmerstein_ecu_tool.png"' in text
     assert 'alt="BimmerStein ECU Tool"' in text
-    assert 'href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b14"' in text
+    assert 'href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b15"' in text
     assert 'href="manual/USER_MANUAL.md">User Manual</a>' in text
     assert 'href="https://github.com/CAATZ/BimmerStein-ECU-Tool/issues"' in text
     assert "## Documentation and support" in text
-    assert "[Patch definitions and usage]" in text
+    assert "[Illustrated PDF manual](output/pdf/BimmerStein-ECU-Tool-User-Manual.pdf)" in text
+    assert "BimmerStein MS41 Patch Definitions.xml" in text
 
 
 def test_public_docs_include_product_specific_disclaimer():

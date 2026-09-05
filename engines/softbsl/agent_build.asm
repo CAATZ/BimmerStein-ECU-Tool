@@ -1,6 +1,6 @@
 ; agent_build.asm — AUTO-GENERATED combined buildable agent.
 ; = agent_softbsl.asm (CALL/RET->calls/rets) + the v5 cores inlined.
-; Loads/runs at 0xD800. Assemble with Ghidra AssembleC166.
+; Loads/runs at 0xD800. Assemble with the C166 assembler.
 base 0d800h
 
 ; ============================================================================

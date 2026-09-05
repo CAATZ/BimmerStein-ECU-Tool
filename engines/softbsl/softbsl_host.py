@@ -1839,7 +1839,7 @@ def _select_agent_for_chip(args, chip):
     if fam["cmdset"] != "amd":
         if not os.path.exists(agent_path):
             raise SoftBSLError(f"--chip {chip}: {fam['agent']} not assembled yet. The source exists "
-                     f"(agent_28f_build.asm); assemble it via Ghidra AssembleC166 -> {fam['agent']} "
+                     f"(agent_28f_build.asm); assemble the C166 source -> {fam['agent']} "
                      f"(flat hex @0xD800), or use BSL-Unbricker --chip {chip} (HW BSL, 12 V).")
     args.agent = agent_path   # amd -> agent.hex ; intel -> agent_28f.hex (gated above)
 

@@ -1,4 +1,6 @@
-import os, sys
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import csv as _csv
 import pytest
@@ -68,6 +70,9 @@ def test_batch_mode_uses_one_poll(tmp_path):
             self.polls += 1
             self.poller._stop.set()
             return bytes(38)
+
+        def read_mem(self, address, length):
+            raise AssertionError("batch polling must not read unrequested memory")
 
     p = live_data.LiveDataPoller(interval=0, use_telegram=True, ecu_id="1437806")
     fake = FakeBatchDS2(p)
@@ -196,6 +201,40 @@ def test_verified_firmware_uses_normalized_tps_and_correct_battery(
     assert direct["Battery Voltage"] == batch["Battery Voltage"] == battery_address
 
 
+def test_selected_definition_drives_direct_and_batch_address_conversion(tmp_path):
+    source = live_data.bundled_logger_definition_path().read_text(encoding="utf-8")
+    selected = tmp_path / "selected.xml"
+    selected.write_text(
+        source.replace("0x0000DA2A", "0x0000D000", 1).replace(
+            'endian="little" expr="x" format="0" gauge_min="0"',
+            'endian="little" expr="x*2" format="0" gauge_min="0"', 1),
+        encoding="utf-8",
+    )
+
+    rpm = next(param for param in live_data.telegram_params_for(
+        "1437806", definition_path=selected) if param.name == "Engine RPM")
+    layout = live_data.batch_layout_for("1437806", definition_path=selected)
+    batch_rpm = next(entry for entry in layout if entry[0] == "Engine RPM")
+
+    assert rpm.address == batch_rpm[1] == 0xD000
+    assert rpm.convert(1000) == batch_rpm[4](1000) == 2000
+
+
+def test_non_memory_romraider_selectors_are_not_read_as_ram(tmp_path):
+    source = live_data.bundled_logger_definition_path().read_text(encoding="utf-8")
+    selected = tmp_path / "selectors.xml"
+    selected.write_text(
+        source.replace("0x0000DA2A", "0x00000007", 1).replace(
+            '<ecuparam id="P12"', '<ecuparam id="P12" groupsize="3"', 1),
+        encoding="utf-8",
+    )
+
+    names = {param.name for param in live_data.telegram_params_for(
+        "1437806", definition_path=selected)}
+    assert "Engine RPM" not in names
+    assert "Mass Air Flow" not in names
+
+
 def test_display_omits_dead_lambda_and_names_measured_vanos_angle():
     names = [name for name, _unit in live_data.display_rows()]
 
@@ -205,16 +244,23 @@ def test_display_omits_dead_lambda_and_names_measured_vanos_angle():
 
 
 def test_live_display_specs_cover_packaged_rows_and_unknowns_fail_closed():
+    rows = set(live_data.display_rows())
+    gauges = {
+        row for row in rows
+        if live_data.live_display_spec(*row)["kind"] == "dial"
+    }
     groups = [
-        set(live_data._LIVE_DIAL_SPECS),
+        gauges,
         set(live_data._LIVE_STATUS_CHANNELS),
         set(live_data._LIVE_VALUE_CHANNELS),
-        set(live_data._LIVE_RAW_CHANNELS),
     ]
-    assert tuple(map(len, groups)) == (24, 7, 2, 0)
+    assert tuple(map(len, groups)) == (24, 7, 2)
     assert sum(map(len, groups)) == len(set().union(*groups))
-    assert set(live_data.display_rows()) == set().union(*groups)
-    for minimum, maximum, step, _source, _evidence in live_data._LIVE_DIAL_SPECS.values():
+    assert rows == set().union(*groups)
+    for row in gauges:
+        spec = live_data.live_display_spec(*row)
+        minimum, maximum, step = (
+            spec["minimum"], spec["maximum"], spec["step"])
         assert minimum < maximum
         assert 0 < step <= maximum - minimum
     assert live_data.live_display_spec("Engine RPM", "RPM")["kind"] == "dial"
@@ -296,8 +342,6 @@ def test_forced_telegram_does_not_silently_fallback_to_standard_ds2():
             raise RuntimeError("unsupported")
 
         def read_mem(self, address, length):
-            if (address, length) == (live_data._CUT_STATE_ADDR, 1):
-                return b"\x00"
             raise AssertionError("forced Telegram must not use standard DS2 reads")
 
     p = live_data.LiveDataPoller(
@@ -490,13 +534,13 @@ def test_resolved_live_rows_drive_display_and_csv_without_a_mobile_whitelist(tmp
     poller._active_profile_names = {"Wideband Mode"}
     poller._latest = {
         "Engine RPM": ("812", "RPM"),
-        "VANOS Measured Angle": ("4.5", "°"),
+        "VANOS Measured Angle": ("4.5", "Â°"),
         "Wideband Mode": ("Enabled", ""),
     }
 
     assert poller.display_values() == [
         ("Engine RPM", "812", "RPM"),
-        ("VANOS Measured Angle", "4.5", "°"),
+        ("VANOS Measured Angle", "4.5", "Â°"),
         ("Wideband Mode", "Enabled", ""),
     ]
 

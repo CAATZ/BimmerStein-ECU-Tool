@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import ctypes
 import hashlib
 import importlib.util
@@ -18,6 +19,7 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 APP_NAME = "BimmerStein ECU Tool"
 PATCH_DEFINITION_NAME = "BimmerStein MS41 Patch Definitions.xml"
+LOGGER_DEFINITION_NAME = "BimmerStein MS41 Logger Definitions.xml"
 PROHIBITED_PUBLIC_TERMS = tuple("".join(parts) for parts in (
     ("artificial", " intelligence"),
     ("chat", "gpt"),
@@ -371,6 +373,12 @@ def _verify_patch_tree(packaged: Path) -> int:
 def _verify_public_terms(paths) -> None:
     for path in paths:
         payload = path.read_bytes()
+        if path.suffix.lower() in {".py", ".pyw", ".spec"}:
+            payload += b"\n" + b"\n".join(
+                node.value.encode("utf-8", errors="backslashreplace")
+                for node in ast.walk(ast.parse(payload, filename=str(path)))
+                if isinstance(node, ast.Constant) and isinstance(node.value, str)
+            )
         hits = sorted({
             match.group().decode("ascii", errors="replace").lower()
             for match in _PROHIBITED_PUBLIC_PATTERN.finditer(payload)
@@ -417,6 +425,8 @@ def verify_public_source() -> dict:
         ROOT / "CHANGELOG.md",
         ROOT / "RELEASE_NOTES.md",
         ROOT / "manual" / "USER_MANUAL.md",
+        ROOT / "THIRD_PARTY_NOTICES.md",
+        ROOT / "logger_definitions" / LOGGER_DEFINITION_NAME,
         ROOT / "packaging" / "capture_manual_screenshots.py",
         romraider / "README.md",
         romraider / "build_patch_definitions.py",
@@ -426,7 +436,31 @@ def verify_public_source() -> dict:
     missing = [str(path) for path in inputs if not path.is_file()]
     if missing:
         raise RuntimeError("public release input is missing:\n" + "\n".join(missing))
+    # Scan production sources and documentation, keeping dependency licenses intact.
+    excluded = {
+        ".git", ".venv", ".tmp", "__pycache__", "build", "dist", "release",
+        "output", "backups", "logs", "tests", "THIRD_PARTY_LICENSES",
+    }
+    text_extensions = {
+        ".py", ".pyw", ".spec", ".ps1", ".bat", ".cmd", ".md", ".txt",
+        ".xml", ".json", ".asm", ".c", ".h", ".toml", ".ini", ".yml",
+        ".yaml", ".html", ".svg",
+    }
+    for directory, names, filenames in os.walk(ROOT, followlinks=False):
+        names[:] = [name for name in names if name not in excluded]
+        for filename in filenames:
+            path = Path(directory) / filename
+            if path.suffix.lower() in text_extensions:
+                inputs.append(path)
+    inputs = sorted(set(inputs))
     _verify_public_terms(inputs)
+    for path in inputs:
+        if path.suffix.lower() != ".md" or path.name == "THIRD_PARTY_NOTICES.md":
+            continue
+        if re.search(rb"\bandroid\b", path.read_bytes(), re.IGNORECASE):
+            raise RuntimeError(
+                "private platform reference in public documentation: "
+                + path.relative_to(ROOT).as_posix())
     return {"source_inputs": len(inputs), "private_paths": 0}
 
 
@@ -472,6 +506,7 @@ def verify_distribution(
         app_dir / "THIRD_PARTY_NOTICES.md",
         app_dir / "BimmerStein-ECU-Tool-User-Manual.pdf",
         app_dir / PATCH_DEFINITION_NAME,
+        content / "logger_definitions" / LOGGER_DEFINITION_NAME,
         content / "assets" / "bimmerstein_ecu_tool.png",
         content / "assets" / "bimmerstein_ecu_tool.ico",
         content / "python314.dll",
@@ -574,6 +609,15 @@ def verify_distribution(
     except ET.ParseError as error:
         raise RuntimeError("bundled patch definition is invalid XML") from error
 
+    logger_definition = content / "logger_definitions" / LOGGER_DEFINITION_NAME
+    tracked_logger_definition = ROOT / "logger_definitions" / LOGGER_DEFINITION_NAME
+    if logger_definition.read_bytes() != tracked_logger_definition.read_bytes():
+        raise RuntimeError("bundled logger definition does not match tracked source")
+    try:
+        ET.parse(logger_definition)
+    except ET.ParseError as error:
+        raise RuntimeError("bundled logger definition is invalid XML") from error
+
     verified_licenses = _verify_license_inventory(app_dir)
     if content != app_dir and (content / "THIRD_PARTY_LICENSES").exists():
         raise RuntimeError("third-party license inventory must be public at package root")
@@ -606,6 +650,7 @@ def verify_distribution(
         app_dir / "RELEASE_NOTES.md",
         app_dir / "THIRD_PARTY_NOTICES.md",
         patch_definition,
+        logger_definition,
         *patch_dir.glob("*.json"),
     ))
 
@@ -613,6 +658,7 @@ def verify_distribution(
         "application": str(app_dir),
         "build_backend": backend,
         "patch_definition": PATCH_DEFINITION_NAME,
+        "logger_definition": LOGGER_DEFINITION_NAME,
         "pe_machine": f"0x{machine:04X}",
         "executable_bytes": executable.stat().st_size,
         "patch_count": patch_file_count,

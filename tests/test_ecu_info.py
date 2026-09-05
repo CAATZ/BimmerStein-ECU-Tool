@@ -37,6 +37,11 @@ def test_decode_firmware_version_non_digit_is_unavailable():
     assert ei.decode_firmware_version(b"14378?6") == "Unavailable"
 
 
+def test_decode_firmware_version_does_not_strip_malformed_bytes():
+    for raw in (b"x1437806", b"1437?806", b"1437806\x00"):
+        assert ei.decode_firmware_version(raw) == "Unavailable"
+
+
 def test_decode_transmission_automatic():
     assert ei.decode_transmission(bytes([0x80])) == "Automatic"
 

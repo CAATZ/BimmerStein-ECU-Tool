@@ -23,9 +23,14 @@ D2XXRequiredError = _sb.D2XXRequiredError
 
 
 class SoftBSLRecoveryStateError(RuntimeError):
-    """A pre-erase attempt could not prove a safe return to normal DS2."""
+    """An operation could not prove a safe return to normal DS2."""
 
     power_cycle_required = True
+    safe_legacy_fallback = False
+
+    def __init__(self, message, *, read_data=None):
+        super().__init__(message)
+        self.read_data = read_data
 
 
 @dataclass
@@ -114,7 +119,7 @@ def validate_flash_image_family(image, connected_family, *, write_bootloader=Fal
             "resident driver or RAM agent safely.")
 
     if write_bootloader:
-        if image_family is None or connected_family is None:
+        if image_family is None:
             raise FlashFamilyMismatchError(
                 "Flash blocked before agent entry: an armed boot-region write requires "
                 "both the image driver and connected ECU flash family to be identified.")
@@ -200,7 +205,7 @@ def _with_baud_fallback(attempt, start_baud, log, label):
     """Retry lower tiers only when the failed attempt is still pre-erase.
 
     Write attempts raise :class:`SoftBSLWriteRecoveryRequired` after their first erase boundary;
-    that exception is never consumed here. Reads remain idempotent and can still retry whole.
+    that exception is never consumed here. Reads can retry whole only after confirmed recovery.
     """
     tiers = _baud_tiers_from(start_baud)
     for i, tier in enumerate(tiers):
@@ -245,14 +250,25 @@ def _recover_marker0(sb, log, finalize_sent=False):
     """
     try:
         return sb.finalize_marker0(already_sent=finalize_sent)
-    except Exception:
-        # Compatibility with lightweight test doubles; production SoftBSL always owns the method.
-        if not finalize_sent:
-            try:
-                sb.reset()
-            except Exception:
-                return False
-        return True
+    except Exception as error:
+        send_to_sink(log, f"Marker-0 finalization could not be confirmed: {error}", "error")
+        return False
+
+
+def _finish_read_session(ds2, sb, log, read_data):
+    """Close a disposable read session without discarding unconfirmed recovery."""
+    try:
+        if not _recover_marker0(sb, log):
+            raise SoftBSLRecoveryStateError(
+                "read stopped with E740=0 / stock DS2 recovery unconfirmed; "
+                "automatic baud fallback is blocked",
+                read_data=read_data or None,
+            )
+    finally:
+        try:
+            ds2.close()
+        except Exception:
+            pass
 
 
 def _recover_staged_entry_marker0(ds2, log):
@@ -893,6 +909,7 @@ def read_image(port, scope, baud, progress_cb, log, chip_family=None,
         d, sb = _open_session(
             port, log, chip_family, require_d2xx=tier != "low", baud_tier=tier,
             entry_mode=entry_mode, serial_factory=serial_factory)
+        result = None
         try:
             _set_agent_baud_if_needed(sb, tier)
             if scope == "tune":
@@ -910,11 +927,7 @@ def read_image(port, scope, baud, progress_cb, log, chip_family=None,
             # ALWAYS recover (even on a failed/partial read — a raised-baud crc_read failure can leave the
             # agent stuck-high). A read entered flash mode via the 0x2A door (E740=1), so this is needed to
             # return to marker 0 + a rebooted, DS2-responsive ECU. See _recover_marker0.
-            _recover_marker0(sb, log)
-            try:
-                d.close()
-            except Exception:
-                pass
+            _finish_read_session(d, sb, log, result)
     # A noisy-link read that exhausts its per-chunk CRC retries at the chosen rate is re-read whole at
     # each lower baud (reads are idempotent); low (9600) needs no D2XX. See _with_baud_fallback.
     return _with_baud_fallback(_attempt, baud, log, f"Fast read ({scope})")
@@ -927,16 +940,14 @@ def _read_identity_range(port, baud, progress_cb, log, chip_family, lo, length,
         d, sb = _open_session(
             port, log, chip_family, require_d2xx=tier != "low", baud_tier=tier,
             serial_factory=serial_factory)
+        result = None
         try:
             _set_agent_baud_if_needed(sb, tier)
-            return sb.read_range(
+            result = sb.read_range(
                 lo, length, progress_cb=progress_cb, descramble=True, log_fn=log)
+            return result
         finally:
-            _recover_marker0(sb, log)
-            try:
-                d.close()
-            except Exception:
-                pass
+            _finish_read_session(d, sb, log, result)
 
     return _with_baud_fallback(_attempt, baud, log, label)
 
@@ -988,7 +999,8 @@ def read_cross_bank_image(port, prompt, log, baud="high", progress_cb=None,
     The operator flips A17 only while the agent is resident in RAM.  A marker read before and
     after the flip must change before the 256 KB read begins, preventing an accidental BOTTOM
     read from being composed as the golden TOP base.  Every exit path asks for LOWER again,
-    finalizes marker 0, resets, and closes the port.  Reads may safely retry at lower baud tiers.
+    finalizes marker 0, resets, and closes the port. Reads retry lower tiers only after recovery
+    is confirmed.
     """
     guard_addr = _sb.MARKER_OFF ^ _sb.DESCR
     def _attempt(tier):
@@ -996,6 +1008,7 @@ def read_cross_bank_image(port, prompt, log, baud="high", progress_cb=None,
             port, log, chip_family="amd", require_d2xx=tier != "low", baud_tier=tier,
             serial_factory=serial_factory)
         may_be_upper = False
+        image = None
         try:
             _set_agent_baud_if_needed(sb, tier)
             before = sb.crc_read(guard_addr, 4)
@@ -1028,11 +1041,7 @@ def read_cross_bank_image(port, prompt, log, baud="high", progress_cb=None,
                         "cockpit switch back to LOWER, then continue.")
                     may_be_upper = False
             finally:
-                _recover_marker0(sb, log)
-                try:
-                    d.close()
-                except Exception:
-                    pass
+                _finish_read_session(d, sb, log, image)
 
     return _with_baud_fallback(_attempt, baud, log, "Golden-TOP base read")
 

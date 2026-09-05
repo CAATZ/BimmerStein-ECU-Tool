@@ -10,8 +10,6 @@ The repository now contains:
 - an offline inspector/decoder;
 - a replay-safe changed-byte writer for exact 512-byte targets;
 - a shared hex-style EEPROM Manager for the ECU Agent and CH341A;
-- an Android full-screen EEPROM Editor with linked Decoded/Hex views and explicit Save copy;
-- a read-only Android EEPROM comparison with named, check, and raw-only differences;
 - family-specific transmission shortcuts and Bins integration;
 - artifact-integrity, protocol, and safety tests.
 
@@ -69,29 +67,29 @@ Names marked inferred describe traced behavior without claiming an unknown
 BMW factory label. An invalid record can be rejected or replaced by defaults
 in RAM without rewriting the stored payload.
 
-| Offset | Len | Check | Stored meaning | Android decoded edit policy |
-|---:|---:|:---:|---|---|
-| `000` | 6 | No | Redundant operating-time counter: three little-endian words `n,n+1,n+2` with 16-bit wrap. The voted value uses nominal 0.1-hour ticks, not ignition cycles. | One advanced logical time edit; physical words read-only |
-| `006` | 4 | No | Little-endian monotonic EEPROM save/commit count, incremented immediately before each store. | Advanced counter edit |
-| `00A` | 4 | Yes | Firmware compatibility/adaptation-invalidation key. A valid key belonging to a different ECU identity causes the downstream adaptation mirror to be cleared. | Advanced raw key edit; not a normal tune parameter |
-| `00E` | 68 | Yes | One row-major 16-RPM×4-load averaged knock table, one global correction byte, one reserved byte, then check. `(raw-128)*0.375°`; `0x80` is neutral. Positive stored corrections are clamped to neutral on ECU load. | Offline per-cell/global edit; preserve all other payload bytes |
-| `052` | 4 | Yes | Signed little-endian Q8.8 filtered load-model correction; zero is neutral. The ID41-DAMOS-derived projection is `raw*5.46850393700787/256 mg/stroke`, with normal producer range `-32768..32512`. The filter's temporary `0x8000` bias is not the stored encoding. | Advanced engineering-unit edit |
-| `056` | 6 | Yes | Little-endian Q8.8 learned VANOS reference (`u16*0.375/256` crankshaft degrees), learned-state byte at +2, reserved byte, then check. | Advanced angle and Default/Learned edits |
-| `05C` | 4 | Yes | Little-endian Q8.8 closed-throttle baseline (`u16*0.46862745098039/256` throttle degrees), not measured live throttle opening. | Advanced angle edit |
-| `060` | 8 | Yes | Five relative ignition/dwell-control gains plus one reserved byte. `raw/128` is the multiplier (`0x80 = 1×`), not a crankshaft sensor-wheel correction. Stored positions 1–5 refer to reference index 0, not proven physical cylinder labels. | Advanced multiplier edits |
-| `068` | 40 | Yes | Centered CO-alignment state, IdleFT1, LTFT1, IdleFT2, LTFT2, then retained per-bank lambda-monitor averages/state. Idle trim is `(u16-32768)*0.00534 ms`; LTFT is `(u16-32768)*100/65535 %`. | Four trims remain direct edits; CO and raw monitor state use Allow advanced edits |
-| `090` | 138 | Yes | Saved-slot count, ten internal DTC IDs, ten 12-byte occurrence/environment records, reserved bytes, and saved global state. Unused slots can be stale. | Grouped saved faults; advanced edits for admitted fields and named status bits |
-| `11A` | 12 | Yes | Idle-air learned multiplier `byte/128`; signed correction words at +2/+4/+6 use `int16*100/65536 %`. They are drive-disengaged, drive-engaged, and stored A/C correction states, not fuel banks. The programmed idle-speed addition at +8 is one byte, `raw*1 RPM`; +9 is separate padding. | Advanced factor, signed corrections and programmed RPM addition |
-| `126` | 32 | Yes | Rough-running/load-correction learner in firing order 1-5-3-6-2-4: counters, five signed corrections relative to cylinder 1, convergence countdown, valid flag and reserved byte. | Summary is structural; every stored value uses Allow advanced edits |
-| `146` | 110 | Yes | DTC status words, ten fixed six-byte RPM/load fault envelopes, a saved freeze snapshot, a qualification counter, and a raw 6×6 cylinder relation matrix. These records are selected by internal fault ID, not occurrence-slot number. | Known envelope values/states and qualification count use advanced edits; unresolved flags/matrix semantics remain raw |
-| `1B4` | 4 | Yes | Repeat-start coolant reference at +0 (`raw*0.75-48 °C`; `FF` unavailable), unresolved preserved payload byte at +1, then check. The next start subtracts a calibrated permitted drop before comparing current ECT. | Advanced temperature edit plus named **Set Not available (0xFF)** action; preserve unresolved byte |
-| `1B8` | 10 | Yes | Seven wrapping monitor-completion counters: catalyst efficiency B1/B2, secondary air B1/B2, secondary-air valve sticking, tank vent/leak finalization, and aggregate misfire window; reserved byte; check. Not operating hours. | Advanced counters; preserve pad |
-| `1C2` | 4 | No | Three-byte progression nonce plus pad, used for actuator/output-test anti-replay validation. | Advanced progression bytes; preserve pad |
-| `1C6` | 4 | Yes | Persistent warm-up history counter at +0, unresolved preserved payload byte at +1, then check. Cold starts saturating-add ECT-indexed counts; qualified warm-ups saturating-subtract counts; the stock gate is set only above 90. | Advanced internal-count edit; preserve unresolved byte |
-| `1CA` | 4 | Yes | Persisted transmission/coding word. Bits `0..1` select mode: `1` automatic, `2` manual. Preserve bits `2..15`. Used at boot only when the calibration selector's low six bits are `0x2C`. | Named transmission shortcut; masked RMW preserves other bits |
-| `1CE` | 4 | Yes | Last-shutdown coolant byte (`raw*0.747-48 °C`) and consecutive warm-restart/no-cooldown count. | Advanced temperature and count |
-| `1D2` | 4 | No | Peak engine speed (`raw*32 RPM`), saved stamp, and pad. | Advanced peak RPM; preserve other bytes |
-| `1D6` | 4 | No | Qualified over-rev event count, saved stamp, and pad. Exact BMW event label is inferred. | Advanced count; preserve other bytes |
+| Offset | Len | Check | Stored meaning |
+|---:|---:|:---:|---|
+| `000` | 6 | No | Redundant operating-time counter: three little-endian words `n,n+1,n+2` with 16-bit wrap. The voted value uses nominal 0.1-hour ticks, not ignition cycles. |
+| `006` | 4 | No | Little-endian monotonic EEPROM save/commit count, incremented immediately before each store. |
+| `00A` | 4 | Yes | Firmware compatibility/adaptation-invalidation key. A valid key belonging to a different ECU identity causes the downstream adaptation mirror to be cleared. |
+| `00E` | 68 | Yes | One row-major 16-RPM×4-load averaged knock table, one global correction byte, one reserved byte, then check. `(raw-128)*0.375°`; `0x80` is neutral. Positive stored corrections are clamped to neutral on ECU load. |
+| `052` | 4 | Yes | Signed little-endian Q8.8 filtered load-model correction; zero is neutral. The ID41-DAMOS-derived projection is `raw*5.46850393700787/256 mg/stroke`, with normal producer range `-32768..32512`. The filter's temporary `0x8000` bias is not the stored encoding. |
+| `056` | 6 | Yes | Little-endian Q8.8 learned VANOS reference (`u16*0.375/256` crankshaft degrees), learned-state byte at +2, reserved byte, then check. |
+| `05C` | 4 | Yes | Little-endian Q8.8 closed-throttle baseline (`u16*0.46862745098039/256` throttle degrees), not measured live throttle opening. |
+| `060` | 8 | Yes | Five relative ignition/dwell-control gains plus one reserved byte. `raw/128` is the multiplier (`0x80 = 1×`), not a crankshaft sensor-wheel correction. Stored positions 1–5 refer to reference index 0, not proven physical cylinder labels. |
+| `068` | 40 | Yes | Centered CO-alignment state, IdleFT1, LTFT1, IdleFT2, LTFT2, then retained per-bank lambda-monitor averages/state. Idle trim is `(u16-32768)*0.00534 ms`; LTFT is `(u16-32768)*100/65535 %`. |
+| `090` | 138 | Yes | Saved-slot count, ten internal DTC IDs, ten 12-byte occurrence/environment records, reserved bytes, and saved global state. Unused slots can be stale. |
+| `11A` | 12 | Yes | Idle-air learned multiplier `byte/128`; signed correction words at +2/+4/+6 use `int16*100/65536 %`. They are drive-disengaged, drive-engaged, and stored A/C correction states, not fuel banks. The programmed idle-speed addition at +8 is one byte, `raw*1 RPM`; +9 is separate padding. |
+| `126` | 32 | Yes | Rough-running/load-correction learner in firing order 1-5-3-6-2-4: counters, five signed corrections relative to cylinder 1, convergence countdown, valid flag and reserved byte. |
+| `146` | 110 | Yes | DTC status words, ten fixed six-byte RPM/load fault envelopes, a saved freeze snapshot, a qualification counter, and a raw 6×6 cylinder relation matrix. These records are selected by internal fault ID, not occurrence-slot number. |
+| `1B4` | 4 | Yes | Repeat-start coolant reference at +0 (`raw*0.75-48 °C`; `FF` unavailable), unresolved preserved payload byte at +1, then check. The next start subtracts a calibrated permitted drop before comparing current ECT. |
+| `1B8` | 10 | Yes | Seven wrapping monitor-completion counters: catalyst efficiency B1/B2, secondary air B1/B2, secondary-air valve sticking, tank vent/leak finalization, and aggregate misfire window; reserved byte; check. Not operating hours. |
+| `1C2` | 4 | No | Three-byte progression nonce plus pad, used for actuator/output-test anti-replay validation. |
+| `1C6` | 4 | Yes | Persistent warm-up history counter at +0, unresolved preserved payload byte at +1, then check. Cold starts saturating-add ECT-indexed counts; qualified warm-ups saturating-subtract counts; the stock gate is set only above 90. |
+| `1CA` | 4 | Yes | Persisted transmission/coding word. Bits `0..1` select mode: `1` automatic, `2` manual. Preserve bits `2..15`. Used at boot only when the calibration selector's low six bits are `0x2C`. |
+| `1CE` | 4 | Yes | Last-shutdown coolant byte (`raw*0.747-48 °C`) and consecutive warm-restart/no-cooldown count. |
+| `1D2` | 4 | No | Peak engine speed (`raw*32 RPM`), saved stamp, and pad. |
+| `1D6` | 4 | No | Qualified over-rev event count, saved stamp, and pad. Exact BMW event label is inferred. |
 
 ### Corrected adaptive-record locations by family
 
@@ -109,8 +107,8 @@ paths for these fields. This is **firmware-static evidence**, not bench or
 on-car qualification. The A/C idle-air correction is already multiplied by a
 calibration-dependent factor before saving; display the stored percentage,
 not a reconstructed live value. These are stored states, not ordinary tune
-parameters; advanced editing unlocks their known storage formats. Displayed
-ranges are representable storage ranges, not universally safe operating limits.
+parameters. Their representable storage ranges are not universally safe
+operating limits.
 
 The load-model state is the signed filtered difference between throttle-model
 load and measured/filtered load. Positive values raise corrected load and
@@ -118,9 +116,8 @@ negative values lower it. The exact common storage domain is signed Q8.8 load
 counts; the `5.46850393700787 mg/stroke` per whole count projection comes from
 the MS41.0 ID41 DAMOS `lm_add_te_ll` scale and is homologous on the later
 families. MS41.0 restores only the signed high byte at `053`; its low byte at
-`052` is saved and checksummed but not restored, so the editor exposes the high
-byte in `5.468503937 mg/stroke` steps and retains the low byte as separately
-named advanced raw state. MS41.1 and MS41.2/.3 restore the complete word and
+`052` is saved and checksummed but not restored. The high byte has
+`5.468503937 mg/stroke` steps; the low byte remains preserved raw state. MS41.1 and MS41.2/.3 restore the complete word and
 therefore retain `0.0213613435 mg/stroke` fractional steps.
 
 The repeat-start coolant-reference record is at MS41.0 `180..183`, MS41.1
@@ -130,9 +127,9 @@ expired, failed-check sentinel. At the next start, firmware computes
 `max(saved ECT - calibrated drop, 0)` and compares current ECT with that
 threshold. The byte is therefore a stored reference, not a status word or live
 coolant. Payload byte +1 participates in the additive check but has no admitted
-independent producer or consumer and remains advanced raw. The decoded editor's
-named **Set Not available (0xFF)** action writes only byte +0 and the owning
-record check; entering a temperature restores the ordinary quantized encoding.
+independent producer or consumer and remains preserved raw state. Setting byte
++0 to `FF` marks the reference unavailable; a temperature uses the ordinary
+quantized encoding. The owning record check must match any changed payload.
 
 MS41.1 `1C8..1CB` and MS41.2/.3 `1C6..1C9` similarly use only payload byte +0
 for a persistent saturating warm-up-history counter. Cold-start ECT selects an
@@ -158,8 +155,7 @@ The leading word of every fuel record is stored CO alignment. `0x8000` is
 neutral and the MS41.0 DAMOS representation is
 `(raw-32768)*100/65536 %`; the other families use the homologous centered
 state. OEM service commands read only `(high_byte-0x80)` and write integral
-`0x100` steps. The offline editor retains the full word and places it behind
-**Allow advanced edits**.
+`0x100` steps. The persisted full word retains the fractional storage value.
 
 After the four named trims, MS41.0 has only its record check. MS41.1 stores two
 per-bank upstream-O2 monitor retained indices at `052..055`. Their stock valid
@@ -175,8 +171,7 @@ calibration window, but does not close a Hz or ms conversion, so the editor
 shows internal normalized counts. The final two bytes per bank are learned
 upper and lower O2 switching-voltage thresholds. Their voltage-domain role is
 closed, but an exact volts-per-count conversion is not; the editor therefore
-shows ADC counts. All remain advanced-editable diagnostic history, not tune
-parameters.
+shows ADC counts. These are diagnostic history, not tune parameters.
 
 The older misfire interpretation is superseded: the exact E5/E6 and E7/E8
 descriptors identify lambda/O2 monitoring; misfire and rough-running records
@@ -199,8 +194,7 @@ negative values increase it. The runtime applies the equivalent two-stage
 integer multiply/shift; diagnostic `raw>>8` is only a coarse export, not the
 engineering conversion. The convergence field is initialized from a
 calibration times 24 and driven toward zero; it is not a sixth correction or a
-time value. The summary row only collapses the record; every stored child value
-remains advanced-editable.
+time value.
 
 The signed load-model format and relative ignition-gain interpretation were
 also closed through exact load/save and runtime consumer chains. Older
@@ -218,8 +212,8 @@ averages the six corresponding live cells back into the one persisted table.
 The overall knock correction remains a separate scalar.
 
 The RPM and load breakpoints live in calibration flash, not in the EEPROM.
-The Android editor therefore identifies displayed numeric breakpoints as
-canonical reference axes; a tuned ROM can change them. Exact axes should come
+Numeric breakpoints from a stock image are canonical reference axes; a tuned
+ROM can change them. Exact axes should come
 from the matching ROM and definition when those are available. The canonical
 references are:
 
@@ -359,9 +353,7 @@ MS41.2 stores ten fixed six-byte records at `152 + 6*i`. Their lookup order is
 internal IDs `44,45,46,47,48,49,57,58,0D,0E`: cylinder misfire in firing order
 1-5-3-6-2-4, mixture deviation bank 1/2, then post-catalyst lambda regulation
 bank 1/2. These are shared group-retention records, not one record per saved
-occurrence. The editor nests a matching record under the first saved fault card;
-duplicate saved IDs show a reference to that same record, and unmatched records
-remain separate collapsible fault cards.
+occurrence. Duplicate saved IDs refer to the same shared management record.
 
 Bytes +0/+2 are the observed minimum/maximum RPM buckets (`raw*32 RPM`), +1/+3
 are minimum/maximum filtered load (`raw*5.4470588235 mg/stroke`), +4 is state,
@@ -413,7 +405,7 @@ two-byte additive check. Both MS41.1 and MS41.2/.3 assign them one-for-one to
 catalyst-efficiency completions bank 1/2, secondary-air-system completions bank
 1/2, secondary-air-valve mechanical-sticking evaluations, tank-vent/leak
 diagnostic finalizations, and six-cylinder misfire evaluation windows. Four
-MS41.1 increment sites live in raw code islands omitted by the linear Ghidra
+MS41.1 increment sites live in raw code islands omitted by the linear disassembly
 export; direct canonical-image scanning and control-flow comparison recover the
 same seven roles without projecting later-family labels. Active increments are
 ordinary byte adds, so `255` wraps to `0`; DS2 service `89/1` clears all seven.
@@ -479,9 +471,9 @@ lambda-state diagnostic classification: the derived numeric code is 2 when
 saved lambda-state bit 3 is set, otherwise 8 when PT2 bit 1 is set, otherwise
 1; unavailable bank 2 produces 0. The human meanings of codes 1, 2, and 8 are
 unresolved, so no friendly PT2 state label is invented. The
-complete PT2 and lambda-controller words remain advanced-editable; only bit 3
-of each saved lambda word receives a named masked edit because it is the sole
-cross-family bit closed as regulation active.
+complete PT2 and lambda-controller words retain their known storage formats;
+only bit 3 of each saved lambda word has a cross-family interpretation as
+regulation active.
 
 These field roles, family layouts and scales are firmware-static evidence from
 the canonical programs and admitted diagnostic definitions. They are not bench
@@ -509,12 +501,6 @@ expert raw edits, **Update Checks for Edited Records** recalculates only known
 checked records whose payload changed from the loaded image. It does not repair
 untouched invalid records. The final write validator still requires every
 edited checked record to contain a valid target check.
-
-Android additionally provides explicit **Record checks → Repair selected**.
-The user selects known checked records and confirms the warning before any
-check-only repair. Only those two-byte checks change; payloads, unrelated
-records and tail bytes are preserved. Repair is one undoable draft operation,
-not proof that the accepted payload is sensible or safe.
 
 ## Tail map (`0x1DD..0x1FF`)
 
@@ -621,57 +607,6 @@ unavailable for a 512-byte EEPROM entry.
 CH341A retains the narrow **Seed ECU Recovery** action. Its inverse is
 **Restore Pre-Seed State**, which uses the exact saved `00 01 02` or `03 04 05`
 source rather than guessing a marker.
-
-### Android full-screen EEPROM Editor
-
-**Open EEPROM Editor** in Library and the Service EEPROM action open the same
-full-screen offline editor. Recognized EEPROM files are excluded from the
-calibration ECU Editor and table-import donors; generic ROM definition support
-is unchanged. Unknown imported EEPROMs require an explicit MS41 family layout.
-
-- **Decoded** and **Hex** show the same 512-byte working draft. Decoded groups
-  coding, fuel trims, knock, adaptations, history, saved faults, diagnostics,
-  identification, and unknown data; field information exposes units, raw bytes, offsets,
-  evidence confidence, and record-check status. Search accepts a label, serialized
-  field ID, decimal offset, or hexadecimal offset; **Edited**, **Invalid check**, and
-  **Advanced** filters work across every category.
-- The tablet category rail collapses; narrow screens use a compact category
-  selector. Fixed collapsible edit controls and the existing numeric keypad
-  avoid covering the data with a draggable sheet. Rotation retains the draft,
-  view, selection, and undo/redo history.
-- Transmission, the four fuel trims, and learned knock cells/global correction
-  remain directly editable. **⋮ → Allow advanced edits** unlocks other known
-  numeric formats, CO alignment, retained raw fuel/lambda-monitor state,
-  rough-running counters/corrections, named states, exact-length ASCII program references, and
-  recognized boot progressions after a warning. Saved fault slots are grouped
-  by physical slot; their admitted counts, sensor values, time snapshots and
-  masked status bits use the same advanced gate. Unavailable freeze-snapshot
-  values remain visibly unavailable rather than becoming fake zeros. The unlock survives rotation
-  for the current file/layout; changing layout or opening another image resets it.
-  Unresolved units remain labeled raw, and opaque blocks retain expert Hex access.
-- **Save copy** first opens **Review Changes**, separating named before/after
-  values, automatic record-check updates, and raw-only byte ranges. Every row
-  jumps back to its decoded field or exact Hex byte. Confirming creates a
-  separate Library image; editing never replaces the source, creates a file per
-  keystroke, or writes to an ECU. Leaving an unsaved draft routes its save option
-  through the same review.
-- Numeric input is range-checked and quantized to the real storage step.
-  Only changed checked-record payloads trigger check updates; a no-op leaves
-  even an invalid record unchanged. Editing an invalid payload can make the
-  remaining bytes in that record acceptable to the ECU, so warnings remain
-  visible. **⋮ → Record checks** shows stored/expected checks and allows explicit
-  selected-record repair after confirmation; it shares the same undo/redo history.
-  No automatic blanket repair of unrelated invalid records is performed.
-- **Compare** is read-only and accepts Library images, an external file, or a
-  completed ECU read only when both inputs are exactly 512 bytes. Compatible
-  layouts show named values, record-check validity changes, and unresolved raw
-  ranges with filename, SHA-256, family, and provenance for both sides. Unknown
-  or incompatible family layouts still receive a complete raw-byte comparison,
-  but named decoding fails closed with an explicit warning. Comparison never
-  edits, repairs, saves, or writes either input.
-
-Physical EEPROM writes remain separate, explicitly authorized operations
-with their existing before-image backup, write admission, and readback rules.
 
 ## Commands
 

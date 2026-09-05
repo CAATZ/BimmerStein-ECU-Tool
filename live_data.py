@@ -5,10 +5,10 @@ Standard mode: DS2 command 0x06 range reads from RAM.
 Telegram mode: MS41 DS2 command 0x0B/0x01 — one registered-address response
   containing every displayed RAM parameter.
 
-Standard and telegram modes use the same built-in firmware-specific RAM address
-and scaling tables. Addresses are 24-bit C166 logical addresses for the Siemens
-80C166 processor (little-endian). Some parameters differ across software
-revisions, so the detected ECU ID selects the applicable table.
+Standard and telegram modes use the same selected XML logger definition.
+Addresses are absolute 24-bit C166 logical addresses for the Siemens 80C166
+processor; the definition selects the applicable address for the detected ECU
+ID and owns storage, scaling, units, and display formatting.
 
   Parameters without a mapped RAM address show "—". Standard and telegram
   acquisition use the same selected address/scaling table; standard mode is a
@@ -24,114 +24,15 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Tuple, List
 
-
-# ──────────────────────────── Standard-mode parameters ────────────────────────
-
-@dataclass
-class MS41Parameter:
-    """Legacy display-schema entry; acquisition now uses DS2 RAM addresses below."""
-    name:   str
-    unit:   str
-    lid:    int      # SID 0x21 local identifier
-    offset: int      # byte index within data payload (after 0x61 + LID echo)
-    length: int      # 1 or 2 bytes
-    scale:  float    # multiply raw value by this
-    bias:   float    # add after scaling
-    fmt:    str      # Python format string, e.g. "{:.1f}"
-    signed: bool = False
-
-    def parse(self, resp: bytes) -> Optional[float]:
-        """Extract and scale this parameter from a full SID 0x21 response."""
-        start = 2 + self.offset   # skip positive SID (0x61) + LID echo
-        if start + self.length > len(resp):
-            return None
-        if self.length == 2:
-            raw = (resp[start] << 8) | resp[start + 1]
-            if self.signed and raw > 0x7FFF:
-                raw -= 0x10000
-        else:
-            raw = resp[start]
-            if self.signed and raw > 127:
-                raw -= 256
-        return raw * self.scale + self.bias
-
-    def display(self, value: Optional[float]) -> str:
-        return "—" if value is None else self.fmt.format(value)
+from logger_definition import (
+    LoggerDefinition,
+    LoggerParameter,
+    bundled_logger_definition_path,
+    load_logger_definition,
+)
 
 
-# Legacy display schema retained for compatibility; acquisition uses the
-# firmware-specific RAM tables below.
-
-MS41_PARAMETERS: List[MS41Parameter] = [
-    # LID 0x01 — Basic engine values
-    MS41Parameter("Engine RPM",         "RPM",  0x01, 0, 2, 0.25,       0.0,   "{:.0f}"),
-    MS41Parameter("Coolant Temp",       "°C",   0x01, 2, 1, 1.0,       -48.0,  "{:.0f}"),
-    MS41Parameter("Throttle Position",  "%",    0x01, 3, 1, 0.390625,   0.0,   "{:.1f}"),
-    MS41Parameter("Intake Air Temp",    "°C",   0x01, 4, 1, 1.0,       -48.0,  "{:.0f}"),
-    MS41Parameter("Battery Voltage",    "V",    0x01, 5, 1, 0.1,        0.0,   "{:.1f}"),
-
-    # LID 0x02 — Air / fuel
-    MS41Parameter("Mass Air Flow",      "kg/h", 0x02, 0, 2, 0.01,       0.0,   "{:.2f}"),
-    MS41Parameter("Fuel Trim ST",       "%",    0x02, 4, 1, 0.390625, -50.0,   "{:.1f}"),
-    MS41Parameter("Fuel Trim LT",       "%",    0x02, 5, 1, 0.390625, -50.0,   "{:.1f}"),
-
-    # LID 0x03 — Ignition / VANOS
-    MS41Parameter("Ignition Advance",   "°",    0x03, 0, 1, 0.75,      -48.0,  "{:.1f}"),
-    MS41Parameter("Knock Retard",       "°",    0x03, 1, 1, 0.75,        0.0,  "{:.1f}"),
-    MS41Parameter("VANOS Measured Angle", "°",  0x03, 2, 1, 0.75,        0.0,  "{:.1f}"),
-
-    # LID 0x04 — Speed / injectors / idle
-    MS41Parameter("Vehicle Speed",      "km/h", 0x04, 0, 1, 1.0,        0.0,  "{:.0f}"),
-    MS41Parameter("Injector PW",        "ms",   0x04, 1, 2, 0.01,       0.0,  "{:.2f}"),
-    MS41Parameter("Idle Valve Pos",     "%",    0x04, 3, 1, 0.390625,   0.0,  "{:.1f}"),
-]
-
-
-# ──────────────────────────── Telegram-mode parameters ────────────────────────
-#
-# RAM addresses and conversions taken from the RomRaider MS41 Logger
-# Definitions (<ecuparam> entries) for ECU ID 1437806 (MS41.1, E36/E39/Z3 — the
-# 256 KB DME on M52/M50-swap cars). Read directly from RAM through MS41 DS2
-# commands 0x06 or 0x0B. The 80C166 is little-endian — 16-bit values are LE.
-#
-# storagetype int16 -> signed read; uint16 -> unsigned read.  Some uint16
-# parameters (fuel trims) are centred at 32768, handled by the convert function.
-#
-# Shared addresses apply across MS41.0-.3; the family maps below resolve the
-# working-RAM addresses that drift between software versions. Names are aligned
-# with the standard-mode table so both transports reuse the same display rows.
-
-@dataclass
-class TelegramParameter:
-    """A live value read from ECU RAM using a RomRaider logger definition address."""
-    name:    str
-    unit:    str
-    address: int                 # C166 RAM address
-    length:  int                 # 1 or 2 bytes
-    signed:  bool                # True for int16 storage
-    convert: callable            # raw int -> physical value
-    fmt:     str
-
-    def parse(self, block: bytes, block_start: int):
-        offset = self.address - block_start
-        if offset < 0 or offset + self.length > len(block):
-            return None
-        if self.length == 2:
-            raw = block[offset] | (block[offset + 1] << 8)   # little-endian
-            if self.signed and raw > 0x7FFF:
-                raw -= 0x10000
-        else:
-            raw = block[offset]
-            if self.signed and raw > 127:
-                raw -= 256
-        return self.convert(raw)
-
-    def display(self, value) -> str:
-        return "—" if value is None else self.fmt.format(value)
-
-
-# Parameter metadata, independent of ECU ID:  name -> (unit, length, signed, convert, fmt)
-_FT = lambda x: (x - 32768) * 100 / 65535
+# ──────────────────────────── Definition-driven parameters ────────────────────
 
 PROFILE_STANDARD = "standard"
 PROFILE_WIDEBAND = "wideband"
@@ -156,14 +57,6 @@ _WBO2_INPUT_SOURCES = {
 }
 
 
-def _state(active) -> str:
-    return "Active" if bool(active) else "Inactive"
-
-
-def _adc_voltage(raw: int) -> float:
-    return (raw & 0x03FF) * 5 / 1023
-
-
 _PROFILE_DISPLAY_ROWS = [
     ("EVAP Purge Duty", "%"),
     ("Closed Throttle", ""),
@@ -186,38 +79,8 @@ _PROFILE_STATUS_NAMES = frozenset({
     "Wideband Mode", "Wideband Input Source", "Narrowband Emulation",
 })
 
-# Neutral presentation scales from the packaged RomRaider logger definition.
-# They are dial ranges only, never normal/safe/warning thresholds. Keys are
-# exact (name, unit) pairs so imported or renamed columns cannot inherit a
-# misleading range from their unit alone.
-_LIVE_DIAL_SPECS = {
-    ("Engine RPM", "RPM"): (0.0, 10000.0, 1000.0, "P8", "direct"),
-    ("Coolant Temp", "°C"): (-50.0, 150.0, 10.0, "P2", "direct"),
-    ("Throttle Position", "%"): (0.0, 100.0, 10.0, "P13", "direct"),
-    ("Intake Air Temp", "°C"): (-50.0, 150.0, 10.0, "P11", "direct"),
-    ("Mass Air Flow", "kg/h"): (0.0, 2048.0, 25.0, "P12", "direct"),
-    ("Fuel Trim ST", "%"): (-32.0, 32.0, 12.0, "E13", "direct"),
-    ("Fuel Trim LT", "%"): (-32.0, 32.0, 12.0, "E21", "direct"),
-    ("Ignition Advance", "°"): (-20.0, 50.0, 5.0, "P10", "direct"),
-    ("Knock Retard", "°"): (-50.0, 50.0, 10.0, "E217", "direct"),
-    ("VANOS Measured Angle", "°"): (0.0, 50.0, 10.0, "E11", "direct"),
-    ("Vehicle Speed", "km/h"): (0.0, 300.0, 30.0, "P9", "direct"),
-    ("Idle Valve Pos", "%"): (-50.0, 50.0, 10.0, "E9", "direct"),
-    ("Knock Retard (Global)", "°"): (-50.0, 50.0, 10.0, "E24", "direct"),
-    ("Fuel Trim ST B2", "%"): (-32.0, 32.0, 12.0, "E14", "direct"),
-    ("Fuel Trim LT B2", "%"): (-32.0, 32.0, 12.0, "E22", "direct"),
-    ("Engine Load", "mg/st"): (0.0, 1389.0, 100.0, "E2", "direct"),
-    ("EVAP Purge Duty", "%"): (0.0, 100.0, 10.0, "E202:PWM_Evap", "direct"),
-    ("Wideband AFR", "AFR"): (8.0, 22.0, 1.0, "P58", "direct"),
-    ("AFR Target", "AFR"): (8.0, 22.0, 1.0, "P60", "direct"),
-    # Same definition scale, with the app's reviewed working-RAM/ADC mirror.
-    ("Battery Voltage", "V"): (0.0, 20.0, 2.0, "P17:working-RAM", "reviewed-semantic"),
-    ("Front O2 B1 Voltage", "V"): (0.0, 5.0, 0.5, "E101:ADC10-mirror", "reviewed-semantic"),
-    ("Front O2 B2 Voltage", "V"): (0.0, 5.0, 0.5, "E102:ADC10-mirror", "reviewed-semantic"),
-    ("MAF Sensor Voltage", "V"): (0.0, 5.0, 0.5, "P18:ADC10-mirror", "reviewed-semantic"),
-    ("Wideband Input Voltage", "V"): (0.0, 5.0, 0.5, "reviewed:ADC10-selected-source", "reviewed-semantic"),
-}
-
+# Non-gauge presentation kinds remain code-owned for runtime probes;
+# every dial range comes from the selected definition.
 _LIVE_STATUS_CHANNELS = frozenset({
     ("Closed Throttle", ""), ("Part Load", ""), ("Full Load", ""),
     ("Decel Fuel Cut", ""), ("Engine Start", ""),
@@ -228,99 +91,29 @@ _LIVE_VALUE_CHANNELS = frozenset({
     ("Injector PW", "ms"), ("Wideband Input Source", ""),
 })
 
-_LIVE_RAW_CHANNELS = frozenset()
-
-
-def live_display_spec(name: str, unit: str) -> dict:
+def live_display_spec(name: str, unit: str, definition_path=None) -> dict:
     """Return evidence-bounded viewer metadata for an exact live-data channel."""
     key = (name, unit)
-    dial = _LIVE_DIAL_SPECS.get(key)
-    if dial:
-        minimum, maximum, step, source, evidence = dial
-        return {
-            "kind": "dial", "minimum": minimum, "maximum": maximum,
-            "step": step, "source": source, "evidence": evidence,
-        }
+    for parameter in _load_definition(definition_path).parameters:
+        if (parameter.name, parameter.unit) != key:
+            continue
+        minimum, maximum, step = (
+            parameter.gauge_min, parameter.gauge_max, parameter.gauge_step)
+        if (minimum is not None and maximum is not None and step is not None
+                and minimum < maximum and 0 < step <= maximum - minimum):
+            return {
+                "kind": "dial", "minimum": minimum, "maximum": maximum,
+                "step": step, "source": parameter.id,
+                "evidence": "definition",
+            }
+        break
     if key in _LIVE_STATUS_CHANNELS:
         return {"kind": "status", "evidence": "core"}
-    if key in _LIVE_RAW_CHANNELS:
-        return {"kind": "raw", "evidence": "core"}
     return {
         "kind": "value",
         "evidence": "core" if key in _LIVE_VALUE_CHANNELS else "unknown",
     }
 
-_PARAM_META = {
-    "Engine RPM":            ("RPM",  2, False, lambda x: x,                "{:.0f}"),
-    "Mass Air Flow":         ("kg/h", 2, False, lambda x: x * 0.25,         "{:.1f}"),
-    "Idle Valve Pos":        ("%",    2, True,  lambda x: x * 0.00153,      "{:.1f}"),
-    "Intake Air Temp":       ("°C",   1, False, lambda x: x * 0.747 - 48,   "{:.0f}"),
-    "Coolant Temp":          ("°C",   1, False, lambda x: x * 0.747 - 48,   "{:.0f}"),
-    "Vehicle Speed":         ("km/h", 1, False, lambda x: x,                "{:.0f}"),
-    "Throttle Position":     ("%",    1, False, lambda x: x * 100 / 255,    "{:.1f}"),
-    "Ignition Advance":      ("°",    1, False, lambda x: 0.373 * x - 23.6, "{:.1f}"),
-    "Knock Retard":          ("°",    1, False, lambda x: (x - 128) * 0.375,"{:.1f}"),
-    "Knock Retard (Global)": ("°",    1, False, lambda x: (x - 128) * 0.375,"{:.1f}"),
-    "VANOS Measured Angle":  ("°",    1, False, lambda x: x * 0.3745,       "{:.1f}"),
-    "Injector PW":           ("ms",   2, False, lambda x: x * 0.00534,      "{:.2f}"),
-    "Fuel Trim ST":          ("%",    2, False, _FT, "{:.1f}"),
-    "Fuel Trim ST B2":       ("%",    2, False, _FT, "{:.1f}"),
-    "Fuel Trim LT":          ("%",    2, False, _FT, "{:.1f}"),
-    "Fuel Trim LT B2":       ("%",    2, False, _FT, "{:.1f}"),
-    "Engine Load":           ("mg/st",2, False, lambda x: x * 0.021195,     "{:.1f}"),
-    # V_IGK: supply voltage monitor, 1 byte, scale 0.10196 V/count (confirmed live: 122 → 12.44 V)
-    "Battery Voltage":       ("V",    1, False, lambda x: x * 0.10196,      "{:.2f}"),
-}
-
-# Display order for telegram params (std-aligned names first, then extras).
-_TELEGRAM_ORDER = [
-    "Engine RPM", "Mass Air Flow", "Idle Valve Pos", "Intake Air Temp", "Coolant Temp",
-    "Vehicle Speed", "Throttle Position", "Ignition Advance", "Knock Retard",
-    "Knock Retard (Global)", "VANOS Measured Angle", "Injector PW",
-    "Fuel Trim ST", "Fuel Trim ST B2", "Fuel Trim LT", "Fuel Trim LT B2", "Engine Load",
-    "Battery Voltage",
-]
-
-# Addresses shared by the ECU IDs explicitly listed in the RomRaider logger
-# definitions.  Do not infer RAM layout from a broad MS41 generation label.
-_SHARED_ADDR = {
-    "Engine RPM": 0xDA2A, "Mass Air Flow": 0xDA34, "Idle Valve Pos": 0xDA36,
-    "Intake Air Temp": 0xDA50, "Coolant Temp": 0xDA5A, "Vehicle Speed": 0xDA63,
-    "Ignition Advance": 0xE989, "Knock Retard": 0xE98D, "Knock Retard (Global)": 0xE9D9,
-    "VANOS Measured Angle": 0xE9E6,
-}
-
-# Per-ECU-ID addresses that drift or require exact firmware proof.
-_FAMILY_ADDR = {
-    "1437806": {"Throttle Position": 0xE8D0, "Battery Voltage": 0xFC9D,
-                "Engine Load": 0xFC52, "Injector PW": 0xEF96,
-                "Fuel Trim ST": 0xF036, "Fuel Trim ST B2": 0xF0F2,
-                "Fuel Trim Additive": 0xF040, "Fuel Trim Additive B2": 0xF0FC,
-                "Fuel Trim LT": 0xF048, "Fuel Trim LT B2": 0xF104},
-    "1429861": {"Throttle Position": 0xE8D0, "Battery Voltage": 0xFB47,
-                "Engine Load": 0xFAFC, "Injector PW": 0xECBC,
-                "Fuel Trim ST": 0xED5C, "Fuel Trim ST B2": 0xED96,
-                "Fuel Trim Additive": 0xED66, "Fuel Trim Additive B2": 0xEDA0,
-                "Fuel Trim LT": 0xED6E, "Fuel Trim LT B2": 0xEDA8},
-    "1406464": {"Throttle Position": 0xE8D0, "Battery Voltage": 0xFC9D,
-                "Engine Load": 0xFC52, "Injector PW": 0xEF7E,
-                "Fuel Trim ST": 0xF01E, "Fuel Trim ST B2": 0xF0CA,
-                "Fuel Trim Additive": 0xF028, "Fuel Trim Additive B2": 0xF0D4,
-                "Fuel Trim LT": 0xF030, "Fuel Trim LT B2": 0xF0DC},
-}
-
-# Exact ECU IDs with a complete, verified fuel/load/TPS address set.
-_ECU_FAMILY = {
-    "1437806": "1437806",   # MS41.1 E36/E39/Z3 M52
-    "1429861": "1429861",   # MS41.0
-    "1406464": "1406464",   # MS41.2 E36 M3 S52
-    "SHINDE1": "1406464",   # MS41.3 bench build (shares MS41.2 RAM layout)
-}
-
-_LIVE_SHARED_IDS = frozenset({
-    "1405854", "1406464", "SHINDE1", "1429373", "1429861", "1432401",
-    "1437806", "1440176",
-})
 # Definition-derived axis locations converted to live DS2 CPU addresses.
 # Only variants with proven Knock Tables X/Y definitions are listed.
 _ADAPTATION_AXES = {
@@ -332,78 +125,49 @@ _ADAPTATION_AXES = {
     "1406464": (0x12388, 0x1235B),
     "SHINDE1": (0x12388, 0x1235B),
 }
-# Fuel-adaptation RAM addresses are not defined for CAL 59 / ECU 1429373.
-_ADAPTATION_FUEL_IDS = {"1437806", "1429861", "1406464", "SHINDE1"}
+# Fuel-adaptation RAM addresses are separate from the selectable live logger.
+_ADAPTATION_FUEL_ADDRS = {
+    "1437806": ((0xF040, 0xF048), (0xF0FC, 0xF104)),
+    "1429861": ((0xED66, 0xED6E), (0xEDA0, 0xEDA8)),
+    "1406464": ((0xF028, 0xF030), (0xF0D4, 0xF0DC)),
+    "SHINDE1": ((0xF028, 0xF030), (0xF0D4, 0xF0DC)),
+}
 _KNOCK_ADAPTATION_ADDR = 0xD840
 
 
-def _profile_telegram_params(profile: str, wideband_input_addr: int):
-    common = [
-        TelegramParameter("Closed Throttle", "", 0xFD24, 1, False,
-                          lambda x: _state((x & 0x01) == 0), "{}"),
-        TelegramParameter("Full Load", "", 0xFD24, 1, False,
-                          lambda x: _state(x & 0x02), "{}"),
-        TelegramParameter("Part Load", "", 0xFD14, 1, False,
-                          lambda x: _state(x & 0x08), "{}"),
-        TelegramParameter("Decel Fuel Cut", "", 0xFD14, 1, False,
-                          lambda x: _state(x & 0x20), "{}"),
-        TelegramParameter("Engine Start", "", 0xFD14, 1, False,
-                          lambda x: _state(x & 0x02), "{}"),
-    ]
-    if profile == PROFILE_WIDEBAND:
-        return common + [
-            TelegramParameter("Wideband Input Voltage", "V", wideband_input_addr,
-                              2, False, _adc_voltage, "{:.3f}"),
-            TelegramParameter("MAF Sensor Voltage", "V", 0xFA9E,
-                              2, False, _adc_voltage, "{:.3f}"),
-            TelegramParameter("Wideband AFR", "AFR", 0xE800, 1, False,
-                              lambda x: x * 0.05 + 8.25, "{:.2f}"),
-            TelegramParameter("AFR Target", "AFR", 0xE811, 1, False,
-                              lambda x: x * 0.05 + 8.25, "{:.2f}"),
-        ]
-    return common + [
-        TelegramParameter("EVAP Purge Duty", "%", 0xDA56, 1, False,
-                          lambda x: x * 100 / 255, "{:.1f}"),
-        TelegramParameter("Front O2 B1 Voltage", "V", 0xFA9A,
-                          2, False, _adc_voltage, "{:.3f}"),
-        TelegramParameter("Front O2 B2 Voltage", "V", 0xFA98,
-                          2, False, _adc_voltage, "{:.3f}"),
-        TelegramParameter("MAF Sensor Voltage", "V", 0xFA9E,
-                          2, False, _adc_voltage, "{:.3f}"),
-    ]
+def _load_definition(definition_path=None) -> LoggerDefinition:
+    return load_logger_definition(
+        definition_path or bundled_logger_definition_path())
 
 
 def telegram_params_for(ecu_id, profile: str = PROFILE_STANDARD,
                         wideband_input_addr: int = _DEFAULT_WBO2_INPUT_ADDR,
-                        ) -> List["TelegramParameter"]:
-    """
-    Build the telegram parameter list for a given ECU ID. Shared parameters and
-    TPS require an explicit logger-definition match; fuel/load require a complete
-    exact-ID address map. Parameters whose
-    address is unknown for the ID are omitted (never shown with a wrong address).
-    """
-    ecu_id = str(ecu_id) if ecu_id is not None else None
-    if ecu_id not in _LIVE_SHARED_IDS:
-        return []
-    fam = _ECU_FAMILY.get(ecu_id)
-    fam_map = _FAMILY_ADDR.get(fam, {})
+                        definition_path=None,
+                        definition: LoggerDefinition | None = None
+                        ) -> List[LoggerParameter]:
+    """Resolve the selected XML definition for one exact ECU ID/profile."""
+    if profile not in {PROFILE_STANDARD, PROFILE_WIDEBAND}:
+        raise ValueError(f"unknown live-data profile {profile!r}")
+    definition = definition or _load_definition(definition_path)
     params = []
-    for name in _TELEGRAM_ORDER:
-        unit, length, signed, convert, fmt = _PARAM_META[name]
-        if name in _SHARED_ADDR:
-            addr = _SHARED_ADDR[name]
-        elif name in fam_map:
-            addr = fam_map[name]
-        else:
-            continue                                  # varying param, unknown for this ID
-        params.append(TelegramParameter(name, unit, addr, length, signed, convert, fmt))
-    params.extend(_profile_telegram_params(profile, wideband_input_addr))
+    for param in definition.parameters_for(str(ecu_id or "")):
+        # The XML format also permits ADC selectors and predefined group offsets;
+        # this owner only issues absolute DS2 memory reads for those channels.
+        if param.address < 0x20 or param.groupsize:
+            continue
+        if param.id.startswith("BS_STD_") and profile != PROFILE_STANDARD:
+            continue
+        if param.id.startswith("BS_WB_") and profile != PROFILE_WIDEBAND:
+            continue
+        if param.id == "BS_WB_INPUT":
+            param = param.with_address(wideband_input_addr)
+        params.append(param)
     return params
 
 
-def live_data_supported(ecu_id) -> bool:
-    """Whether the packaged logger has at least one exact-ID live channel."""
-    return bool(telegram_params_for(ecu_id))
+def live_data_supported(ecu_id, definition_path=None) -> bool:
+    """Whether the selected definition has at least one exact-ID live channel."""
+    return bool(telegram_params_for(ecu_id, definition_path=definition_path))
 
 
 def adaptation_read_supported(ecu_id) -> bool:
@@ -427,12 +191,9 @@ def read_adaptations(ds2, ecu_id):
         return data
 
     additive, ltft = [None, None], [None, None]
-    if ecu_id in _ADAPTATION_FUEL_IDS:
-        family = _ECU_FAMILY[ecu_id]
-        addresses = _FAMILY_ADDR[family]
-        for index, suffix in enumerate(("", " B2")):
-            add_address = addresses[f"Fuel Trim Additive{suffix}"]
-            lt_address = addresses[f"Fuel Trim LT{suffix}"]
+    if ecu_id in _ADAPTATION_FUEL_ADDRS:
+        for index, (add_address, lt_address) in enumerate(
+                _ADAPTATION_FUEL_ADDRS[ecu_id]):
             block = read_exact(add_address, lt_address - add_address + 2)
             add_raw = int.from_bytes(block[:2], "little")
             lt_raw = int.from_bytes(
@@ -463,130 +224,117 @@ def read_adaptations(ds2, ecu_id):
     }
 
 
-# Default param set (ECU ID 1437806 / MS41.1) for display layout, names, and tests.
-_TELEGRAM_PARAMS: List[TelegramParameter] = telegram_params_for("1437806")
-
-# All parameter names supplied by either DS2 live-data profile.
-TELEGRAM_PARAM_NAMES: frozenset = (
-    frozenset(_TELEGRAM_ORDER) | PROFILE_DISPLAY_NAMES
-)
-
-# Telegram-only parameters (not in the standard SID 0x21 table) — appended as
-# extra rows in the live display so they are visible in telegram mode.
-TELEGRAM_EXTRA_PARAMS = [
-    (p.name, p.unit) for p in _TELEGRAM_PARAMS
-    if (p.name not in {sp.name for sp in MS41_PARAMETERS}
-        and p.name not in PROFILE_DISPLAY_NAMES)
-]
+# Default bundled metadata keeps the desktop logger unchanged. Callers can pass
+# a selected definition path into the same functions.
+_BUNDLED_DEFINITION = _load_definition()
+_TELEGRAM_PARAMS: List[LoggerParameter] = telegram_params_for(
+    "1437806", definition=_BUNDLED_DEFINITION)
+TELEGRAM_PARAM_NAMES = frozenset(
+    param.name for param in _BUNDLED_DEFINITION.parameters
+) | _PROFILE_STATUS_NAMES
 
 
-def display_rows() -> List[Tuple[str, str]]:
-    """Ordered (name, unit) rows for the live table: standard params then telegram extras."""
-    rows = [(p.name, p.unit) for p in MS41_PARAMETERS]
-    rows += TELEGRAM_EXTRA_PARAMS
+def display_rows(definition_path=None) -> List[Tuple[str, str]]:
+    """Ordered rows supplied by the selected definition plus runtime probes."""
+    definition = _load_definition(definition_path)
+    rows = list(dict.fromkeys(
+        (param.name, param.unit) for param in definition.parameters))
     existing = {name for name, _unit in rows}
-    rows += [row for row in _PROFILE_DISPLAY_ROWS if row[0] not in existing]
+    rows.extend(
+        row for row in _PROFILE_DISPLAY_ROWS
+        if row[0] in _PROFILE_STATUS_NAMES and row[0] not in existing
+    )
     return rows
 
 
-# ─────────────────── DS2 0x0B/0x01 batch parameter layout ───────────────────
-#
-# Ordered list matching the setup frame entries (see ds2.py _BATCH_SETUP_ARGS).
-# Each tuple: (display_name_or_None, addr, n_response_bytes, signed, convert, unit, fmt)
-#   display_name=None marks a shared state byte decoded through _BATCH_STATE_VALUES.
-#
-# Response parsing:
-#   data[0:2]   = group 1 status (skipped)
-#   data[2:28]  = 20 param values (group 1), sizes per n_response_bytes
-#   data[28:30] = group 2 status (skipped)
-#   data[30:38] = 4 param values (group 2)
-#
-# Conversions use the same formulas as the direct RAM parameters (_PARAM_META)
-# so readings are directly comparable between modes.
+# The proven DS2 0x0B transport has exactly 24 positional slots. Static
+# addresses, widths, storage, and conversions still come from the definition.
+_BATCH_HEAD_NAMES = (
+    "Idle Valve Pos", "Injector PW", "Ignition Advance", "Knock Retard",
+    "Vehicle Speed", "Throttle Position", "Engine RPM", "Mass Air Flow",
+    "Coolant Temp", "Intake Air Temp", "Battery Voltage",
+    "Knock Retard (Global)", "VANOS Measured Angle",
+)
+_BATCH_TRIM_NAMES = (
+    "Fuel Trim LT", "Fuel Trim LT B2", "Fuel Trim ST", "Fuel Trim ST B2",
+)
+_BATCH_STATE_GROUPS = (
+    ("Closed Throttle", "Full Load"),
+    ("Part Load", "Decel Fuel Cut", "Engine Start"),
+)
 
-_FT_BATCH = lambda x: (x - 32768) * 100 / 65535   # same as _FT above
 
-# Addresses shown here are for ECU 1437806 (MS41.1) — the default.
-# batch_layout_for() substitutes exact-ID and profile-specific addresses before
-# the same positional plan is passed to both the transport and response parser.
-#
-# ST entries (1b) read the high byte of the standard-mode LE 16b value
-# (addr = standard_ST_addr + 1).  Formula (x-128)*100/256 gives ±50% range,
-# matching the 2b _FT formula used by standard/telegram mode.
-_FT_ST_BATCH = lambda x: (x - 128) * 100 / 256   # 1b high-byte of LE 16b ST trim
-
-DS2_BATCH_LAYOUT = [
-    # name,                     addr,   bytes, signed, convert,                         unit,   fmt
-    # ── group 1 (20 entries, data[2:28]) ─────────────────────────────────────
-    ("Idle Valve Pos",       0xDA36, 2, True,  lambda x: x*0.00153,            "%",     "{:.1f}"),
-    ("Injector PW",          0xEF96, 2, False, lambda x: x*0.00534,            "ms",    "{:.2f}"),
-    ("Ignition Advance",     0xE989, 1, False, lambda x: 0.373*x - 23.6,      "°",     "{:.1f}"),
-    ("Knock Retard",         0xE98D, 1, False, lambda x: (x-128)*0.375,        "°",     "{:.1f}"),
-    ("Vehicle Speed",        0xDA63, 1, False, lambda x: x,                    "km/h",  "{:.0f}"),
-    ("Throttle Position",    0xE8D0, 1, False, lambda x: x*100/255,            "%",     "{:.1f}"),
-    ("Engine RPM",           0xDA2A, 2, False, lambda x: x,                    "RPM",   "{:.0f}"),
-    ("Mass Air Flow",        0xDA34, 2, False, lambda x: x*0.25,               "kg/h",  "{:.1f}"),
-    ("Coolant Temp",         0xDA5A, 1, False, lambda x: x*0.747 - 48,         "°C",    "{:.0f}"),
-    ("Intake Air Temp",      0xDA50, 1, False, lambda x: x*0.747 - 48,         "°C",    "{:.0f}"),
-    ("Battery Voltage",      0xFC9D, 1, False, lambda x: x * 0.10196,          "V",     "{:.2f}"),
-    ("Knock Retard (Global)",0xE9D9, 1, False, lambda x: (x-128)*0.375,        "°",     "{:.1f}"),
-    ("VANOS Measured Angle", 0xE9E6, 1, False, lambda x: x*0.3745,             "°",     "{:.1f}"),
-    ("EVAP Purge Duty",     0xDA56, 1, False, lambda x: x*100/255,             "%",     "{:.1f}"),
-    ("Fuel Trim LT",         0xF048, 2, False, _FT_BATCH,                      "%",     "{:.1f}"),
-    ("Fuel Trim LT B2",      0xF104, 2, False, _FT_BATCH,                      "%",     "{:.1f}"),
-    ("Fuel Trim ST",         0xF037, 1, False, _FT_ST_BATCH,                   "%",     "{:.1f}"),
-    ("Fuel Trim ST B2",      0xF0F3, 1, False, _FT_ST_BATCH,                   "%",     "{:.1f}"),
-    (None,           0xFD24, 1, False, None,                                   "",      ""),
-    (None,           0xFD14, 1, False, None,                                   "",      ""),
-    # ── group 2 (4 entries, data[30:38]) ─────────────────────────────────────
-    ("Engine Load",          0xFC52, 2, False, lambda x: x*0.021195,           "mg/st", "{:.1f}"),
-    ("Front O2 B1 Voltage", 0xFA9A, 2, False, _adc_voltage,                   "V",     "{:.3f}"),
-    ("Front O2 B2 Voltage", 0xFA98, 2, False, _adc_voltage,                   "V",     "{:.3f}"),
-    ("MAF Sensor Voltage",  0xFA9E, 2, False, _adc_voltage,                   "V",     "{:.3f}"),
-]
-
-_BATCH_STATE_VALUES = {
-    18: (
-        ("Closed Throttle", lambda x: _state((x & 0x01) == 0), "", "{}"),
-        ("Full Load", lambda x: _state(x & 0x02), "", "{}"),
-    ),
-    19: (
-        ("Part Load", lambda x: _state(x & 0x08), "", "{}"),
-        ("Decel Fuel Cut", lambda x: _state(x & 0x20), "", "{}"),
-        ("Engine Start", lambda x: _state(x & 0x02), "", "{}"),
-    ),
-}
+def _batch_entry(param: LoggerParameter, *, address=None, length=None,
+                 signed=None, convert=None):
+    return (
+        param.name,
+        param.address if address is None else address,
+        param.length if length is None else length,
+        param.signed if signed is None else signed,
+        param.convert if convert is None else convert,
+        param.unit,
+        param.fmt,
+    )
 
 
 def batch_layout_for(ecu_id, profile: str = PROFILE_STANDARD,
-                     wideband_input_addr: int = _DEFAULT_WBO2_INPUT_ADDR):
-    """Build the positional decoder for the ECU family and selected profile."""
-    fam = _ECU_FAMILY.get(str(ecu_id) if ecu_id is not None else None)
-    if fam is None:
+                     wideband_input_addr: int = _DEFAULT_WBO2_INPUT_ADDR,
+                     definition_path=None,
+                     definition: LoggerDefinition | None = None):
+    """Build the fixed telegram layout only when the definition fits it exactly."""
+    params = telegram_params_for(
+        ecu_id, profile, wideband_input_addr,
+        definition_path=definition_path, definition=definition)
+    by_name = {param.name: param for param in params}
+    profile_name = (
+        "Wideband AFR" if profile == PROFILE_WIDEBAND else "EVAP Purge Duty")
+    tail_names = (
+        ("Wideband Input Voltage", "MAF Sensor Voltage", "AFR Target")
+        if profile == PROFILE_WIDEBAND else
+        ("Front O2 B1 Voltage", "Front O2 B2 Voltage", "MAF Sensor Voltage")
+    )
+    required = (
+        _BATCH_HEAD_NAMES + (profile_name,) + _BATCH_TRIM_NAMES
+        + tuple(name for group in _BATCH_STATE_GROUPS for name in group)
+        + ("Engine Load",) + tail_names
+    )
+    if len(params) != len(required) or set(by_name) != set(required):
         return None
-    addrs = _FAMILY_ADDR[fam]
-    layout = list(DS2_BATCH_LAYOUT)
-    layout[1] = (layout[1][0], addrs["Injector PW"], *layout[1][2:])
-    layout[5] = (layout[5][0], addrs["Throttle Position"], *layout[5][2:])
-    layout[10] = (layout[10][0], addrs["Battery Voltage"], *layout[10][2:])
-    layout[14] = (layout[14][0], addrs["Fuel Trim LT"], *layout[14][2:])
-    layout[15] = (layout[15][0], addrs["Fuel Trim LT B2"], *layout[15][2:])
-    layout[16] = (layout[16][0], addrs["Fuel Trim ST"] + 1, *layout[16][2:])
-    layout[17] = (layout[17][0], addrs["Fuel Trim ST B2"] + 1, *layout[17][2:])
-    layout[20] = (layout[20][0], addrs["Engine Load"], *layout[20][2:])
+
+    state_entries = []
+    for names in _BATCH_STATE_GROUPS:
+        state_params = tuple(by_name[name] for name in names)
+        if (len({param.address for param in state_params}) != 1
+                or any(param.length != 1 for param in state_params)):
+            return None
+        state_entries.append((
+            state_params, state_params[0].address, 1, False, None, "", ""))
+
+    layout = [_batch_entry(by_name[name]) for name in _BATCH_HEAD_NAMES]
+    layout.append(_batch_entry(by_name[profile_name]))
+    layout.extend(_batch_entry(by_name[name]) for name in _BATCH_TRIM_NAMES[:2])
+    for name in _BATCH_TRIM_NAMES[2:]:
+        param = by_name[name]
+        layout.append(_batch_entry(
+            param, address=param.address + 1, length=1, signed=False,
+            convert=lambda raw, owner=param: owner.convert(raw << 8)))
+    layout.extend(state_entries)
+    layout.append(_batch_entry(by_name["Engine Load"]))
 
     if profile == PROFILE_WIDEBAND:
-        layout[13] = ("Wideband AFR", 0xE800, 1, False,
-                      lambda x: x * 0.05 + 8.25, "AFR", "{:.2f}")
-        layout[21] = ("Wideband Input Voltage", wideband_input_addr, 2, False,
-                      _adc_voltage, "V", "{:.3f}")
-        layout[22] = ("MAF Sensor Voltage", 0xFA9E, 2, False,
-                      _adc_voltage, "V", "{:.3f}")
-        # E810/E811 is one native little-endian word. Batch mode presents it
-        # MSB-first, so the high byte of the parsed word is E811 (AFR target).
-        layout[23] = ("AFR Target", 0xE810, 2, False,
-                      lambda x: (x >> 8) * 0.05 + 8.25, "AFR", "{:.2f}")
+        layout.append(_batch_entry(by_name["Wideband Input Voltage"]))
+        layout.append(_batch_entry(by_name["MAF Sensor Voltage"]))
+        target = by_name["AFR Target"]
+        layout.append(_batch_entry(
+            target, address=target.address - 1, length=2, signed=False,
+            convert=lambda raw, owner=target: owner.convert(raw >> 8)))
+    else:
+        layout.extend(_batch_entry(by_name[name]) for name in tail_names)
     return tuple(layout)
+
+
+DS2_BATCH_LAYOUT = batch_layout_for(
+    "1437806", definition=_BUNDLED_DEFINITION)
 
 
 def batch_wire_entries(layout):
@@ -609,14 +357,14 @@ def _parse_ds2_batch(raw: bytes, latest: dict, lock, csv_row: dict,
     # Build offset table: skip 2-byte group headers at boundaries
     offsets = []
     off = _G1_START
-    for i, (name, addr, nbytes, signed, convert, unit, fmt) in enumerate(layout):
+    for i, entry in enumerate(layout):
         if i == 20:           # group 2 starts at data[30]
             off = _G2_START
         offsets.append(off)
-        off += nbytes
+        off += entry[2]
 
     with lock:
-        for i, (name, addr, nbytes, signed, convert, unit, fmt) in enumerate(layout):
+        for i, (name, _addr, nbytes, signed, convert, unit, fmt) in enumerate(layout):
             start = offsets[i]
             end   = start + nbytes
             if end > len(raw):
@@ -630,16 +378,16 @@ def _parse_ds2_batch(raw: bytes, latest: dict, lock, csv_row: dict,
             val   = int.from_bytes(chunk, "big")
             if signed and val >= (1 << (8 * nbytes - 1)):
                 val -= 1 << (8 * nbytes)
-            if name is not None and convert is not None:
+            if isinstance(name, tuple):
+                for parameter in name:
+                    state_disp = parameter.display(parameter.convert(val))
+                    latest[parameter.name] = (state_disp, parameter.unit)
+                    csv_row[parameter.name] = state_disp
+            elif convert is not None:
                 physical = convert(val)
                 disp = fmt.format(physical)
                 latest[name] = (disp, unit)
                 csv_row[name] = disp
-            for state_name, state_convert, state_unit, state_fmt in _BATCH_STATE_VALUES.get(i, ()):
-                state_value = state_convert(val)
-                state_disp = state_fmt.format(state_value)
-                latest[state_name] = (state_disp, state_unit)
-                csv_row[state_name] = state_disp
 
 
 @dataclass
@@ -647,7 +395,7 @@ class _TelBlock:
     """A contiguous memory range to be read in one DS2 command-0x06 call."""
     start:  int
     size:   int
-    params: List[TelegramParameter] = field(default_factory=list)
+    params: List[LoggerParameter] = field(default_factory=list)
 
 
 def _build_telegram_blocks(params, max_span=120) -> List[_TelBlock]:
@@ -673,11 +421,11 @@ class LiveDataPoller:
     Polls MS41 live data on a background thread.
 
     Standard mode (use_telegram=False):
-      Reads the RomRaider RAM-address set via DS2 command 0x06, grouped into
+      Reads the selected RAM-address set via DS2 command 0x06, grouped into
       contiguous ranges (multiple round trips per sample).
 
     Telegram mode (use_telegram=True):
-      Registers the RomRaider MS41 RAM-address set via DS2 0x0B/0x01 and then
+      Registers the selected MS41 RAM-address set via DS2 0x0B/0x01 and then
       retrieves the complete sample with one 0x0B/0x00 response.
 
     Stores latest values in a thread-safe dict; the GUI reads via a QTimer.
@@ -686,7 +434,7 @@ class LiveDataPoller:
 
     def __init__(self, interval: float = 0.5, use_telegram: bool = False,
                  ecu_id=None, ecu_variant=None, ds2=None, log_columns=None,
-                 telegram_fallback: bool = True):
+                 telegram_fallback: bool = True, definition_path=None):
         self._ds2          = ds2          # DS2Interface — the live ECU connection
         self._interval     = interval
         self._use_telegram = use_telegram
@@ -696,10 +444,13 @@ class LiveDataPoller:
         self._profile      = PROFILE_STANDARD
         self._profile_ready = False
         self._wideband_input_addr = _DEFAULT_WBO2_INPUT_ADDR
+        self._logger_definition = _load_definition(definition_path)
         # Resolve only parameters explicitly mapped for this ECU ID.
-        self._tel_params   = telegram_params_for(ecu_id)
+        self._tel_params   = telegram_params_for(
+            ecu_id, definition=self._logger_definition)
         self._tel_blocks   = _build_telegram_blocks(self._tel_params)
-        self._batch_layout = batch_layout_for(ecu_id)
+        self._batch_layout = batch_layout_for(
+            ecu_id, definition=self._logger_definition)
         self._log_columns = tuple(log_columns) if log_columns is not None else None
         self._active_profile_names = set()
         self._stop         = threading.Event()
@@ -872,9 +623,12 @@ class LiveDataPoller:
         key = self._ecu_id
         self._profile = profile
         self._wideband_input_addr = input_addr
-        self._tel_params = telegram_params_for(key, profile, input_addr)
+        self._tel_params = telegram_params_for(
+            key, profile, input_addr,
+            definition=self._logger_definition)
         self._tel_blocks = _build_telegram_blocks(self._tel_params)
-        self._batch_layout = batch_layout_for(key, profile, input_addr)
+        self._batch_layout = batch_layout_for(
+            key, profile, input_addr, definition=self._logger_definition)
         active_names = {
             p.name for p in self._tel_params if p.name in PROFILE_DISPLAY_NAMES
         }
@@ -901,11 +655,6 @@ class LiveDataPoller:
         """
         self._prepare_live_profile()
         self._ensure_csv()
-        produced = {p.name for p in self._tel_params}
-        with self._lock:
-            for p in MS41_PARAMETERS:
-                if p.name not in produced:
-                    self._latest[p.name] = ("—", p.unit)
 
         while not self._stop.is_set():
             cycle_started = time.monotonic()
@@ -1047,7 +796,7 @@ class LiveDataPoller:
         wrote_csv = self._csv_writer is not None
         if self._csv_writer:
             self._csv_writer.writerow(row)
-            # Match RomRaider's buffered logger behavior: avoid a synchronous disk flush
+            # Buffer logger output: avoid a synchronous disk flush
             # in the serial acquisition loop for every sample, while still making an active
             # log visible on disk at least once per second.
             now = time.monotonic()

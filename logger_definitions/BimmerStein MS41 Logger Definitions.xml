@@ -1,0 +1,236 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE logger [
+  <!ELEMENT address (#PCDATA)>
+  <!ATTLIST address length CDATA #IMPLIED>
+  <!ATTLIST address bit (0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31) #IMPLIED>
+  <!ELEMENT ecu (address+)>
+  <!ATTLIST ecu id CDATA #REQUIRED>
+  <!ELEMENT ref EMPTY>
+  <!ATTLIST ref ecuparam CDATA #IMPLIED>
+  <!ATTLIST ref parameter IDREF #IMPLIED>
+  <!ELEMENT depends (ref+)>
+  <!ELEMENT replace EMPTY>
+  <!ATTLIST replace value CDATA #REQUIRED>
+  <!ATTLIST replace with CDATA #REQUIRED>
+  <!ELEMENT conversion (replace*)>
+  <!ATTLIST conversion expr CDATA #REQUIRED>
+  <!ATTLIST conversion format (0|0.0|0.00|0.000|0.0000|0.00000|0.000000) #REQUIRED>
+  <!ATTLIST conversion storagetype (int8|int16|uint8|uint16|int32|uint32|float) #IMPLIED>
+  <!ATTLIST conversion endian CDATA #IMPLIED>
+  <!ATTLIST conversion units CDATA #REQUIRED>
+  <!ATTLIST conversion gauge_min CDATA #IMPLIED>
+  <!ATTLIST conversion gauge_max CDATA #IMPLIED>
+  <!ATTLIST conversion gauge_step CDATA #IMPLIED>
+  <!ELEMENT conversions (conversion+)>
+  <!ELEMENT parameter ((address+,conversions?)|(depends,conversions?))>
+  <!ATTLIST parameter target CDATA #REQUIRED>
+  <!ATTLIST parameter ecubit (0|1|2|3|4|5|6|7) #IMPLIED>
+  <!ATTLIST parameter ecubyteindex CDATA #IMPLIED>
+  <!ATTLIST parameter desc CDATA #REQUIRED>
+  <!ATTLIST parameter name CDATA #REQUIRED>
+  <!ATTLIST parameter id ID #REQUIRED>
+  <!ELEMENT parameters (parameter+)>
+  <!ATTLIST parameters mode CDATA #IMPLIED>
+  <!ELEMENT switch EMPTY>
+  <!ATTLIST switch target CDATA #REQUIRED>
+  <!ATTLIST switch ecubyteindex CDATA #IMPLIED>
+  <!ATTLIST switch bit (0|1|2|3|4|5|6|7) #REQUIRED>
+  <!ATTLIST switch byte CDATA #REQUIRED>
+  <!ATTLIST switch desc CDATA #REQUIRED>
+  <!ATTLIST switch name CDATA #REQUIRED>
+  <!ATTLIST switch id ID #REQUIRED>
+  <!ELEMENT switches (switch+)>
+  <!ELEMENT dtcode EMPTY>
+  <!ATTLIST dtcode bit (0|1|2|3|4|5|6|7) #REQUIRED>
+  <!ATTLIST dtcode memaddr CDATA #REQUIRED>
+  <!ATTLIST dtcode tmpaddr CDATA #REQUIRED>
+  <!ATTLIST dtcode desc CDATA #REQUIRED>
+  <!ATTLIST dtcode name CDATA #REQUIRED>
+  <!ATTLIST dtcode id ID #REQUIRED>
+  <!ELEMENT dtcodes (dtcode+)>
+  <!ELEMENT ecuparam (ecu+,conversions?)>
+  <!ATTLIST ecuparam target CDATA #REQUIRED>
+  <!ATTLIST ecuparam groupsize CDATA #IMPLIED>
+  <!ATTLIST ecuparam subgroup CDATA #IMPLIED>
+  <!ATTLIST ecuparam group CDATA #IMPLIED>
+  <!ATTLIST ecuparam desc CDATA #REQUIRED>
+  <!ATTLIST ecuparam name CDATA #REQUIRED>
+  <!ATTLIST ecuparam id ID #REQUIRED>
+  <!ELEMENT ecuparams (ecuparam+)>
+  <!ELEMENT module EMPTY>
+  <!ATTLIST module fastpoll CDATA #IMPLIED>
+  <!ATTLIST module tester CDATA #IMPLIED>
+  <!ATTLIST module desc CDATA #REQUIRED>
+  <!ATTLIST module address CDATA #REQUIRED>
+  <!ATTLIST module id ID #REQUIRED>
+  <!ELEMENT transport (module+)>
+  <!ATTLIST transport desc CDATA #REQUIRED>
+  <!ATTLIST transport name CDATA #REQUIRED>
+  <!ATTLIST transport id ID #REQUIRED>
+  <!ELEMENT transports (transport+)>
+  <!ELEMENT protocol (transports,parameters?,switches?,dtcodes?,ecuparams?)>
+  <!ATTLIST protocol id ID #REQUIRED>
+  <!ATTLIST protocol baud CDATA #REQUIRED>
+  <!ATTLIST protocol databits CDATA #REQUIRED>
+  <!ATTLIST protocol stopbits CDATA #REQUIRED>
+  <!ATTLIST protocol parity CDATA #REQUIRED>
+  <!ATTLIST protocol connect_timeout CDATA #REQUIRED>
+  <!ATTLIST protocol send_timeout CDATA #REQUIRED>
+  <!ELEMENT protocols (protocol+)>
+  <!ELEMENT logger (protocols)>
+  <!ATTLIST logger version CDATA #IMPLIED>
+]>
+<logger version="1.0.0">
+  <protocols>
+    <protocol id="DS2" baud="9600" databits="8" stopbits="1" parity="2"
+              connect_timeout="2000" send_timeout="55">
+      <transports>
+        <transport id="iso9141" name="K-Line" desc="BMW low-speed diagnosis bus">
+          <module id="ecu" address="0x12" desc="Engine Control Module"/>
+        </transport>
+      </transports>
+      <ecuparams>
+        <!-- Stock/core channels. Addresses are absolute C166 CPU-memory addresses. -->
+        <ecuparam id="P8" name="Engine RPM" desc="Engine speed" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000DA2A</address></ecu>
+          <conversions><conversion units="RPM" storagetype="uint16" endian="little" expr="x" format="0" gauge_min="0" gauge_max="10000" gauge_step="1000"/></conversions>
+        </ecuparam>
+        <ecuparam id="P12" name="Mass Air Flow" desc="Calculated air mass flow" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000DA34</address></ecu>
+          <conversions><conversion units="kg/h" storagetype="uint16" endian="little" expr="x*0.25" format="0.0" gauge_min="0" gauge_max="2048" gauge_step="25"/></conversions>
+        </ecuparam>
+        <ecuparam id="E9" name="Idle Valve Pos" desc="Idle valve position" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000DA36</address></ecu>
+          <conversions><conversion units="%" storagetype="int16" endian="little" expr="x*0.00153" format="0.0" gauge_min="-50" gauge_max="50" gauge_step="10"/></conversions>
+        </ecuparam>
+        <ecuparam id="P11" name="Intake Air Temp" desc="Intake-air temperature" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000DA50</address></ecu>
+          <conversions><conversion units="°C" storagetype="uint8" expr="x*0.747-48" format="0" gauge_min="-50" gauge_max="150" gauge_step="10"/></conversions>
+        </ecuparam>
+        <ecuparam id="P2" name="Coolant Temp" desc="Engine-coolant temperature" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000DA5A</address></ecu>
+          <conversions><conversion units="°C" storagetype="uint8" expr="x*0.747-48" format="0" gauge_min="-50" gauge_max="150" gauge_step="10"/></conversions>
+        </ecuparam>
+        <ecuparam id="P9" name="Vehicle Speed" desc="Vehicle speed" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000DA63</address></ecu>
+          <conversions><conversion units="km/h" storagetype="uint8" expr="x" format="0" gauge_min="0" gauge_max="300" gauge_step="30"/></conversions>
+        </ecuparam>
+        <ecuparam id="P13" name="Throttle Position" desc="Normalized displayed throttle position" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000E8D0</address></ecu>
+          <conversions><conversion units="%" storagetype="uint8" expr="x*100/255" format="0.0" gauge_min="0" gauge_max="100" gauge_step="10"/></conversions>
+        </ecuparam>
+        <ecuparam id="P10" name="Ignition Advance" desc="Ignition advance" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000E989</address></ecu>
+          <conversions><conversion units="°" storagetype="uint8" expr="0.373*x-23.6" format="0.0" gauge_min="-20" gauge_max="50" gauge_step="5"/></conversions>
+        </ecuparam>
+        <ecuparam id="E217" name="Knock Retard" desc="Current knock retard" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000E98D</address></ecu>
+          <conversions><conversion units="°" storagetype="uint8" expr="(x-128)*0.375" format="0.0" gauge_min="-50" gauge_max="50" gauge_step="10"/></conversions>
+        </ecuparam>
+        <ecuparam id="E24" name="Knock Retard (Global)" desc="Global knock retard" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000E9D9</address></ecu>
+          <conversions><conversion units="°" storagetype="uint8" expr="(x-128)*0.375" format="0.0" gauge_min="-50" gauge_max="50" gauge_step="10"/></conversions>
+        </ecuparam>
+        <ecuparam id="E11" name="VANOS Measured Angle" desc="Measured VANOS angle" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000E9E6</address></ecu>
+          <conversions><conversion units="°" storagetype="uint8" expr="x*0.3745" format="0.0" gauge_min="0" gauge_max="50" gauge_step="10"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_INJECTOR_PW" name="Injector PW" desc="Injector pulse width" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1429861"><address>0x0000ECBC</address></ecu>
+          <ecu id="1406464,SHINDE1"><address>0x0000EF7E</address></ecu>
+          <ecu id="1437806"><address>0x0000EF96</address></ecu>
+          <conversions><conversion units="ms" storagetype="uint16" endian="little" expr="x*0.00534" format="0.00"/></conversions>
+        </ecuparam>
+        <ecuparam id="E13" name="Fuel Trim ST" desc="Short-term fuel trim bank 1" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1429861"><address>0x0000ED5C</address></ecu>
+          <ecu id="1406464,SHINDE1"><address>0x0000F01E</address></ecu>
+          <ecu id="1437806"><address>0x0000F036</address></ecu>
+          <conversions><conversion units="%" storagetype="uint16" endian="little" expr="(x-32768)*100/65535" format="0.0" gauge_min="-32" gauge_max="32" gauge_step="12"/></conversions>
+        </ecuparam>
+        <ecuparam id="E14" name="Fuel Trim ST B2" desc="Short-term fuel trim bank 2" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1429861"><address>0x0000ED96</address></ecu>
+          <ecu id="1406464,SHINDE1"><address>0x0000F0CA</address></ecu>
+          <ecu id="1437806"><address>0x0000F0F2</address></ecu>
+          <conversions><conversion units="%" storagetype="uint16" endian="little" expr="(x-32768)*100/65535" format="0.0" gauge_min="-32" gauge_max="32" gauge_step="12"/></conversions>
+        </ecuparam>
+        <ecuparam id="E21" name="Fuel Trim LT" desc="Long-term fuel trim bank 1" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1429861"><address>0x0000ED6E</address></ecu>
+          <ecu id="1406464,SHINDE1"><address>0x0000F030</address></ecu>
+          <ecu id="1437806"><address>0x0000F048</address></ecu>
+          <conversions><conversion units="%" storagetype="uint16" endian="little" expr="(x-32768)*100/65535" format="0.0" gauge_min="-32" gauge_max="32" gauge_step="12"/></conversions>
+        </ecuparam>
+        <ecuparam id="E22" name="Fuel Trim LT B2" desc="Long-term fuel trim bank 2" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1429861"><address>0x0000EDA8</address></ecu>
+          <ecu id="1406464,SHINDE1"><address>0x0000F0DC</address></ecu>
+          <ecu id="1437806"><address>0x0000F104</address></ecu>
+          <conversions><conversion units="%" storagetype="uint16" endian="little" expr="(x-32768)*100/65535" format="0.0" gauge_min="-32" gauge_max="32" gauge_step="12"/></conversions>
+        </ecuparam>
+        <ecuparam id="E2" name="Engine Load" desc="Calculated engine load" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1429861"><address>0x0000FAFC</address></ecu>
+          <ecu id="1406464,SHINDE1,1437806"><address>0x0000FC52</address></ecu>
+          <conversions><conversion units="mg/st" storagetype="uint16" endian="little" expr="x*0.021195" format="0.0" gauge_min="0" gauge_max="1389" gauge_step="100"/></conversions>
+        </ecuparam>
+        <ecuparam id="P17" name="Battery Voltage" desc="Supply voltage monitor" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1429861"><address>0x0000FB47</address></ecu>
+          <ecu id="1406464,SHINDE1,1437806"><address>0x0000FC9D</address></ecu>
+          <conversions><conversion units="V" storagetype="uint8" expr="x*0.10196" format="0.00" gauge_min="0" gauge_max="20" gauge_step="2"/></conversions>
+        </ecuparam>
+
+        <!-- Channels shared by both stock and wideband display profiles. -->
+        <ecuparam id="BS_STATE_CLOSED_THROTTLE" name="Closed Throttle" desc="Closed-throttle state" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000FD24</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="!BitWise(1,x,1)" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_STATE_FULL_LOAD" name="Full Load" desc="Full-load state" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000FD24</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="BitWise(2,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_STATE_PART_LOAD" name="Part Load" desc="Part-load state" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000FD14</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="BitWise(8,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_STATE_DECEL_CUT" name="Decel Fuel Cut" desc="Deceleration fuel-cut state" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000FD14</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="BitWise(32,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_STATE_ENGINE_START" name="Engine Start" desc="Engine-start state" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000FD14</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="BitWise(2,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="P18" name="MAF Sensor Voltage" desc="MAF ADC voltage" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000FA9E</address></ecu>
+          <conversions><conversion units="V" storagetype="uint16" endian="little" expr="BitWise(1023,x,1)*5/1023" format="0.000" gauge_min="0" gauge_max="5" gauge_step="0.5"/></conversions>
+        </ecuparam>
+
+        <!-- Stock narrowband profile only. -->
+        <ecuparam id="BS_STD_EVAP_PURGE" name="EVAP Purge Duty" desc="EVAP purge duty" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000DA56</address></ecu>
+          <conversions><conversion units="%" storagetype="uint8" expr="x*100/255" format="0.0" gauge_min="0" gauge_max="100" gauge_step="10"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_STD_O2_B1" name="Front O2 B1 Voltage" desc="Front oxygen-sensor bank 1 ADC voltage" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000FA9A</address></ecu>
+          <conversions><conversion units="V" storagetype="uint16" endian="little" expr="BitWise(1023,x,1)*5/1023" format="0.000" gauge_min="0" gauge_max="5" gauge_step="0.5"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_STD_O2_B2" name="Front O2 B2 Voltage" desc="Front oxygen-sensor bank 2 ADC voltage" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000FA98</address></ecu>
+          <conversions><conversion units="V" storagetype="uint16" endian="little" expr="BitWise(1023,x,1)*5/1023" format="0.000" gauge_min="0" gauge_max="5" gauge_step="0.5"/></conversions>
+        </ecuparam>
+
+        <!-- MS41.3 wideband profile only. BS_WB_INPUT is replaced with the runtime-selected pointer. -->
+        <ecuparam id="BS_WB_INPUT" name="Wideband Input Voltage" desc="Selected wideband ADC-source voltage" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1406464,SHINDE1"><address>0x0000FA9A</address></ecu>
+          <conversions><conversion units="V" storagetype="uint16" endian="little" expr="BitWise(1023,x,1)*5/1023" format="0.000" gauge_min="0" gauge_max="5" gauge_step="0.5"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_WB_AFR" name="Wideband AFR" desc="Wideband air-fuel ratio" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1406464,SHINDE1"><address>0x0000E800</address></ecu>
+          <conversions><conversion units="AFR" storagetype="uint8" expr="x*0.05+8.25" format="0.00" gauge_min="8" gauge_max="22" gauge_step="1"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_WB_TARGET" name="AFR Target" desc="Target air-fuel ratio" group="0x0B" subgroup="0x01" target="1">
+          <ecu id="1406464,SHINDE1"><address>0x0000E811</address></ecu>
+          <conversions><conversion units="AFR" storagetype="uint8" expr="x*0.05+8.25" format="0.00" gauge_min="8" gauge_max="22" gauge_step="1"/></conversions>
+        </ecuparam>
+
+      </ecuparams>
+    </protocol>
+  </protocols>
+</logger>

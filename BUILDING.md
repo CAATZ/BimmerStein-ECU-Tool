@@ -1,6 +1,6 @@
 # Building BimmerStein ECU Tool
 
-Beta 14 is a Windows x64 desktop release only. It is built with both PyInstaller
+Beta 15 is a Windows x64 desktop release only. It is built with both PyInstaller
 and Nuitka and distributed as portable ZIPs and per-user installers.
 All commands below run from the repository root in PowerShell.
 
@@ -59,7 +59,7 @@ Render and visually inspect every PDF page before publishing a release.
 ## 4. Build the portable package
 
 ```powershell
-.\build_windows.ps1 -Version 0.1.0b14
+.\build_windows.ps1 -Version 0.1.0b15
 ```
 
 The script regenerates metadata-clean icons, rebuilds the manual, runs the
@@ -77,7 +77,7 @@ adjacent `_internal` directory.
 To compile the Nuitka portable package:
 
 ```powershell
-.\build_windows_nuitka.ps1 -Version 0.1.0b14
+.\build_windows_nuitka.ps1 -Version 0.1.0b15
 ```
 
 Its output is `dist\BimmerStein ECU Tool Nuitka\`. It is a flat Nuitka
@@ -117,11 +117,11 @@ After the release owner has selected a version, create the final ZIP with the
 GPLv3 licensing gate selected for the public beta:
 
 Beta versions use the same compact `bN` suffix as BimmerStein Tuning Suite.
-The current beta is `0.1.0b14`, with Git tag `v0.1.0b14`.
+The current beta is `0.1.0b15`, with Git tag `v0.1.0b15`.
 
 ```powershell
 .\packaging\prepare_release.ps1 `
-    -Version 0.1.0b14 `
+    -Version 0.1.0b15 `
     -PyQtLicenseBasis GPLv3 `
     -IncludeNuitka `
     -IsccPath "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"

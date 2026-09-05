@@ -188,10 +188,9 @@ def image_chip_family(image: bytes) -> str:
 def decode_firmware_version(raw: bytes) -> str:
     """7-ASCII-digit program-side BMW part number, or 'Unavailable' if the
     read came back short or non-numeric."""
-    digits = "".join(chr(b) for b in raw if 0x30 <= b <= 0x39)
-    if len(digits) != FW_VERSION_LEN:
+    if len(raw) != FW_VERSION_LEN or any(not 0x30 <= b <= 0x39 for b in raw):
         return "Unavailable"
-    return digits
+    return bytes(raw).decode("ascii")
 
 
 def _ascii_field(raw: bytes, *, digits=False) -> str | None:

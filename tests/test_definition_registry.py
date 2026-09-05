@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -91,6 +92,17 @@ def test_identical_import_reuses_registered_copy(tmp_path):
     again = registry.import_file(source)
     assert again.copied is False
     assert again.identical is True
+
+
+@pytest.mark.parametrize("payload", [None, [], "MS41.xml", 1, True])
+def test_registry_ignores_non_object_settings(tmp_path, payload):
+    registry = DefinitionRegistry(tmp_path)
+    settings = json.dumps(payload)
+    registry.settings_path.write_text(settings, encoding="utf-8")
+
+    assert registry.active_names() == []
+    assert registry.active_path() is None
+    assert registry.settings_path.read_text(encoding="utf-8") == settings
 
 
 def test_different_same_name_requires_explicit_replace(tmp_path):

@@ -5,7 +5,7 @@
   "tested": false,
   "title": "VANOS minimum RPM",
   "user_description": "Adds a configurable minimum-RPM threshold for closed-throttle VANOS engagement on MS41.1. The default value preserves stock behavior; vehicle testing is still required.",
-  "description": "MS41.1 port of the MS41.0 VANOS retrofit. Splices the matching fd14.4 branch at file 0x3FBC0 into a cave at file 0x3B880. The cave re-tests fd14.4/fd14.5, reads the native RPM/32 mirror at 0xE9E2, and enters the stock engage path at file 0x3FBCE only when RPM reaches VANOSRPM; otherwise it returns to the stock off path at file 0x3FBC8. VANOSRPM uses blank SA 0x3720 and defaults to 0xFF, preserving stock behavior. Marker VANOSRT2 at SA 0x3728 selects the matching RomRaider definition.",
+  "description": "MS41.1 port of the MS41.0 VANOS retrofit. Splices the matching fd14.4 branch at file 0x3FBC0 into a cave at file 0x3B880. The cave re-tests fd14.4/fd14.5, reads the native RPM/32 mirror at 0xE9E2, and enters the stock engage path at file 0x3FBCE only when RPM reaches VANOSRPM; otherwise it returns to the stock off path at file 0x3FBC8. VANOSRPM uses blank SA 0x3720 and defaults to 0xFF, preserving stock behavior. Marker VANOSRT2 at SA 0x3728 selects the matching XML definition.",
   "target": "MS41.1",
   "recompute": ["program"],
   "requires": [],

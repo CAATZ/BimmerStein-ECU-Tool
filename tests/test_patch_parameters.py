@@ -17,7 +17,8 @@ CASES = (
     (
         "MS41.1",
         ["ignition_cut_v7_ms411", "launch_control_v4_ms411"],
-        {"ignition_cut_v7_ms411": 2, "launch_control_v4_ms411": 8},
+        {"ignition_cut_v7_ms411": 2, "launch_control_v4_ms411": 8,
+         "vanos_minrpm_ms411": 1},
     ),
     (
         "MS41.2",
@@ -43,6 +44,31 @@ EXPECTED_PARAMETER_IDS = {
     },
     "vanos_minrpm": {"VANOSRPM"},
 }
+
+
+def test_installable_patch_exposes_schema_but_cannot_be_edited_directly(monkeypatch):
+    image = bytes(256 * 1024)
+    monkeypatch.setattr(patch_service, "base_version", lambda _data: "MS41.3")
+    monkeypatch.setattr(patch_service, "available_patches", lambda _data: [{
+        "id": "ignition_cut_v7", "installed": False, "deprecated": False,
+        "ok": True, "badge": "OK",
+    }])
+    monkeypatch.setattr(
+        patch_service.checksum, "verify_checksum", lambda _data: (True, []),
+    )
+    monkeypatch.setattr(
+        patch_service, "_public_parameter",
+        lambda _image, _patch, spec: {"id": spec["id"]},
+    )
+
+    groups = patch_service.editable_parameters(image)
+
+    assert [group["patch_id"] for group in groups] == ["ignition_cut_v7"]
+    assert groups[0]["editable"] is True
+    with pytest.raises(patch_service.PatchError, match="not an editable current installation"):
+        patch_service.apply_parameter_changes(
+            image, "ignition_cut_v7", {"CUTRPM": "4000"},
+        )
 
 
 def _built(variant, patch_ids):

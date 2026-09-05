@@ -183,29 +183,12 @@ The project does not need a Python D2XX package and does not intentionally
 bundle `ftd2xx.dll`. If the DLL is redistributed in the future, review FTDI's
 current redistribution terms first.
 
-## Vendored source code
-
-### BimmerStein Tuning Suite editor core
-
-- Project: BimmerStein Tuning Suite (`ECU Editor-Dev`)
-- Source: https://github.com/CAATZ/bimmerstein-tuning-suite
-- Vendored snapshot basis: commit `80edb10`
-- Copyright: Copyright (C) 2026 CAATZ and contributors
-- Upstream license: GNU General Public License version 2 or, at the recipient's
-  option, any later version (`GPL-2.0-or-later`)
-- Use: Qt-free definition, ROM-table, scaling, Map Studio, and MAF-scaling core
-  packaged under `android/app/src/main/python/ecueditor/`
-
-The Android copy retains the upstream attribution and may include documented
-Android-specific compatibility changes. The combined application selects GNU
-GPL version 3 under the upstream "or later" permission; the complete GPLv3 text
-is shipped in `LICENSE`.
-
 ## Definition data
 
-The release bundles `BimmerStein MS41 Patch Definitions.xml`, generated from the
-project's patch descriptors for use with RomRaider or BimmerStein Tuning Suite.
-The ROM Analyzer can also import user-selected RomRaider-format MS41 definition
+The release bundles `BimmerStein MS41 Patch Definitions.xml` and
+`BimmerStein MS41 Logger Definitions.xml`, generated from the project's patch
+descriptors and verified logger mappings for use with BimmerStein Tuning Suite.
+The ROM Analyzer can also import user-selected MS41 XML definition
 files and stores a private registered copy under the user's local
 application-data folder. The application's GPLv3 license does not cover
 separately imported data.
@@ -213,6 +196,6 @@ separately imported data.
 ## Trademarks and independence
 
 BMW, FTDI, Inno Setup, libusb, Microsoft, Nuitka, Python, PyQt, PyUSB, Qt,
-PyInstaller, ReportLab, pySerial, OpenSSL, and RomRaider names belong to their
+PyInstaller, ReportLab, pySerial, and OpenSSL names belong to their
 respective owners. BimmerStein ECU Tool is independent software and is not
 affiliated with or endorsed by those projects or companies.
