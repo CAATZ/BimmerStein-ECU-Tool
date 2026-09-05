@@ -174,7 +174,9 @@ def main() -> int:
     ):
         if font_path.is_file():
             QFontDatabase.addApplicationFont(str(font_path))
-    app.setFont(QFont("Segoe UI", 10))
+    font = QFont("Segoe UI")
+    font.setPointSizeF(8.25)  # Match Qt's normal Windows application font.
+    app.setFont(font)
     gui.configure_application(app)
     window = gui.MS41FlashGUI()
     window.resize(1600, 940)

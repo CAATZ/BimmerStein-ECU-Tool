@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Release numbers use a `major.minor.patch` base and the compact `bN` beta suffix
 shared by BimmerStein applications.
 
+## [0.1.0b15] - 2026-09-04
+
+### Fixed
+
+- Preserved the system font size and improved scrolling on smaller or scaled displays.
+- Stopped Soft-BSL retries and reconnection when the ECU's return to normal operation
+  cannot be confirmed. Completed reads are preserved with their recovery error.
+- Made interrupted Bins catalogue saves recoverable after the storage problem is
+  resolved, while retaining the exact saved image and its original metadata.
+- Protected Bins metadata from imported filename collisions and reported archive
+  failures without incorrectly displaying a successful backup.
+- Corrected checksum-copy filenames for uppercase `.BIN` and extensionless inputs.
+- Rejected malformed saved definition settings, VIN input, and firmware-ID data.
+
+### Changed
+
+- Refreshed the Windows x64 documentation and recovery instructions for Beta 15.
+- Retained the published Beta 14 firmware patches and matching calibration XML:
+  Ignition Cut V7 and Launch Control V4/V5 remain unchanged.
+
 ## [0.1.0b14] - 2026-08-23
 
 ### Added
@@ -142,7 +162,7 @@ shared by BimmerStein applications.
 - Revved MS41.3 Launch Control to V5 and relocated its controls to the dedicated
   `0x47E0-0x47E7` calibration block, allowing Launch and boost control together.
   Released V4 remains detectable and remove-only for migration, and the bundled
-  RomRaider definitions now expose the V5 addresses.
+  calibration definitions now expose the V5 addresses.
 
 ## [0.1.0b9] - 2026-07-23
 
@@ -153,7 +173,7 @@ shared by BimmerStein applications.
 - Ported Ignition Cut V7 and Launch Control V4 to MS41.0 and MS41.1, with
   firmware-specific splice sites, collision checks, and offline verification gates.
 - Added the closed-throttle VANOS minimum-RPM retrofit to MS41.1 and expanded
-  the bundled RomRaider patch definitions for MS41.0 and MS41.1 partial and
+  the bundled calibration patch definitions for MS41.0 and MS41.1 partial and
   full-ROM images.
 
 ### Fixed
@@ -198,7 +218,7 @@ shared by BimmerStein applications.
 ### Added
 
 - Bundled the standalone BimmerStein MS41 patch definition in both Windows
-  packaging backends for RomRaider and BimmerStein Tuning Suite.
+  packaging backends for compatible calibration editors.
 - Added explicit slow-DS2 ECU recovery selection and complete cross-variant
   identity grafting for full-ROM conversion.
 
@@ -303,7 +323,7 @@ configuration, patching, and recovery workflows.
 - DTC read and clear with MS41-specific fault descriptions.
 - Live-data monitoring, fast telegram mode, and adaptation reset workflows.
 - Offline ROM Analyzer for variant, ECU ID, CAL ID, VIN, checksum state, and
-  user-supplied RomRaider calibration definitions.
+  user-supplied calibration XML definitions.
 - Backup cataloguing with automatic VIN and CAL-ID naming.
 - Collision-safe firmware patch composition with checksum recomputation and
   deprecated-patch detection/removal.

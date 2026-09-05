@@ -1,4 +1,4 @@
-<!-- RomRaider table fragment for MS41.2 Ignition Cut V7 plus Launch Control V4.
+<!-- XML table fragment for MS41.2 Ignition Cut V7 plus Launch Control V4.
      The source addresses match MS41.2 ID12 and launch_control_v4_ms412.
      build_patch_definitions.py remaps the Launch controls for MS41.0, MS41.1,
      and MS41.3; do not paste this unprocessed fragment into those variants.

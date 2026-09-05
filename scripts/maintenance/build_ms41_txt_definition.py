@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a source-complete ID41 RomRaider reference from the SAM2000 MS41.TXT listing."""
+"""Build a source-complete ID41 XML reference from the SAM2000 MS41.TXT listing."""
 
 from __future__ import annotations
 
@@ -1183,7 +1183,7 @@ def build_candidate(
                 record, purposes, adjudication, table_name=name,
                 category_name=selected_categories[record.storageaddress], storage_offset=offset,
             ))
-        # RomRaider's table-name pre-scan stops at the first omit entry.
+        # The table-name pre-scan stops at the first omit entry.
         fragment = provenance + "\n\n".join(tables) + "\n\n" + omit_xml + "\n"
         source = insert_into_rom(source, "41", internalidaddress, fragment)
     output_path.parent.mkdir(parents=True, exist_ok=True)

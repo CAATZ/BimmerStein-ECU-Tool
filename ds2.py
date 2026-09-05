@@ -709,7 +709,7 @@ class DS2Interface:
                 f"unexpected battery-voltage payload length {len(payload)}")
         return int.from_bytes(payload, "big") * 0.101
 
-    # VIN encoding: BMW MS4x stores the VIN as 13 bytes using 6-bit packing
+    # VIN encoding: BMW MS41 stores the VIN as 13 bytes using 6-bit packing
     # (4 VIN chars per 3 bytes, CHAR_MAP = digits + uppercase).
     # Source: mscoder project (github.com/sprytnyk/mscoder), confirmed against
     # live ECU reads without retaining any per-unit identity in this repository.

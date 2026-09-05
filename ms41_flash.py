@@ -11,6 +11,7 @@ for everything else.
 
 import sys
 import argparse
+from pathlib import Path
 
 
 def main():
@@ -93,9 +94,11 @@ def run_offline(args):
         with open(args.fix_file, "rb") as f:
             data = bytearray(f.read())
         if len(data) != MS41ECU.FULL_ROM_SIZE:
-            print("Checksum correction needs a full 256 KB ROM image."); sys.exit(1)
+            print("Checksum correction needs a full 256 KB ROM image.")
+            sys.exit(1)
         patched, details = correct_checksums(data)
-        out = args.output if args.output else args.fix_file.replace(".bin", "_cksum.bin")
+        source = Path(args.fix_file)
+        out = args.output or source.with_name(source.stem + "_cksum.bin")
         with open(out, "wb") as f:
             f.write(patched)
         print(f"✓ Checksums corrected → {out}")
@@ -112,7 +115,8 @@ def run_dump(args):
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="[%(levelname)s] %(message)s")
     if not args.port:
-        print("--dump needs --port (e.g. --port COM3)"); sys.exit(2)
+        print("--dump needs --port (e.g. --port COM3)")
+        sys.exit(2)
 
     def progress(done, total, label):
         print(f"\r  {label}: {done}/{total} B ({100 * done // total}%)", end="", flush=True)
@@ -156,7 +160,8 @@ def run_dump(args):
         print(f"\nSaved {len(data)} bytes -> {args.dump}")
         sys.exit(0)
     except Exception as e:
-        print(f"\nError: {e}"); sys.exit(1)
+        print(f"\nError: {e}")
+        sys.exit(1)
     finally:
         if ds2 is not None:
             try:

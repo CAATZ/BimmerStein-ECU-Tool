@@ -1,6 +1,7 @@
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import identity
+import pytest
 from ms41 import MS41ECU
 from tests.conftest import SYNTHETIC_IDENTITIES, ref
 
@@ -13,6 +14,19 @@ def test_vin_round_trip():
     img = bytearray(identity.FULL_ROM_SIZE)
     img[identity.VIN_OFF:identity.VIN_OFF + 13] = packed
     assert identity.decode_vin(bytes(img)) == vin
+
+
+def test_encode_vin_rejects_trailing_newline():
+    vin = SYNTHETIC_IDENTITIES["MS41.1"][1]
+    with pytest.raises(ValueError, match="invalid VIN"):
+        identity.encode_vin(vin + "\n")
+
+
+@pytest.mark.parametrize("size", [0, identity.VIN_OFF, identity.VIN_OFF + identity.VIN_LEN - 1])
+def test_set_vin_rejects_incomplete_field(size):
+    image = bytes(size)
+    with pytest.raises(ValueError, match="complete VIN field"):
+        identity.set_vin(image, SYNTHETIC_IDENTITIES["MS41.1"][1])
 
 
 def test_decode_vin_from_ref():

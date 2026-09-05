@@ -1,13 +1,13 @@
 """
-romraider_defs.py — Parser for RomRaider MS41 ECU definition files.
+romraider_defs.py — Parser for MS41 ECU definition XML files.
 
-Makes the ROM Analyzer data-driven (like RomRaider itself) instead of relying on
+Makes the ROM Analyzer data-driven instead of relying on
 a handful of hardcoded scalars.  It:
 
-  * parses a user-selected RomRaider-format MS41 ECU definition XML,
+  * parses a user-selected XML-format MS41 ECU definition XML,
   * resolves the rom inheritance chain (BMWMS41BASE -> ID12_BASE / child -> leaf),
   * matches a loaded .bin to the correct rom definition by
-    (internalidaddress + internalidstring + filesize) — this is how RomRaider
+    (internalidaddress + internalidstring + filesize) — this is how the definition format
     distinguishes a 256 KB FULL file (OBDII/readiness tables only) from a 24 KB
     PARTIAL "tune space" file (all the scalars/maps), for MS41.0/.1/.2 AND MS41.3,
   * exposes every table with its merged attributes, computing scalar values.

@@ -1,8 +1,8 @@
 """
 checksum.py — BMW MS41.0/.1/.2/.3 ROM checksum verification and correction.
 
-The full algorithm was reverse-engineered with the help of the Siemens_MS41_Checksum
-project and the pyms41 project, and VERIFIED byte-for-byte against real dumps:
+The full algorithm was reverse-engineered with the help of work by kimfreding and
+jpiccari, and VERIFIED byte-for-byte against real dumps:
 a stock MS41.1 323i plus three independent ID-60 (MS41.1) DME reads, two of them
 tuned.  All checksums match on every ID-60 image.
 

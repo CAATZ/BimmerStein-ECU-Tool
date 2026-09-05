@@ -3,10 +3,10 @@
 ;   BYTE-FOR-BYTE the AMD agent's; ONLY the two flash cores + the erase wrapper were swapped to the
 ;   Intel 28F command set (0x40 program / 0x20+0xD0 erase / 0x70 status / 0xFF read-array), and a
 ;   VPP=12V bracket (P2.6 + P3.6) was added around erase + program.
-;   For chip=28f200 (Intel A28F200BX-B).  Loads/runs at 0xD800.  Assemble with Ghidra AssembleC166.
+;   For chip=28f200 (Intel A28F200BX-B).  Loads/runs at 0xD800.  Assemble with the C166 assembler.
 ;   Boot-region writes remain brick-class and require the normal confirmation/recovery discipline.
 ; = agent_softbsl.asm (CALL/RET->calls/rets) + the v5 cores inlined.
-; Loads/runs at 0xD800. Assemble with Ghidra AssembleC166.
+; Loads/runs at 0xD800. Assemble with the C166 assembler.
 base 0d800h
 
 ; ============================================================================

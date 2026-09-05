@@ -1,9 +1,9 @@
 # BimmerStein ECU Tool Release Notes
 
-## 0.1.0 Beta 14
+## 0.1.0 Beta 15
 
-Beta 14 makes recovery, EEPROM work, diagnostics, coding, and full-file
-flashing easier and more predictable.
+Beta 15 improves display scaling, backup reliability, and recovery reporting
+while retaining the published Beta 14 firmware patches.
 
 **OFF-ROAD, COMPETITION, RESEARCH, AND BENCH USE ONLY.** Do not use this
 software to modify a vehicle operated on public roads. The user is responsible
@@ -11,21 +11,21 @@ for compliance with applicable emissions, safety, registration, and other laws.
 
 ### Highlights
 
-- A complete PC EEPROM workspace can read, review, write, seed, compare, and
-  restore 512-byte images with guided backups and verification.
-- **Restore Pre-Seed State** can recover the exact saved original after the
-  programmer is reconnected or the application is restarted.
-- ECU Info is clearer, and diagnostics cover more reviewed vehicle modules.
-- Guided coding and transmission-conversion workflows use plain-language
-  choices, backups, read-back checks, and recovery steps.
-- Soft-BSL and CalGuard can be reinstalled or updated from recognized older
-  versions when the ECU boot region is healthy. A damaged boot region still
-  requires recovery from a known-good backup.
-- Boot-preserving full-file writes no longer stop because the file and ECU use
-  different flash-chip families; that distinction matters only when the boot
-  region will actually be written.
-- Interrupted operations now provide clearer recovery instructions and retain
-  the prepared recovery path whenever it is still safe to continue.
+- Improved readability on scaled displays and smaller screens while preserving
+  the system font size and keeping controls accessible by scrolling.
+- Soft-BSL stops with a clear recovery error when the ECU's return to normal
+  operation cannot be confirmed. It does not report success or automatically
+  reconnect and retry in that state.
+- Completed reads are preserved in Bins when possible even if subsequent
+  recovery cannot be confirmed. The error shows the saved capture's location,
+  any storage problem, and the required next steps.
+- Interrupted Bins catalogue saves can be recovered after the storage problem
+  is resolved and the application is restarted. Saved images and their original
+  metadata are preserved, and failures identify the retained file.
+- Fixed filename collisions with Bins metadata and corrected checksum-copy
+  filenames for uppercase `.BIN` and extensionless files.
+- Invalid saved definition settings use the normal fallback. VIN and firmware-ID
+  validation now rejects malformed or incomplete data more consistently.
 
 ### Important warnings
 
@@ -36,7 +36,7 @@ for compliance with applicable emissions, safety, registration, and other laws.
 > change only settings you understand, and be prepared to restore the original
 > coding.
 
-Ignition Cut and Launch Control are unchanged from Beta 13: Ignition Cut V7;
+Ignition Cut and Launch Control are unchanged from Beta 14: Ignition Cut V7;
 Launch Control V4 on MS41.0, MS41.1, and MS41.2; and Launch Control V5 on
 MS41.3. They remain highly experimental and require controlled vehicle testing.
 AlphaN MAF-failsafe V3 also remains experimental and requires vehicle testing.
@@ -48,17 +48,16 @@ establish safe behavior on an engine.
 
 ### Validation
 
-- Automated offline checks cover EEPROM recovery, diagnostics, coding,
-  transmission conversion, file validation, Soft-BSL and CalGuard migration,
-  packaging, and interrupted-operation recovery.
-- Soft-BSL V11 and CalGuard V5 still require bench confirmation, including the
-  newly broadened reinstall and update path.
+- Automated offline checks cover the recovery, catalogue, filename, settings,
+  and validation fixes alongside the existing programming and diagnostic workflows.
+- Soft-BSL V11 and CalGuard V5 still require bench confirmation. The application
+  recovery fixes do not change their physical validation status.
 - The Coding tab has not completed vehicle testing and must be treated as
   highly experimental.
 
 ### Distribution
 
-Version `0.1.0b14` contains the Windows x64 PC application only. PyInstaller
+Version `0.1.0b15` contains the Windows x64 PC application only. PyInstaller
 and Nuitka builds are supplied as per-user installers and portable ZIPs. Each
 package includes the user manual, `BimmerStein MS41 Patch Definitions.xml`,
 placed beside the executable, plus release metadata, third-party notices and

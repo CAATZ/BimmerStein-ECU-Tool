@@ -45,7 +45,7 @@ def format_dtc_table(dtcs: list) -> str:
 
 # ---------------------------------------------------------------------------
 # DS2 single-byte DTC database (BMW MS41 / MS42 / MS43)
-# Primary source: openms41.sites.google.com DTC reference table (verified).
+# Verified MS41 diagnostic trouble-code reference table.
 # Code 46 is supplemented from hash-bound BMW MS411DS2.PRG FORTTEXTE.
 # Code = single byte integer (1–255), matches byte[0] of each 10-byte DS2 record
 # ---------------------------------------------------------------------------

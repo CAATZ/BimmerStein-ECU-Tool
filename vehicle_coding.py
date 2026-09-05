@@ -94,12 +94,6 @@ def _bcd(value: int) -> int:
     return high * 10 + low
 
 
-def _raw_bcd(value: int) -> int:
-    if not 0 <= value <= 99:
-        raise ValueError("coding index is outside two-digit BCD")
-    return (value // 10 << 4) | value % 10
-
-
 def _request(ds2, profile: ModuleCodingProfile, body: bytes, *, write: bool = False) -> bytes:
     if profile.transport == "gm3_selected":
         time.sleep(_REGEN_SECONDS)

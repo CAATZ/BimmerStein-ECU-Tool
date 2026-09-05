@@ -64,7 +64,7 @@ def _layout_ok(b):
     notes = []
     if len(b) < 0x6100:
         return False, ["image too small / not a 256 KB full read"]
-    if _ascii_digits(b, PARTNUM_OFF, 7) == "" or len(_ascii_digits(b, PARTNUM_OFF, 7)) != 7:
+    if len(_ascii_digits(b, PARTNUM_OFF, 7)) != 7:
         notes.append("no 7-digit part number at 0x6025")
     if bytes(b[MARK_1585_OFF:MARK_1585_OFF + 4]) != b"1585":
         notes.append("missing '1585' marker at 0x5CE0")
@@ -103,13 +103,13 @@ def decode_vin(data: bytes) -> "str | None":
                 return None
             chars.append(_VIN_CHARS[idx])
     vin = "".join(chars)[3:]
-    return vin if _VIN_RE.match(vin) else None
+    return vin if _VIN_RE.fullmatch(vin) else None
 
 
 def encode_vin(vin: str) -> bytes:
     """Pack a 17-char VIN into the 13-byte 6-bit field (inverse of decode_vin)."""
     vin = vin.upper()
-    if not _VIN_RE.match(vin):
+    if not _VIN_RE.fullmatch(vin):
         raise ValueError(f"invalid VIN: {vin!r}")
     padded = "000" + vin  # 3 pad chars -> 20 chars -> 5 groups of 4 -> 15 bytes
     out = bytearray()
@@ -124,6 +124,8 @@ def encode_vin(vin: str) -> bytes:
 def set_vin(data: bytes, vin: str) -> bytearray:
     """Return a copy of `data` with the VIN field replaced. Checksum-neutral:
     0x5D07 is in the un-checksummed gap 0x5C14-0x6100, so no recompute is needed."""
+    if len(data) < VIN_OFF + VIN_LEN:
+        raise ValueError("image must contain the complete VIN field")
     out = bytearray(data)
     out[VIN_OFF:VIN_OFF + VIN_LEN] = encode_vin(vin)
     return out

@@ -60,7 +60,7 @@ class BackupEntry:
 
 
 class BackupIndexError(RuntimeError):
-    """The catalogue index could not be read without risking metadata loss."""
+    """The catalogue could not be loaded or committed without metadata loss."""
 
 
 class BackupManager:
@@ -70,7 +70,9 @@ class BackupManager:
         os.makedirs(BACKUP_DIR, exist_ok=True)
         self._entries: List[BackupEntry] = []
         self._folders: List[str] = []
+        self._pending_records: dict[str, BackupEntry] = {}
         self._load()
+        self._recover_pending()
         self._load_folders()
 
     # ── Public API ─────────────────────────────────────────────────────────
@@ -144,6 +146,20 @@ class BackupManager:
 
         base = self._unique_name(filename)
         destination = self._entry_path(base)
+        entry = BackupEntry(
+            filename=base, file_type=file_type, variant=variant, cs_ok=cs_ok,
+            size=size, date=date, notes=notes, ecu_id=ecu_id, vin=vin,
+            cal_id=cal_id, source=source,
+            program_variant=program_variant, cal_variant=cal_variant, hybrid=hybrid,
+            sha256=hashlib.sha256(data).hexdigest(),
+            folder=folder,
+        )
+        # Persist provenance before publishing an image that may outlive its index save.
+        pending_dir = os.path.join(BACKUP_DIR, ".pending")
+        os.makedirs(pending_dir, exist_ok=True)
+        pending = os.path.join(pending_dir, f"{uuid.uuid4().hex}.json")
+        self._write_json(pending, asdict(entry))
+        self._pending_records[pending] = entry
         temporary = os.path.join(BACKUP_DIR, f".{uuid.uuid4().hex}.tmp")
         try:
             with open(temporary, "xb") as f:
@@ -157,20 +173,19 @@ class BackupManager:
             except FileNotFoundError:
                 pass
 
-        entry = BackupEntry(
-            filename=base, file_type=file_type, variant=variant, cs_ok=cs_ok,
-            size=size, date=date, notes=notes, ecu_id=ecu_id, vin=vin,
-            cal_id=cal_id, source=source,
-            program_variant=program_variant, cal_variant=cal_variant, hybrid=hybrid,
-            sha256=hashlib.sha256(data).hexdigest(),
-            folder=folder,
-        )
         self._entries.append(entry)
         if folder and not any(
                 candidate.casefold() == folder.casefold() for candidate in self._folders):
             self._folders.append(folder)
             self._folders.sort(key=str.casefold)
-        self._save()
+        try:
+            self._save()
+        except OSError as error:
+            raise BackupIndexError(
+                f"Backup image saved at {destination}, but its catalogue entry "
+                f"could not be committed. Recovery metadata is saved at {pending}. "
+                "Resolve the storage error and restart to retry catalogue recovery."
+            ) from error
         return entry
 
     @staticmethod
@@ -196,15 +211,20 @@ class BackupManager:
 
     def _unique_name(self, filename: str) -> str:
         base = os.path.basename(filename)
-        self._entry_path(base)
-        if not os.path.exists(self._entry_path(base)):
+        path = self._entry_path(base)
+        pending_names = {entry.filename.casefold() for entry in self._pending_records.values()}
+        if (os.path.normcase(path) != os.path.normcase(os.path.realpath(INDEX_FILE))
+                and base.casefold() != ".pending"
+                and base.casefold() not in pending_names
+                and not os.path.exists(path)):
             return base
         stem, ext = os.path.splitext(base)
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         suffix = 1
         while True:
             candidate = f"{stem}_{ts}_{suffix}{ext}"
-            if not os.path.exists(self._entry_path(candidate)):
+            if (candidate.casefold() not in pending_names
+                    and not os.path.exists(self._entry_path(candidate))):
                 return candidate
             suffix += 1
 
@@ -247,7 +267,8 @@ class BackupManager:
         entry = self.exact_entry(filename, sha256)
         replacement = str(replacement).strip()
         self._entry_path(replacement)
-        if (len(replacement.encode("utf-8")) > 255
+        if (replacement.casefold() == ".pending"
+                or len(replacement.encode("utf-8")) > 255
                 or replacement.endswith((".", " "))
                 or any(ord(character) < 32 or character in '<>:"/\\|?*'
                        for character in replacement)
@@ -260,7 +281,7 @@ class BackupManager:
         if replacement == entry.filename:
             return entry
         if any(candidate.filename.casefold() == replacement.casefold()
-               for candidate in self._entries):
+               for candidate in [*self._entries, *self._pending_records.values()]):
             raise ValueError("filename already exists")
         self.read_data(entry.filename, entry.sha256)
         source = self._entry_path(entry.filename)
@@ -367,6 +388,58 @@ class BackupManager:
 
     # ── Persistence ────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _write_json(destination, payload):
+        temporary = os.path.join(
+            os.path.dirname(destination), f".{uuid.uuid4().hex}.tmp")
+        try:
+            with open(temporary, "x", encoding="utf-8") as stream:
+                json.dump(payload, stream, indent=2, ensure_ascii=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, destination)
+        finally:
+            try:
+                os.remove(temporary)
+            except FileNotFoundError:
+                pass
+
+    def _recover_pending(self):
+        pending_dir = os.path.join(BACKUP_DIR, ".pending")
+        if not os.path.exists(pending_dir):
+            return
+        try:
+            for name in sorted(os.listdir(pending_dir)):
+                if not name.endswith(".json"):
+                    continue
+                pending = os.path.join(pending_dir, name)
+                with open(pending, "r", encoding="utf-8") as stream:
+                    entry = BackupEntry(**json.load(stream))
+                path = self._entry_path(entry.filename)
+                if (os.path.normcase(path) == os.path.normcase(os.path.realpath(INDEX_FILE))
+                        or entry.filename.casefold() == ".pending"):
+                    raise ValueError("pending backup filename is reserved")
+                if os.path.exists(path):
+                    with open(path, "rb") as stream:
+                        data = stream.read()
+                    if len(data) != entry.size or hashlib.sha256(data).hexdigest() != entry.sha256:
+                        raise ValueError(f"pending backup failed its content check: {path}")
+                    indexed = [e for e in self._entries if e.filename == entry.filename]
+                    if indexed:
+                        if len(indexed) != 1 or indexed[0].sha256 != entry.sha256:
+                            raise ValueError(f"pending backup conflicts with the index: {path}")
+                    else:
+                        self._entries.append(entry)
+                self._pending_records[pending] = entry
+            if self._pending_records:
+                self._save()
+        except (OSError, TypeError, ValueError) as error:
+            raise BackupIndexError(
+                f"Backup catalogue recovery could not finish: {error}. "
+                f"Images remain at {os.path.abspath(BACKUP_DIR)} and recovery metadata "
+                f"at {pending_dir}. Resolve the storage or metadata error and restart to retry."
+            ) from error
+
     def _load(self):
         if not os.path.exists(INDEX_FILE):
             return
@@ -429,18 +502,15 @@ class BackupManager:
         self._folders.sort(key=str.casefold)
 
     def _save(self):
-        temporary = os.path.join(BACKUP_DIR, f".index-{uuid.uuid4().hex}.tmp")
-        try:
-            with open(temporary, "x", encoding="utf-8") as f:
-                json.dump([asdict(e) for e in self._entries], f, indent=2, ensure_ascii=False)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(temporary, INDEX_FILE)
-        finally:
+        self._write_json(INDEX_FILE, [asdict(e) for e in self._entries])
+        for pending in list(self._pending_records):
             try:
-                os.remove(temporary)
+                os.remove(pending)
             except FileNotFoundError:
                 pass
+            except OSError:
+                continue  # The committed index is authoritative on the next replay.
+            del self._pending_records[pending]
 
     def _save_folders(self):
         destination = _folder_index_file()

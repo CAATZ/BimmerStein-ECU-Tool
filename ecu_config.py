@@ -2,7 +2,7 @@
 ecu_config.py — BMW MS41 "Control Bits" configuration (enable/disable features).
 
 The MS41 calibration has a set of control bytes (Byte 4..Byte 8) whose individual
-bits enable/disable engine features.  Bit meanings are from the RomRaider MS41
+bits enable/disable engine features.  Bit meanings are from the MS41 XML
 "Control Bits" thread (mrf582's reference post) and cross-checked against real
 dumps.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """preprocess_asm.py <in.asm> <out.asm> — make a hand-written C166 .asm ready for
-Ghidra AssembleC166.java. Transforms (discovered via headless --probe):
+the C166 assembler. Transforms (discovered via headless --probe):
   * trailing-h hex (0E000h, 09Ch)        -> 0x notation (0xE000, 0x9C)
   * EQU defs (BUF EQU 0E000h)            -> inlined + the def line dropped
   * uppercase mnemonics (MOV/CMPB/JMPR)  -> lowercase (operands/regs/cc untouched)

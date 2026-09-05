@@ -2,7 +2,7 @@
 
 **BMW MS41 Programming, Diagnostics, and Recovery**
 
-Windows x64
+Version 0.1.0 Beta 15 · Windows x64 · 2026-09-04
 
 BimmerStein ECU Tool combines normal DS2 diagnostics, stock-ECU high-speed DS2 transfers,
 Soft-BSL programming, hardware bootstrap recovery, offline ROM utilities, and firmware patch
@@ -110,7 +110,7 @@ The portable application creates mutable data beside the executable:
 - `logs/` for session logs and diagnostic detail.
 
 Every package includes `BimmerStein MS41 Patch Definitions.xml` beside the executable for use with
-RomRaider or BimmerStein Tuning Suite. The ROM Analyzer stores user-imported definitions under
+a compatible calibration editor. The ROM Analyzer stores user-imported definitions under
 `%LOCALAPPDATA%\BimmerStein ECU Tool\definitions\`. This keeps the selected definition available
 when the portable application folder is replaced during an update.
 
@@ -126,6 +126,9 @@ and operation history.
 The connection bar remains visible above all tabs. It contains the normal DS2 COM selection,
 Connect button, direct-tap choice, connection state, ECU variant, and transfer-mode information.
 The shared log and progress controls remain visible below it.
+
+The interface preserves the system font size. On smaller or scaled displays, scroll the main
+workspace to reach controls without compressing the application layout.
 
 ### Normal K-Line versus direct tap
 
@@ -162,8 +165,6 @@ The shared log and progress controls remain visible below it.
 
 ![Flash tab controls and transfer status](images/flash-workflow.png)
 
-The Flash tab is the normal starting point for ECU reads and writes.
-
 ### Choose the operation
 
 - **Read Full** saves a single-pass 256 KB full ROM.
@@ -173,10 +174,8 @@ The Flash tab is the normal starting point for ECU reads and writes.
 
 ### Automatic transfer selection
 
-The application selects one of these routes:
-
 1. **Soft-BSL** when the persistent loader is detected. It starts at the highest supported tier and
-   retries lower Soft-BSL tiers only before erase.
+   retries lower Soft-BSL tiers only before erase and after recovery is confirmed.
 2. **Native-fast DS2** on a compatible stock ECU through D2XX. A failed pre-erase high-rate check can
    restart the complete operation over normal DS2 only after the normal ECU state is confirmed.
 3. **Normal DS2 at 9600** when neither accelerated route is available.
@@ -186,9 +185,9 @@ active session for recovery instead of changing transports.
 
 ### Write options
 
-- **Correct checksums** is enabled by default. MS41.3 boot and calibration checksums
-  are corrected; its program checksum remains unchanged because stock program verification is
-  disabled.
+- **Correct checksums** is enabled by default. Full images receive boot, program, and
+  calibration checksum correction on all supported MS41 variants. This does not change the
+  image's separate program-check enable setting. A 24 KB tune contains calibration only.
 - **Back up before write** is optional and follows the operator's selection.
 - **Verify after write** controls host-side byte-for-byte read-back verification.
 - ECU-side flash finalization is independent of the optional host Verify checkbox.
@@ -200,8 +199,21 @@ active session for recovery instead of changing transports.
 
 ### Failure before erase
 
-Before erase, Soft-BSL can retry the operation at a lower Soft-BSL baud tier. Native-fast DS2 can
+Before erase, Soft-BSL can retry at a lower tier only after recovery is confirmed. Native-fast DS2 can
 restart through normal DS2 at 9600 only after the normal low-rate ECU state has been confirmed.
+
+### Recovery cannot be confirmed
+
+If Soft-BSL cannot confirm the return to normal ECU operation, it reports a recovery error and
+leaves the application disconnected. It does not report a successful operation or retry at
+another rate. Follow the displayed instruction to turn ignition OFF, wait at least 10 seconds,
+then turn ignition ON and reconnect. Confirm normal communication before retrying.
+
+If the read completed, the application saves its bytes in Bins when possible and includes the
+capture location in the error. An identity-window or erase-sector capture remains a raw partial
+image; it is not treated as a full ROM. If archiving also failed, the original recovery error and
+the storage error remain visible. This differs from an active post-erase recovery session below,
+which must remain powered and open.
 
 ### Failure after erase
 
@@ -411,7 +423,7 @@ state, and matching definition information. No ECU connection is required.
 
 To enable parameter matching:
 
-1. Select **Load Definition...** and choose a RomRaider-format MS41 XML definition.
+1. Select **Load Definition...** and choose a compatible MS41 calibration XML definition.
 2. The tool validates the XML and copies it into the per-user definition registry.
 3. Use the **Definition** list to switch between registered definitions. The selection persists
    across application restarts.
@@ -445,6 +457,11 @@ Bins catalogs files created by reads, backups, and patch composition. Entries in
 variant, type, VIN/CAL metadata, notes, and source. Use descriptive notes and preserve a known-good
 original separately from edited or patched images. Newly cataloged files also record a SHA-256
 identity so an externally replaced or modified file can be identified later.
+
+If the image is saved but its catalogue entry cannot be committed, the error reports the saved
+file and recovery metadata locations. Correct the storage problem and restart the application;
+the catalogue entry is restored only when the retained image matches its recorded size and hash.
+Keep both the image and recovery metadata intact. Conflicting or changed records remain blocked.
 
 Select exactly two entries and choose **Compare** for a read-only report of their SHA-256 identity,
 program/calibration variants, checksum state, installed patches, changed-byte count, and changed
@@ -486,7 +503,7 @@ Launch Control V4 fuel mode held its configured 4000 RPM setpoint during
 vehicle testing before the MS41.3 calibration relocation. V5 keeps that native
 fuel-limiter path, but its relocated MS41.3 controls still require vehicle
 retesting. Historical variant-specific releases remain visible only when
-installed so they can be removed before the current Beta 13 revision is applied.
+installed so they can be removed before the current published revision is applied.
 Applying one requires an explicit confirmation. Do not treat offline validation as proof of safe
 behavior on an engine.
 
@@ -500,7 +517,7 @@ behavior on an engine.
 ### Bundled patch definition
 
 The release includes `BimmerStein MS41 Patch Definitions.xml` beside the executable. Load it into
-RomRaider or BimmerStein Tuning Suite to configure calibration items added by the matching patches.
+a compatible calibration editor to configure calibration items added by the matching patches.
 Install the firmware patch first and verify the ECU variant, calibration ID, and patch revision. A
 mismatched definition can expose incorrect tables or write to the wrong calibration addresses.
 Ignition Cut provides switch and RPM controls. Launch Control adds its mode,
@@ -657,7 +674,7 @@ VPP control remains disabled until the Intel chip family is selected.
 
 ### The fast-path stability check fails
 
-If a Soft-BSL tier fails before erase, the application can retry a lower Soft-BSL tier. If a
+If a Soft-BSL tier fails before erase and recovery is confirmed, the application can retry a lower tier. If a
 native-fast DS2 check fails before erase and normal ECU state is confirmed, it can restart the
 complete operation over normal DS2. Check adapter latency, wiring, ground, ECU voltage, and signal
 integrity before retrying.
@@ -670,7 +687,7 @@ integrity before retrying.
 
 ### The ROM Analyzer cannot load definitions
 
-Use **Load Definition...** to select a valid RomRaider-format MS41 XML file. Do not copy XML files
+Use **Load Definition...** to select a compatible MS41 calibration XML file. Do not copy XML files
 into `_internal` or any other packaged runtime directory. If a registered definition was changed or
 damaged outside the application, delete it and import a known-good copy again. Confirm the BIN size
 and exact ECU software identity before relying on matched values.
@@ -740,13 +757,13 @@ compliant with applicable emissions, safety, registration, competition, and othe
 off-road designation does not establish that a particular modification is lawful.
 
 BimmerStein ECU Tool is independent software and is not affiliated with or endorsed by BMW AG,
-FTDI, or RomRaider. Nothing in this disclaimer limits the rights granted under the GNU General
+or FTDI. Nothing in this disclaimer limits the rights granted under the GNU General
 Public License version 3.
 
 ## Project and license
 
 BimmerStein ECU Tool is independent software for compatible BMW MS41 workflows. It is not
-affiliated with or endorsed by BMW AG, FTDI, or RomRaider.
+affiliated with or endorsed by BMW AG or FTDI.
 
 The software is intended solely for off-road, competition, research, and bench use. It is not
 designed or certified for modifying a vehicle operated on public roads.

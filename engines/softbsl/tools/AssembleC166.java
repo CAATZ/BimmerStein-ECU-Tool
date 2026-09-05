@@ -1,4 +1,4 @@
-// AssembleC166.java - Ghidra headless postScript (Java; Jython is gone in GH12)
+// AssembleC166.java - headless C166 assembly post-script.
 // Assemble a small C166 .asm (with labels) to raw bytes via the loaded c166
 // Sleigh assembler. Two passes: resolve label addresses, then emit encodings.
 //
@@ -155,7 +155,7 @@ public class AssembleC166 extends GhidraScript {
         {"P2", "0xFFC0"}, {"DP2", "0xFFC2"}, {"P3", "0xFFC4"}, {"DP3", "0xFFC6"},
     };
 
-    // disassemble hex bytes at an address; print Ghidra's canonical instruction text
+    // Disassemble hex bytes at an address and print canonical instruction text.
     private void doDisasm(AddressSpace space, String hex, long base) throws Exception {
         byte[] bytes = new byte[hex.length() / 2];
         for (int i = 0; i < bytes.length; i++)
