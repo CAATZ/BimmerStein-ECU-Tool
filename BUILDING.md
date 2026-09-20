@@ -1,6 +1,6 @@
 # Building BimmerStein ECU Tool
 
-Beta 15 is a Windows x64 desktop release only. It is built with both PyInstaller
+Beta 16 is a Windows x64 desktop release only. It is built with both PyInstaller
 and Nuitka and distributed as portable ZIPs and per-user installers.
 All commands below run from the repository root in PowerShell.
 
@@ -59,7 +59,7 @@ Render and visually inspect every PDF page before publishing a release.
 ## 4. Build the portable package
 
 ```powershell
-.\build_windows.ps1 -Version 0.1.0b15
+.\build_windows.ps1 -Version 0.1.0b16
 ```
 
 The script regenerates metadata-clean icons, rebuilds the manual, runs the
@@ -77,7 +77,7 @@ adjacent `_internal` directory.
 To compile the Nuitka portable package:
 
 ```powershell
-.\build_windows_nuitka.ps1 -Version 0.1.0b15
+.\build_windows_nuitka.ps1 -Version 0.1.0b16
 ```
 
 Its output is `dist\BimmerStein ECU Tool Nuitka\`. It is a flat Nuitka
@@ -113,15 +113,21 @@ Publication still requires the release owner's final package review.
 
 ## 6. Prepare the versioned release artifacts
 
-After the release owner has selected a version, create the final ZIP with the
-GPLv3 licensing gate selected for the public beta:
+Prepare Beta 16 from a clean, reviewed public source checkout. Keep private
+projects, reference images, engineering archives, and user data outside that
+checkout. Verify that `git status --porcelain` is empty before the build and
+review any generated changes afterward. Final release metadata must identify
+the intended source commit and record `source_dirty: false`.
+
+Create the release artifacts with the GPLv3 licensing gate selected:
 
 Beta versions use the same compact `bN` suffix as BimmerStein Tuning Suite.
-The current beta is `0.1.0b15`, with Git tag `v0.1.0b15`.
+The release candidate is `0.1.0b16`; its intended release tag is `v0.1.0b16`.
+Preparing the artifacts does not create that tag or publish a release.
 
 ```powershell
 .\packaging\prepare_release.ps1 `
-    -Version 0.1.0b15 `
+    -Version 0.1.0b16 `
     -PyQtLicenseBasis GPLv3 `
     -IncludeNuitka `
     -IsccPath "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
@@ -136,8 +142,8 @@ individual checksum files, and one complete `SHA256SUMS.txt` under `release\`.
 Before building, it runs the same mandatory owner-only exact-byte execution
 admission using the release owner's private local configuration.
 
-The PyInstaller and Nuitka installers retain distinct internal identities and
-installation directories. Both use the BimmerStein icon and the same
+The installers use one product identity and installation directory. Choose one
+edition for each installation. All use the BimmerStein icon and the same
 user-facing application and shortcut name, install under the current user's
 local application-data folder without requiring administrator access, create a
 Start Menu shortcut, and offer an optional desktop shortcut. Nuitka artifacts

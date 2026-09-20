@@ -255,10 +255,17 @@ def scan_cave_intraseg(patch):
 
 
 def is_applied(data, patch):
-    """True if every edit's post-patch bytes are already present in `data` (patch installed)."""
+    """Match installed bytes, allowing either valid bank ID for a Soft-BSL loader."""
     for e in patch["edits"]:
         off = e["off"]; dat = bytes.fromhex(e["data"])
-        if bytes(data[off:off + len(dat)]) != dat:
+        actual = bytes(data[off:off + len(dat)])
+        # Bank identity is metadata, not a loader revision. Check all four bytes;
+        # missing/corrupt markers and every executable edit still fail closed.
+        if (patch.get("id", "").startswith("softbsl_loader") and off == 0x5FFC
+                and dat in (b"\xa5\x5a\x42\xbd", b"\xa5\x5a\x54\xab")
+                and actual in (b"\xa5\x5a\x42\xbd", b"\xa5\x5a\x54\xab")):
+            continue
+        if actual != dat:
             return False
     return True
 

@@ -727,6 +727,7 @@ def test_crossbank_top_verify_uses_1k_crc_reads_for_every_non_ff_byte(monkeypatc
     guard_count = 0
     verify_reads = []
     progress = []
+    prompts = []
     def read_back(cpu, size):
         nonlocal guard_count
         if cpu == 0x1FFC and size == 4:
@@ -738,7 +739,7 @@ def test_crossbank_top_verify_uses_1k_crc_reads_for_every_non_ff_byte(monkeypatc
     monkeypatch.setattr(sb, "crc_read", read_back)
 
     sb.flash_cross_bank(
-        bytes(image), baud="low", do_verify=True, prompt=lambda _msg: None,
+        bytes(image), baud="low", do_verify=True, prompt=prompts.append,
         progress_cb=lambda done, total, phase: progress.append((done, total, phase)),
     )
 
@@ -747,7 +748,11 @@ def test_crossbank_top_verify_uses_1k_crc_reads_for_every_non_ff_byte(monkeypatc
     assert all(size == sh.CHUNK_SIZE for _cpu, size in verify_reads)
     assert sum(size for _cpu, size in verify_reads) == sh.IMAGE_SIZE - 0x4000
     assert progress[0][2] == "erase"
-    assert progress[-1] == (sh.IMAGE_SIZE, sh.IMAGE_SIZE, "verify")
+    assert progress[-2] == (sh.IMAGE_SIZE, sh.IMAGE_SIZE, "verify")
+    assert progress[-1] == (0, 0, "reset")
+    assert "UPPER" in prompts[0] and "LOWER" in prompts[1]
+    assert all(">>>" not in text and "**" not in text and "press Enter" not in text
+               for text in prompts)
 
 
 def test_write_tune_partial_skips_all_ff_chunks(monkeypatch):

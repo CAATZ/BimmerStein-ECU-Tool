@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <strong><a href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b15">Download Beta 15</a></strong>
+  <strong><a href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b16">Download Beta 16</a></strong>
   &nbsp;&middot;&nbsp;
   <a href="manual/USER_MANUAL.md">User Manual</a>
   &nbsp;&middot;&nbsp;
@@ -48,15 +48,17 @@ BimmerStein ECU Tool brings BMW MS41 flashing, diagnostics, configuration, patch
 - Install and use Soft-BSL for supported high-speed operations.
 - Recover an unbootable ECU through the separate hardware-BSL workflow.
 
-Beta 15 is a **Windows x64 desktop release only**. PyInstaller and Nuitka builds are distributed as
+Beta 16 is a **Windows x64 desktop release only**. PyInstaller and Nuitka builds are distributed as
 per-user installers and complete portable packages. The PyInstaller executable must remain beside
 its `_internal` directory; the Nuitka build uses a flat application folder. The required Visual C++
 runtime is included in every Windows package, so no separate runtime installation is required.
 
-Beta 15 improves display scaling, preserves completed reads when recovery cannot be confirmed,
-and makes interrupted Bins catalogue saves recoverable after the storage problem is resolved.
-It also corrects checksum-output filenames and tightens saved-settings and identity validation.
-The published firmware patch set remains unchanged from Beta 14.
+Beta 16 adds an EEPROM editor, folders and file organization in Bins, searchable logs,
+and live and recorded data views with selectable channels. The main window is resizable,
+and separate Windows 7 SP1 x64 portable and installer downloads are available.
+Tested 29F400BB dual-bank support writes both halves and manages each bank's patches
+and Soft-BSL. The Windows 7 package is also tested and working.
+The firmware patch versions and bytes remain unchanged from Beta 15. See [release notes](RELEASE_NOTES.md).
 
 ## Safety
 
@@ -189,12 +191,14 @@ metadata. Conflicting or modified recovery records remain blocked instead of bei
 
 ## Firmware patches
 
+AlphaN MAF-failsafe V3, Soft-BSL V11, and CalGuard V5 are tested.
+
 The Patches tab detects installed and deprecated revisions, validates dependencies and byte
 collisions, corrects checksums, and archives the composed image in Bins.
 
 > [!WARNING]
-> **HIGHLY EXPERIMENTAL — ON-CAR TESTING REQUIRED.** Ignition Cut V7, Launch Control V4/V5,
-> and AlphaN MAF-failsafe V3 have not completed on-car validation.
+> **HIGHLY EXPERIMENTAL — ON-CAR TESTING REQUIRED.** Ignition Cut V7 and Launch Control V4/V5
+> have not completed on-car validation.
 > Unexpected engine behavior, stalling, failure to limit RPM, or other unintended results are
 > possible. Test only in controlled off-road or bench
 > conditions, begin conservatively, monitor the engine closely, and keep a verified stock image and
@@ -247,7 +251,7 @@ native-fast journal. Raw ROMs are excluded. Session logs require an explicit pri
 The illustrated manual covers normal flashing, recovery behavior, Soft-BSL, hardware BSL,
 diagnostics, offline tools, patches, and final checklists:
 
-- [Download BimmerStein ECU Tool 0.1.0 Beta 15](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b15)
+- [Download BimmerStein ECU Tool 0.1.0 Beta 16](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b16)
 - [Illustrated PDF manual](output/pdf/BimmerStein-ECU-Tool-User-Manual.pdf)
 - [User manual (web-readable Markdown)](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/manual/USER_MANUAL.md)
 - [Build and release instructions](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/BUILDING.md)
@@ -280,7 +284,7 @@ The FTDI D2XX driver supplies `ftd2xx.dll`; no separate Python D2XX package is r
 .venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .venv\Scripts\python.exe -m pytest -q
 .venv\Scripts\python.exe -m engines.softbsl.verify_agent_artifacts
-.\build_windows.ps1 -Version 0.1.0b15
+.\build_windows.ps1 -Version 0.1.0b16
 ```
 
 The verified one-folder package is written to `dist\BimmerStein ECU Tool\`.

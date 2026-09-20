@@ -152,7 +152,7 @@ def decode_flash_chip(sig: bytes) -> str:
     guesses: an unrecognized signature (or no response) reports itself as
     unknown, including the raw bytes so a human can investigate."""
     if sig == _DRV_SIG_AMD:
-        return "AMD driver — 29F200 / 29F400 (bottom half)"
+        return "AMD driver — 29F200 / 29F400"
     if sig == _DRV_SIG_INTEL:
         return "Intel driver — 28F200"
     shown = sig.hex() if sig else "no response"
@@ -168,6 +168,16 @@ def chip_family(sig: bytes) -> str:
     if sig == _DRV_SIG_INTEL:
         return "intel"
     return None
+
+
+def bank_identification(marker, signature):
+    """Describe firmware bank evidence without claiming to read the A17 switch."""
+    family = chip_family(signature)
+    if family == "intel":
+        return "Flash bank: single bank (28F200)"
+    if family == "amd" and marker in ("B", "T"):
+        return "Detected bank: " + ("BOTTOM" if marker == "B" else "TOP")
+    return "Detected bank: unknown"
 
 
 def image_chip_family(image: bytes) -> str:

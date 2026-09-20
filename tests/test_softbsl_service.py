@@ -9,6 +9,19 @@ from engines.softbsl import softbsl_host
 BLANK = b"\xFF" * 262144
 
 
+def test_top_boot_sector_compares_all_mapped_bytes_not_just_boot_patches():
+    image = bytearray(BLANK)
+    for offset in (0, 0x3FFF, 0x4000, 0x5FFF, 0x6050, 0x7FFF, 0xC000, 0xFFFF):
+        image[offset] = 0
+        assert not softbsl_service.top_boot_sector_matches(image, BLANK)
+        image[offset] = 0xFF
+    for offset in (0x8000, 0xBFFF, 0x10000, 0x20000):
+        image[offset] = 0
+    assert softbsl_service.top_boot_sector_matches(image, BLANK)
+    assert not softbsl_service.top_boot_sector_matches(image, None)
+    assert not softbsl_service.top_boot_sector_matches(image, BLANK[:0xFFFF])
+
+
 def _valid_image():
     image = bytearray(BLANK)
     image[0x6025:0x602C] = b"1406464"

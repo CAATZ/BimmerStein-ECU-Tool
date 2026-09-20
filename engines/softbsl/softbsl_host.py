@@ -1503,9 +1503,9 @@ class SoftBSL:
         # marker @0x1FFC; when the two banks share a marker but differ elsewhere (e.g. one has the door_magic
         # splice, the other is stock), point it at that differing byte for a REAL flip-proof instead.
         pre = self.crc_read(guard_addr, 4)                       # guard byte at the BOTTOM view
-        prompt("\n  >>> FLIP THE A17 COCKPIT SWITCH TO **UPPER** NOW, then press Enter."
-               "\n      (agent is in RAM = safe; the tool will NOT re-identify, so its cached 'bottom' "
-               "policy keeps writes allowed.) ")
+        prompt("Move the bank switch to UPPER\n\n"
+               "Select the TOP backup bank now. Keep ignition ON.\n"
+               "Continue when the switch is in position. The app will check the bank change before writing.")
         post = self.crc_read(guard_addr, 4)                      # view AFTER the (claimed) flip
         if post == pre:
             if not skip_marker_guard:
@@ -1597,7 +1597,11 @@ class SoftBSL:
             if progress_cb:
                 progress_cb(IMAGE_SIZE, IMAGE_SIZE, "verify")
             self.log("verify OK -- golden top written.")
-        prompt("\n  >>> FLIP THE A17 COCKPIT SWITCH BACK TO **LOWER** NOW, then press Enter. ")
+        prompt("Return the bank switch to LOWER\n\n"
+               "Select the BOTTOM working bank. Keep ignition ON.\n"
+               "Continue when the switch is in position so the ECU can restart.")
+        if progress_cb:
+            progress_cb(0, 0, "reset")
         self.reset()
         self.log("cross-bank top write complete; golden top established (marker 'T'). ECU reboots.")
 

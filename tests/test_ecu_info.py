@@ -6,7 +6,20 @@ import ecu_info as ei
 
 def test_decode_flash_chip_amd():
     sig = bytes.fromhex("e00e0d58f04ec084")
-    assert ei.decode_flash_chip(sig) == "AMD driver — 29F200 / 29F400 (bottom half)"
+    assert ei.decode_flash_chip(sig) == "AMD driver — 29F200 / 29F400"
+
+
+def test_bank_identification_requires_marker_and_driver_evidence():
+    amd = bytes.fromhex("e00e0d58f04ec084")
+    intel = bytes.fromhex("e6f45000b84c6fe0")
+    for raw, bank in ((b"\xa5\x5a\x42\xbd", "BOTTOM"),
+                      (b"\xa5\x5a\x54\xab", "TOP")):
+        marker = ei.decode_bank_marker(raw)
+        assert ei.bank_identification(marker, amd) == f"Detected bank: {bank}"
+        assert "single bank" in ei.bank_identification(marker, intel)
+        assert "unknown" in ei.bank_identification(marker, b"")
+    for raw in (b"", b"\xa5\x5a\x54\x00"):
+        assert "unknown" in ei.bank_identification(ei.decode_bank_marker(raw), amd)
 
 
 def test_decode_flash_chip_intel():
@@ -116,7 +129,7 @@ def test_format_new_fields_assembles_named_identity_fields():
         "BMW Program Part Number": "1437806",
         "DME Production Serial": "012345678",
         "EWS2 ISN": "5678",
-        "Flash Command-Set Driver": "AMD driver — 29F200 / 29F400 (bottom half)",
+        "Flash Command-Set Driver": "AMD driver — 29F200 / 29F400",
         "Transmission Mode": "Manual",
     }
 

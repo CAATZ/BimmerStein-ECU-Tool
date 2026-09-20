@@ -1,66 +1,66 @@
 # BimmerStein ECU Tool Release Notes
 
-## 0.1.0 Beta 15
+## 0.1.0 Beta 16
 
-Beta 15 improves display scaling, backup reliability, and recovery reporting
-while retaining the published Beta 14 firmware patches.
+Beta 16 makes everyday work easier: organize your saved files, edit EEPROM settings
+with clearer controls, and explore live data and recorded logs. A separate Windows 7
+download brings the same desktop features to older computers. Dual-bank 29F400BB
+support lets you work with both halves of the flash chip.
 
-**OFF-ROAD, COMPETITION, RESEARCH, AND BENCH USE ONLY.** Do not use this
-software to modify a vehicle operated on public roads. The user is responsible
-for compliance with applicable emissions, safety, registration, and other laws.
+### What's new
 
-### Highlights
+- **Tested 29F400BB dual-bank support:** write both halves of the flash chip and
+  manage each bank's patches and Soft-BSL.
+- **EEPROM editor:** find settings by name or category, edit supported values, undo
+  and redo changes, and review everything before saving or writing. Compare images
+  from the same ECU family and repair supported record checks when needed.
+- **A more useful Bins library:** create folders, rename and move files, and open an
+  editable copy in BimmerStein Tuning Suite. Frequently used actions are easier to reach.
+- **Live data your way:** choose channels and view graphs, gauges, or digital values.
+  Select a logger definition and recording rate, and save a CSV while watching the data.
+- **Better log browsing:** search, preview, copy, and export logs and recovery records.
+  Open saved CSV recordings to compare channels, zoom in, and inspect values with a cursor.
+- **Windows 7 downloads:** a portable package and installer for Windows 7 SP1 x64,
+  with the simple BimmerStein ECU Tool name in the installation folder and shortcuts.
 
-- Improved readability on scaled displays and smaller screens while preserving
-  the system font size and keeping controls accessible by scrolling.
-- Soft-BSL stops with a clear recovery error when the ECU's return to normal
-  operation cannot be confirmed. It does not report success or automatically
-  reconnect and retry in that state.
-- Completed reads are preserved in Bins when possible even if subsequent
-  recovery cannot be confirmed. The error shows the saved capture's location,
-  any storage problem, and the required next steps.
-- Interrupted Bins catalogue saves can be recovered after the storage problem
-  is resolved and the application is restarted. Saved images and their original
-  metadata are preserved, and failures identify the retained file.
-- Fixed filename collisions with Bins metadata and corrected checksum-copy
-  filenames for uppercase `.BIN` and extensionless files.
-- Invalid saved definition settings use the normal fallback. VIN and firmware-ID
-  validation now rejects malformed or incomplete data more consistently.
+### Improvements and fixes
 
-### Important warnings
+- The main window now starts at a more compact size and can be resized. Scrolling
+  keeps controls within reach on smaller screens.
+- Diagnostics show clearer stored and shadow fault details, including available
+  freeze-frame information. Clearing faults refreshes the list and reports any errors.
+- Adaptation values can be refreshed without reopening the page.
+- Improved handling of TOP and BOTTOM flash banks when reading, detecting installed
+  Soft-BSL, and checking whether a boot-region write is needed.
+- Bins folder operations preserve file information and handle naming conflicts more reliably.
 
-> **HIGHLY EXPERIMENTAL — NOT VEHICLE TESTED.** The Coding tab can change
-> configuration in multiple vehicle modules. Built-in profiles and read-back
-> checks reduce mistakes, but they do not prove a change is safe for a
-> particular vehicle. Back up first, use stable power, keep the engine off,
-> change only settings you understand, and be prepared to restore the original
-> coding.
+### Firmware patches
 
-Ignition Cut and Launch Control are unchanged from Beta 14: Ignition Cut V7;
-Launch Control V4 on MS41.0, MS41.1, and MS41.2; and Launch Control V5 on
-MS41.3. They remain highly experimental and require controlled vehicle testing.
-AlphaN MAF-failsafe V3 also remains experimental and requires vehicle testing.
+The firmware patches are unchanged from Beta 15: **Ignition Cut V7**, **Launch
+Control V4** for MS41.0/MS41.1/MS41.2, and **Launch Control V5** for MS41.3.
+Installing this application does not change the firmware in your ECU.
 
-**IGNITION CUT HAZARD:** Ignition Cut may suppress spark while injection
-continues. Unburned fuel can damage catalytic converters and exhaust components;
-never use it on a car with catalytic converters. Offline validation does not
-establish safe behavior on an engine.
+**AlphaN MAF-failsafe V3, Soft-BSL V11, and CalGuard V5 are tested.**
+Ignition Cut V7 and Launch Control V4/V5 remain experimental and require vehicle
+testing. Vehicle module coding remains highly experimental and has not completed
+vehicle testing.
 
-### Validation
+**IGNITION CUT HAZARD:** Ignition Cut may suppress spark while injection continues.
+Unburned fuel can damage catalytic converters and exhaust components; never use it
+on a car with catalytic converters.
 
-- Automated offline checks cover the recovery, catalogue, filename, settings,
-  and validation fixes alongside the existing programming and diagnostic workflows.
-- Soft-BSL V11 and CalGuard V5 still require bench confirmation. The application
-  recovery fixes do not change their physical validation status.
-- The Coding tab has not completed vehicle testing and must be treated as
-  highly experimental.
+### Downloads
 
-### Distribution
+Version `0.1.0b16` is available as Windows x64 portable ZIPs and per-user installers,
+with a separate Windows 7 SP1 x64 package. Each includes the user manual, patch
+definitions (`BimmerStein MS41 Patch Definitions.xml`, beside the executable), and required application libraries. No separate Python installation
+is needed. Install the appropriate interface driver separately.
 
-Version `0.1.0b15` contains the Windows x64 PC application only. PyInstaller
-and Nuitka builds are supplied as per-user installers and portable ZIPs. Each
-package includes the user manual, `BimmerStein MS41 Patch Definitions.xml`,
-placed beside the executable, plus release metadata, third-party notices and
-licenses, and SHA-256 checksums. The application is distributed under
-`GPL-3.0-only`. Development-only material and private reference ROMs are not
-included.
+The Windows 7 package requires KB2533623 or a superseding Windows update.
+The Windows 7 package is tested and working. Installers are unsigned.
+SHA-256 checksums accompany the downloads.
+
+**OFF-ROAD, COMPETITION, RESEARCH, AND BENCH USE ONLY.** Do not use this software
+to modify a vehicle operated on public roads. Use stable power and follow the
+application's recovery instructions if a write is interrupted. Distributed under
+GPL-3.0-only.

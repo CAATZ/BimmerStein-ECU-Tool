@@ -324,6 +324,18 @@ def full_write_requires_softbsl(live_marker, image):
     return live_marker == "T" or marker(image) == "T"
 
 
+# File-order flash ranges in TOP's fused SA7. 0x8000-0xBFFF is an unmapped
+# peripheral window; reads synthesize it and writes never program it.
+TOP_BOOT_FLASH_RANGES = ((0, 0x4000), (0x4000, 0x8000), (0xC000, 0x10000))
+
+
+def top_boot_sector_matches(image, evidence):
+    """Prove every writable SA7 byte matches; incomplete evidence is insufficient."""
+    return (evidence is not None and len(evidence) >= 0x10000
+            and len(image) >= 0x10000
+            and all(image[lo:hi] == evidence[lo:hi] for lo, hi in TOP_BOOT_FLASH_RANGES))
+
+
 def calguard_recovery_ready(ds2, log):
     """Read-only probe for a CalGuard-held direct 0x5A recovery path."""
     return _sb.SoftBSL(ds2, log=_agent_log(log)).calguard_direct_entry_ready()
@@ -1013,9 +1025,9 @@ def read_cross_bank_image(port, prompt, log, baud="high", progress_cb=None,
             _set_agent_baud_if_needed(sb, tier)
             before = sb.crc_read(guard_addr, 4)
             prompt(
-                "READ TOP BASE: flip the A17 cockpit switch to UPPER now, then continue.\n\n"
-                "The RAM agent is already running from the intact BOTTOM bank. This step is "
-                "read-only; the tool will verify that the visible bank changed before reading.")
+                "Move the bank switch to UPPER\n\n"
+                "Select the TOP backup bank. Keep ignition ON and continue when ready.\n"
+                "This step only reads the bank; it does not write any changes.")
             may_be_upper = True
             after = sb.crc_read(guard_addr, 4)
             if after == before:
@@ -1027,8 +1039,9 @@ def read_cross_bank_image(port, prompt, log, baud="high", progress_cb=None,
                 0, _sb.IMAGE_SIZE, progress_cb=progress_cb,
                 descramble=True, log_fn=log)
             prompt(
-                "TOP base read is complete. Flip the A17 cockpit switch back to LOWER now, "
-                "then continue so the ECU can reset into the working bank.")
+                "Return the bank switch to LOWER\n\n"
+                "The TOP backup bank has been read. Select the BOTTOM working bank.\n"
+                "Keep ignition ON and continue when ready so the ECU can restart.")
             may_be_upper = False
             return bytes(image)
         finally:
@@ -1037,8 +1050,9 @@ def read_cross_bank_image(port, prompt, log, baud="high", progress_cb=None,
                     # A read/CRC failure can occur while A17 is physically upper. Make the required
                     # recovery position a modal action, not a line that can be missed in the log.
                     prompt(
-                        "TOP read stopped before completion. Before recovery/reset, flip the A17 "
-                        "cockpit switch back to LOWER, then continue.")
+                        "Return the bank switch to LOWER\n\n"
+                        "Reading stopped before completion. Select the BOTTOM working bank "
+                        "before recovery. Keep ignition ON and continue when ready.")
                     may_be_upper = False
             finally:
                 _finish_read_session(d, sb, log, image)
