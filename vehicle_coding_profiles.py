@@ -7,7 +7,7 @@ encodings. It has no runtime dependency on external diagnostic databases.
 from __future__ import annotations
 
 import base64
-from collections.abc import Iterator, Mapping
+from typing import Iterator, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 import json

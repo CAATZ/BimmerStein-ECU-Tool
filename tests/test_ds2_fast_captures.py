@@ -5,6 +5,8 @@ cleanly when the evidence directory is absent, matching the existing reference
 ROM test policy.
 """
 
+from __future__ import annotations
+
 from collections import Counter
 import os
 from pathlib import Path

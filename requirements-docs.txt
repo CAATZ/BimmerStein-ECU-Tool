@@ -1,2 +1,2 @@
-reportlab>=4.2,<6
-pypdf>=6.14,<7
+reportlab==4.2.5
+pypdf==5.9.0

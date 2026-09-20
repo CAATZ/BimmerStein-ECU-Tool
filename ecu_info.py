@@ -6,6 +6,8 @@ on a normally-running ECU — no BSL/flash-listen mode required. Stdlib only,
 no Qt / hardware dependency, so these are unit-testable with plain bytes.
 """
 
+from __future__ import annotations
+
 # Flash-driver signature @ SA1 driver entry (DS2 0x023C = file 0x423C).
 # Byte-identical location across MS41.0/.1/.2/.3; identifies the flash DRIVER
 # family compiled into the firmware (AMD vs Intel command set), not the

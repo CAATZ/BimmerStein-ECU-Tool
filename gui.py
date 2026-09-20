@@ -1,5 +1,7 @@
 """PyQt5 desktop interface for BimmerStein ECU Tool."""
 
+from __future__ import annotations
+
 import sys
 import os
 import json

@@ -15,6 +15,8 @@ ID and owns storage, scaling, units, and display formatting.
   transport fallback, not an independent validation source.
 """
 
+from __future__ import annotations
+
 import threading
 import time
 import csv

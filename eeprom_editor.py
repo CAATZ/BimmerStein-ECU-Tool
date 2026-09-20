@@ -747,7 +747,7 @@ class EepromEditorDialog(QDialog):
             QMessageBox.critical(self, 'Invalid EEPROM Edit', str(error))
             return
         modified = self.owner._eeprom_modified or image != self._baseline
-        self.owner._show_eeprom_image(image, self.source.text().removeprefix('Source: '),
+        self.owner._show_eeprom_image(image, (self.source.text()[8:] if self.source.text().startswith('Source: ') else self.source.text()),
                                      variant=self._variant, modified=modified)
         self._baseline = image
         self.accept()

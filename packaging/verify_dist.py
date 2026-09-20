@@ -67,38 +67,7 @@ _PRIVATE_PROVENANCE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 PE_MACHINE_AMD64 = 0x8664
-REQUIRED_LICENSE_FILES = {
-    "Nuitka-4.1.3-LICENSE-RUNTIME.txt": (
-        "20ff0ae581adf436a7b06e50e67a6c8913aec1ea4e60dba138d0a0bee7ee520c"
-    ),
-    "PyInstaller-6.21.0-COPYING.txt": (
-        "dcf75fdb959db1e3b41c0f8505069d2ece781b5ec6b3d0a4d30975cfc6580245"
-    ),
-    "PyQt5-sip-12.18.0-BSD-2-Clause.txt": (
-        "3e6f5b427c36f94ecf86bc01698af7030a1ed6eb3748110d5dbb8d142d804611"
-    ),
-    "PyUSB-1.3.1-BSD-3-Clause.txt": (
-        "03e39fdcee9c18f2f9d0c3500a993ddeac050695eb81070ea41347587c76a7fe"
-    ),
-    "Python-3.14.6-LICENSE.txt": (
-        "935cf13e19f8c31b497d20b05d73623431a226b230c3599bc30fa3348979bc68"
-    ),
-    "Python-3.14.6-INCORPORATED-SOFTWARE-NOTICES.rst.txt": (
-        "c695d550b135e53e38807e76496d1db17d22c40e461d1f3f354c86188d3305dd"
-    ),
-    "Qt-5.15.2-LICENSE.txt": (
-        "2004ee3ef8282a85f7dbd035dfacf63cf03d569537bc08655ffeb140ea3671c5"
-    ),
-    "pyserial-3.5-BSD-3-Clause.txt": (
-        "ddba22532a6f362880d849b5e2ed4b0a288b8bec4315364d6640d8dad3feea27"
-    ),
-    "libusb1-3.4.0-COPYING.txt": (
-        "ab15fd526bd8dd18a9e77ebc139656bf4d33e97fc7238cd11bf60e2b9b8666c6"
-    ),
-    "libusb1-3.4.0-COPYING.LESSER.txt": (
-        "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
-    ),
-}
+REQUIRED_LICENSE_FILES = {'GCC-15.2.0-GPL-3.txt': '8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903', 'GCC-15.2.0-RUNTIME-EXCEPTION.txt': '9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74', 'libusb1-3.4.0-COPYING.LESSER.txt': 'dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551', 'libusb1-3.4.0-COPYING.txt': 'ab15fd526bd8dd18a9e77ebc139656bf4d33e97fc7238cd11bf60e2b9b8666c6', 'MinGW-w64-13.0.0-COPYING.txt': '99a69660981156c21336fdb5661f89341b013c94e4bf9e1c7467b4745718397f', 'Nuitka-4.1.3-LICENSE-RUNTIME.txt': '20ff0ae581adf436a7b06e50e67a6c8913aec1ea4e60dba138d0a0bee7ee520c', 'PyQt5-sip-12.15.0-BSD-2-Clause.txt': '3859cfca971e429d6b79bdfeb1dc9e43aa9592f7295bf28fdd62824097909383', 'pyserial-3.5-BSD-3-Clause.txt': 'ddba22532a6f362880d849b5e2ed4b0a288b8bec4315364d6640d8dad3feea27', 'Python-3.8.10-LICENSE.txt': 'f830ec5b33c5ce41bf667d7fb4e395c5ee6fe20a108baebc99be565f0ef0907d', 'PyUSB-1.2.1-BSD-3-Clause.txt': '03e39fdcee9c18f2f9d0c3500a993ddeac050695eb81070ea41347587c76a7fe', 'Qt-5.15.2-LICENSE.txt': '2004ee3ef8282a85f7dbd035dfacf63cf03d569537bc08655ffeb140ea3671c5'}
 
 MSVC_RUNTIME_FILES = (
     Path("VCRUNTIME140.dll"),
@@ -244,46 +213,22 @@ def _pyinstaller_msvc_runtime_sources() -> dict[Path, tuple[Path, str]]:
     }
 
 
-def _nuitka_msvc_runtime_sources(
-        content: Path) -> dict[Path, tuple[Path, str]]:
-    """Resolve the unchanged CPython/MSVC redistributables selected by Nuitka."""
-    python_root = Path(sys.base_prefix)
-    sources: dict[Path, tuple[Path, str]] = {
-        NUITKA_MSVC_RUNTIME_FILES[0]: (
-            python_root / NUITKA_MSVC_RUNTIME_FILES[0], "CPython 3.14.6"),
-        NUITKA_MSVC_RUNTIME_FILES[1]: (
-            python_root / NUITKA_MSVC_RUNTIME_FILES[1], "CPython 3.14.6"),
+def _nuitka_msvc_runtime_sources(content):
+    """Verify the Windows 7 build against its older, unmodified dependency DLLs."""
+    pyqt_spec = importlib.util.find_spec("PyQt5")
+    qt = Path(next(iter(pyqt_spec.submodule_search_locations))) / "Qt5/bin"
+    sources = {
+        Path(name): (Path(sys.base_prefix) / name, "CPython 3.8.10")
+        for name in ("VCRUNTIME140.dll", "VCRUNTIME140_1.dll")
     }
-    program_files_x86 = os.environ.get("ProgramFiles(x86)")
-    if not program_files_x86:
-        raise RuntimeError("ProgramFiles(x86) is unavailable for Nuitka runtime verification")
-    redist_root = (
-        Path(program_files_x86)
-        / "Microsoft Visual Studio" / "2022" / "BuildTools" / "VC" / "Redist" / "MSVC"
-    )
-    for relative in NUITKA_MSVC_RUNTIME_FILES[2:]:
-        packaged = content / relative
-        if not packaged.is_file():
-            raise RuntimeError(f"packaged VC++ runtime file is missing: {relative.as_posix()}")
-        packaged_digest = hashlib.sha256(packaged.read_bytes()).hexdigest()
-        candidates = sorted(
-            redist_root.glob(f"*/x64/Microsoft.VC143.CRT/{relative.name}"),
-            reverse=True,
-        )
-        source = next(
-            (
-                candidate for candidate in candidates
-                if hashlib.sha256(candidate.read_bytes()).hexdigest() == packaged_digest
-            ),
-            None,
-        )
-        if source is None:
-            raise RuntimeError(
-                "packaged VC++ runtime file does not match an installed MSVC "
-                f"redistributable: {relative.as_posix()}"
-            )
-        sources[relative] = (source, f"MSVC {source.parents[2].name} redistributable")
+    sources.update({
+        Path(name): (qt / name, "PyQt5-Qt5 5.15.2")
+        for name in ("MSVCP140.dll", "MSVCP140_1.dll", "MSVCP140_2.dll", "CONCRT140.dll")
+    })
+    ucrt = Path(os.environ["ProgramFiles(x86)"]) / "Windows Kits/10/Redist/ucrt/DLLs/x64"
+    sources.update({Path(p.name): (p, "Windows SDK UCRT 10.0.10240.16384") for p in ucrt.glob("*.dll")})
     return sources
+
 
 
 def _msvc_runtime_sources(
@@ -548,10 +493,10 @@ def verify_distribution(
         content / "logger_definitions" / LOGGER_DEFINITION_NAME,
         content / "assets" / "bimmerstein_ecu_tool.png",
         content / "assets" / "bimmerstein_ecu_tool.ico",
-        content / "python314.dll",
-        content / "libcrypto-3.dll",
-        content / "libssl-3.dll",
-        content / "libffi-8.dll",
+        content / "python38.dll",
+        content / "libcrypto-1_1.dll",
+        content / "libssl-1_1.dll",
+        content / "libffi-7.dll",
         content / "VCRUNTIME140.dll",
         content / "VCRUNTIME140_1.dll",
         content / "usb1" / "libusb-1.0.dll",

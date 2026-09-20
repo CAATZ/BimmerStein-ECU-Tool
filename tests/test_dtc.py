@@ -1,4 +1,6 @@
 """Regression tests for the captured MS41 DS2 command-0x04 record layout."""
+
+from __future__ import annotations
 import csv
 import os
 from pathlib import Path

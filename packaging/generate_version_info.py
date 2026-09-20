@@ -82,7 +82,7 @@ def main() -> int:
 
     output = args.output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(render_version_info(args.version), encoding="utf-8", newline="\n")
+    output.write_bytes(render_version_info(args.version).encode("utf-8"))
     print(f"Windows version metadata written: {output} ({args.version})")
     return 0
 

@@ -231,7 +231,7 @@ def test_license_inventory_verifier_rejects_missing_or_changed_text(tmp_path):
     verified = module._verify_license_inventory(app_dir)
     assert set(verified) == set(module.REQUIRED_LICENSE_FILES)
 
-    target = app_dir / "THIRD_PARTY_LICENSES" / "Python-3.14.6-LICENSE.txt"
+    target = app_dir / "THIRD_PARTY_LICENSES" / "Python-3.8.10-LICENSE.txt"
     target.write_bytes(target.read_bytes() + b"\nmodified\n")
     with pytest.raises(RuntimeError, match="does not match tracked source"):
         module._verify_license_inventory(app_dir)
@@ -301,7 +301,7 @@ def test_release_packaging_requires_explicit_license_gates():
     building = (ROOT / "BUILDING.md").read_text(encoding="utf-8")
     assert "-Version 0.1.0b16" in building
     assert "v0.1.0b16" in building
-    assert "BimmerStein ECU Tool Nuitka" in building
+    assert "Nuitka application directory" in building
 
 
 def test_inno_installer_uses_bimmerstein_identity_and_per_user_install():
@@ -321,7 +321,7 @@ def test_inno_installer_uses_bimmerstein_identity_and_per_user_install():
     assert "ArchitecturesAllowed=x64compatible" in installer
     assert "ArchitecturesInstallIn64BitMode=x64compatible" in installer
     assert "DefaultDirName={localappdata}\\Programs\\{#SetupInstallDirName}" in installer
-    assert "BimmerStein-ECU-Tool-{#AppVersion}-Windows-x64{#PackageSuffix}-Setup" in installer
+    assert "BimmerStein-ECU-Tool-{#AppVersion}-Windows7-x64{#PackageSuffix}-Setup" in installer
     assert "SetupIconFile=..\\assets\\bimmerstein_ecu_tool.ico" in installer
     assert "LicenseFile={#SourceDir}\\LICENSE.txt" in installer
     assert "InfoBeforeFile={#SourceDir}\\RELEASE_NOTES.md" in installer
@@ -369,9 +369,9 @@ def test_installer_rejects_release_prefix_sibling():
 def test_nuitka_build_is_explicit_and_separate():
     build = (ROOT / "build_windows_nuitka.ps1").read_text(encoding="utf-8")
     assert '"--mode=standalone"' in build
-    assert '"--msvc=latest"' in build
+    assert '"--mingw64"' in build
     assert '"--enable-plugin=pyqt5"' in build
-    assert '"--include-windows-runtime-dlls=yes"' in build
+    assert '"--include-windows-runtime-dlls=no"' in build
     assert "Path(usb1.__file__).with_name('libusb-1.0.dll')" in build
     assert "Copy-Item -LiteralPath $usb1Dll -Destination $usb1Target" in build
     assert '"--backend", "nuitka"' not in build  # PowerShell invokes these as separate tokens.
@@ -390,16 +390,16 @@ def test_nuitka_build_is_explicit_and_separate():
     requirements = (ROOT / "requirements-build.txt").read_text(encoding="utf-8")
     assert "nuitka==4.1.3" in requirements
     assert "ordered-set==4.1.0" in requirements
-    assert "zstandard==0.25.0" in requirements
+    assert "zstandard==0.23.0" in requirements
 
 
 def test_ch341a_usb_runtime_dependencies_are_pinned_and_licensed():
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
 
-    assert "PyUSB==1.3.1" in requirements
+    assert "PyUSB==1.2.1" in requirements
     assert 'libusb1==3.4.0; sys_platform == "win32"' in requirements
-    assert "THIRD_PARTY_LICENSES/PyUSB-1.3.1-BSD-3-Clause.txt" in notices
+    assert "THIRD_PARTY_LICENSES/PyUSB-1.2.1-BSD-3-Clause.txt" in notices
     assert "THIRD_PARTY_LICENSES/libusb1-3.4.0-COPYING.LESSER.txt" in notices
 
 def test_public_project_license_and_docs_are_gplv3():

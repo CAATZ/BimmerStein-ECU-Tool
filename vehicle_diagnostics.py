@@ -5,6 +5,8 @@ application. Runtime operation uses only the existing DS2 connection; no
 external diagnostic runtime or data file is loaded.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 import time
 

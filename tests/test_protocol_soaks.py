@@ -60,8 +60,8 @@ def test_randomized_fragmented_ds2_roundtrip_soak(monkeypatch):
     monkeypatch.setattr(ds2.time, "sleep", lambda _seconds: None)
 
     for case in range(_ROUNDS):
-        args = rng.randbytes(rng.randrange(252))
-        payload = rng.randbytes(rng.randrange(252))
+        args = rng.getrandbits(count * 8).to_bytes(count, "little") if (count := rng.randrange(252)) else b""
+        payload = rng.getrandbits(count * 8).to_bytes(count, "little") if (count := rng.randrange(252)) else b""
         status = rng.choice((0xA0, 0xFF))
         command = 0xA2 if status == 0xFF else rng.randrange(256)
         echo = bool(rng.getrandbits(1))

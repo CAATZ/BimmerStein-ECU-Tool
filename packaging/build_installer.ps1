@@ -20,7 +20,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $releaseRoot = Join-Path $root "release"
 $isNuitka = $Backend -eq "nuitka"
 $packageSuffix = if ($isNuitka) { "-Nuitka" } else { "" }
-$releaseName = "BimmerStein-ECU-Tool-$Version-Windows-x64$packageSuffix"
+$releaseName = "BimmerStein-ECU-Tool-$Version-Windows7-x64$packageSuffix"
 if (-not $SourceDir) {
     $SourceDir = Join-Path $releaseRoot $releaseName
 }
@@ -44,7 +44,7 @@ if (-not (Test-Path -LiteralPath $sourcePath -PathType Container)) {
     throw "Prepared release directory not found: $sourcePath"
 }
 
-$python = Join-Path $root ".venv\Scripts\python.exe"
+$python = Join-Path $root ".venv\python.exe"
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
     throw "Virtual environment not found. Create .venv and install requirements-build.txt first."
 }
