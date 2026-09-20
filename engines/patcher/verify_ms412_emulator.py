@@ -1977,14 +1977,19 @@ def _intel_driver(kind, *, from_ram):
     image[_FLASH_TARGET_FILE:_FLASH_TARGET_FILE + 2] = (
         0xFFFF if kind == "program" else 0).to_bytes(2, "little")
     emu = _load_emulator(
-        bytes(image), seg0_from_flash=True, flash_writable=True,
-        force_variant="SS1v2")
+        bytes(image), flash_writable=True, force_variant="SS1v2")
+    # The actual post-prologue SYSCON keeps segmentation enabled. Artificial
+    # flash-to-SFR preloading sets SGTDIS and redirects this target to 0x2200.
+    assert emu.mem.translate(_FLASH_TARGET) == _FLASH_TARGET_PHYS
     emu.mem.flash_model = FlashModel(
         target=_FLASH_TARGET, busy_reads=2)
     Timer1(tick=1).attach(emu.peripherals)
     emu.write(0xE656, _FLASH_TARGET)
     emu.write(0xE744, 0xFFFF)
     emu.reg.set_word(0, 0xE600)
+    emu.reg.sp = 0xFBFC
+    emu.mem.write_word_direct(0xFBFC, 0xE000)
+    emu.mem.write_word_direct(0xFBFE, 0)
     if kind == "program":
         emu.write(0xE73C, 0xE800)
         emu.write(0xE73A, 2)
@@ -1993,19 +1998,42 @@ def _intel_driver(kind, *, from_ram):
     else:
         start, end, flash_entry = 0x432E, 0x4410, 0x032E
     if from_ram:
-        stop = _copy_driver(emu, start, end)
+        _copy_driver(emu, start, end + 2)  # Include the native terminal RETS.
         entry = 0xE320
     else:
-        entry, stop = flash_entry, end ^ 0x4000
-    result = _run(emu, entry, stop_at=stop, max_steps=400000)
-    assert result.exit_reason == "stop_at" and emu.read_byte(0xE742) == 1
+        # Negative control: execute the exact flash-resident prefix only up to
+        # starting the WSM. Its next instruction fetch must see CUI busy status,
+        # not the image opcode; continuing it cannot prove native-driver success.
+        emu.cpu.ip = flash_entry
+        for _ in range(400000):
+            emu.cpu.step()
+            if emu.mem.flash_model.pending is not None:
+                break
+        assert emu.mem.flash_model.pending is not None
+        assert emu.mem.flash_model.mode == "status"
+        pc = emu.cpu.pc
+        native_word = bytes(emu.mem.image[pc ^ 0x4000:(pc ^ 0x4000) + 2])
+        fetched_word = bytes(
+            emu.mem.read_code_byte(emu.cpu.ip + index, emu.cpu.csp)
+            for index in range(2))
+        assert fetched_word == b"\x00\x00" and fetched_word != native_word
+        assert emu.read_byte(0xE742) != 1
+        assert emu.mem.image[_FLASH_TARGET_FILE:_FLASH_TARGET_FILE + 2] == (
+            image[_FLASH_TARGET_FILE:_FLASH_TARGET_FILE + 2])
+        return
+    result = _run(emu, entry, stop_at=0xE000, max_steps=400000)
+    assert result.exit_reason == "stop_at" and emu.cpu.pc == 0xE000
+    assert emu.reg.sp == 0xFC00 and emu.reg.get_word(0) == 0xE600
+    assert emu.read_byte(0xE742) == 1
     emu.write(_FLASH_TARGET, 0x00FF)
     expected = 0xBEEF if kind == "program" else 0xFFFF
     assert emu.read(_FLASH_TARGET) == expected
+    assert emu.mem.image[_FLASH_TARGET_FILE:_FLASH_TARGET_FILE + 2] == (
+        expected.to_bytes(2, "little"))
 
 
 def verify_intel_flash_mutation():
-    """Run the stock Intel program/erase driver from flash and its RAM copy."""
+    """Prove real RAM-driver returns and reject flash-resident CUI execution."""
     for kind in ("program", "erase"):
         for from_ram in (False, True):
             _intel_driver(kind, from_ram=from_ram)
@@ -2016,13 +2044,16 @@ def _amd_driver(device, kind):
     image[_FLASH_TARGET_FILE:_FLASH_TARGET_FILE + 2] = (
         0xFFFF if kind == "program" else 0).to_bytes(2, "little")
     emu = _load_emulator(
-        bytes(image), seg0_from_flash=True, flash_writable=True,
-        force_variant="1406464")
+        bytes(image), flash_writable=True, force_variant="1406464")
+    assert emu.mem.translate(_FLASH_TARGET) == _FLASH_TARGET_PHYS
     emu.mem.flash_model = AmdFlashModel(device=device, busy_reads=4)
     Timer1(tick=1).attach(emu.peripherals)
     emu.write(0xE656, _FLASH_TARGET)
     emu.write(0xE744, 0xFFFF)
     emu.reg.set_word(0, 0xE600)
+    emu.reg.sp = 0xFBFC
+    emu.mem.write_word_direct(0xFBFC, 0xE000)
+    emu.mem.write_word_direct(0xFBFE, 0)
     if kind == "program":
         emu.write(0xE73C, 0xE800)
         emu.write(0xE73A, 2)
@@ -2030,11 +2061,15 @@ def _amd_driver(device, kind):
         start, end = 0x4230, 0x4308
     else:
         start, end = 0x432E, 0x43C4
-    stop = _copy_driver(emu, start, end) - 2  # AMD descriptor slice includes RETS.
-    result = _run(emu, 0xE320, stop_at=stop, max_steps=400000)
-    assert result.exit_reason == "stop_at" and emu.read_byte(0xE742) == 1
+    _copy_driver(emu, start, end)  # AMD descriptor slice includes RETS.
+    result = _run(emu, 0xE320, stop_at=0xE000, max_steps=400000)
+    assert result.exit_reason == "stop_at" and emu.cpu.pc == 0xE000
+    assert emu.reg.sp == 0xFC00 and emu.reg.get_word(0) == 0xE600
+    assert emu.read_byte(0xE742) == 1
     expected = 0xBEEF if kind == "program" else 0xFFFF
     assert emu.read(_FLASH_TARGET) == expected
+    assert emu.mem.image[_FLASH_TARGET_FILE:_FLASH_TARGET_FILE + 2] == (
+        expected.to_bytes(2, "little"))
 
 
 def verify_amd_flash_mutation():

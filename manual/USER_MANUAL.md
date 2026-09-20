@@ -2,7 +2,7 @@
 
 **BMW MS41 Programming, Diagnostics, and Recovery**
 
-Version 0.1.0 Beta 15 · Windows x64 · 2026-09-04
+Version 0.1.0b16 — Windows x64
 
 BimmerStein ECU Tool combines normal DS2 diagnostics, stock-ECU high-speed DS2 transfers,
 Soft-BSL programming, hardware bootstrap recovery, offline ROM utilities, and firmware patch
@@ -59,7 +59,7 @@ read-back verification.
 | Soft-BSL | Persistent loader plus RAM agents | Installation modifies firmware and requires the guided workflow. |
 | Hardware BSL | Intel 28F200 and AMD/JEDEC 29F200/29F400 | Uses a separate direct ASC0 tap, not the normal K-Line connection. |
 | File sizes | 256 KB full ROM and 24 KB tune | Choose the operation matching the file and intended region. |
-| Host platform | Windows x64 installer or portable release | PyInstaller and Nuitka packages contain the same application features. |
+| Host platform | Windows x64 installer or portable release | Both package editions contain the same application features. |
 
 ### Flash-chip families
 
@@ -75,13 +75,13 @@ read-back verification.
 
 ### Windows installer
 
-1. Download either versioned Windows x64 installer.
+1. Download the Windows x64 installer for your system. Use the Windows 7 package on Windows 7 SP1 x64.
 2. Run it for a per-user installation with no administrator access required.
 3. Install the driver for the intended FTDI adapter, then launch **BimmerStein ECU Tool**.
 
-Assets whose names contain `-Nuitka` use the Nuitka backend. That installer uses a distinct product
-identity and installation directory so it can coexist with the PyInstaller build. Report the
-selected backend when describing startup or packaging behavior.
+PyInstaller and Nuitka packages provide the same features; Nuitka downloads use the `-Nuitka` suffix.
+The installer uses the BimmerStein ECU Tool folder and shortcut name. Choose one edition for an installation.
+Include the complete package filename when describing startup or packaging behavior.
 
 ### Portable Windows package
 
@@ -89,9 +89,9 @@ selected backend when describing startup or packaging behavior.
 2. Extract the complete ZIP into a writable folder.
 3. Run `BimmerStein ECU Tool.exe` from the extracted application folder.
 
-Do not move only the executable. PyQt, protocol resources, patch descriptors, and RAM-agent
-payloads are stored under `_internal` in the PyInstaller package and beside the executable in the
-flat Nuitka package. Keep the selected package's complete extracted folder together.
+Keep the complete extracted folder together. Application runtimes, protocol resources, patch
+descriptors, and RAM-agent payloads are required beside the executable or in its `_internal`
+directory, depending on the package edition.
 
 The executable may not be code-signed. Windows can show an unknown-publisher warning. Confirm the
 release filename and matching `.zip.sha256` value before continuing.
@@ -100,7 +100,7 @@ release filename and matching `.zip.sha256` value before continuing.
 
 Install the driver for the selected FTDI adapter. D2XX is preferred for stock native-fast DS2,
 Soft-BSL, and hardware BSL. When D2XX is unavailable, normal DS2 and supported hardware-BSL paths
-can fall back to pyserial at their compatible rates.
+can use the standard serial fallback at their compatible rates.
 
 ### Data folders
 
@@ -121,14 +121,11 @@ and operation history.
 
 ## Main window
 
-![Main Flash workspace while disconnected](images/application-overview.png)
+![Synthetic main Flash workspace](images/application-overview.png)
 
 The connection bar remains visible above all tabs. It contains the normal DS2 COM selection,
 Connect button, direct-tap choice, connection state, ECU variant, and transfer-mode information.
 The shared log and progress controls remain visible below it.
-
-The interface preserves the system font size. On smaller or scaled displays, scroll the main
-workspace to reach controls without compressing the application layout.
 
 ### Normal K-Line versus direct tap
 
@@ -165,6 +162,8 @@ workspace to reach controls without compressing the application layout.
 
 ![Flash tab controls and transfer status](images/flash-workflow.png)
 
+The Flash tab is the normal starting point for ECU reads and writes.
+
 ### Choose the operation
 
 - **Read Full** saves a single-pass 256 KB full ROM.
@@ -174,8 +173,10 @@ workspace to reach controls without compressing the application layout.
 
 ### Automatic transfer selection
 
+The application selects one of these routes:
+
 1. **Soft-BSL** when the persistent loader is detected. It starts at the highest supported tier and
-   retries lower Soft-BSL tiers only before erase and after recovery is confirmed.
+   retries lower Soft-BSL tiers only before erase.
 2. **Native-fast DS2** on a compatible stock ECU through D2XX. A failed pre-erase high-rate check can
    restart the complete operation over normal DS2 only after the normal ECU state is confirmed.
 3. **Normal DS2 at 9600** when neither accelerated route is available.
@@ -185,9 +186,9 @@ active session for recovery instead of changing transports.
 
 ### Write options
 
-- **Correct checksums** is enabled by default. Full images receive boot, program, and
-  calibration checksum correction on all supported MS41 variants. This does not change the
-  image's separate program-check enable setting. A 24 KB tune contains calibration only.
+- **Correct checksums** is enabled by default. MS41.3 boot and calibration checksums
+  are corrected; its program checksum remains unchanged because stock program verification is
+  disabled.
 - **Back up before write** is optional and follows the operator's selection.
 - **Verify after write** controls host-side byte-for-byte read-back verification.
 - ECU-side flash finalization is independent of the optional host Verify checkbox.
@@ -199,21 +200,8 @@ active session for recovery instead of changing transports.
 
 ### Failure before erase
 
-Before erase, Soft-BSL can retry at a lower tier only after recovery is confirmed. Native-fast DS2 can
+Before erase, Soft-BSL can retry the operation at a lower Soft-BSL baud tier. Native-fast DS2 can
 restart through normal DS2 at 9600 only after the normal low-rate ECU state has been confirmed.
-
-### Recovery cannot be confirmed
-
-If Soft-BSL cannot confirm the return to normal ECU operation, it reports a recovery error and
-leaves the application disconnected. It does not report a successful operation or retry at
-another rate. Follow the displayed instruction to turn ignition OFF, wait at least 10 seconds,
-then turn ignition ON and reconnect. Confirm normal communication before retrying.
-
-If the read completed, the application saves its bytes in Bins when possible and includes the
-capture location in the error. An identity-window or erase-sector capture remains a raw partial
-image; it is not treated as a full ROM. If archiving also failed, the original recovery error and
-the storage error remain visible. This differs from an active post-erase recovery session below,
-which must remain powered and open.
 
 ### Failure after erase
 
@@ -261,16 +249,31 @@ calibration markers rather than relying only on the shared ECU ID.
    select the exact fitted system profile. If no embedded profile matches, fault reading and
    clearing remain unavailable rather than using an assumed record layout.
 4. Select **Read Faults**, then review the code, reference, system, status, description, and
-   selected-fault detail.
+   selected-fault detail. For the DME, choose **Stored** or **Shadow** memory. Supported
+   records include frequency, conditions and decoded freeze-frame values.
 5. Select **Export to Text** when a service record is required.
-6. Record the faults and correct their cause before selecting **Clear Faults**. Read the module
-   again after a non-engine clear request to confirm the result.
+6. Record the faults and correct their cause before selecting **Clear Faults**. DME clearing
+   automatically re-reads stored memory and distinguishes remaining faults from a failed
+   confirmation read. Read the module again after a non-engine clear request to confirm it.
+
+**Copy ECU Info** and **Export ECU Info…** in the ECU Info tab export the displayed identity
+fields and raw identification response with a UTC report timestamp.
 
 ### Live Data
 
-Review the fixed parameter rows for plausible values and units. Fast telegram mode requests the
-mapped addresses in one batch; compatible mode reads the same mapped values in smaller blocks. CSV
+Review the selected definition's parameter rows for plausible values and units. Auto mode requests
+mapped addresses in a fast telegram and permits the shared DS2 fallback; Telegram and Standard
+DS2 select the explicit modes. CSV
 logging is written automatically under the application `logs/` directory while logging is enabled.
+
+Select a compatible logger XML or return to the bundled definition while polling is stopped.
+Choose **Maximum rate** for acquisition without an additional interval, or use 100–5000 ms. The
+actual sample rate still depends on the ECU and adapter.
+
+The **Values**, **Graphs**, and **Gauges / digital** tabs share channel selection and search. Move
+the sample cursor, zoom or pan to inspect a capture. The live view retains the latest 5,000
+samples; enabled CSV logging records the complete session. **Open CSV Log…** opens a saved log in
+the same viewer. Gauges use defined ranges; unavailable values remain unavailable.
 
 Fast telegram mode uses all 24 ECU slots. In addition to the core engine values, it reports EVAP
 purge duty, front-O2 and MAF input voltages, and operating states such as closed throttle, part/full
@@ -279,17 +282,13 @@ once when polling starts. If enabled, the profile automatically reports actual A
 the configured wideband input voltage; the table also identifies the selected input and whether
 narrowband emulation is active.
 
+Live Data is read-only with respect to flash memory.
+
 <!-- pagebreak -->
 
 ## Coding and guided transmission conversion
 
 ### Vehicle module coding
-
-> [!WARNING]
-> **HIGHLY EXPERIMENTAL — NOT VEHICLE TESTED.** The Coding tab can change configuration in multiple
-> vehicle modules. Built-in profiles and read-back checks reduce mistakes, but they do not prove a
-> change is safe for a particular vehicle. Back up first, use stable power, keep the engine off,
-> change only settings you understand, and be prepared to restore the original coding.
 
 Module coding requires normal K-Line mode; Direct Tap reaches only the Engine ECU.
 
@@ -341,7 +340,8 @@ mapping remain shown as `—`. The knock tables use load columns, RPM rows, and 
 **Reset Adaptations** changes learned ECU state and requires confirmation. MS41.0 offers
 **All adaptations** only. Other supported families offer **All adaptations**, **Idle adaptation**,
 **Knock adaptation**, **Lambda / fuel trim adaptation**, or **Throttle adaptation**. The ECU
-relearns the selected values during subsequent operation.
+relearns the selected values during subsequent operation. After reset, the tool rereads the values.
+If that refresh fails, it clears the old display and reports that refreshed values are unavailable.
 
 <!-- pagebreak -->
 
@@ -360,15 +360,18 @@ The EEPROM tab works with one displayed 512-byte physical 24C04 image. Loading a
 ### Load and inspect an image
 
 1. Select **Open EEPROM File...**, or select an `EEPROM` entry in **Bins** and choose
-   **Load EEPROM**.
+   **Open in > EEPROM**.
 2. Confirm the detected MS41 layout. If it is unresolved, enable **Manual override** and select the
    exact MS41.0, MS41.1, MS41.2, or MS41.3 program layout before editing or writing.
-3. Select **View / Edit...**. Raw byte editing is disabled by default. Prefer the named
-   transmission shortcut over arbitrary byte edits.
-4. For edited checked records, select **Update Checks for Edited Records**. Existing invalid
-   records that were not edited remain unchanged.
-5. Select **Apply Changes** to return the edited image to the EEPROM tab. This updates the displayed
-   target only; it does not write to hardware.
+3. Select **View / Edit...**. The **Decoded** view provides categories, search, typed edits and
+   learned-knock cells. Advanced edits require an explicit unlock. **Hex** retains expert byte
+   editing, disabled by default. Undo and Redo apply to the current draft.
+4. Changed-record checks use the shared EEPROM owner. **Repair selected checks** is a separate,
+   confirmed action for selected invalid records; repair does not validate their payload.
+   **Compare file…** shows named and raw changes. An optional matching BIN supplies verified
+   knock-grid axes through the active calibration definition.
+5. Select **Apply Changes**, review the differences, and confirm to return the edited image to
+   the EEPROM tab. This updates the displayed target only; it does not write to hardware.
 6. Use **Save Copy...** when an additional offline copy is required.
 
 <!-- pagebreak -->
@@ -423,7 +426,7 @@ state, and matching definition information. No ECU connection is required.
 
 To enable parameter matching:
 
-1. Select **Load Definition...** and choose a compatible MS41 calibration XML definition.
+1. Select **Load Definition...** and choose a compatible MS41 XML definition.
 2. The tool validates the XML and copies it into the per-user definition registry.
 3. Use the **Definition** list to switch between registered definitions. The selection persists
    across application restarts.
@@ -458,16 +461,26 @@ variant, type, VIN/CAL metadata, notes, and source. Use descriptive notes and pr
 original separately from edited or patched images. Newly cataloged files also record a SHA-256
 identity so an externally replaced or modified file can be identified later.
 
-If the image is saved but its catalogue entry cannot be committed, the error reports the saved
-file and recovery metadata locations. Correct the storage problem and restart the application;
-the catalogue entry is restored only when the retained image matches its recorded size and hash.
-Keep both the image and recovery metadata intact. Conflicting or changed records remain blocked.
+The compact toolbar keeps Import, ECU Backup, Compare and Flash visible. **Open in** groups
+Tuning Suite, BSL-Unbricker, Patches, ECU Config and EEPROM destinations.
+Use the folder filter and **Organize > New folder…**, **Rename image…** and **Move to folder…** to organize
+images. These logical folders preserve the catalogue's flat storage and exact file hashes.
+Under **Browse**, **Browse logs…** and **Browse recovery files…** provide file trees with filename filtering, copy export,
+and access to the native folder; completed CSV logs open in the built-in viewer.
+
+**Open in > Tuning Suite** requires an installed compatible BimmerStein Tuning Suite and is
+disabled when it is absent or needs an update. Launch rechecks the installation and validates
+the selected Bin. It creates an editable copy in `editor/`, keeping the catalogued original
+unchanged. Import the result after saving in Tuning Suite.
 
 Select exactly two entries and choose **Compare** for a read-only report of their SHA-256 identity,
 program/calibration variants, checksum state, installed patches, changed-byte count, and changed
 address ranges. A 256 KB full ROM can be compared with a 24 KB tune by comparing only the full
 ROM's correctly mapped tune region. Legacy entries whose original SHA-256 was never recorded are
 reported as such; Compare never updates that baseline or changes either file.
+
+For two EEPROM entries, Compare shows decoded field and raw-byte differences when their known
+layouts match. Unknown or differing layouts are compared as raw bytes only.
 
 Select a 256 KB full-ROM entry and choose **Patches** to load it directly into the Patches tab.
 Adding or removing patches works on an in-memory copy; **Build Patched Image** archives a new Bin
@@ -497,8 +510,8 @@ checksums, and archives the composed image into Bins.
 - **Untested** means physical vehicle testing has not been completed.
 - Boot-region patches require a transfer path that can actually deliver their bytes.
 
-Ignition Cut V7, Launch Control V4/V5, and AlphaN MAF-failsafe V3 intentionally
-remain marked **Untested**.
+AlphaN MAF-failsafe V3, Soft-BSL V11, and CalGuard V5 are **Tested**.
+Ignition Cut V7 and Launch Control V4/V5 remain marked **Untested**.
 Launch Control V4 fuel mode held its configured 4000 RPM setpoint during
 vehicle testing before the MS41.3 calibration relocation. V5 keeps that native
 fuel-limiter path, but its relocated MS41.3 controls still require vehicle
@@ -612,6 +625,9 @@ daily operations use the persistent loader and current RAM agents.
 
 ### Cross-bank and boot writes
 
+Dual-bank support for the 29F400BB is tested and working. The tool can write both
+halves and manage each bank's patches and Soft-BSL.
+
 Golden-bank and boot-region workflows are advanced, recovery-sensitive operations. Follow the
 displayed A17/bank instructions and verify the selected physical half. Do not use them as a routine
 replacement for normal tune or program writes.
@@ -668,13 +684,13 @@ VPP control remains disabled until the Intel chip family is selected.
 
 - Confirm the selected COM port belongs to the intended FTDI device.
 - Verify the FTDI D2XX driver is installed.
-- Normal DS2 can use the pyserial fallback at 9600.
+- Normal DS2 can use the standard serial fallback at 9600.
 - Hardware BSL can use its compatible serial fallback. Native-fast DS2 requires D2XX; Soft-BSL can
   fall back to its supported low-rate serial tier when D2XX is unavailable.
 
 ### The fast-path stability check fails
 
-If a Soft-BSL tier fails before erase and recovery is confirmed, the application can retry a lower tier. If a
+If a Soft-BSL tier fails before erase, the application can retry a lower Soft-BSL tier. If a
 native-fast DS2 check fails before erase and normal ECU state is confirmed, it can restart the
 complete operation over normal DS2. Check adapter latency, wiring, ground, ECU voltage, and signal
 integrity before retrying.
@@ -687,7 +703,7 @@ integrity before retrying.
 
 ### The ROM Analyzer cannot load definitions
 
-Use **Load Definition...** to select a compatible MS41 calibration XML file. Do not copy XML files
+Use **Load Definition...** to select a valid compatible MS41 XML file. Do not copy XML files
 into `_internal` or any other packaged runtime directory. If a registered definition was changed or
 damaged outside the application, delete it and import a known-good copy again. Confirm the BIN size
 and exact ECU software identity before relying on matched values.
@@ -756,14 +772,14 @@ The user is solely responsible for determining whether any operation or modifica
 compliant with applicable emissions, safety, registration, competition, and other regulations. An
 off-road designation does not establish that a particular modification is lawful.
 
-BimmerStein ECU Tool is independent software and is not affiliated with or endorsed by BMW AG,
-or FTDI. Nothing in this disclaimer limits the rights granted under the GNU General
+BimmerStein ECU Tool is independent software and is not affiliated with or endorsed by BMW AG
+or interface manufacturers. Nothing in this disclaimer limits the rights granted under the GNU General
 Public License version 3.
 
 ## Project and license
 
 BimmerStein ECU Tool is independent software for compatible BMW MS41 workflows. It is not
-affiliated with or endorsed by BMW AG or FTDI.
+affiliated with or endorsed by BMW AG or interface manufacturers.
 
 The software is intended solely for off-road, competition, research, and bench use. It is not
 designed or certified for modifying a vehicle operated on public roads.

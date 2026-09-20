@@ -171,7 +171,7 @@ def test_full_write_blocks_unapplied_amd_boot_patch_when_boot_is_preserved(monke
         w._ds2_write_full(bytearray(image), "ms413-amd.bin")
 
         assert captured.get("ran") is not True
-        assert blocked and blocked[-1][0] == "Boot-Region Patch — Flash Blocked"
+        assert blocked and blocked[-1][0] == "Soft-BSL Boot Write Required"
     finally:
         w.close()
 
@@ -431,7 +431,9 @@ def test_partial_family_graft_reaches_every_write_route(monkeypatch, route):
         w.close()
 
 
-def test_boot_overwrite_normalizes_mixed_target_to_its_own_boot_family(monkeypatch):
+@pytest.mark.parametrize("trigger", ["checkbox", "cached", "sparse", "cached_sector", "sparse_sector"])
+@pytest.mark.parametrize("approve", [True, False])
+def test_boot_overwrite_normalizes_mixed_target_to_its_own_boot_family(monkeypatch, trigger, approve):
     app, w = _gui()
     try:
         target = bytearray(b"\xFF" * gui.MS41ECU.FULL_ROM_SIZE)
@@ -444,7 +446,17 @@ def test_boot_overwrite_normalizes_mixed_target_to_its_own_boot_family(monkeypat
         w._ecu_variant = "MS41.2"
         w._ds2 = _CodingFamilyDS2(b"909")
         w.chk_bootloader_write.setEnabled(True)
-        w.chk_bootloader_write.setChecked(True)
+        w.chk_bootloader_write.setChecked(trigger == "checkbox")
+        if trigger != "checkbox":
+            target[0x5FFC:0x6000] = bytes.fromhex("a55a54ab")
+            w._ecu_softbsl_marker = "T"
+            w._last_full_read = bytes(target) if trigger.startswith("cached") else None
+            monkeypatch.setattr(gui.patch_service, "missing_boot_patches",
+                                lambda *a: [] if trigger.endswith("sector") else ["softbsl_loader"])
+            monkeypatch.setattr(gui.patch_service, "boot_patch_read_ranges", lambda *a: [(0x4000, 0x4001)])
+            monkeypatch.setattr(gui.patch_service, "missing_boot_patches_sparse", lambda *a: ["softbsl_loader"])
+            w._ds2.read_memory_range = lambda address, length: b"\xff" * length
+            monkeypatch.setattr(gui.QTimer, "singleShot", lambda _delay, callback: callback())
         w.chk_boot_preserve_identity.setChecked(False)
         monkeypatch.setattr(w, "_auto_transfer_route", lambda: "softbsl")
         monkeypatch.setattr(
@@ -457,14 +469,25 @@ def test_boot_overwrite_normalizes_mixed_target_to_its_own_boot_family(monkeypat
         monkeypatch.setattr(
             gui.softbsl_service, "validate_flash_image_family", lambda *a, **k: None
         )
-        monkeypatch.setattr(gui.patch_service, "boot_write_patches_in", lambda _data: [])
+        monkeypatch.setattr(gui.patch_service, "boot_write_patches_in",
+                            lambda _data: [] if trigger == "checkbox" or trigger.endswith("sector")
+                            else ["softbsl_loader"])
+        if trigger.endswith("sector"):
+            w.chk_correct_cksum.setChecked(True)
+            def correct(data):
+                corrected = bytearray(data)
+                corrected[0x6050] = 0x17
+                return corrected, []
+            monkeypatch.setattr(gui, "correct_checksums", correct)
         monkeypatch.setattr(w, "_bootloader_write_file_warning", lambda _data: None)
         monkeypatch.setattr(w, "_softbsl_missing_after_full_write", lambda *a, **k: ())
         monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: QMessageBox.Yes)
         monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
-        monkeypatch.setattr(
-            QInputDialog, "getText", lambda *a, **k: ("WRITE BOOT", True)
-        )
+        approvals = []
+        def confirm(*args, **kwargs):
+            approvals.append(args[2])
+            return ("WRITE BOOT", True) if approve else ("", False)
+        monkeypatch.setattr(QInputDialog, "getText", confirm)
         monkeypatch.setattr(w, "_finish_flash_success", lambda *a, **k: None)
         captured = {}
         monkeypatch.setattr(
@@ -488,14 +511,24 @@ def test_boot_overwrite_normalizes_mixed_target_to_its_own_boot_family(monkeypat
 
         w._ds2_write_full(target, "mixed-boot.bin")
 
+        assert len(approvals) == 1
+        if trigger != "checkbox":
+            assert "BOTTOM bank" in approvals[0]
+            assert not w.chk_bootloader_write.isChecked()
+        if not approve:
+            assert not captured
+            return
         written = captured["image"]
+        if trigger.endswith("sector"):
+            assert written[0x6050] == 0x17
         assert written[CODING_FAMILY_FILE_ADDR:CODING_FAMILY_FILE_ADDR + 3] == b"606"
         for address in CODING_FAMILY_PROGRAM_ADDRS:
             assert written[address:address + 3] == b"606"
         for address in CODING_FAMILY_CAL_ADDRS:
             assert written[address] == ord("6")
         assert captured["kwargs"]["write_bootloader"] is True
-        assert w._ds2.reads == []
+        expected_reads = [(0x1CF4, 3)] if trigger.startswith("sparse") else []
+        assert w._ds2.reads == expected_reads
     finally:
         w._ds2 = None
         w.close()

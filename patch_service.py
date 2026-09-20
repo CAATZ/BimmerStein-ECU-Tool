@@ -324,6 +324,8 @@ def editable_parameters(data):
 
     Addresses and codecs remain private to this service. Consumers receive only
     stable patch/parameter ids and semantic values.
+    Uninstalled patches expose draft controls before composition recomputes
+    checksums; applying values still requires a valid installed image.
     """
     data = bytes(data)
     if len(data) != MS41ECU.FULL_ROM_SIZE:
@@ -340,15 +342,16 @@ def editable_parameters(data):
         specs = _EDITABLE_PARAMETER_FAMILIES.get(_parameter_family(patch))
         if not specs or entry.get("deprecated"):
             continue
+        editable = bool(entry.get("ok") and (checksum_ok or not entry["installed"]))
         parameters = [_public_parameter(data, patch, spec) for spec in specs]
         result.append({
             "patch_id": patch_id,
             "title": patch.get("title", patch_id),
             "version": patch.get("version", ""),
             "descriptor_token": _descriptor_token(patch),
-            "editable": bool(entry.get("ok") and checksum_ok),
+            "editable": editable,
             "blocked_reason": (
-                "" if entry.get("ok") and checksum_ok
+                "" if editable
                 else entry.get("badge") if not entry.get("ok")
                 else "Source checksum verification failed."
             ),
@@ -675,9 +678,11 @@ def build_image(base_data, selected_ids, marker=None):
     base_data = bytes(base_data)
     selected_ids = list(selected_ids)
     all_patches = patch_ms41.load_patches()
+    result, log_lines = patch_ms41.build(
+        base_data, selected_ids, marker=marker)
     _ver, installed_ids, shadowed_ids = _installed_patch_state(
-        base_data, all_patches)
-    effective_after_build = (installed_ids - shadowed_ids) | set(selected_ids)
+        result, all_patches)
+    effective_after_build = installed_ids - shadowed_ids
     missing = {
         patch_id: [
             required_id
@@ -699,8 +704,7 @@ def build_image(base_data, selected_ids, marker=None):
         raise PatchError(
             "installed patch dependency is incomplete; select the required "
             f"patch or remove the dependent patch first: {details}")
-    return patch_ms41.build(
-        base_data, selected_ids, marker=marker)
+    return result, log_lines
 
 
 # SA1 / boot window (file offsets) — the region DS2 and un-armed soft-BSL never write.
@@ -755,12 +759,14 @@ def sa1_window(evidence):
     return None
 
 
-def _sa1_edits_present(patch, ecu_sa1):
+def _sa1_edits_present(patch, ecu_sa1, image):
     """True iff every SA1-region byte this patch writes is already present in `ecu_sa1`. Edit
     bytes OUTSIDE [0x4000, 0x6000) are ignored — those are delivered by the normal DS2 / soft-BSL
     write; only the SA1 portion is at risk of being dropped. Scoping to the patch's own edit
     bytes is what keeps per-unit descriptor/coding drift (serial, VIN, boot-CRC) from tripping
-    the gate — that drift is real but lies outside every boot patch's edits."""
+    the gate — that drift is real but lies outside every boot patch's edits.
+    Compare the actual target bytes, including its bank marker, not the descriptor's
+    default BOTTOM marker."""
     for e in patch["edits"]:
         off = e["off"]
         dat = bytes.fromhex(e["data"])
@@ -768,7 +774,7 @@ def _sa1_edits_present(patch, ecu_sa1):
         b = min(off + len(dat), SA1_HI)
         if a >= b:
             continue                                   # this edit doesn't touch SA1
-        if dat[a - off:b - off] != ecu_sa1[a - SA1_LO:b - SA1_LO]:
+        if image[a:b] != ecu_sa1[a - SA1_LO:b - SA1_LO]:
             return False
     return True
 
@@ -800,7 +806,7 @@ def missing_boot_patches_sparse(image, reads):
             if lo >= hi:
                 continue
             actual = _sparse_bytes(reads, lo, hi)
-            if actual != expected[lo - off:hi - off]:
+            if actual != image[lo:hi]:
                 present = False
                 break
         if not present:
@@ -818,4 +824,4 @@ def missing_boot_patches(image, ecu_evidence):
     win = sa1_window(ecu_evidence)
     patches = patch_ms41.load_patches()
     return [pid for pid in boot_write_patches_in(image)
-            if win is None or not _sa1_edits_present(patches[pid], win)]
+            if win is None or not _sa1_edits_present(patches[pid], win, image)]

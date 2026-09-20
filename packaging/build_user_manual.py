@@ -422,6 +422,7 @@ def build_pdf(output: Path) -> Path:
     body_width = page_width - left - right
 
     def cover_page(canvas, _document) -> None:
+        canvas.setProducer("BimmerStein ECU Tool documentation build")
         canvas.saveState()
         canvas.setFillColor(colors.HexColor("#10151c"))
         canvas.rect(0, 0, page_width, page_height, fill=1, stroke=0)

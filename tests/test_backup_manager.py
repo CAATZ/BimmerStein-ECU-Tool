@@ -2,6 +2,7 @@ import os
 import sys
 import hashlib
 import json
+from pathlib import Path
 from dataclasses import asdict
 import pytest
 
@@ -148,7 +149,7 @@ def test_catalog_exact_crud_is_content_checked_and_collision_safe(tmp_path, monk
     ]
 
 
-def test_catalog_folders_change_metadata_without_moving_images(tmp_path, monkeypatch):
+def test_catalog_folders_move_images_on_disk(tmp_path, monkeypatch):
     mgr = _mgr(tmp_path, monkeypatch)
     first = mgr.add_data(bytes(512), "first.bin", variant="MS41.2")
     second = mgr.add_data(bytes([1]) * 512, "second.bin", variant="MS41.2")
@@ -168,8 +169,10 @@ def test_catalog_folders_change_metadata_without_moving_images(tmp_path, monkeyp
     assert mgr.clear_folder("Race day") == 1
     assert mgr.exact_entry(first.filename, first.sha256).folder == ""
     assert mgr.exact_entry(second.filename, second.sha256).folder == "Stock"
-    assert {first.filename: first.path, second.filename: second.path} == original_paths
-    assert all(os.path.exists(path) for path in original_paths.values())
+    assert first.path == original_paths["first.bin"]
+    assert Path(second.path) == tmp_path / "backups" / "Stock" / "second.bin"
+    assert not Path(original_paths["second.bin"]).exists()
+    assert Path(first.path).exists() and Path(second.path).exists()
 
     with pytest.raises(ValueError, match="reserved"):
         mgr.update_folder_exact(first.filename, first.sha256, "Unfiled")
@@ -221,7 +224,7 @@ def test_failed_index_commit_recovers_exact_image_and_metadata(tmp_path, monkeyp
         return replace(source, destination)
 
     monkeypatch.setattr(os, "replace", fail_index)
-    image = tmp_path / "backups" / "capture.bin"
+    image = tmp_path / "backups" / "Recovery" / "capture.bin"
     with pytest.raises(backup_manager.BackupIndexError) as failure:
         mgr.add_data(
             bytes(512), image.name, notes="durable original", source="ECU EEPROM Agent",
@@ -231,7 +234,7 @@ def test_failed_index_commit_recovers_exact_image_and_metadata(tmp_path, monkeyp
     assert str(image) in str(failure.value)
     assert isinstance(failure.value.__cause__, PermissionError)
     assert image.read_bytes() == bytes(512)
-    pending, = (image.parent / ".pending").glob("*.json")
+    pending, = (index.parent / ".pending").glob("*.json")
     assert json.loads(pending.read_text()) == expected
     assert index.read_bytes() == original_index
 
@@ -244,7 +247,7 @@ def test_failed_index_commit_recovers_exact_image_and_metadata(tmp_path, monkeyp
     reloaded = backup_manager.BackupManager()
     assert [asdict(entry) for entry in reloaded.entries] == [asdict(original), expected]
     assert reloaded.folders == ["Recovery"]
-    assert reloaded.read_data(image.name, expected["sha256"]) == bytes(512)
+    assert reloaded.read_data(expected["filename"], expected["sha256"]) == bytes(512)
     assert not pending.exists()
     assert len(backup_manager.BackupManager().entries) == 2
 
@@ -322,6 +325,7 @@ def test_retry_after_failed_image_publication_keeps_pending_identities_separate(
             raise PermissionError("storage unavailable")
         return replace(source, destination)
 
+    monkeypatch.setattr(backup_manager, "_move_file", fail_publication_or_index)
     monkeypatch.setattr(os, "replace", fail_publication_or_index)
     with pytest.raises(PermissionError):
         mgr.add_data(b"first capture", first_image.name)
@@ -347,7 +351,7 @@ def test_rename_cannot_reuse_an_unresolved_pending_filename(tmp_path, monkeypatc
             raise PermissionError("image unavailable")
         return replace(source, destination)
 
-    monkeypatch.setattr(os, "replace", fail_image_publication)
+    monkeypatch.setattr(backup_manager, "_move_file", fail_image_publication)
     with pytest.raises(PermissionError):
         mgr.add_data(b"different capture", failed_image.name)
     assert mgr.rename_exact(entry.filename, entry.sha256, entry.filename) is entry
@@ -355,3 +359,201 @@ def test_rename_cannot_reuse_an_unresolved_pending_filename(tmp_path, monkeypatc
         mgr.rename_exact(entry.filename, entry.sha256, failed_image.name)
     reloaded = backup_manager.BackupManager()
     assert reloaded.read_data(entry.filename, entry.sha256) == b"stable"
+
+
+@pytest.mark.parametrize("interruption", ["none", "move", "index"])
+def test_legacy_folder_migration_retries_and_preserves_metadata(tmp_path, monkeypatch, interruption):
+    mgr = _mgr(tmp_path, monkeypatch)
+    first = mgr.add_data(bytes(512), "first.bin", notes="original", source="ECU read", variant="MS41.2")
+    second = mgr.add_data(bytes([1]) * 512, "second.bin", notes="second")
+    rows = [asdict(first), asdict(second)]
+    for row in rows:
+        row["folder"] = "Road / Baselines"
+    index = tmp_path / "backups" / "index.json"
+    index.write_text(json.dumps(rows))
+    (tmp_path / "library-folders.json").write_text(json.dumps(["Road / Baselines", "Empty?", "CON"]))
+    rename, replace = os.rename, os.replace
+
+    def fail_move(source, destination):
+        if str(source).endswith("second.bin"):
+            raise PermissionError("interrupted move")
+        return rename(source, destination)
+
+    def fail_index(source, destination):
+        if str(destination) == str(index):
+            raise PermissionError("interrupted index")
+        return replace(source, destination)
+
+    if interruption != "none":
+        monkeypatch.setattr(os, "rename" if interruption == "move" else "replace",
+                            fail_move if interruption == "move" else fail_index)
+        with pytest.raises(backup_manager.BackupIndexError, match="migration"):
+            backup_manager.BackupManager()
+        assert (index.parent / ".folder-migration.json").exists()
+        monkeypatch.setattr(os, "rename", rename)
+        monkeypatch.setattr(os, "replace", replace)
+    migrated = backup_manager.BackupManager()
+    assert (index.parent / "Empty_").is_dir()
+    assert (index.parent / "_CON").is_dir()
+    for old, entry in zip(rows, migrated.entries):
+        assert entry.filename == "Road/Baselines/" + old["filename"]
+        assert entry.notes == old["notes"] and entry.source == old["source"]
+        assert entry.sha256 == old["sha256"] and entry.variant == old["variant"]
+        assert not (index.parent / old["filename"]).exists()
+        assert len(migrated.read_data(entry.filename, entry.sha256)) == 512
+    assert json.loads(index.read_text())["version"] == 2
+    assert not (index.parent / ".folder-migration.json").exists()
+    assert [asdict(entry) for entry in backup_manager.BackupManager().entries] == [
+        asdict(entry) for entry in migrated.entries]
+
+
+def test_external_move_discovery_edits_and_empty_folders(tmp_path, monkeypatch):
+    mgr = _mgr(tmp_path, monkeypatch)
+    entry = mgr.add_data(bytes(512), "original.bin", notes="keep", source="ECU read", variant="MS41.2")
+    directory = tmp_path / "backups" / "External  folder" / "Nested"
+    directory.mkdir(parents=True)
+    Path(entry.path).rename(directory / "renamed.BIN")
+    (directory / "new.bin").write_bytes(bytes([2]) * 512)
+    (directory / "Empty").mkdir()
+    (directory / "readme.txt").write_text("not a bin")
+    mgr = backup_manager.BackupManager()
+    moved = next(e for e in mgr.entries if e.notes == "keep")
+    assert moved.filename == "External  folder/Nested/renamed.BIN"
+    assert moved.folder == "External  folder/Nested" and moved.source == "ECU read"
+    assert moved.variant == "MS41.2"
+    assert "External  folder/Nested/Empty" in mgr.folders
+    assert len(mgr.entries) == 2
+    old_hash = moved.sha256
+    Path(moved.path).write_bytes(bytes([3]) * 512)
+    mgr.refresh()
+    edited = mgr.exact_entry(moved.filename)
+    assert edited.sha256 != old_hash and edited.source == "imported"
+    assert edited.variant == "Unknown"
+    with pytest.raises(ValueError, match="identity changed"):
+        mgr.read_data(moved.filename, old_hash)
+    assert backup_manager.BackupManager().exact_entry(edited.filename).sha256 == edited.sha256
+    Path(edited.path).unlink()
+    mgr.refresh()
+    assert len(mgr.entries) == 1
+    Path(edited.path).write_bytes(bytes(512))
+    restored = backup_manager.BackupManager().exact_entry(edited.filename)
+    assert restored.notes == "keep" and restored.source == "ECU read"
+
+
+def test_duplicates_are_addressed_by_relative_path_and_do_not_steal_notes(tmp_path, monkeypatch):
+    mgr = _mgr(tmp_path, monkeypatch)
+    first = mgr.add_data(bytes(512), "same.bin", folder="A", notes="first")
+    second = mgr.add_data(bytes(512), "same.bin", folder="B", notes="second")
+    assert first.filename == "A/same.bin" and second.filename == "B/same.bin"
+    original_second = Path(second.path)
+    mgr.update_folder_exact(first.filename, first.sha256, "B")
+    assert first.filename != second.filename and original_second.read_bytes() == bytes(512)
+    Path(first.path).rename(tmp_path / "backups" / "external1.bin")
+    Path(second.path).rename(tmp_path / "backups" / "external2.bin")
+    mgr.refresh()
+    assert len(mgr.entries) == 2 and all(not entry.notes for entry in mgr.entries)
+    rows = json.loads(Path(backup_manager.INDEX_FILE).read_text())["entries"]
+    assert {row["notes"] for row in rows} >= {"first", "second"}
+    mgr.remove_exact("external1.bin", first.sha256)
+    assert (tmp_path / "backups" / "external2.bin").exists()
+
+
+def test_migration_collision_does_not_overwrite_existing_file(tmp_path, monkeypatch):
+    mgr = _mgr(tmp_path, monkeypatch)
+    entry = mgr.add_data(bytes(512), "same.bin", notes="legacy")
+    row = asdict(entry)
+    row["folder"] = "Stock"
+    Path(backup_manager.INDEX_FILE).write_text(json.dumps([row]))
+    folder = tmp_path / "backups" / "Stock"
+    folder.mkdir()
+    (folder / "same.bin").write_bytes(bytes([1]) * 512)
+    migrated = backup_manager.BackupManager()
+    assert len(migrated.entries) == 2
+    legacy = next(e for e in migrated.entries if e.notes == "legacy")
+    assert legacy.filename != "Stock/same.bin"
+    assert migrated.read_data(legacy.filename, legacy.sha256) == bytes(512)
+    assert (folder / "same.bin").read_bytes() == bytes([1]) * 512
+
+
+@pytest.mark.parametrize("operation", ["move", "rename_folder"])
+def test_folder_operations_roll_back_when_index_write_fails(tmp_path, monkeypatch, operation):
+    mgr = _mgr(tmp_path, monkeypatch)
+    entry = mgr.add_data(bytes(512), "original.bin", folder="A/Child", notes="keep")
+    mgr.refresh()
+    before = asdict(entry)
+    original_save = mgr._save
+
+    def fail():
+        raise PermissionError("index locked")
+
+    monkeypatch.setattr(mgr, "_save", fail)
+    with pytest.raises(PermissionError):
+        if operation == "move":
+            mgr.update_folder_exact(entry.filename, entry.sha256, "B")
+        else:
+            mgr.rename_folder("A", "B")
+    assert asdict(entry) == before and Path(entry.path).read_bytes() == bytes(512)
+    monkeypatch.setattr(mgr, "_save", original_save)
+    assert mgr.rename_folder("A", "C") == 1
+    assert entry.filename == "C/Child/original.bin"
+    assert mgr.read_data(entry.filename, entry.sha256) == bytes(512)
+
+
+@pytest.mark.parametrize("folder", ["../escape", "/absolute", "bad?", "CON", ".pending", "bsl", "a/../b"])
+def test_real_folder_names_cannot_escape_or_use_reserved_storage(tmp_path, monkeypatch, folder):
+    mgr = _mgr(tmp_path, monkeypatch)
+    with pytest.raises(ValueError):
+        mgr.create_folder(folder)
+
+
+def test_scan_ignores_recovery_storage_and_does_not_prune_on_scan_error(tmp_path, monkeypatch):
+    mgr = _mgr(tmp_path, monkeypatch)
+    entry = mgr.add_data(bytes(512), "original.bin")
+    root = tmp_path / "backups"
+    for name in (".pending", "bsl", "native_fast", "transmission"):
+        (root / name).mkdir(exist_ok=True)
+        (root / name / "private.bin").write_bytes(bytes(512))
+    mgr.refresh()
+    assert mgr.entries == [entry] and mgr.folders == []
+    before = Path(backup_manager.INDEX_FILE).read_bytes()
+
+    def fail_walk(*args, **kwargs):
+        kwargs["onerror"](PermissionError("scan unavailable"))
+        yield
+
+    monkeypatch.setattr(os, "walk", fail_walk)
+    with pytest.raises(PermissionError):
+        mgr.refresh()
+    assert Path(backup_manager.INDEX_FILE).read_bytes() == before and mgr.entries == [entry]
+
+
+def test_refresh_retries_failed_metadata_commit(tmp_path, monkeypatch):
+    mgr = _mgr(tmp_path, monkeypatch)
+    entry = mgr.add_data(bytes(512), "original.bin", notes="keep")
+    Path(entry.path).rename(tmp_path / "backups" / "moved.bin")
+    write = mgr._write_json
+    monkeypatch.setattr(mgr, "_write_json", lambda *args: (_ for _ in ()).throw(PermissionError("locked")))
+    with pytest.raises(PermissionError):
+        mgr.refresh()
+    monkeypatch.setattr(mgr, "_write_json", write)
+    mgr.refresh()
+    rows = json.loads(Path(backup_manager.INDEX_FILE).read_text())["entries"]
+    assert rows[0]["filename"] == "moved.bin" and rows[0]["notes"] == "keep"
+
+
+def test_concurrent_file_creation_is_never_overwritten(tmp_path, monkeypatch):
+    mgr = _mgr(tmp_path, monkeypatch)
+    move = backup_manager._move_file
+
+    def another_writer(source, destination):
+        Path(destination).write_bytes(b"external")
+        move(source, destination)
+
+    monkeypatch.setattr(backup_manager, "_move_file", another_writer)
+    with pytest.raises(FileExistsError):
+        mgr.add_data(b"capture", "race.bin")
+    assert (tmp_path / "backups" / "race.bin").read_bytes() == b"external"
+    assert not list((tmp_path / "backups" / ".pending").glob("*.json"))
+    entry, = backup_manager.BackupManager().entries
+    assert entry.source == "imported"
+    assert entry.sha256 == hashlib.sha256(b"external").hexdigest()

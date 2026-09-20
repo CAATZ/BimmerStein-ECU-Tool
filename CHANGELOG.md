@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0 Beta 16
+
+EEPROM editing, Bins folders, improved live and saved data viewing, searchable logs,
+resizable layouts, tested 29F400BB dual-bank support, and tested Windows 7 packages. See [release notes](RELEASE_NOTES.md).
+
+
 All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).

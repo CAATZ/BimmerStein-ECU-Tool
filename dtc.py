@@ -36,6 +36,17 @@ def format_dtc_table(dtcs: list) -> str:
         conditions = getattr(d, "conditions", ())
         if conditions:
             lines.append(f"{'':<21}Conditions: {'; '.join(conditions)}")
+        qualifiers = getattr(d, "qualifiers", ())
+        if qualifiers:
+            lines.append(f"{'':<21}Conditions: {'; '.join(qualifiers)}")
+        for attribute, label in (("memory", "Memory"), ("frequency", "Frequency"),
+                                 ("occurred_hours_ago", "Occurred hours ago"),
+                                 ("operating_hours", "Operating hours")):
+            value = getattr(d, attribute, None)
+            if value is not None:
+                lines.append(f"{'':<21}{label}: {value}")
+        for value in getattr(d, "freeze_frame", ()):
+            lines.append(f"{'':<21}{value.label}: {value.value:g} {value.unit}")
         reported_total = getattr(d, "reported_total", None)
         if reported_total is not None:
             lines.append(f"{'':<21}Module Fault Count: {reported_total}")

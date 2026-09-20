@@ -47,11 +47,23 @@ _PROHIBITED_PUBLIC_TEXT_PATTERN = re.compile(
 )
 _PRIVATE_PATCH_PATTERN = re.compile(
     rb"(?<![a-z0-9])(?:"
-    rb"ignition[ _-]?cut[ _-]?v(?:8|9)|"
+    rb"ignition[ _-]?cut[ _-]?v(?:8|9|1[0-9])|"
     rb"launch[ _-]?(?:control[ _-]?)?v(?:6|7)|"
     rb"(?:cut|lc)[ _-]?(?:hyst|ipw)|"
     rb"ignition[ _-]?hysteresis|fixed[ _-]?ipw"
     rb")(?![a-z0-9])",
+    re.IGNORECASE,
+)
+_PUBLIC_DOCUMENT_NAMES = (
+    "README.md", "RELEASE_NOTES.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md",
+    "RELEASE-METADATA.json", "BimmerStein-ECU-Tool-User-Manual.pdf",
+)
+_PRIVATE_PROVENANCE_PATTERN = re.compile(
+    rb"(?<![a-z0-9])(?:" + b"".join((b"And", b"roid"))
+    + rb"|_private|scratchpad)(?![a-z0-9])"
+    rb"|[a-z]:[\\/]+(?:users|tmp|temp)[\\/]+"
+    rb"|/(?:Users|home)/|file:///"
+    rb"|(?<![a-z0-9])\.tmp[\\/]",
     re.IGNORECASE,
 )
 PE_MACHINE_AMD64 = 0x8664
@@ -372,7 +384,23 @@ def _verify_patch_tree(packaged: Path) -> int:
 
 def _verify_public_terms(paths) -> None:
     for path in paths:
-        payload = path.read_bytes()
+        if path.suffix.lower() == ".pdf":
+            try:
+                from pypdf import PdfReader
+            except ImportError as error:
+                raise RuntimeError("PDF release verification requires requirements-docs.txt") from error
+            try:
+                reader = PdfReader(path)
+                text = "\n".join(page.extract_text() or "" for page in reader.pages)
+                if not text.strip():
+                    raise ValueError("no extractable text")
+                payload = (text + "\n" + str(reader.metadata or {})).encode("utf-8")
+            except Exception as error:
+                raise RuntimeError(f"cannot verify packaged PDF text: {path.name}") from error
+        else:
+            payload = path.read_bytes()
+        if path.suffix.lower() in {".pdf", ".json", ".md", ".txt", ".xml"}:
+            payload = re.sub(rb"\s+", b" ", payload)
         if path.suffix.lower() in {".py", ".pyw", ".spec"}:
             payload += b"\n" + b"\n".join(
                 node.value.encode("utf-8", errors="backslashreplace")
@@ -383,7 +411,7 @@ def _verify_public_terms(paths) -> None:
             match.group().decode("ascii", errors="replace").lower()
             for match in _PROHIBITED_PUBLIC_PATTERN.finditer(payload)
         })
-        if path.suffix.lower() in {".json", ".md", ".txt", ".xml"}:
+        if path.suffix.lower() in {".pdf", ".json", ".md", ".txt", ".xml"}:
             hits.extend(
                 match.group().decode("ascii", errors="replace").lower()
                 for match in _PROHIBITED_PUBLIC_TEXT_PATTERN.finditer(payload)
@@ -395,6 +423,17 @@ def _verify_public_terms(paths) -> None:
         if hits:
             raise RuntimeError(
                 f"prohibited public reference in {path.name}: {', '.join(hits)}")
+        if path.name in _PUBLIC_DOCUMENT_NAMES and _PRIVATE_PROVENANCE_PATTERN.search(payload):
+            raise RuntimeError(f"private provenance in public document: {path.name}")
+
+
+def _verify_public_documents(app_dir: Path) -> None:
+    # The required-file inventory is enforced by verify_distribution; metadata
+    # and CHANGELOG are additionally checked whenever staging includes them.
+    _verify_public_terms(
+        path for name in _PUBLIC_DOCUMENT_NAMES
+        if (path := app_dir / name).is_file()
+    )
 
 
 def verify_public_source() -> dict:
@@ -644,6 +683,7 @@ def verify_distribution(
 
     patch_dir = content / "engines" / "patcher" / "patches"
     patch_file_count = _verify_patch_tree(patch_dir)
+    _verify_public_documents(app_dir)
     _verify_public_terms((
         executable,
         app_dir / "README.md",

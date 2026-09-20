@@ -145,7 +145,7 @@ def test_public_source_rejects_private_platform_docs(tmp_path, monkeypatch):
         path.write_text("# Public source", encoding="utf-8")
     for relative in (
         "tests/README.md", "THIRD_PARTY_LICENSES/dependency.md",
-        "THIRD_PARTY_NOTICES.md", "tools/dependency.java",
+        "tools/dependency.java",
     ):
         path = tmp_path / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -299,8 +299,8 @@ def test_release_packaging_requires_explicit_license_gates():
     assert "b[1-9]\\d*" in build_text
 
     building = (ROOT / "BUILDING.md").read_text(encoding="utf-8")
-    assert "-Version 0.1.0b15" in building
-    assert "v0.1.0b15" in building
+    assert "-Version 0.1.0b16" in building
+    assert "v0.1.0b16" in building
     assert "BimmerStein ECU Tool Nuitka" in building
 
 
@@ -310,9 +310,11 @@ def test_inno_installer_uses_bimmerstein_identity_and_per_user_install():
     )
     assert "AppName={#SetupAppName}" in installer
     assert '#define SetupAppName "BimmerStein ECU Tool"' in installer
-    assert '#define SetupShortcutSuffix " (Nuitka)"' in installer
+    assert '#define SetupInstallDirName "BimmerStein ECU Tool"' in installer
+    assert "Development" not in installer
+    assert "(Compiled)" not in installer
     assert '#define SetupShortcutSuffix ""' in installer
-    assert '#define AppNumericVersion "0.1.0.15"' in installer
+    assert '#define AppNumericVersion "0.1.0.16"' in installer
     assert 'SetupAppName "BimmerStein ECU Tool (' not in installer
     assert "AppPublisher=CAATZ" in installer
     assert "PrivilegesRequired=lowest" in installer
@@ -423,7 +425,7 @@ def test_readme_uses_canonical_product_logo_and_resource_links():
     text = (ROOT / "README.md").read_text(encoding="utf-8")
     assert '<img src="assets/bimmerstein_ecu_tool.png"' in text
     assert 'alt="BimmerStein ECU Tool"' in text
-    assert 'href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b15"' in text
+    assert 'href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b16"' in text
     assert 'href="manual/USER_MANUAL.md">User Manual</a>' in text
     assert 'href="https://github.com/CAATZ/BimmerStein-ECU-Tool/issues"' in text
     assert "## Documentation and support" in text
@@ -465,7 +467,7 @@ def test_manual_declares_both_packaging_backends():
     normalized = " ".join(text.split())
     assert "PyInstaller and Nuitka packages" in normalized
     assert "-Nuitka" in text
-    assert "distinct product identity" in normalized
+    assert "Choose one edition for an installation" in normalized
     assert "E659=0xCC" in text
 
 

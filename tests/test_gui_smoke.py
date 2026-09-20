@@ -379,9 +379,9 @@ def test_high_dpi_policy_and_small_screen_overflow_are_explicit():
         scroll = window.centralWidget()
         assert isinstance(scroll, QScrollArea)
         assert window.width() == 980
-        assert window.height() == 960
+        assert window.height() == 740
         assert scroll.widget().minimumWidth() == 980
-        assert scroll.widget().minimumHeight() == 960
+        assert scroll.widget().minimumHeight() == 540
 
         window.show()
         app.processEvents()
@@ -402,7 +402,7 @@ def test_high_dpi_policy_and_small_screen_overflow_are_explicit():
         window.close()
 
 
-def test_show_fitted_only_maximizes_when_the_design_does_not_fit():
+def test_show_fitted_keeps_a_normal_window_inside_the_work_area():
     app, window = _gui()
     try:
         calls = []
@@ -414,7 +414,9 @@ def test_show_fitted_only_maximizes_when_the_design_does_not_fit():
         window.screen = lambda: type(
             "Screen", (), {"availableGeometry": lambda self: geometry})()
         window.show_fitted()
-        assert calls == ["maximized"]
+        assert calls == ["normal"]
+        assert window.width() <= 939
+        assert window.height() <= 889
 
         calls.clear()
         geometry = type("Geometry", (), {"width": lambda self: 980,
@@ -2567,16 +2569,21 @@ def test_native_pre_erase_fallback_respects_verify_choice(
         w.close()
 
 
-def test_native_pre_erase_failure_never_falls_back_without_low_identity(monkeypatch):
+@pytest.mark.parametrize("operation", ("tune", "full"))
+@pytest.mark.parametrize("safe_fallback,reopened", (
+    (False, False), (False, True), (True, False),
+))
+def test_native_pre_erase_failure_never_falls_back_without_low_identity(
+        monkeypatch, operation, safe_fallback, reopened):
     app, w = _gui()
     try:
         calls = []
-        w._ds2 = object()
+        w._ds2 = object() if reopened else None
 
         def fail_without_low_identity(*args, **kwargs):
             raise gui.ds2_native_fast_service.NativeFastPreEraseFailure(
                 RuntimeError("authorization state requires ignition cycle"),
-                safe_legacy_fallback=False,
+                safe_legacy_fallback=safe_fallback,
             )
 
         monkeypatch.setattr(w, "_run_via_native_fast_write", fail_without_low_identity)
@@ -2587,11 +2594,11 @@ def test_native_pre_erase_failure_never_falls_back_without_low_identity(monkeypa
         )
 
         with pytest.raises(
-            RuntimeError,
-            match="normal low state was not confirmed",
+            gui.StockWriteNotStarted,
+            match="Safe fallback to DS2 at 9600 could not be confirmed",
         ) as caught:
             w._native_fast_write_with_fallback(
-                "full",
+                operation,
                 b"target",
                 "intel",
                 lambda *args, **kwargs: None,
@@ -2603,6 +2610,12 @@ def test_native_pre_erase_failure_never_falls_back_without_low_identity(monkeypa
             caught.value.__cause__,
             gui.ds2_native_fast_service.NativeFastPreEraseFailure,
         )
+        message = str(caught.value)
+        assert "Nothing was erased or programmed by this attempt" in message
+        assert "Turn ignition OFF" in message
+        assert "10 seconds" in message
+        assert "ignition ON, then reconnect and retry" in message
+        assert "authorization state requires ignition cycle" in message
         assert calls == []
     finally:
         w._ds2 = None
@@ -2662,6 +2675,70 @@ def test_initial_seed_unavailable_never_restarts_legacy_write(monkeypatch):
         w.close()
 
 
+def test_native_pre_erase_failure_shows_calibration_not_started(monkeypatch):
+    app, w = _gui()
+    try:
+        tune = bytearray(b"\xFF" * MS41ECU.TUNE_SIZE)
+        tune[0x0C:0x16] = b"0641011110"
+        w.chk_correct_cksum.setChecked(False)
+        w.chk_backup_before_write.setChecked(False)
+        w.chk_verify.setChecked(False)
+        w._ecu_variant = w._ecu_program_variant = "MS41.0"
+        w._ecu_program_compatibility_id = "0641"
+        w._ds2 = object()
+        monkeypatch.setattr(w, "_live_coding_family", lambda: b"606")
+        monkeypatch.setattr(gui, "verify_checksum", lambda _data: (True, []))
+        monkeypatch.setattr(w, "_auto_transfer_route", lambda: "native_ds2")
+
+        def fail_before_erase(*args, **kwargs):
+            w._ds2 = None  # The attempted low-rate reconnect also failed.
+            raise gui.ds2_native_fast_service.NativeFastPreEraseFailure(
+                RuntimeError("K-Line echo mismatch for high_rate_pre_erase_token_liveness"),
+                safe_legacy_fallback=False,
+            )
+
+        monkeypatch.setattr(w, "_run_via_native_fast_write", fail_before_erase)
+        monkeypatch.setattr(
+            w, "_ds2_write",
+            lambda *args, **kwargs: pytest.fail("unconfirmed low state must not write"),
+        )
+
+        def sync_run_task(task, on_success=None, on_failure=None):
+            try:
+                task(lambda *args: None, lambda *args: None)
+            except Exception as error:
+                on_failure(error)
+            else:
+                pytest.fail("the failed native write must reach its failure callback")
+
+        monkeypatch.setattr(w, "_run_task", sync_run_task)
+        monkeypatch.setattr(
+            QMessageBox, "question", staticmethod(lambda *args: QMessageBox.Yes))
+        warnings, criticals = [], []
+        monkeypatch.setattr(
+            QMessageBox, "warning",
+            staticmethod(lambda _parent, title, message: warnings.append((title, message))),
+        )
+        monkeypatch.setattr(
+            QMessageBox, "critical",
+            staticmethod(lambda _parent, title, message: criticals.append((title, message))),
+        )
+
+        w._ds2_write_tune(tune, "pre-erase-failure.bin")
+
+        assert criticals == []
+        assert len(warnings) == 1
+        title, message = warnings[0]
+        assert title == "Calibration Write Not Started"
+        assert "Nothing was erased or programmed by this attempt" in message
+        assert "high_rate_pre_erase_token_liveness" in message
+        assert "partially erased" not in message
+        assert "Re-flash before cycling ignition" not in message
+    finally:
+        w._ds2 = None
+        w.close()
+
+
 def test_ecu_info_tab_has_new_field_set():
     app, w = _gui()
     try:
@@ -2681,9 +2758,13 @@ def test_ecu_info_tab_has_new_field_set():
                         "Coding / Variant", "ROM Header (hex)"))
         assert w.raw_ident_view.isHidden()
         assert w.technical_info_group.isHidden()
-        w._info_scroll.resize(800, 400)
+        w.resize(980, 540)
+        w.tabs.setCurrentIndex(next(i for i in range(w.tabs.count())
+                                    if w.tabs.tabText(i).strip() == "ECU Info"))
+        w.show()
         w.btn_show_technical_info.click()
-        app.processEvents()
+        for _ in range(6):
+            app.processEvents()
         assert not w.technical_info_group.isHidden()
         assert w.btn_show_technical_info.text() == "Hide Technical Details"
         assert w._info_scroll.verticalScrollBar().maximum() > 0
@@ -2736,7 +2817,7 @@ def test_read_new_info_fields_maps_ds2_reads_to_ecu_info_dict():
             "BMW Program Part Number": "1437806",
             "DME Production Serial": "012345678",
             "EWS2 ISN": "5678",
-            "Flash Command-Set Driver": "AMD driver — 29F200 / 29F400 (bottom half)",
+            "Flash Command-Set Driver": "AMD driver — 29F200 / 29F400",
             "Transmission Mode": "Manual",
         }
         assert (0x2025, 7) in calls
@@ -3156,7 +3237,7 @@ def test_patches_tab_lists_the_ms41_3_patches():
         }
         assert "BOOT · SOFT-BSL" in calguard_badges
         assert "V5" in calguard_badges
-        assert "UNTESTED" in calguard_badges
+        assert "TESTED" in calguard_badges
         assert "REQUIRES SOFT-BSL V11" in calguard_badges
         assert all("BOOT REGION" not in badge for badge in calguard_badges)
         assert "Exact compatibility guard" in (
@@ -3190,12 +3271,10 @@ def test_patches_tab_warns_for_every_explicitly_untested_patch(monkeypatch):
         assert "marked untested" in shown["message"]
         assert "Ignition Cut" in shown["message"]
         assert "experimental" in shown["message"]
-        assert "may suppress spark while injection continues" in shown["message"]
-        assert "Vehicle testing is still required" in shown["message"]
-        assert "Ignition Cut V9" not in shown["message"]
-        assert "configured fixed pulse width" not in shown["message"]
-        assert "fuel-adaptation and diagnostic guards" not in shown["message"]
-        assert "offline exact-byte verified" not in shown["message"]
+        assert "injection continues" in shown["message"]
+        assert "fuel-adaptation and diagnostic guards" in shown["message"]
+        assert "offline exact-byte verified" in shown["message"]
+        assert "not vehicle-validated" in shown["message"]
         assert "Never use it on a car with catalytic converters" in shown["message"]
     finally:
         w.close()
@@ -3301,7 +3380,7 @@ def test_installed_dependency_badge_collapses_multiple_patch_names():
         w.close()
 
 
-def test_patches_tab_removes_field_failed_v6_and_enables_v9(monkeypatch):
+def test_patches_tab_removes_field_failed_v6_and_enables_v7(monkeypatch):
     import patch_service
 
     app, w = _gui()
@@ -3853,12 +3932,14 @@ def test_softbsl_tab_loads_and_previews():
         img[0x423C:0x4244] = bytes.fromhex("e00e0d58f04ec084")
         img[0x5FFC:0x6000] = bytes([0xA5, 0x5A, 0x54, 0x54 ^ 0xFF])   # 'T'
         w._ecu_chip_sig = bytes.fromhex("e00e0d58f04ec084")
+        w._ds2 = SimpleNamespace(close=lambda: None)
         w._show_softbsl_image(bytes(img), "unit-test")
         assert w._softbsl_image is not None
         assert "T" in w._softbsl_marker_lbl.text()
         preview = w._softbsl_preview.toPlainText()
-        assert "CROSS-BANK top-half write PLAN" in preview
-        assert "BRICK-CLASS" in preview
+        assert "Target: TOP backup bank" in preview
+        assert "including its bootloader" in preview
+        assert "BRICK-CLASS" not in preview
         assert "full bottom half" not in preview
         assert w.btn_softbsl_xbank.isEnabled() is True
 
@@ -3871,7 +3952,7 @@ def test_softbsl_tab_loads_and_previews():
         w.close()
 
 
-def test_softbsl_crossbank_button_requires_disconnected_session():
+def test_softbsl_crossbank_hands_off_connected_session(monkeypatch):
     app, w = _gui()
     try:
         img = bytearray(b"\xFF" * 262144)
@@ -3879,12 +3960,46 @@ def test_softbsl_crossbank_button_requires_disconnected_session():
         img[0x5FFC:0x6000] = bytes([0xA5, 0x5A, 0x54, 0x54 ^ 0xFF])
         w._ecu_chip_sig = bytes.fromhex("e00e0d58f04ec084")
         w._show_softbsl_image(bytes(img), "top.bin")
-        assert w.btn_softbsl_xbank.isEnabled() is True
-
-        w._ds2 = object()
-        w._update_softbsl_crossbank_button()
         assert w.btn_softbsl_xbank.isEnabled() is False
-        assert "Disconnect" in w.btn_softbsl_xbank.toolTip()
+
+        closed = []
+        w._ds2 = SimpleNamespace(close=lambda: closed.append(True))
+        w.cb_port.addItem("COM_TEST")
+        w.cb_port.setCurrentText("COM_TEST")
+        w._port_owner.acquire("flasher")
+        w._update_softbsl_crossbank_button()
+        assert w.btn_softbsl_xbank.isEnabled() is True
+        monkeypatch.setattr(QInputDialog, "getText", lambda *a: ("", False))
+        w._on_softbsl_cross_bank()
+        assert not closed
+        assert w._port_owner.owner == "flasher"
+
+        monkeypatch.setattr(QInputDialog, "getText", lambda *a: ("FLASH TOP", True))
+        calls, progress, logs = [], [], []
+        def cross_bank(*a, **kw):
+            calls.append((a, kw))
+            a[3]("guard @0x1FFC")
+            for phase in ("erase", "program", "verify"):
+                kw["progress_cb"](1024, 262144, phase)
+        monkeypatch.setattr(gui.softbsl_service, "run_cross_bank", cross_bank)
+        def run(task, on_success, on_failure):
+            assert w._ds2 is None
+            assert w._port_owner.owner == "softbsl"
+            task(lambda *a: logs.append(a), lambda *a: progress.append(a))
+            on_success(None)
+            return True
+        monkeypatch.setattr(w, "_run_state_changing_task", run)
+        w._on_softbsl_cross_bank()
+        assert closed == [True]
+        assert calls[0][0][0] == "COM_TEST"
+        assert calls[0][1]["chip_family"] == "amd"
+        assert (1024, 262144, "Writing backup bank") in progress
+        assert (1024, 262144, "Verifying backup bank") in progress
+        assert ("guard @0x1FFC", "debug") in logs
+        assert logs.count(("Writing backup bank…",)) == 1
+        assert w._port_owner.is_free()
+        assert w._fast_chip_family() is None
+        assert w.btn_softbsl_xbank.isEnabled() is False
     finally:
         w._ds2 = None
         w.close()
@@ -3895,16 +4010,18 @@ def test_softbsl_crossbank_failure_releases_port_and_shows_a17_recovery(monkeypa
     try:
         w._port_owner.acquire("softbsl")
         shown = {}
-        monkeypatch.setattr(
-            QMessageBox, "critical",
-            staticmethod(lambda *args, **kwargs: shown.update(message=args) or QMessageBox.Ok))
+        def show(box):
+            shown.update(title=box.windowTitle(), text=box.text(), details=box.detailedText())
+            return QMessageBox.Ok
+        monkeypatch.setattr(QMessageBox, "exec_", show)
 
         w._on_softbsl_crossbank_failure("verify mismatch")
 
         assert w._port_owner.is_free()
-        assert shown["message"][1] == "Cross-bank Write Stopped"
-        assert "A17 switch is back in the LOWER" in shown["message"][2]
-        assert "verify mismatch" in shown["message"][2]
+        assert shown["title"] == "Backup Bank Write Stopped"
+        assert "bank switch to LOWER" in shown["text"]
+        assert "verify mismatch" not in shown["text"]
+        assert shown["details"] == "verify mismatch"
     finally:
         w._port_owner.release("softbsl")
         w.close()
@@ -3989,6 +4106,9 @@ def test_run_task_stops_active_live_poller_before_worker_starts(monkeypatch):
 
             def stop(self):
                 events.append("poller_stop")
+
+            def completed_samples_since(self, _after):
+                return 0, 0, 0, (), ()
 
         class Signal:
             def __init__(self):
@@ -4381,8 +4501,8 @@ def test_softbsl_crossbank_top_base_is_composed_with_persistent_patches(version)
         assert w._softbsl_xbank_patch_ids == [
             "softbsl_loader", door_id, "cal_guard", "amd_flash"]
         preview = w._softbsl_preview.toPlainText()
-        assert "PREPARED IMAGE" in preview
-        assert "CROSS-BANK top-half write PLAN" in preview
+        assert "Prepared image" in preview
+        assert "Target: TOP backup bank" in preview
     finally:
         w.close()
 
@@ -4638,7 +4758,7 @@ def test_shared_application_configuration_uses_dark_fusion_theme():
     assert app.applicationName() == "BimmerStein ECU Tool"
     assert app.style().objectName().lower() == "fusion"
     assert app.font().family() == "Segoe UI"
-    assert app.font().pointSizeF() == pytest.approx(8.25)
+    assert app.font().pointSizeF() == pytest.approx(9)
     assert palette.color(QPalette.Window).name() == "#2b2b2b"
     assert palette.color(QPalette.Base).name() == "#1e1e1e"
     assert palette.color(QPalette.Disabled, QPalette.ButtonText).name() == "#888888"
@@ -4718,13 +4838,13 @@ def test_bsl_dry_run_populates_preview_and_gates_arm(tmp_path):
 def test_bins_open_in_bsl_button_is_offline_local_action(monkeypatch):
     app, w = _gui()
     try:
-        assert w.btn_backup_open_bsl.text() == "BSL-Unbricker"
-        assert "does not open hardware or flash anything" in w.btn_backup_open_bsl.toolTip()
+        assert w.act_backup_open_bsl.text() == "BSL-Unbricker"
+        assert "does not open hardware or flash anything" in w.act_backup_open_bsl.toolTip()
 
         w._ds2 = None
         w.backup_table.clearSelection()
         w._set_backup_buttons_enabled()
-        assert not w.btn_backup_open_bsl.isEnabled()
+        assert not w.act_backup_open_bsl.isEnabled()
 
         row = w.backup_table.rowCount()
         w.backup_table.insertRow(row)
@@ -4734,7 +4854,7 @@ def test_bins_open_in_bsl_button_is_offline_local_action(monkeypatch):
             lambda: type("Entry", (), {"file_type": "Full ROM"})(),
         )
         w._set_backup_buttons_enabled()
-        assert w.btn_backup_open_bsl.isEnabled()
+        assert w.act_backup_open_bsl.isEnabled()
         assert not w.btn_backup_flash.isEnabled()
     finally:
         w.close()
@@ -4748,15 +4868,15 @@ def test_bins_toolbar_labels_and_compare_selection_gate():
             w.btn_backup_add.text(),
             w.btn_backup_compare.text(),
             w.btn_backup_flash.text(),
-            w.btn_backup_open_bsl.text(),
-            w.btn_backup_patches.text(),
-            w.btn_backup_config.text(),
-            w.btn_backup_notes.text(),
-            w.btn_backup_del.text(),
-            w.btn_backup_open_folder.text(),
+            w.act_backup_open_bsl.text(),
+            w.act_backup_patches.text(),
+            w.act_backup_config.text(),
+            w.act_backup_notes.text(),
+            w.act_backup_del.text(),
+            w.act_backup_open_folder.text(),
         ] == [
             "ECU Backup…", "Import Bin…", "Compare", "Flash",
-            "BSL-Unbricker", "Patches", "Config", "Notes", "Delete",
+            "BSL-Unbricker", "Patches", "ECU Config", "Notes", "Delete",
             "Open Folder",
         ]
         assert (
@@ -4781,7 +4901,7 @@ def test_bins_toolbar_labels_and_compare_selection_gate():
         w._set_backup_buttons_enabled()
         assert not w.btn_backup_compare.isEnabled()
         assert w.btn_backup_flash.isEnabled()
-        assert w.btn_backup_open_bsl.isEnabled()
+        assert w.act_backup_open_bsl.isEnabled()
 
         selection.select(
             model.index(1, 0),
@@ -4789,11 +4909,11 @@ def test_bins_toolbar_labels_and_compare_selection_gate():
         w._set_backup_buttons_enabled()
         assert w.btn_backup_compare.isEnabled()
         assert not w.btn_backup_flash.isEnabled()
-        assert not w.btn_backup_open_bsl.isEnabled()
-        assert not w.btn_backup_patches.isEnabled()
-        assert not w.btn_backup_config.isEnabled()
-        assert not w.btn_backup_notes.isEnabled()
-        assert not w.btn_backup_del.isEnabled()
+        assert not w.act_backup_open_bsl.isEnabled()
+        assert not w.act_backup_patches.isEnabled()
+        assert not w.act_backup_config.isEnabled()
+        assert not w.act_backup_notes.isEnabled()
+        assert not w.act_backup_del.isEnabled()
 
         w._on_backup_search("first")
         assert w.backup_table.isRowHidden(1)
@@ -4824,9 +4944,9 @@ def test_bins_patches_button_loads_selected_full_rom_offline(
         w._set_backup_buttons_enabled()
         w.tabs.setCurrentIndex(0)
 
-        assert w.btn_backup_patches.text() == "Patches"
-        assert w.btn_backup_patches.isEnabled()
-        w.btn_backup_patches.click()
+        assert w.act_backup_patches.text() == "Patches"
+        assert w.act_backup_patches.isEnabled()
+        w.act_backup_patches.trigger()
 
         assert w._patch_base == data
         assert w._patch_base_source == path.name
@@ -4846,7 +4966,7 @@ def test_bins_patches_button_loads_selected_full_rom_offline(
             lambda _parent, title, message: warnings.append((title, message)))
         w.tabs.setCurrentIndex(0)
 
-        w.btn_backup_patches.click()
+        w.act_backup_patches.trigger()
 
         assert w._patch_base == data
         assert w._patch_base_source == path.name
@@ -5040,6 +5160,49 @@ def test_flash_chip_label_updates_after_connect_intel():
         w._on_connected(chip_sig=sig)
         assert "28F200" in w._flash_chip_note.text()
     finally:
+        w.close()
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (b"\xa5\x5a\x42\xbd", "Detected bank: BOTTOM"),
+    (b"\xa5\x5a\x54\xab", "Detected bank: TOP"),
+    (b"\xa5\x5a\x54\x00", "unknown"),
+])
+def test_bank_identification_logged_on_connect_and_refresh(monkeypatch, raw, expected):
+    app, w = _gui()
+    try:
+        sig = bytes.fromhex("e00e0d58f04ec084")
+        w._on_connected(chip_sig=sig, softbsl_marker_raw=raw)
+        assert expected in w.log_view.toPlainText()
+        assert "#6adf6a" in w.log_view.toHtml()
+        w.log_view.clear()
+        w._ds2 = SimpleNamespace(
+            identify=lambda: b"", read_vin=lambda: "", close=lambda: None,
+            read_mem=lambda addr, size: {gui.ecu_info.BANK_MARKER_ADDR: raw,
+                                        gui.ecu_info.DRV_SIG_ADDR: sig}.get(addr, b""))
+        monkeypatch.setattr(w, "_read_new_info_fields", lambda *a: {})
+        monkeypatch.setattr(w, "_read_live_identity_source", lambda *a: None)
+        monkeypatch.setattr(w, "_run_task", lambda task, **kw: task(w._log, lambda *a: None))
+        w._on_read_info()
+        assert expected in w.log_view.toPlainText()
+        assert "#6adf6a" in w.log_view.toHtml()
+    finally:
+        w.close()
+
+
+def test_bank_prompt_uses_continue_and_updates_waiting_status(monkeypatch):
+    app, w = _gui()
+    try:
+        shown = []
+        monkeypatch.setattr(QMessageBox, "exec_", lambda box: shown.append(
+            (box.text(), [button.text() for button in box.buttons()])))
+        w._task_busy = True
+        w._softbsl_prompt._show("Move the bank switch to UPPER\n\nKeep ignition ON.")
+        assert shown[0][1] == ["Continue"]
+        assert w.progress_label.text() == "Waiting: Move the bank switch to UPPER"
+        assert w._softbsl_prompt._evt.is_set()
+    finally:
+        w._task_busy = False
         w.close()
 
 
@@ -7744,6 +7907,67 @@ def test_config_comboboxes_share_a_text_safe_fixed_height():
         w.close()
 
 
+def test_default_pages_fit_review_window_with_populated_identity_fields():
+    app = QApplication.instance() or QApplication([])
+    old_font = app.font()
+    gui.configure_application(app)
+    w = gui.MS41FlashGUI()
+    try:
+        w.resize(980, 740)
+        w.show()
+        for key, value in {"source": "ECU boot read (BOTTOM)", "part": "1437806",
+                           "serial": TEST_SERIAL, "vin": TEST_VIN, "isn": TEST_ISN}.items():
+            w._id_labels[key].setText(value)
+        w._info_labels["VIN"].setText(TEST_VIN)
+        w._info_labels["Calibration ID"].setText("0110AD1100 (ID 12)")
+        w._analyzer_labels["vin"].setText(TEST_VIN)
+        w._analyzer_labels["matched"].setText("MS41 calibration definition")
+        w.id_boot_strings.setPlainText("Example identity strings\n" * 8)
+        w._softbsl_preview.setPlainText("Example prepared-image details\n" * 12)
+        for index in range(w.tabs.count()):
+            w.tabs.setCurrentIndex(index)
+            for _ in range(8):
+                app.processEvents()
+            page = w.tabs.widget(index)
+            scroll = page if isinstance(page, QScrollArea) else page.findChild(QScrollArea)
+            assert scroll.verticalScrollBar().maximum() == 0, w.tabs.tabText(index)
+            assert scroll.horizontalScrollBar().maximum() == 0, w.tabs.tabText(index)
+            for panel in page.findChildren(gui.QTextEdit):
+                if panel.isVisible():
+                    assert panel.parentWidget().rect().contains(panel.geometry())
+        assert (w.width(), w.height()) == (980, 740)
+    finally:
+        w.close()
+        app.setFont(old_font)
+
+
+def test_compact_bsl_preserves_both_sections_without_spreading_help_apart():
+    app = QApplication.instance() or QApplication([])
+    old_font = app.font()
+    gui.configure_application(app)
+    w = gui.MS41FlashGUI()
+    try:
+        w.resize(1000, 740)
+        w.show()
+        w.tabs.setCurrentIndex(w._bsl_tab_index)
+        for _ in range(6):
+            app.processEvents()
+        assert w.btn_bsl_read_full.isVisible()
+        assert w.btn_bsl_arm.isVisible()
+        page = w.tabs.widget(w._bsl_tab_index)
+        assert page.verticalScrollBar().maximum() == 0
+        labels = page.findChildren(gui.QLabel)
+        warning = next(label for label in labels if "BSL-Unbricker drives" in label.text())
+        help_text = next(label for label in labels if "Last resort only" in label.text())
+        assert 0 <= help_text.y() - warning.geometry().bottom() <= 8
+        for name in ("cb_bsl_view", "cb_softbsl_view", "cb_coding_view", "cb_config_mode"):
+            assert not hasattr(w, name)
+        assert not any(box.text() == "Show configuration help" for box in w.findChildren(gui.QCheckBox))
+    finally:
+        w.close()
+        app.setFont(old_font)
+
+
 def test_config_tab_scrolls_instead_of_compressing_combobox_rows():
     app, w = _gui()
     try:
@@ -7762,14 +7986,12 @@ def test_config_tab_scrolls_instead_of_compressing_combobox_rows():
         ]
         assert all(combo.parentWidget() is calibration
                    for combo in calibration_combos)
-        geometries = sorted(
-            (combo.y(), combo.height())
-            for combo in calibration_combos
-        )
-        assert all(y + height <= next_y
-                   for (y, height), (next_y, _) in zip(
-                       geometries, geometries[1:]))
-        assert w._config_scroll.verticalScrollBar().maximum() > 0
+        for x in {combo.x() for combo in calibration_combos}:
+            geometries = sorted((combo.y(), combo.height()) for combo in calibration_combos
+                                if combo.x() == x)
+            assert all(y + height <= next_y for (y, height), (next_y, _) in
+                       zip(geometries, geometries[1:]))
+        assert w._main_scroll.horizontalScrollBar().maximum() > 0
     finally:
         w.close()
 
@@ -8693,3 +8915,68 @@ def test_close_event_close_releases_recovery_owner_and_accepts(monkeypatch):
         w._softbsl_write_recovery = None
         w._port_owner.release("softbsl")
         w.close()
+
+
+def test_resizable_panels_fit_wide_windows_and_restore_user_sizes(tmp_path, monkeypatch):
+    from PyQt5.QtCore import QSettings
+
+    settings = QSettings(str(tmp_path / "layout.ini"), QSettings.IniFormat)
+    monkeypatch.setattr(gui._PanelSplitter, "_settings", lambda self: settings)
+    app = QApplication.instance() or QApplication([])
+    old_font = app.font()
+    gui.configure_application(app)
+    w = gui.MS41FlashGUI()
+    other = None
+    try:
+        w.resize(980, 740)
+        w.show()
+        heights = {}
+        for width, height in ((980, 740), (3440, 1393)):
+            w.resize(width, height)
+            for name, editor in (("Coding", w.transmission_swap_details),
+                                 ("Patches", w.patches_log),
+                                 ("VIN / EWS", w.id_ews_frames)):
+                index = next(i for i in range(w.tabs.count())
+                             if w.tabs.tabText(i).strip() == name)
+                w.tabs.setCurrentIndex(index)
+                for _ in range(8):
+                    app.processEvents()
+                page = w.tabs.widget(index)
+                scroll = page if isinstance(page, QScrollArea) else page.findChild(QScrollArea)
+                assert scroll.verticalScrollBar().maximum() == 0
+                assert editor.parentWidget().rect().contains(editor.geometry())
+                if width == 980:
+                    heights[name] = editor.height()
+                else:
+                    assert editor.height() > heights[name] + 200
+            assert w.btn_transmission_swap_recover.x() - w.btn_transmission_swap_check.geometry().right() < 20
+            assert w.btn_ews_send.x() - w.id_ews_isn.geometry().right() < 20
+            assert w.id_vin_custom.width() <= 300
+            assert w.txt_coding_search.x() < 600
+
+        before = w.log_view.height()
+        w.main_splitter.moveSplitter(300, 1)
+        app.processEvents()
+        assert w.log_view.height() > before + 100
+        saved_sizes = w.main_splitter.sizes()
+        assert settings.contains("layout/main")
+        other = gui.MS41FlashGUI()
+        other.resize(3440, 1393)
+        other.show()
+        for _ in range(8):
+            app.processEvents()
+        assert abs(other.main_splitter.sizes()[0] - saved_sizes[0]) <= 2
+        reset = next(button for button in other.findChildren(QPushButton)
+                     if button.text() == "Reset Layout")
+        reset.click()
+        assert not settings.contains("layout/main")
+        assert other.main_splitter.sizes()[0] != saved_sizes[0]
+        # Shrinking after a user drag keeps every panel accessible.
+        other.resize(980, 740)
+        app.processEvents()
+        assert all(size > 0 for size in other.main_splitter.sizes())
+    finally:
+        w.close()
+        if other is not None:
+            other.close()
+        app.setFont(old_font)

@@ -79,9 +79,9 @@ def test_available_patches_filters_by_version():
     assert amd["status"] == "TESTED"
     assert amd["tested"] is True
     alphan = next(p for p in avail if p["id"] == "alphan_failsafe")
-    assert alphan["status"] == "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED"
-    assert alphan["tested"] is False
-    assert next(p for p in avail if p["id"] == "softbsl_loader")["tested"] is False
+    assert alphan["status"] == "TESTED"
+    assert alphan["tested"] is True
+    assert next(p for p in avail if p["id"] == "softbsl_loader")["tested"] is True
     assert next(p for p in avail if p["id"] == "door_magic")["tested"] is True
     ic = next(p for p in avail if p["id"] == "ignition_cut_v7")
     assert ic["status"] == "VEHICLE TEST REQUIRED"
@@ -538,8 +538,8 @@ def test_deprecated_calguard_is_detected_removed_and_replaced_by_v5(
     assert available[legacy_id]["removable"] is True
     assert available["cal_guard"]["installed"] is False
     assert available["cal_guard"]["version"] == "V5"
-    assert available["cal_guard"]["status"] == "OFFLINE EXACT-BYTE VERIFIED - BENCH TEST REQUIRED"
-    assert available["cal_guard"]["tested"] is False
+    assert available["cal_guard"]["status"] == "TESTED"
+    assert available["cal_guard"]["tested"] is True
     assert available["cal_guard"]["legacy"] == [{
         "id": legacy_id,
         "label": legacy_label,
@@ -947,3 +947,44 @@ def test_sparse_boot_gate_fails_safe_on_incomplete_evidence():
 
     assert patch_service.missing_boot_patches_sparse(cg_img, only_first_range) == [
         "cal_guard", "softbsl_loader"]
+
+
+@pytest.mark.parametrize("marker", [b"\xa5\x5a\x42\xbd", b"\xa5\x5a\x54\xab"])
+def test_loader_bank_marker_does_not_break_dependency_detection(marker):
+    patches = patch_service.definitions()
+    image = bytearray(_synthetic_patch_base("1406464", "12", "0912"))
+    for pid in ("softbsl_loader", "cal_guard", "door_magic"):
+        for edit in patches[pid]["edits"]:
+            data = bytes.fromhex(edit["data"])
+            image[edit["off"]:edit["off"] + len(data)] = data
+    image[0x5FFC:0x6000] = marker
+    original = bytes(image)
+    rows = {row["id"]: row for row in patch_service.available_patches(image)}
+    assert rows["softbsl_loader"]["installed"]
+    for pid in ("cal_guard", "door_magic"):
+        assert rows[pid]["installed"]
+        assert "MISSING REQUIRED PATCH" not in rows[pid]["badge"]
+    assert bytes(image) == original
+    reads = [(lo, bytes(image[lo:hi]))
+             for lo, hi in patch_service.boot_patch_read_ranges(image)]
+    assert patch_service.missing_boot_patches(image, image) == []
+    assert patch_service.missing_boot_patches_sparse(image, reads) == []
+    other_bank = bytearray(image)
+    other_bank[0x5FFC:0x6000] = (b"\xa5\x5a\x54\xab" if marker[2] == 0x42
+                               else b"\xa5\x5a\x42\xbd")
+    assert patch_service.missing_boot_patches(image, other_bank) == ["softbsl_loader"]
+    other_reads = [(lo, bytes(other_bank[lo:hi]))
+                   for lo, hi in patch_service.boot_patch_read_ranges(image)]
+    assert patch_service.missing_boot_patches_sparse(image, other_reads) == ["softbsl_loader"]
+
+    loader = patches["softbsl_loader"]
+    for invalid in (b"\xff" * 4, b"\xa5\x5a\x54\x00", b"\xa5\x5a\x58\xa7"):
+        image[0x5FFC:0x6000] = invalid
+        assert not patch_ms41.is_applied(image, loader)
+    image[0x5FFC:0x6000] = marker
+    for edit in loader["edits"]:
+        if edit["off"] == 0x5FFC:
+            continue
+        image[edit["off"]] ^= 1
+        assert not patch_ms41.is_applied(image, loader)
+        image[edit["off"]] ^= 1

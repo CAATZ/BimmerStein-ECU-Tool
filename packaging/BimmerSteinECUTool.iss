@@ -1,14 +1,14 @@
 #ifndef AppVersion
-  #define AppVersion "0.1.0b15"
+  #define AppVersion "0.1.0b16"
 #endif
 #ifndef AppDisplayVersion
-  #define AppDisplayVersion "0.1.0 Beta 15"
+  #define AppDisplayVersion "0.1.0 Beta 16"
 #endif
 #ifndef AppNumericVersion
-  #define AppNumericVersion "0.1.0.15"
+  #define AppNumericVersion "0.1.0.16"
 #endif
 #ifndef SourceDir
-  #define SourceDir "..\release\BimmerStein-ECU-Tool-0.1.0b15-Windows-x64"
+  #define SourceDir "..\release\BimmerStein-ECU-Tool-0.1.0b16-Windows-x64"
 #endif
 #ifndef OutputDir
   #define OutputDir "..\release"
@@ -18,9 +18,9 @@
 #endif
 #define SetupAppName "BimmerStein ECU Tool"
 #ifdef NuitkaBuild
-  #define SetupAppId "{{53C48669-F8A0-4C31-A2C1-E4AF447F71CA}"
-  #define SetupInstallDirName "BimmerStein ECU Tool-N"
-  #define SetupShortcutSuffix " (Nuitka)"
+  #define SetupAppId "{{2FB57080-7F5F-4C36-B723-55377DC11A55}"
+  #define SetupInstallDirName "BimmerStein ECU Tool"
+  #define SetupShortcutSuffix ""
 #else
   #define SetupAppId "{{2FB57080-7F5F-4C36-B723-55377DC11A55}"
   #define SetupInstallDirName "BimmerStein ECU Tool"
