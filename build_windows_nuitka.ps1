@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $root = $PSScriptRoot
-$python = Join-Path $root ".venv\Scripts\python.exe"
+$python = Join-Path $root ".venv\python.exe"
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
     throw "Virtual environment not found. Create .venv and install requirements-build.txt first."
 }
@@ -25,16 +25,10 @@ try {
         throw "The libusb1 Windows runtime DLL is missing."
     }
 
-    & $python "packaging\generate_icon.py"
-    if ($LASTEXITCODE -ne 0) { throw "Application icon generation failed." }
+    # Use the reviewed canonical manual and artwork shipped in this source archive.
     & $python "packaging\generate_version_info.py" --version $Version
     if ($LASTEXITCODE -ne 0) { throw "Windows version-metadata generation failed." }
-
     $env:QT_QPA_PLATFORM = "offscreen"
-    & $python "packaging\capture_manual_screenshots.py"
-    if ($LASTEXITCODE -ne 0) { throw "Manual screenshot generation failed." }
-    & $python "packaging\build_user_manual.py"
-    if ($LASTEXITCODE -ne 0) { throw "User-manual build failed." }
 
     & $python -m engines.softbsl.verify_agent_artifacts
     if ($LASTEXITCODE -ne 0) { throw "RAM-agent artifact verification failed." }
@@ -83,12 +77,14 @@ try {
     $nuitkaArguments = @(
         "-m", "nuitka",
         "--mode=standalone",
-        "--msvc=latest",
+        "--mingw64",
+        "--jobs=12",
+        "--lto=no",
         "--assume-yes-for-downloads",
         "--enable-plugin=pyqt5",
         "--include-module=serial.tools.list_ports_windows",
         "--windows-console-mode=disable",
-        "--include-windows-runtime-dlls=yes",
+        "--include-windows-runtime-dlls=no",
         "--include-data-dir=$root\assets=assets",
         "--include-data-dir=$root\engines\patcher\patches=engines/patcher/patches",
         "--include-data-dir=$root\THIRD_PARTY_LICENSES=THIRD_PARTY_LICENSES",
@@ -119,6 +115,24 @@ try {
     $usb1Target = Join-Path $builtApp "usb1"
     New-Item -ItemType Directory -Path $usb1Target -Force | Out-Null
     Copy-Item -LiteralPath $usb1Dll -Destination $usb1Target
+    # Use the original older runtime DLLs, never the host's current MSVC redist.
+    $pythonRoot = Split-Path -Parent $python
+    $qtBin = Join-Path $pythonRoot "Lib\site-packages\PyQt5\Qt5\bin"
+    foreach ($name in @("vcruntime140.dll", "vcruntime140_1.dll")) {
+        Copy-Item -LiteralPath (Join-Path $pythonRoot $name) -Destination $builtApp -Force
+    }
+    foreach ($name in @("msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "concrt140.dll")) {
+        Copy-Item -LiteralPath (Join-Path $qtBin $name) -Destination $builtApp -Force
+    }
+    Copy-Item -LiteralPath (Join-Path $pythonRoot "DLLs\libssl-1_1.dll") -Destination $builtApp -Force
+    $ucrt = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\Redist\ucrt\DLLs\x64"
+    Get-ChildItem -LiteralPath $ucrt -Filter '*.dll' | Copy-Item -Destination $builtApp -Force
+    $mediaPath = [IO.Path]::GetFullPath((Join-Path $builtApp "PyQt5\qt-plugins\mediaservice"))
+    if (-not $mediaPath.StartsWith([IO.Path]::GetFullPath($builtApp) + "\", [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to remove plugins outside the build package"
+    }
+    if (Test-Path -LiteralPath $mediaPath) { Remove-Item -LiteralPath $mediaPath -Recurse -Force }
+    New-Item -ItemType Directory -Path (Split-Path -Parent $appDir) -Force | Out-Null
     Move-Item -LiteralPath $builtApp -Destination $appDir
 
     $releaseReadme = Get-Content -Raw -LiteralPath "README.md" -Encoding utf8

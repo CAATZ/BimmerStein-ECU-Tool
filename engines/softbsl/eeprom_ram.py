@@ -732,7 +732,7 @@ def field_report(image: bytes, variant: str = "MS41.3") -> list[dict]:
     report = []
     for field in fields_for_variant(variant):
         raw = image[field.offset:field.offset + field.length]
-        row = asdict(field) | {"raw": raw.hex(" ")}
+        row = {**asdict(field), "raw": raw.hex(" ")}
         if field.checked:
             row["stored_check"] = _u16(raw, field.length - 2)
             row["computed_check"] = additive_check(raw[:-2])
@@ -2042,7 +2042,7 @@ def set_decoded_field(image: bytes, variant: str, field_id: str, value: str, *,
                       else None)
         if raw_option is not None:
             try:
-                raw_replacement = bytes.fromhex(raw_option.removeprefix("raw:"))
+                raw_replacement = bytes.fromhex(raw_option[4:])
             except ValueError as error:
                 raise ValueError("invalid raw EEPROM field option") from error
             if len(raw_replacement) != field["length"]:
@@ -2090,7 +2090,7 @@ def set_decoded_field(image: bytes, variant: str, field_id: str, value: str, *,
                 f"{field['label']} must be between {field['minimum']} and "
                 f"{field['maximum']} {field['unit']}")
         if variant == "MS41.1" and field_id.startswith("knock_cell_"):
-            shift = (int(field_id.removeprefix("knock_cell_")) % 2) * 4
+            shift = (int(field_id[len("knock_cell_"):]) % 2) * 4
             nibble = round(-numeric / field["step"])
             stored = (before[offset] & ~(0x0F << shift)) | (nibble << shift)
         elif signed:

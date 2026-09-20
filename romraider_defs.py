@@ -15,6 +15,8 @@ a handful of hardcoded scalars.  It:
 Definitions are loaded only from the explicit path selected in the ROM Analyzer.
 """
 
+from __future__ import annotations
+
 from functools import lru_cache
 import hashlib
 from pathlib import Path

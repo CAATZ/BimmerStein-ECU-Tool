@@ -6,6 +6,8 @@ state flags. The layout was verified against an MS41 serial capture and the
 MS41.3 response builder.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 

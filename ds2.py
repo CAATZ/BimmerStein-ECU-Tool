@@ -39,6 +39,8 @@ Partial-write sequence (captured control flow with production payload sizing):
     → 0x07/0x02 write blocks (up to 243 bytes each, skip all-0xFF chunks)
 """
 
+from __future__ import annotations
+
 import sys
 import time
 import logging
