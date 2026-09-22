@@ -12,6 +12,7 @@ import traceback
 import uuid
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -35,7 +36,10 @@ from ms41 import (
     SS1V2_PROG_SIG,
     SS1V2_PROG_SIG_ADDR,
 )
-from ds2 import DS2Interface, DS2Error
+from ds2 import (
+    DS2Interface, DS2Error, LegacyWriteRecovery, LegacyWriteRecoveryRequired,
+    open_identified, resume_legacy_recovery,
+)
 from checksum import verify_checksum, correct_checksums
 from dtc import (format_dtc_table, parse_ds2_dtc_response, DS2DTCRecord,
                  read_ms41_fault_memory)
@@ -93,6 +97,7 @@ LOG_DIR = str(mutable_path("logs"))
 VERIFY_OFF_MESSAGE = (
     "Read-back verification skipped (Verify off). ECU-side finalization completed."
 )
+CONNECT_TIMEOUT_S = 30.0
 LOW_BATTERY_WARNING_V = 12.0
 MAIN_WINDOW_WIDTH = 980
 MAIN_WINDOW_PREFERRED_HEIGHT = 740
@@ -522,6 +527,37 @@ class WorkerThread(QThread):
             self.done_signal.emit(False, e)
 
 
+class _ConnectWorker(QObject):
+    """Only ordinary read-only Connect may outlive the window in a stuck driver."""
+    log_signal = pyqtSignal(str, str)
+    progress_signal = pyqtSignal(int, int, str)
+    done_signal = pyqtSignal(bool, object)
+    cleanup_signal = pyqtSignal(object)
+
+    def __init__(self, task_fn):
+        super().__init__()
+        self.task_fn = task_fn
+        self._thread = threading.Thread(target=self.run, daemon=True)
+
+    run = WorkerThread.run
+
+    def start(self):
+        self._thread.start()
+
+    def isRunning(self):
+        return self._thread.is_alive()
+
+    def discard_result(self, result):
+        def close():
+            try:
+                result[0].close()
+            except Exception as error:
+                self.cleanup_signal.emit(error)
+            else:
+                self.cleanup_signal.emit(None)
+        threading.Thread(target=close, daemon=True).start()
+
+
 class _GuiPrompt(QObject):
     """A blocking prompt usable from a worker thread. The soft-BSL class calls
     prompt(msg) at each physical step (key-cycle / A17 flip); this shows a modal
@@ -815,7 +851,9 @@ class MS41FlashGUI(QMainWindow):
                                             # reused for boot gates and identity grafting
         self._ecu_identity_source = None   # live DS2 production identity + AIF snapshot
         self._task_busy           = False
-        self._connect_attempt     = None   # token while a provisional DS2 handle is worker-owned
+        self._connect_attempt     = None   # active, cancellable ordinary Connect
+        self._connect_pending     = None   # owns the port until native cleanup returns
+        self._closing             = False
         self._connection_echo     = True
         self._connection_port     = None   # plain-string snapshot; safe for worker-thread handoffs
         self._d2xx_checked        = False
@@ -827,7 +865,7 @@ class MS41FlashGUI(QMainWindow):
         self._live_timer.timeout.connect(self._refresh_live_display)
         self._backup_mgr           = BackupManager()
         self._port_owner           = PortOwner()   # single-owner mutex for the one serial port
-        self._native_write_recovery = None  # retained D2XX/session after a post-erase failure
+        self._native_write_recovery = None  # retained stock DS2 owner, slow or native-fast
         self._softbsl_write_recovery = None # retained Soft-BSL RAM agent after a post-erase failure
         self._eeprom_write_recovery = None # retained EEPROM agent after an uncertain byte write
         self._transmission_swap_sessions = {}
@@ -1282,9 +1320,9 @@ class MS41FlashGUI(QMainWindow):
         self.chk_boot_preserve_identity.setEnabled(False)
         self.chk_boot_preserve_identity.setStyleSheet("color:#aaa; padding:4px;")
         self.chk_boot_preserve_identity.setToolTip(
-            "When a brick-class boot/parameter write is armed, graft the connected ECU's "
-            "serial (including its four-digit EWS ISN) and VIN onto the selected image. "
-            "DS2 and ordinary Soft-BSL writes preserve this region automatically.")
+            "When Write Boot is enabled, preserve the connected ECU's serial, EWS ISN, "
+            "VIN and AIF history in the file's replacement boot region. With Write Boot "
+            "off, the existing boot region already preserves these bytes.")
         boot_row.addWidget(self.chk_boot_preserve_identity)
         boot_row.addStretch()
         lay.addLayout(boot_row)
@@ -1838,6 +1876,9 @@ class MS41FlashGUI(QMainWindow):
                 self._d2xx_warn.setVisible(False)
 
     def _on_connect_toggle(self, checked):
+        if self._connect_attempt is not None:
+            self._cancel_connect()
+            return
         if checked:
             self._connect()
         else:
@@ -1855,6 +1896,9 @@ class MS41FlashGUI(QMainWindow):
         return bool(session is not None and session.is_open)
 
     def _connect(self):
+        if self._connect_pending is not None:
+            self._log("The previous connection is still closing; its port remains reserved.", "warn")
+            return
         port = self.cb_port.currentText()
         if not port or port.startswith("("):
             QMessageBox.warning(self, "No Serial Port", "Select a valid serial port.")
@@ -1873,19 +1917,31 @@ class MS41FlashGUI(QMainWindow):
             return
         self._start_session_log()
         self._log(f"Opening {port} for BMW DS2 (9600 8E2, no init)…")
-        connect_attempt = object()
-        self._connect_attempt = connect_attempt
+        connect_attempt = SimpleNamespace(
+            cancelled=threading.Event(), deadline=time.monotonic() + CONNECT_TIMEOUT_S,
+            ds2=None, worker=None, cleanup_error=None)
+        self._connect_attempt = self._connect_pending = connect_attempt
         direct_tap = self.chk_direct_tap.isChecked()
         self._connection_echo = not direct_tap
         self._connection_port = port
         if direct_tap:
             self._log("Direct-tap mode: full-duplex, no K-Line echo expected.")
 
+        def check_operation():
+            if connect_attempt.cancelled.is_set():
+                raise DS2Error("Connection cancelled.")
+            if time.monotonic() >= connect_attempt.deadline:
+                raise DS2Error("Connection timed out after 30 seconds.")
+
         def task(log_fn, progress_fn):
             ds2 = None
             try:
+                check_operation()
                 ds2 = DS2Interface(
                     port=port, baud=9600, verbose=False, echo=not direct_tap)
+                connect_attempt.ds2 = ds2
+                ds2.operation_check = check_operation
+                check_operation()
                 progress_fn(0, 1, f"Opening {port}")
                 ds2.open()
                 transport = getattr(ds2, "transport_name", None) or "serial"
@@ -1893,12 +1949,14 @@ class MS41FlashGUI(QMainWindow):
                 log_fn("Identifying ECU (DS2 0x00)…")
                 progress_fn(0, 1, "Identifying ECU")
                 ident = ds2.identify()
+                check_operation()
+                progress_fn(0, 1, "Reading ECU connection details")
                 cal_id = ""
                 try:
                     raw = bytes(ds2.read_mem(ecu_info.CAL_ID_ADDR, ecu_info.CAL_ID_LEN))
                     cal_id = raw.decode("ascii") if raw.isdigit() else ""
                 except Exception:
-                    pass
+                    check_operation()
                 program_compatibility_id = ""
                 try:
                     program_ids = [
@@ -1909,7 +1967,7 @@ class MS41FlashGUI(QMainWindow):
                             and len(set(program_ids)) == 1):
                         program_compatibility_id = program_ids[0].decode("ascii")
                 except Exception:
-                    pass
+                    check_operation()
                 calibration_compatibility_id = ""
                 try:
                     calibration_ids = [
@@ -1920,12 +1978,12 @@ class MS41FlashGUI(QMainWindow):
                             and len(set(calibration_ids)) == 1):
                         calibration_compatibility_id = calibration_ids[0].decode("ascii")
                 except Exception:
-                    pass
+                    check_operation()
                 vin = ""
                 try:
                     vin = ds2.read_vin()
                 except Exception:
-                    pass
+                    check_operation()
                 # Detect MS41.3 from the PROGRAM-region SS1v2 signature (survives a tune/cal
                 # reflash), NOT the cal-resident ABHISHEK marker a custom tune wipes.
                 ecu_id = bytes(ident[:7]).decode("ascii", errors="ignore")
@@ -1933,6 +1991,7 @@ class MS41FlashGUI(QMainWindow):
                     program_signature = bytes(ds2.read_mem(
                         SS1V2_PROG_SIG_ADDR ^ 0x4000, len(SS1V2_PROG_SIG)))
                 except Exception:
+                    check_operation()
                     program_signature = b""
                 live_variants = ecu_info.resolve_live_variants(
                     ecu_id,
@@ -1947,13 +2006,12 @@ class MS41FlashGUI(QMainWindow):
                 # Soft-BSL bank marker + flash chip signature — read-only, no agent, safe on a
                 # normally-running ECU. Used to decide whether the Fast checkbox can be offered
                 # and to render an accurate chip label.
-                progress_fn(0, 1, "Reading ECU connection details")
                 softbsl_marker_raw = b""
                 try:
                     softbsl_marker_raw = ds2.read_mem(
                         ecu_info.BANK_MARKER_ADDR, ecu_info.BANK_MARKER_LEN)
                 except Exception:
-                    pass
+                    check_operation()
                 softbsl_hook_present = False
                 softbsl_hook_check_failed = False
                 if ecu_info.decode_bank_marker(softbsl_marker_raw):
@@ -1961,6 +2019,7 @@ class MS41FlashGUI(QMainWindow):
                         softbsl_hook_present = self._live_softbsl_door_present(
                             ds2, program_variant)
                     except Exception as error:
+                        check_operation()
                         softbsl_hook_check_failed = True
                         log_fn(
                             "Soft-BSL loader marker is present, but the normal-mode 0x2A "
@@ -1980,10 +2039,11 @@ class MS41FlashGUI(QMainWindow):
                     chip_sig_for_fast = ds2.read_mem(
                         ecu_info.DRV_SIG_ADDR, ecu_info.DRV_SIG_LEN)
                 except Exception:
-                    pass
+                    check_operation()
                 new_fields = self._read_new_info_fields(
                     ds2, log_fn, ident, program_variant)
                 identity_source = self._read_live_identity_source(ds2, log_fn)
+                check_operation()
                 return (ds2, ident, cal_id, vin, prog_is_ms41_3, new_fields,
                         softbsl_marker_raw, chip_sig_for_fast, identity_source,
                         softbsl_hook_present, program_compatibility_id,
@@ -1994,9 +2054,11 @@ class MS41FlashGUI(QMainWindow):
                 # connect-time probe succeeds. Keep PortOwner held while close()
                 # runs so no other GUI route can race the same physical handle.
                 if ds2 is not None:
+                    progress_fn(0, 1, "Closing connection")
                     try:
                         ds2.close()
                     except Exception as close_error:
+                        connect_attempt.cleanup_error = close_error
                         log_fn(
                             f"Failed connection cleanup reported: {close_error}",
                             "warn",
@@ -2004,14 +2066,32 @@ class MS41FlashGUI(QMainWindow):
                 raise
 
         def on_success(result):
-            if self._connect_attempt is connect_attempt:
-                self._connect_attempt = None
+            if (self._closing or self._connect_attempt is not connect_attempt
+                    or connect_attempt.cancelled.is_set()
+                    or time.monotonic() >= connect_attempt.deadline):
+                if self._connect_attempt is connect_attempt:
+                    self._cancel_connect("Connection timed out after 30 seconds.")
+                # Success may have been queued just before Cancel. The handle is still
+                # worker-owned; even a blocking close must stay off the GUI thread.
+                connect_attempt.worker.discard_result(result)
+                return
+            self._connect_attempt = self._connect_pending = None
             self._ds2, *details = result
+            self._ds2.operation_check = None
             self._on_connected(*details)
 
         def on_failure(error):
-            if self._connect_attempt is connect_attempt:
-                self._connect_attempt = None
+            if self._connect_pending is not connect_attempt:
+                return
+            if self._closing or self._connect_attempt is not connect_attempt:
+                self._finish_connect_cleanup(connect_attempt, connect_attempt.cleanup_error)
+                return
+            self._connect_attempt = None
+            if connect_attempt.cleanup_error is not None:
+                self._log(f"Connection cleanup failed: {connect_attempt.cleanup_error}. "
+                          "The port remains reserved; the application can be closed.", "error")
+                return
+            self._connect_pending = None
             self._on_connect_failed(error)
 
         try:
@@ -2022,7 +2102,8 @@ class MS41FlashGUI(QMainWindow):
             )
         except Exception:
             if self._connect_attempt is connect_attempt:
-                self._connect_attempt = None
+                self._connect_attempt = self._connect_pending = None
+                self._port_owner.release("flasher")
             raise
         worker = self._worker
         if self._connect_attempt is connect_attempt and worker is not None:
@@ -2030,6 +2111,10 @@ class MS41FlashGUI(QMainWindow):
                 10000,
                 lambda: self._on_connect_still_waiting(
                     connect_attempt, worker, port),
+            )
+            QTimer.singleShot(
+                max(0, int((connect_attempt.deadline - time.monotonic()) * 1000)),
+                lambda: self._on_connect_timeout(connect_attempt, worker),
             )
 
     def _on_connect_still_waiting(self, connect_attempt, worker, port):
@@ -2041,11 +2126,59 @@ class MS41FlashGUI(QMainWindow):
         stage_note = f" Current stage: {stage}." if stage else ""
         message = (
             f"Still waiting for {port} / ECU response.{stage_note} "
-            "The port remains reserved; "
-            "wait, or unplug the adapter and let connection cleanup finish."
+            "The port remains reserved; choose Cancel to stop this connection."
         )
         self.progress_label.setText(message)
         self._log(message, "warn")
+
+    def _on_connect_timeout(self, attempt, worker):
+        if self._connect_attempt is attempt and self._worker is worker:
+            self._cancel_connect("Connection timed out after 30 seconds.")
+
+    def _cancel_connect(self, message="Connection cancelled."):
+        attempt = self._connect_attempt
+        if attempt is None:
+            return
+        attempt.cancelled.set()
+        self._connect_attempt = None
+        if self._worker is attempt.worker:
+            self._worker = None
+            self._task_busy = False
+        self.progress_bar.setVisible(False)
+        self.progress_label.setText(message + " Waiting for driver cleanup; you can close the app.")
+        self._log(message, "warn")
+        self.btn_connect.setChecked(False)
+        self._set_all_buttons_enabled(not self._task_busy)
+        cancel_io = getattr(attempt.ds2, "cancel_pending_io", None)
+        if cancel_io is not None:
+            def cancel():
+                try:
+                    cancel_io()
+                except Exception:
+                    pass
+            threading.Thread(target=cancel, daemon=True).start()
+
+    def _finish_connect_cleanup(self, attempt, error=None):
+        if self._connect_pending is not attempt:
+            return
+        if error is not None:
+            attempt.cleanup_error = error
+            if not self._closing:
+                self._log(f"Connection cleanup failed: {error}. The port remains reserved; "
+                          "the application can be closed.", "error")
+            return
+        self._connect_pending = None
+        self._port_owner.release("flasher")
+        self._connection_port = None
+        if self._worker is attempt.worker:
+            self._worker = None
+        if not self._closing:
+            self.btn_connect.setText("Connect")
+            self.btn_connect.setChecked(False)
+            if not self._task_busy:
+                self.progress_label.setText("")
+            self._log("Connection cleanup completed. Connect is available again.", "info")
+            self._set_all_buttons_enabled(not self._task_busy)
 
     def _connect_calguard_boot(self, port):
         if self.chk_direct_tap.isChecked():
@@ -2107,6 +2240,7 @@ class MS41FlashGUI(QMainWindow):
 
     def _on_calguard_boot_connected(self, session):
         self._softbsl_boot_session = session
+        self._ecu_softbsl_marker = getattr(session, "bank_marker", None)
         self._ecu_chip_sig = bytes(
             getattr(session, "driver_signature", b"") or b"")
         self._flash_chip_note.setText(
@@ -2476,7 +2610,7 @@ class MS41FlashGUI(QMainWindow):
             "session. The session stays open afterward.")
         self.btn_write_full.setToolTip(
             "Write a validated full ROM through the retained CalGuard/Soft-BSL "
-            "session. The existing boot/identity region is preserved.")
+            "session. TOP follows the Write Boot option; BOTTOM preserves boot/identity.")
         self.btn_write_tune.setToolTip(
             "Write a tune only when its Firmware Compatibility ID matches the "
             "identifiable live program. A missing or corrupt program ID blocks it.")
@@ -2635,11 +2769,17 @@ class MS41FlashGUI(QMainWindow):
             and self.chk_force_slow_ds2.isChecked()
         )
         force_direct = self._force_softbsl_recovery()
-        if self._fast_read_available() and not force_slow and not force_direct:
+        is_top = getattr(self, "_ecu_softbsl_marker", None) == "T"
+        self.chk_bootloader_write.setText(
+            "Write Boot (use file boot region)" if is_top else
+            "Allow high-risk boot/parameter writes (Full ROM)")
+        top_full = is_top and self._auto_transfer_route() == "softbsl"
+        if top_full or (self._fast_read_available() and not force_slow and not force_direct):
             self.chk_bootloader_write.setEnabled(True)
             if getattr(self, "_ecu_softbsl_marker", None) == "T":
-                tip = ("Writes the complete fused TOP SA7 sector (file 0x0000-0xFFFF) through "
-                       "the RAM agent. If interrupted, select BOTTOM and recover over Soft-BSL.")
+                tip = ("Checked: use the selected TOP file's boot/parameter region. "
+                       "Unchecked: preserve the ECU's current 8 KB boot/parameter region. "
+                       "Both use the Soft-BSL RAM agent to rewrite TOP's shared sector.")
             else:
                 tip = ("Writes BOTTOM file 0x4000-0x5FFF through the Soft-BSL agent. If interrupted, "
                        "recover over Soft-BSL when possible; hardware BSL remains the backstop.")
@@ -2653,15 +2793,25 @@ class MS41FlashGUI(QMainWindow):
         self._update_boot_identity_checkbox_state()
 
     def _update_boot_identity_checkbox_state(self):
-        """Enable identity grafting only for an armed boot/parameter write.
-
-        The option remains checked while disabled so boot writes always return to the safe
-        default. DS2 and ordinary Soft-BSL writes preserve these ECU bytes in place.
-        """
+        """Enable identity grafting for boot replacement, retaining the user's preference."""
         checkbox = getattr(self, "chk_boot_preserve_identity", None)
         boot = getattr(self, "chk_bootloader_write", None)
         if checkbox is not None:
-            checkbox.setEnabled(bool(boot and boot.isEnabled() and boot.isChecked()))
+            enabled = bool(boot and boot.isEnabled() and boot.isChecked())
+            checkbox.setEnabled(enabled)
+            is_top = getattr(self, "_ecu_softbsl_marker", None) == "T"
+            checkbox.setText(
+                "Graft ECU identity / AIF history" if is_top and enabled else
+                "Graft identity (already preserved with boot)" if is_top else
+                "Preserve ECU identity during boot writes")
+            checkbox.setToolTip(
+                "Preserve the connected ECU's identity and AIF history when replacing boot."
+                if enabled else
+                "Write Boot is off: TOP keeps its current 8 KB boot region, which already "
+                "includes ECU identity and AIF history. No separate identity graft is needed."
+                if is_top else
+                "Write Boot is off: the existing boot region already preserves ECU identity "
+                "and AIF history, so no separate identity graft is needed.")
 
     def _identity_graft_source(self):
         """Return the best current ECU identity snapshot and its decoded fields.
@@ -3236,8 +3386,7 @@ class MS41FlashGUI(QMainWindow):
                 f = diffs[0]
                 raise DS2Error(
                     f"Verify FAILED: {len(diffs)} byte(s) differ in the written regions — "
-                    f"first at DS2 0x{f:06X} (wrote 0x{exp[f]:02X}, read 0x{got[f]:02X}). "
-                    f"Re-flash before cycling ignition.")
+                    f"first at DS2 0x{f:06X} (wrote 0x{exp[f]:02X}, read 0x{got[f]:02X}).")
             log_fn("Verify OK — program + tune regions read back byte-for-byte.", "ok")
             return
 
@@ -3250,8 +3399,7 @@ class MS41FlashGUI(QMainWindow):
             f = diffs[0]
             raise DS2Error(
                 f"Verify FAILED: {len(diffs)} byte(s) differ after write — first at "
-                f"0x{f:05X} (wrote 0x{image[f]:02X}, read 0x{rb[f]:02X}). Re-flash before "
-                f"cycling ignition.")
+                f"0x{f:05X} (wrote 0x{image[f]:02X}, read 0x{rb[f]:02X}).")
         log_fn(f"Verify OK — {len(image)//1024} KB read back byte-for-byte.", "ok")
 
     def _show_flash_complete(self, title: str, message: str):
@@ -3522,22 +3670,46 @@ class MS41FlashGUI(QMainWindow):
         self._run_state_changing_task(
             task, on_success=on_success, on_failure=on_failure)
 
+    def _check_full_write_transport(self, image, transfer_route):
+        """Reject unsupported TOP writes before any preparation read."""
+        if (
+            softbsl_service.full_write_requires_softbsl(
+                getattr(self, "_ecu_softbsl_marker", None), image
+            )
+            and transfer_route != "softbsl"
+        ):
+            QMessageBox.critical(
+                self,
+                "TOP Full Write Requires Soft-BSL",
+                "A TOP-bank full write cannot use the resident DS2 flash driver because "
+                "TOP file 0x0000-0xFFFF is one fused 64 KB SA7 erase sector containing "
+                "that running driver. Use Automatic with the installed Soft-BSL RAM agent. "
+                "Tune-only writes remain available over DS2.",
+            )
+            self._log(
+                "Full write blocked before erase — TOP geometry requires Soft-BSL.",
+                "error",
+            )
+            return False
+        return True
+
     def _ds2_write_full(self, data: bytearray, filename: str, *,
                         require_boot_write=False, preserve_boot_identity=None,
                         archived_prewrite_image=None, on_write_success=None,
-                        disconnect_after_success=False):
+                        disconnect_after_success=False, write_notes=None):
         """Validate and route a full 256 KB ROM write.
 
         ``require_boot_write`` is used by workflows whose intended edit lives inside file
         0x4000-0x5FFF (such as Identity/EWS or a boot-region patch). It never weakens the
-        normal boot-write gates:
-        Soft-BSL/D2XX is required and the file warning, typed acknowledgement, and final
-        confirmation still run. ``preserve_boot_identity=False`` deliberately writes the ROM
+        normal boot-write gates: Soft-BSL/D2XX is required. TOP requires the Write Boot
+        checkbox and one combined confirmation; BOTTOM retains its typed acknowledgement.
+        ``preserve_boot_identity=False`` deliberately writes the ROM
         file's identity instead of grafting the currently connected ECU identity over the edit.
         ``archived_prewrite_image`` is an already-catalogued live full read; when supplied,
         the optional pre-write backup read is not repeated. ``on_write_success`` is called on
-        the GUI thread only after the full writer reports success. ``disconnect_after_success``
-        releases the ECU connection after the shared ignition-cycle prompt.
+        the GUI thread only after the full writer reports success. Every completed full write
+        releases the connection after the ignition-cycle prompt so the next connection refreshes
+        ECU identity and transfer routing; ``disconnect_after_success`` remains accepted for callers.
         """
         from ms41 import MS41ECU
 
@@ -3556,7 +3728,7 @@ class MS41FlashGUI(QMainWindow):
                 preserve_boot_identity=boot_identity_preference,
                 archived_prewrite_image=archived_prewrite_image,
                 on_write_success=on_write_success,
-                disconnect_after_success=disconnect_after_success)
+                disconnect_after_success=disconnect_after_success, write_notes=write_notes)
 
         # ── Hybrid ROM check — HARD BLOCK, no override ──────────────────────────
         # Detect ROMs assembled from program and calibration of different variants
@@ -3594,11 +3766,21 @@ class MS41FlashGUI(QMainWindow):
         boot_checkbox_requested = bool(
             getattr(self, "chk_bootloader_write", None) is not None
             and self.chk_bootloader_write.isChecked())
+        live_half = getattr(self, "_ecu_softbsl_marker", None)
+        top_full = live_half == "T"
+        file_half = softbsl_service.marker(image)
+        if top_full and require_boot_write and not boot_checkbox_requested:
+            QMessageBox.critical(
+                self, "Write Boot Required for This Edit",
+                "This operation explicitly changes boot-region bytes. Enable Write Boot "
+                "to apply those changes. With Write Boot off, TOP keeps its current boot "
+                "region and those edits would not be applied.")
+            return
         cached_full = getattr(self, "_last_full_read", None)
-        if (cached_full is not None
+        if (not top_full and cached_full is not None
                 and patch_service.missing_boot_patches(image, cached_full)):
             require_boot_write = True
-        if require_boot_write and (not fast_route or recovery_direct):
+        if require_boot_write and (not fast_route or (recovery_direct and not top_full)):
             QMessageBox.critical(
                 self, "Soft-BSL Boot Write Required",
                 "This operation changes bytes inside the ECU's boot/parameter region "
@@ -3610,33 +3792,23 @@ class MS41FlashGUI(QMainWindow):
                       "Soft-BSL boot-region write.", "error")
             return
         will_write_boot = (
-            fast_route and not recovery_direct
+            fast_route and (top_full or not recovery_direct)
             and (require_boot_write or boot_checkbox_requested)
         )
-        target_half = softbsl_service.marker(image) or "B"
-        if (
-            softbsl_service.full_write_requires_softbsl(
-                getattr(self, "_ecu_softbsl_marker", None), image
-            )
-            and not fast_route
-        ):
+        target_half = "T" if top_full else (file_half or "B")
+        if top_full and will_write_boot and file_half != "T":
             QMessageBox.critical(
-                self,
-                "TOP Full Write Requires Soft-BSL",
-                "A TOP-bank full write cannot use the resident DS2 flash driver because "
-                "TOP file 0x0000-0xFFFF is one fused 64 KB SA7 erase sector containing "
-                "that running driver. Use Automatic with the installed Soft-BSL RAM agent. "
-                "Tune-only writes remain available over DS2.",
-            )
-            self._log(
-                "Full write blocked before erase — TOP geometry requires Soft-BSL.",
-                "error",
-            )
+                self, "TOP Boot Image Required",
+                "Write Boot is enabled on TOP. Select a prepared TOP image, or turn "
+                "Write Boot off to preserve the ECU's current boot region.")
+            return
+        if not self._check_full_write_transport(image, transfer_route):
             return
         connected_chip_family = self._fast_chip_family()
         try:
-            softbsl_service.validate_flash_image_family(
-                image, connected_chip_family, write_bootloader=will_write_boot)
+            if not top_full or will_write_boot:
+                softbsl_service.validate_flash_image_family(
+                    image, connected_chip_family, write_bootloader=will_write_boot)
         except softbsl_service.FlashFamilyMismatchError as error:
             QMessageBox.critical(self, "Flash-Chip Family Mismatch", str(error))
             self._log(f"Full write blocked — {error}", "error")
@@ -3650,7 +3822,7 @@ class MS41FlashGUI(QMainWindow):
             and preserve_requested)
         identity_source = None
         identity_info = None
-        if preserve_boot_identity:
+        if preserve_boot_identity and not top_full:
             identity_source, identity_info = self._identity_graft_source()
             if identity_source is None:
                 QMessageBox.critical(
@@ -3680,7 +3852,17 @@ class MS41FlashGUI(QMainWindow):
         is_variant_conversion = _is_firmware_conversion(
             file_variant, ecu_variant, file_program_id, ecu_program_id
         )
-        if file_variant is None:
+        top_warnings = [write_notes] if write_notes else []
+        if top_full:
+            if file_variant is None:
+                top_warnings.append(
+                    "The file is not recognised as a valid MS41 ROM; an invalid image "
+                    "can leave TOP unbootable.")
+            elif is_variant_conversion:
+                _title, risk_note = self._conversion_warning_policy()
+                top_warnings.append(
+                    f"Variant conversion: {ecu_variant} → {file_variant}. {risk_note}")
+        elif file_variant is None:
             ans = QMessageBox.warning(self, "Unrecognised ROM",
                 "This file is not recognised as a valid MS41 ROM.\n\n"
                 "Flashing an invalid ROM can leave the ECU unbootable and require "
@@ -3727,8 +3909,9 @@ class MS41FlashGUI(QMainWindow):
                 "ok",
             )
 
+        # TOP's shared writer normalizes family after its live boot/identity graft.
         family_changed = False
-        if will_write_boot:
+        if not top_full and will_write_boot:
             start = MS41ECU.CODING_FAMILY_FILE_ADDR
             coding_family = bytes(image[start:start + 3])
             try:
@@ -3758,7 +3941,7 @@ class MS41FlashGUI(QMainWindow):
                 ),
                 "warn" if family_changed else "ok",
             )
-        else:
+        elif not top_full:
             try:
                 coding_family = self._live_coding_family(
                     archived_prewrite_image
@@ -3786,7 +3969,7 @@ class MS41FlashGUI(QMainWindow):
                 "ok",
             )
 
-        if preserve_boot_identity:
+        if preserve_boot_identity and not top_full:
             image = identity.graft_identity(image, identity_source)
             self._log(f"Identity and AIF history grafted from the connected ECU "
                       f"(serial {identity_info.serial or '?'}).", "ok")
@@ -3799,7 +3982,9 @@ class MS41FlashGUI(QMainWindow):
         ok, cs_details = verify_checksum(image)
         for detail in cs_details:
             self._log(detail)
-        if not ok:
+        if not ok and top_full:
+            top_warnings.append("The selected ROM has an invalid checksum.")
+        elif not ok:
             ans = QMessageBox.warning(
                 self,
                 "Checksum Not Valid",
@@ -3835,17 +4020,7 @@ class MS41FlashGUI(QMainWindow):
         # exact SA1 patch-edit ranges in the write worker before any erase. Building is never gated.
         boot_ids = patch_service.boot_write_patches_in(image)    # pure, ~0 cost, usually []
         gate_needs_live_read = False
-        top_sector_gate = target_half == "T" and not will_write_boot
-        if top_sector_gate:
-            # Compare the final image, including corrected program checksums in param2.
-            evidence = archived_prewrite_image or getattr(self, "_last_full_read", None)
-            if evidence is not None:
-                if not softbsl_service.top_boot_sector_matches(image, evidence):
-                    retry_with_boot()
-                    return
-            else:
-                gate_needs_live_read = True
-        elif boot_ids and not will_write_boot:
+        if not top_full and boot_ids and not will_write_boot:
             cached_full = getattr(self, "_last_full_read", None)
             if cached_full is not None:                          # authoritative, free (a slice)
                 blk = self._boot_region_flash_block(image, cached_full)
@@ -3858,7 +4033,11 @@ class MS41FlashGUI(QMainWindow):
             else:
                 gate_needs_live_read = True   # defer sparse SA1 patch reads to the worker (pre-erase)
 
-        if will_write_boot:
+        if top_full and will_write_boot:
+            warning = self._bootloader_write_file_warning(image)
+            if warning:
+                top_warnings.append(warning)
+        elif will_write_boot:
             warning = self._bootloader_write_file_warning(image)
             if warning and QMessageBox.warning(
                     self, "Boot-Region Write — File Check",
@@ -3909,6 +4088,23 @@ class MS41FlashGUI(QMainWindow):
             "ROM-file identity/AIF history will be written"
             if will_write_boot else
             "connected ECU identity/AIF history preserved in place")
+        top_note = ""
+        if top_full:
+            boot_region = "TOP boot/parameter region (file 0x4000-0x5FFF)"
+            boot_action = ("will use the selected TOP file" if will_write_boot else
+                           "will preserve the ECU's current 8 KB")
+            identity_action = (
+                "live ECU identity/AIF history will be read and grafted before erase"
+                if preserve_boot_identity else
+                "ROM-file identity/AIF history will be written"
+                if will_write_boot else
+                "ECU identity/AIF history retained with its existing boot region")
+            top_note = (
+                "TOP's shared 64 KB sector is erased and rewritten in either case. "
+                "Keep the bank switch on TOP. If interrupted, use the intact BOTTOM "
+                "bank for Soft-BSL recovery.\n\n")
+            if top_warnings:
+                top_note += "\n\n".join(top_warnings) + "\n\n"
         battery_notice = self._prewrite_battery_notice()
         ans = QMessageBox.question(
             self, "Confirm Full ROM Write",
@@ -3921,6 +4117,7 @@ class MS41FlashGUI(QMainWindow):
             f"Boot/parameter region - {boot_region}: {boot_action}.\n"
             f"{battery_notice}\n\n"
             f"Identity: {identity_action}.\n\n"
+            f"{top_note}"
             f"• Program and calibration sectors will be erased and rewritten.\n"
             f"• Keep ignition ON throughout. Engine must be OFF.\n"
             f"• Do NOT disconnect the adapter or cut power during write.\n"
@@ -3932,25 +4129,28 @@ class MS41FlashGUI(QMainWindow):
             return
 
         image_bytes = bytes(image)
-        softbsl_missing_after_write = (
-            self._softbsl_missing_after_full_write(
-                image_bytes, write_bootloader=will_write_boot)
-            if fast_route else ()
-        )
+        effective_image = [image_bytes]
+
+        def prepared_image_ready(prepared):
+            effective_image[0] = bytes(prepared)
+
+        top_full_options = ({
+            "preserve_boot_identity": preserve_boot_identity,
+            "correct_checksums": self.chk_correct_cksum.isChecked(),
+            "prepared_image_cb": prepared_image_ready,
+        } if top_full else None)
         backup_entry_box = [None]
         self._invalidate_current_full_read("full ROM write started")
 
         def task(log_fn, progress_fn):
             if gate_needs_live_read:
-                ranges = (softbsl_service.TOP_BOOT_FLASH_RANGES if top_sector_gate
-                          else patch_service.boot_patch_read_ranges(image_bytes))
+                ranges = patch_service.boot_patch_read_ranges(image_bytes)
                 total = sum(hi - lo for lo, hi in ranges)
                 log_fn(f"Boot-region gate: reading {total} required patch bytes "
                        f"across {len(ranges)} sparse range(s) before erase…")
                 try:
-                    # Each range stays within one 16 KB XOR-mapped block. TOP needs
-                    # all mapped SA7 bytes, while BOTTOM reads only the patch edits.
-                    # read_memory_range handles the DS2 frame cap before any erase.
+                    # BOTTOM reads only the required patch edits. Each range stays
+                    # within one 16 KB XOR-mapped block; read_memory_range caps frames.
                     if retained_recovery:
                         sparse = [
                             (lo, softbsl_service.read_boot_recovery_range(
@@ -3971,14 +4171,8 @@ class MS41FlashGUI(QMainWindow):
                         raise ValueError("incomplete boot-region read")
                 except Exception as e:
                     return _BootGateBlock(
-                        ["TOP fused SA7"] if top_sector_gate else boot_ids,
-                        reason=f"could not be read ({e})")  # fail-safe: no erase
-                if top_sector_gate:
-                    missing = (["TOP fused SA7"] if any(
-                        actual != image_bytes[lo:hi]
-                        for (lo, hi), (_off, actual) in zip(ranges, sparse)) else [])
-                else:
-                    missing = patch_service.missing_boot_patches_sparse(image_bytes, sparse)
+                        boot_ids, reason=f"could not be read ({e})")  # fail-safe: no erase
+                missing = patch_service.missing_boot_patches_sparse(image_bytes, sparse)
                 if missing:
                     return _BootGateBlock(missing)     # abort BEFORE any erase
             if archived_prewrite_image is not None:
@@ -4008,7 +4202,8 @@ class MS41FlashGUI(QMainWindow):
                             log_fn,
                             progress_cb=progress_fn,
                             do_verify=verify_write,
-                            write_bootloader=False,
+                            write_bootloader=will_write_boot if top_full else False,
+                            **({"top_full_options": top_full_options} if top_full else {}),
                         )
                     )
                 else:
@@ -4018,9 +4213,10 @@ class MS41FlashGUI(QMainWindow):
                             port, image_bytes, "full", self._softbsl_prompt, lf, baud="high",
                             progress_cb=pf, do_verify=verify_write,
                             write_bootloader=will_write_boot, chip_family=chip_family,
-                            entry_mode=entry_mode),
+                            entry_mode=entry_mode,
+                            **({"top_full_options": top_full_options} if top_full else {})),
                         log_fn, progress_fn,
-                        restore_after_success=not softbsl_missing_after_write)
+                        restore_after_success=False)
             elif native_route:
                 log_fn(
                     "Using stock native DS2 with direct 187500 entry and a short "
@@ -4035,9 +4231,8 @@ class MS41FlashGUI(QMainWindow):
                     variant_conversion=is_variant_conversion,
                 )
             else:
-                self._ds2_write("full", image_bytes, progress_fn, log_fn)
-                if verify_write:
-                    self._ds2_verify_after_write("full", image_bytes, log_fn, progress_fn)
+                self._ds2_write(
+                    "full", image_bytes, progress_fn, log_fn, verify_write=verify_write)
             if verify_write:
                 return "Full ROM write completed and read-back verification passed."
             return f"Full ROM write completed. {VERIFY_OFF_MESSAGE}"
@@ -4066,18 +4261,19 @@ class MS41FlashGUI(QMainWindow):
             self._finish_flash_success("Full ROM Write Complete", msg)
             if on_write_success is not None:
                 on_write_success()
+            softbsl_missing_after_write = (
+                self._softbsl_missing_after_full_write(
+                    effective_image[0], write_bootloader=will_write_boot or top_full)
+                if fast_route else ())
             if softbsl_missing_after_write:
                 missing_text = ", ".join(softbsl_missing_after_write)
                 self._log(
                     "The written image no longer contains a complete Soft-BSL entry "
                     f"path ({missing_text}). Disconnected so the next connection "
                     "detects the ECU's actual transfer route.", "warn")
-            if (disconnect_after_success or native_route or retained_recovery
-                    or softbsl_missing_after_write):
-                # Stock full writes remain at high rate. A Soft-BSL write whose
-                # effective target loses the loader or normal-mode hook is also
-                # left disconnected so Connect performs fresh route detection.
-                self._disconnect()
+            # Every full write can change program identity and the next entry path.
+            # A fresh Connect must detect the firmware that is now installed.
+            self._disconnect()
 
         def on_failure(error_msg):
             if backup_entry_box[0] is not None:
@@ -5716,6 +5912,8 @@ class MS41FlashGUI(QMainWindow):
             needs_full = True
 
         if needs_full:
+            if not self._check_full_write_transport(b"", self._auto_transfer_route()):
+                return
             requested_changes = {
                 name: cb.currentText()
                 for name, cb in self._config_combos.items()
@@ -5834,7 +6032,8 @@ class MS41FlashGUI(QMainWindow):
 
         actual_changes = [line for line in change_log if line != "No changes."]
         preview = "\n".join(f"  • {line}" for line in actual_changes)
-        if QMessageBox.warning(
+        top_full = getattr(self, "_ecu_softbsl_marker", None) == "T"
+        if not top_full and QMessageBox.warning(
                 self, "Confirm Full-ROM Config Patch",
                 "These configuration changes will be applied to the ECU's archived "
                 f"full read:\n\n{preview}\n\n"
@@ -5867,7 +6066,8 @@ class MS41FlashGUI(QMainWindow):
         self._ds2_write_full(
             bytearray(patched), "live_ECU_config_full.bin",
             archived_prewrite_image=archived_source,
-            on_write_success=update_program_baseline)
+            on_write_success=update_program_baseline,
+            **({"write_notes": f"Configuration changes:\n{preview}"} if top_full else {}))
 
     def _config_write_apply(self, partial):
         """Build the patched tune, preview the diff, then partial-write it back."""
@@ -7992,8 +8192,8 @@ class MS41FlashGUI(QMainWindow):
 
         self._d2xx_warn = QLabel()
         self._d2xx_warn.setWordWrap(True)
-        self._update_d2xx_warning()
         lay.addWidget(self._d2xx_warn)
+        self._update_d2xx_warning()
 
         # ── ① install soft-BSL loader (one-click, in-process service) ──
         inst = QGroupBox("①  Install Soft-BSL  (prepare image → one ignition cycle → write → verify)")
@@ -8395,7 +8595,7 @@ class MS41FlashGUI(QMainWindow):
             return "Soft-BSL RAM-agent", soft
         native = getattr(self, "_native_write_recovery", None)
         if native is not None and native.is_open:
-            return "native-fast", native
+            return ("DS2 (slow)" if isinstance(native, LegacyWriteRecovery) else "native-fast"), native
         return None, None
 
     def _offer_active_flash_recovery(self, failure_summary: str) -> bool:
@@ -8409,12 +8609,14 @@ class MS41FlashGUI(QMainWindow):
         if recovery is None:
             return False
         if not getattr(recovery, "retry_supported", True):
-            self.btn_native_recovery.setVisible(False)
-            self.btn_native_recovery.setEnabled(False)
+            cycle_allowed = bool(getattr(recovery, "power_cycle_required", False))
+            self.btn_native_recovery.setVisible(cycle_allowed)
+            self.btn_native_recovery.setEnabled(cycle_allowed)
+            self.btn_native_recovery.setText("Confirm Ignition Cycle")
             next_step = (
                 "Keep the application and adapter open. Turn ignition OFF for at least "
-                "10 seconds, turn it ON, then close the application to release this "
-                "session and reconnect with Force DS2 (slow). If DS2 is unavailable, "
+                "10 seconds, turn it ON, then choose Confirm Ignition Cycle to release "
+                "this session and reconnect with Force DS2 (slow). If DS2 is unavailable, "
                 "use hardware BSL recovery."
                 if getattr(recovery, "power_cycle_required", False)
                 else
@@ -8439,7 +8641,7 @@ class MS41FlashGUI(QMainWindow):
             f"{failure_summary}\n\n"
             "DO NOT TURN IGNITION OFF or disconnect the adapter.\n"
             f"The ECU and {recovery_kind} session are still live.\n\n"
-            "Choose Retry to re-erase and re-flash the same corrected target now. "
+            "Choose Retry to recover the same corrected target now. "
             "Choose Cancel only to leave recovery pending; the session stays open and "
             "Retry Flash Recovery remains available.",
             QMessageBox.Retry | QMessageBox.Cancel,
@@ -8779,9 +8981,8 @@ class MS41FlashGUI(QMainWindow):
                 f"before erase ({error}). Restarting the complete write at DS2 9600.",
                 "warn",
             )
-            self._ds2_write(which, bytes(image_bytes), progress_fn, log_fn)
-            if verify_write:
-                self._ds2_verify_after_write(which, bytes(image_bytes), log_fn, progress_fn)
+            self._ds2_write(
+                which, bytes(image_bytes), progress_fn, log_fn, verify_write=verify_write)
             return None
         except Exception as error:
             # Transport setup failed before a session could erase anything.  The
@@ -8798,9 +8999,8 @@ class MS41FlashGUI(QMainWindow):
                 "Restarting the complete write at DS2 9600.",
                 "warn",
             )
-            self._ds2_write(which, bytes(image_bytes), progress_fn, log_fn)
-            if verify_write:
-                self._ds2_verify_after_write(which, bytes(image_bytes), log_fn, progress_fn)
+            self._ds2_write(
+                which, bytes(image_bytes), progress_fn, log_fn, verify_write=verify_write)
             return None
 
     def _start_softbsl_install_recovery(self, confirmed=False):
@@ -8941,8 +9141,9 @@ class MS41FlashGUI(QMainWindow):
                     self._reopen_ds2_with_retry(recovery.port, log_fn)
                 raise
             self._port_owner.release("softbsl")
-            self._port_owner.acquire("flasher")
-            self._reopen_ds2_with_retry(recovery.port, log_fn)
+            if recovery.operation == "tune":
+                self._port_owner.acquire("flasher")
+                self._reopen_ds2_with_retry(recovery.port, log_fn)
             return result
 
         def on_success(_result):
@@ -8955,6 +9156,8 @@ class MS41FlashGUI(QMainWindow):
                 else f"Soft-BSL flash recovery completed. {VERIFY_OFF_MESSAGE}"
             )
             self._finish_flash_success("Flash Recovery Complete", message)
+            if recovery.operation != "tune":
+                self._disconnect()
 
         def on_failure(error_msg):
             still_live = recovery.is_open
@@ -8982,8 +9185,43 @@ class MS41FlashGUI(QMainWindow):
         self._run_state_changing_task(
             task, on_success=on_success, on_failure=on_failure)
 
+    def _release_flash_recovery_after_cycle(self):
+        """Release a cycle-qualified session only after the operator confirms the cycle."""
+        recovery_kind, recovery = self._active_write_recovery()
+        if (self._task_busy or recovery is None
+                or getattr(recovery, "retry_supported", True)
+                or not getattr(recovery, "power_cycle_required", False)):
+            return
+        if QMessageBox.warning(
+                self, "Confirm Ignition Cycle",
+                "Confirm that ignition has been turned OFF for at least 10 seconds "
+                "and then ON. This releases the old session so you can reconnect; "
+                "it does not retry the write.\n\nHas that ignition cycle completed?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        try:
+            recovery.close_after_confirmed_power_cycle()
+        except Exception as error:
+            QMessageBox.critical(self, "Recovery Session Release Failed", str(error))
+            return
+        for attribute in (
+                "_softbsl_install_recovery", "_softbsl_write_recovery",
+                "_native_write_recovery"):
+            if getattr(self, attribute, None) is recovery:
+                setattr(self, attribute, None)
+        for owner in ("native_fast_ds2", "softbsl"):
+            self._port_owner.release(owner)
+        self._log(f"Released the retained {recovery_kind} session after the confirmed "
+                  "ignition cycle. Reconnect before another write.", "warn")
+        self._disconnect()
+
     def _start_native_flash_recovery(self, confirmed=False):
-        """Resume the same corrected target on the retained D2XX session."""
+        """Resume the target, or release a session after a permitted ignition cycle."""
+        _kind, active_recovery = self._active_write_recovery()
+        if (active_recovery is not None
+                and not getattr(active_recovery, "retry_supported", True)
+                and getattr(active_recovery, "power_cycle_required", False)):
+            return self._release_flash_recovery_after_cycle()
         if (self._softbsl_install_recovery is not None
                 and self._softbsl_install_recovery.is_open):
             return self._start_softbsl_install_recovery(confirmed=confirmed)
@@ -8991,30 +9229,32 @@ class MS41FlashGUI(QMainWindow):
                 and self._softbsl_write_recovery.is_open):
             return self._start_softbsl_flash_recovery(confirmed=confirmed)
         recovery = self._native_write_recovery
+        legacy = isinstance(recovery, LegacyWriteRecovery)
+        mode = "DS2 at 9600" if legacy else "native-fast DS2"
         if recovery is None or not recovery.is_open:
             QMessageBox.warning(
                 self,
-                "Native Recovery Unavailable",
-                "No live native-fast recovery session is available.",
+                "Flash Recovery Unavailable",
+                "No live stock DS2 recovery session is available.",
             )
             return
         if not recovery.retry_supported:
             self._offer_active_flash_recovery(
-                "The retained native-fast handler is no longer qualified for another "
+                "The retained stock DS2 handler is no longer qualified for another "
                 "erase/write replay."
             )
             return
         verify_note = (
             "Read-back verification will run because Verify was selected."
-            if getattr(recovery.session, "verify_write", False)
+            if getattr(recovery if legacy else recovery.session, "verify_write", False)
             else "Verify remains off for this recovery attempt."
         )
         if not confirmed and QMessageBox.warning(
             self,
-            "Retry Native Flash Recovery",
+            "Retry Flash Recovery",
             "The ECU must still be powered and the adapter must remain connected.\n\n"
-            "The same prepared target will be re-erased and re-flashed "
-            "using the retained high-rate session.\n\n"
+            "The same prepared target will be recovered "
+            f"using the retained {mode} session.\n\n"
             f"{verify_note}\n\nProceed?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
@@ -9023,9 +9263,23 @@ class MS41FlashGUI(QMainWindow):
 
         def task(log_fn, progress_fn):
             log_fn(
-                "Resuming retained native-fast recovery. DO NOT TURN IGNITION OFF.",
+                f"Resuming retained {mode} recovery. DO NOT TURN IGNITION OFF.",
                 "warn",
             )
+            if legacy:
+                try:
+                    resume_legacy_recovery(recovery, progress_cb=progress_fn, log_fn=log_fn)
+                    self._ds2 = recovery.ds2
+                    if recovery.verify_write:
+                        self._ds2_verify_after_write(
+                            recovery.operation, recovery.target, log_fn, progress_fn)
+                except Exception as error:
+                    self._ds2 = None
+                    if recovery.completed and not isinstance(error, LegacyWriteRecoveryRequired):
+                        recovery.error = error
+                        raise LegacyWriteRecoveryRequired(recovery) from error
+                    raise
+                return None
             result = ds2_native_fast_service.resume_recovery(
                 recovery,
                 progress_cb=progress_fn,
@@ -9041,16 +9295,17 @@ class MS41FlashGUI(QMainWindow):
             self.btn_native_recovery.setVisible(False)
             self.btn_native_recovery.setEnabled(False)
             message = (
-                "Native flash recovery completed and read-back verification passed."
-                if getattr(result, "verified", False)
-                else f"Native flash recovery completed. {VERIFY_OFF_MESSAGE}"
+                "Flash recovery completed and read-back verification passed."
+                if (recovery.verify_write if legacy else getattr(result, "verified", False))
+                else f"Flash recovery completed. {VERIFY_OFF_MESSAGE}"
             )
             self._finish_flash_success("Flash Recovery Complete", message)
-            if result.final_link.name.lower() == "high":
+            if ((legacy and recovery.operation == "full")
+                    or (not legacy and result.final_link.name.lower() == "high")):
                 self._disconnect()
 
         def on_failure(error_msg):
-            self._log(f"Native flash recovery failed: {error_msg}", "error")
+            self._log(f"{mode} recovery failed: {error_msg}", "error")
             retry_supported = recovery.retry_supported
             self.btn_native_recovery.setVisible(retry_supported)
             self.btn_native_recovery.setEnabled(retry_supported)
@@ -9105,43 +9360,25 @@ class MS41FlashGUI(QMainWindow):
         answering — confirm with an identify() and retry until it responds (these early retries are
         expected, not errors, so they aren't logged per-attempt). self._ds2 stays None if the ECU
         never comes back."""
-        last_err = None
-        for attempt in range(1, attempts + 1):
-            try:
-                self._ds2 = DS2Interface(
-                    port=port, baud=9600, verbose=False, echo=self._connection_echo)
-                self._ds2.open()
-                reopened_identity = bytes(self._ds2.identify())
-                if expected_identity is not None:
-                    if len(reopened_identity) != ds2_fast_read.IDENTITY_LENGTH:
-                        raise RuntimeError(
-                            "reopened ECU identify returned "
-                            f"{len(reopened_identity)} bytes; expected "
-                            f"{ds2_fast_read.IDENTITY_LENGTH}"
-                        )
-                    if reopened_identity != expected_identity:
-                        raise RuntimeError(
-                            "reopened ECU identity differs from the original "
-                            f"{ds2_fast_read.IDENTITY_LENGTH}-byte identity"
-                        )
-                self._d2xx_checked = True
-                self._d2xx_ok = bool(getattr(self._ds2, "uses_d2xx", False))
-                if attempt > 1:
-                    log_fn(f"ECU back up after the Fast operation (attempt {attempt}).", "ok")
-                return True
-            except Exception as e:
-                last_err = e
-                try:
-                    if self._ds2:
-                        self._ds2.close()
-                except Exception:
-                    pass
-                self._ds2 = None
-                time.sleep(delay)
-        log_fn(f"Could not reconnect to {port} after the Fast operation ({last_err}). "
-              f"Key-cycle the ECU and press Connect.", "error")
-        self._mark_ds2_reconnect_failed()
-        return False
+        try:
+            self._ds2, _identity = open_identified(
+                port,
+                echo=self._connection_echo,
+                expected_identity=expected_identity,
+                attempts=attempts,
+                delay=delay,
+                interface_factory=DS2Interface,
+                log_fn=log_fn,
+            )
+        except Exception as error:
+            self._ds2 = None
+            log_fn(f"Could not reconnect to {port} after the Fast operation ({error}). "
+                   "Key-cycle the ECU and press Connect.", "error")
+            self._mark_ds2_reconnect_failed()
+            return False
+        self._d2xx_checked = True
+        self._d2xx_ok = bool(getattr(self._ds2, "uses_d2xx", False))
+        return True
 
     @staticmethod
     def _crossbank_progress(log_fn, progress_fn):
@@ -10335,6 +10572,9 @@ class MS41FlashGUI(QMainWindow):
                     rlay.addWidget(dependency_badge)
                     btn_rm.setEnabled(False)
                     btn_rm.setToolTip(
+                        "TOP-bank protection requires the AMD driver; "
+                        "it cannot be removed from this image."
+                        if "top_ds2_guard" in required_by else
                         f"Cannot remove {p['title']} while installed patch(es) {joined} "
                         "still require it. Remove the dependent patch first."
                     )
@@ -10820,7 +11060,13 @@ class MS41FlashGUI(QMainWindow):
 
         # Offer to flash it straight to the connected ECU (same auto soft-BSL/DS2 routing + variant /
         # identity guards as any full write on the Flash tab).
-        if self._ds2 is not None:
+        if self._ds2 is not None and getattr(self, "_ecu_softbsl_marker", None) == "T":
+            self._ds2_write_full(
+                bytearray(out), entry.filename,
+                require_boot_write=boot_region_changed,
+                disconnect_after_success=True,
+                write_notes=f"Patch changes: {change_summary}")
+        elif self._ds2 is not None:
             if boot_region_changed:
                 flash_now = QMessageBox.warning(
                     self, "BRICK-CLASS — Flash Boot-Region Patch?",
@@ -13242,11 +13488,33 @@ class MS41FlashGUI(QMainWindow):
         fn = self._ds2.read_full if which == "full" else self._ds2.read_partial
         return fn(progress_cb=progress_fn, log_fn=log_fn)
 
-    def _ds2_write(self, which: str, image_bytes, progress_fn, log_fn):
-        """Write 'full' or 'tune' over DS2 (9600)."""
+    def _ds2_write(self, which: str, image_bytes, progress_fn, log_fn, *, verify_write=False):
+        """Run the shared slow writer and preserve its exact post-erase context."""
+        if self._active_write_recovery()[1] is not None:
+            raise RuntimeError("Resolve the retained flash recovery before another write.")
         self._require_previous_write_cycle(log_fn)
-        fn = self._ds2.write_full if which == "full" else self._ds2.write_partial
-        fn(image_bytes, progress_cb=progress_fn, log_fn=log_fn)
+        ds2 = self._ds2
+        fn = ds2.write_full if which == "full" else ds2.write_partial
+        try:
+            fn(image_bytes, progress_cb=progress_fn, log_fn=log_fn)
+            if verify_write:
+                self._ds2_verify_after_write(which, bytes(image_bytes), log_fn, progress_fn)
+        except Exception as error:
+            recovery = (
+                error.recovery if isinstance(error, LegacyWriteRecoveryRequired)
+                else getattr(ds2, "write_recovery", None)
+            )
+            if recovery is not None and (
+                isinstance(error, LegacyWriteRecoveryRequired) or recovery.completed
+            ):
+                recovery.verify_write = bool(verify_write)
+                if not isinstance(error, LegacyWriteRecoveryRequired):
+                    recovery.error = error
+                self._native_write_recovery = recovery
+                self._ds2 = None
+                if not isinstance(error, LegacyWriteRecoveryRequired):
+                    raise LegacyWriteRecoveryRequired(recovery) from error
+            raise
 
     def _require_previous_write_cycle(self, log_fn) -> None:
         """Prove a requested post-write power cycle before another stock write.
@@ -13399,9 +13667,8 @@ class MS41FlashGUI(QMainWindow):
                 verify_write=verify_write,
             )
         else:
-            self._ds2_write("tune", bytes(image_bytes), progress_fn, log_fn)
-            if verify_write:
-                self._ds2_verify_after_write("tune", bytes(image_bytes), log_fn, progress_fn)
+            self._ds2_write(
+                "tune", bytes(image_bytes), progress_fn, log_fn, verify_write=verify_write)
 
     def _run_retained_softbsl_write(self, operation):
         """Run one write on the connected recovery agent and transfer failures safely."""
@@ -13462,11 +13729,26 @@ class MS41FlashGUI(QMainWindow):
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
 
-        self._worker = WorkerThread(task_fn)
-        self._worker.log_signal.connect(self._log)
-        self._worker.progress_signal.connect(self._on_progress)
+        connect_attempt = getattr(self, "_connect_attempt", None)
+        worker = self._worker = (
+            _ConnectWorker(task_fn) if connect_attempt is not None else WorkerThread(task_fn))
+        if connect_attempt is not None:
+            connect_attempt.worker = worker
+            worker.cleanup_signal.connect(
+                lambda error: self._finish_connect_cleanup(connect_attempt, error))
+
+        def current():
+            return (not getattr(self, "_closing", False) and self._worker is worker
+                    and (connect_attempt is None or self._connect_attempt is connect_attempt))
+
+        worker.log_signal.connect(lambda message, level: self._log(message, level) if current() else None)
+        worker.progress_signal.connect(lambda done, total, label: self._on_progress(done, total, label) if current() else None)
 
         def _done(success, result):
+            if not current():
+                if connect_attempt is not None and self._connect_pending is connect_attempt:
+                    (on_success if success else on_failure)(result)
+                return
             self._task_busy = False
             self.progress_bar.setVisible(False)
             self.progress_label.setText("")
@@ -13494,10 +13776,14 @@ class MS41FlashGUI(QMainWindow):
                     else:
                         QMessageBox.critical(self, "Operation Failed", str(result))
             finally:
-                self._set_all_buttons_enabled(True)
+                if self._worker is worker and not getattr(self, "_closing", False):
+                    self._set_all_buttons_enabled(not self._task_busy)
 
-        self._worker.done_signal.connect(_done)
-        self._worker.start()
+        worker.done_signal.connect(_done)
+        if connect_attempt is not None:
+            self.btn_connect.setText("Cancel")
+            self.btn_connect.setEnabled(True)
+        worker.start()
 
     def _on_progress(self, done: int, total: int, label: str):
         if total == 0:
@@ -13649,16 +13935,22 @@ class MS41FlashGUI(QMainWindow):
                     self.rb_recovery_auto, self.chk_force_slow_ds2,
                     self.chk_force_softbsl, self.rb_recovery_boot):
                 button.setEnabled(False)
-        self._set_bsl_controls_enabled(enabled)
+        self._set_bsl_controls_enabled(enabled and self._connect_pending is None)
         self._update_softbsl_crossbank_button()
         self._update_transfer_mode()
         _recovery_kind, active_recovery = self._active_write_recovery()
         recovery_active = active_recovery is not None
-        recovery_available = bool(
-            enabled
-            and recovery_active
-            and getattr(active_recovery, "retry_supported", True)
-        )
+        retry_supported = bool(
+            recovery_active and getattr(active_recovery, "retry_supported", True))
+        cycle_allowed = bool(
+            recovery_active and getattr(active_recovery, "power_cycle_required", False))
+        recovery_available = enabled and (retry_supported or cycle_allowed)
+        self.btn_native_recovery.setText(
+            "Retry Flash Recovery" if retry_supported else "Confirm Ignition Cycle")
+        self.btn_native_recovery.setToolTip(
+            "Continue the retained session. Keep ignition ON and the adapter connected."
+            if retry_supported else
+            "Release the old session after confirming ignition OFF for 10 seconds, then ON.")
         self.btn_native_recovery.setVisible(recovery_available)
         self.btn_native_recovery.setEnabled(recovery_available)
         if recovery_active:
@@ -13684,6 +13976,12 @@ class MS41FlashGUI(QMainWindow):
                 self.cb_port.setEnabled(True)
                 self.chk_direct_tap.setEnabled(True)
         self._apply_transmission_recovery_quarantine()
+        if self._connect_pending is not None:
+            active = self._connect_attempt is not None
+            self.btn_connect.setText("Cancel" if active else "Closing connection")
+            self.btn_connect.setEnabled(active)
+            self.cb_port.setEnabled(False)
+            self.chk_direct_tap.setEnabled(False)
 
     def closeEvent(self, event):
         # Don't silently close over a running read/write/flash — a half-written flash can need
@@ -13691,17 +13989,16 @@ class MS41FlashGUI(QMainWindow):
         eeprom_recovery = self._pending_eeprom_recovery()
         eeprom_owned = self._port_owner.owner == "eeprom"
         recovery_kind, recovery = self._active_write_recovery()
-        if self._connect_attempt is not None:
-            QMessageBox.warning(
-                self,
-                "Serial Connection Still Active",
-                "The initial connection is still waiting for the adapter, ECU, or "
-                "serial-driver cleanup. The port remains reserved so another transport "
-                "cannot open it concurrently.\n\n"
-                "If the adapter is unresponsive, unplug it and wait for the connection "
-                "failure message before closing the application.",
-            )
-            event.ignore()
+        pending = self._connect_pending
+        if (pending is not None and recovery is None and eeprom_recovery is None
+                and not eeprom_owned
+                and (self._worker is pending.worker or not self._task_busy)):
+            self._cancel_connect()
+            self._closing = True
+            self._end_session_log()
+            # Ordinary Connect has made no ECU mutation. Its daemon retains the
+            # provisional handle; never close it from this GUI thread or free its port.
+            super().closeEvent(event)
             return
         if getattr(self, "_task_busy", False):
             if (
@@ -13851,6 +14148,7 @@ class MS41FlashGUI(QMainWindow):
         except Exception:
             pass
         self._end_session_log()
+        self._closing = True
         super().closeEvent(event)
 
     # -------------------------------------------------------------------

@@ -9,8 +9,8 @@ param(
 
     [string]$IsccPath,
 
-    [ValidateSet("pyinstaller", "nuitka")]
-    [string]$Backend = "pyinstaller"
+    [ValidateSet("x64", "x86")][string]$Architecture = "x64",
+    [string]$PythonPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,9 +18,7 @@ Set-StrictMode -Version Latest
 
 $root = Split-Path -Parent $PSScriptRoot
 $releaseRoot = Join-Path $root "release"
-$isNuitka = $Backend -eq "nuitka"
-$packageSuffix = if ($isNuitka) { "-Nuitka" } else { "" }
-$releaseName = "BimmerStein-ECU-Tool-$Version-Windows-x64$packageSuffix"
+$releaseName = "BimmerStein-ECU-Tool-$Version-Windows-$Architecture"
 if (-not $SourceDir) {
     $SourceDir = Join-Path $releaseRoot $releaseName
 }
@@ -44,7 +42,7 @@ if (-not (Test-Path -LiteralPath $sourcePath -PathType Container)) {
     throw "Prepared release directory not found: $sourcePath"
 }
 
-$python = Join-Path $root ".venv\Scripts\python.exe"
+$python = if ($PythonPath) { [System.IO.Path]::GetFullPath($PythonPath) } else { Join-Path $root ".venv\Scripts\python.exe" }
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
     throw "Virtual environment not found. Create .venv and install requirements-build.txt first."
 }
@@ -66,7 +64,7 @@ $compiler = [System.IO.Path]::GetFullPath($compiler)
 
 Push-Location $root
 try {
-    & $python "packaging\verify_dist.py" --backend $Backend --expected-version $Version $sourcePath
+    & $python "packaging\verify_dist.py" --backend nuitka --architecture $Architecture --expected-version $Version $sourcePath
     if ($LASTEXITCODE -ne 0) { throw "Installer source-package verification failed." }
 
     $match = [regex]::Match(
@@ -106,21 +104,15 @@ try {
         "/DAppVersion=$Version",
         "/DAppDisplayVersion=$displayVersion",
         "/DAppNumericVersion=$numericVersion",
-        "/DPackageSuffix=$packageSuffix",
+        "/DArchitecture=$Architecture",
         "/DSourceDir=$sourcePath",
         "/DOutputDir=$outputPath",
         "packaging\BimmerSteinECUTool.iss"
     )
-    if ($isNuitka) {
-        $compilerArguments = @("/DNuitkaBuild") + $compilerArguments
-    }
     $compilerArgumentText = ($compilerArguments | ForEach-Object {
         '"' + $_.Replace('"', '\"') + '"'
     }) -join ' '
-    $compilerProcess = [System.Diagnostics.Process]::Start(
-        $compiler,
-        $compilerArgumentText
-    )
+    $compilerProcess = Start-Process -FilePath $compiler -ArgumentList $compilerArgumentText -WindowStyle Hidden -PassThru
     if ($null -eq $compilerProcess) { throw "Inno Setup compiler did not start." }
     $compilerProcess.WaitForExit()
     if ($compilerProcess.ExitCode -ne 0) { throw "Inno Setup compilation failed." }

@@ -17,7 +17,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 _GROUP_NAMES = (
-    "cal-guard", "loader-doors", "intel-flash", "amd-flash",
+    "cal-guard", "loader-doors", "intel-flash", "amd-flash", "top-ds2",
     "features-ms410", "features-ms411", "features-ms412", "features-ms413",
 )
 
@@ -78,6 +78,7 @@ from ms41emu.peripherals import (  # noqa: E402
     Timer1,
 )
 from ms41emu.references import resolve_reference  # noqa: E402
+from ms41emu.top_ds2_guard import exercise_top_ds2_guard  # noqa: E402
 from tools.opcode_coverage import (  # noqa: E402
     manual_evidence_paths,
     require_trusted,
@@ -892,12 +893,12 @@ def _softbsl_agent_payload(agent_key):
         (root / "agent_manifest.json").read_text(encoding="utf-8"))
     bindings = {
         "amd": (
-            "agent.hex", 1498,
-            "00eea04eae248f35f77140913bd27a0ffc0003251acd361db2ee80c4b336cb72",
+            "agent.hex", 1416,
+            "59543efcda316e670e3290444e9acd8bf99e48dbc85946aa17129ddcb89f72b9",
         ),
         "intel_28f200": (
-            "agent_28f.hex", 1464,
-            "5c35c219cf350f9dfd936be92907b2a44d9c52e0cb40d0831f805f49f8a418c2",
+            "agent_28f.hex", 1382,
+            "8096c69eac3d26ccb1daa1d81e3fab7be6b073c2cb6f1b1f7491abee19f4a668",
         ),
     }
     expected_name, expected_size, expected_digest = bindings[agent_key]
@@ -2077,7 +2078,7 @@ def verify_amd_flash_mutation():
     patch = PATCHES["amd_flash"]
     asm = TEST_DATA_ROOT.parent / "Decompilation" / "asm"
     program = bytes.fromhex(
-        (asm / "program_amd_v5.hex").read_text(encoding="ascii").strip())
+        (ROOT / "engines" / "patcher" / "program_amd_v6.hex").read_text(encoding="ascii").strip())
     erase = bytes.fromhex(
         (asm / "erase_amd.hex").read_text(encoding="ascii").strip())
     program_edit = bytes.fromhex(patch["edits"][0]["data"])
@@ -2085,9 +2086,9 @@ def verify_amd_flash_mutation():
     assert program_edit == program[12:]
     assert erase_edit == erase[6:]
     assert hashlib.sha256(program).hexdigest() == (
-        "456fde3b6f6cfaeaa77add3e9090bb56bf6d9a2fb37c61cc7fba60e193630b6c")
+        "c935b0c2a3c09e6f7668d1342f55435f1cbfa11ef6b6a06afc8fccbb6901680f")
     assert hashlib.sha256(program_edit).hexdigest() == (
-        "b2c462b5531eb57707109f65770c7208030edacb3fe71471f198cd4b41b39c31")
+        "57cf955e150ba14eb398830fcbf61920fbca90df8fc7d379cc388a7ec2b3630a")
     assert hashlib.sha256(erase).hexdigest() == (
         "21b0cb2e7fc17bdf1fef238a312783f320cf8903ccdcbda2c618763cbbf5a460")
     assert hashlib.sha256(erase_edit).hexdigest() == (
@@ -2097,9 +2098,32 @@ def verify_amd_flash_mutation():
             _amd_driver(device, kind)
 
 
+def verify_top_ds2_guard():
+    """Execute the final shared-builder TOP images on all supported references."""
+    from engines.softbsl.softbsl_host import compose_persistent_image
+
+    payload = bytes.fromhex(
+        (ROOT / "engines" / "patcher" / "top_ds2_guard.hex").read_text())
+    payload_edit = next(edit for edit in PATCHES["top_ds2_guard"]["edits"]
+                        if edit["off"] == 0x4F22)
+    assert payload == bytes.fromhex(payload_edit["data"])
+    for path, variant in _REFERENCE_VARIANTS.items():
+        image, ids, _log = compose_persistent_image(
+            path.read_bytes(), "29f400", with_calguard=True, marker="T")
+        assert "top_ds2_guard" in ids
+        status = checksum.checksum_status(image)
+        assert all(status[key] for key in ("boot", "program", "cal")), status
+        _bind_image(image, variant)
+        for fast in ((False,) if variant == "1429861" else (False, True)):
+            result = exercise_top_ds2_guard(
+                image, variant, load_emulator=_load_emulator, fast=fast)
+            print(f"[PASS] TOP DS2 {variant} fast={fast}: {result}")
+
+
 ADMISSION_REGISTRY = {
     "alphan_failsafe": "features-ms413",
     "amd_flash": "amd-flash",
+    "top_ds2_guard": "top-ds2",
     "cal_guard": "cal-guard",
     "door_0x43": "loader-doors",
     "door_0x43_ms410": "loader-doors",
@@ -2125,7 +2149,7 @@ def _verify_registry():
         patch_id for patch_id, patch in PATCHES.items()
         if not patch.get("deprecated")
         and (patch.get("cave")
-             or patch_id in {"amd_flash", "softbsl_loader"})
+             or patch_id in {"amd_flash", "softbsl_loader", "top_ds2_guard"})
     }
     assert installable == set(ADMISSION_REGISTRY), (
         "patch admission registry drift",
@@ -2150,6 +2174,9 @@ def _admission_fingerprint():
         ROOT / "checksum.py",
         ROOT / "engines" / "patcher" / "patch_ms41.py",
         ROOT / "engines" / "patcher" / "cal_guard_exact.py",
+        ROOT / "engines" / "patcher" / "top_ds2_guard.asm",
+        ROOT / "engines" / "patcher" / "top_ds2_guard.hex",
+        ROOT / "engines" / "softbsl" / "softbsl_host.py",
     ):
         add(path.relative_to(ROOT).as_posix(), path)
     for path in sorted(
@@ -2176,7 +2203,8 @@ def _admission_fingerprint():
     ):
         add(f"reference/{variant}.bin", path)
     asm = TEST_DATA_ROOT.parent / "Decompilation" / "asm"
-    add("amd/program_amd_v5.hex", asm / "program_amd_v5.hex")
+    add("amd/program_amd_v6.asm", ROOT / "engines" / "patcher" / "program_amd_v6.asm")
+    add("amd/program_amd_v6.hex", ROOT / "engines" / "patcher" / "program_amd_v6.hex")
     add("amd/erase_amd.hex", asm / "erase_amd.hex")
     softbsl = ROOT / "engines" / "softbsl"
     for path in sorted((*softbsl.glob("*.hex"), *softbsl.glob("*manifest.json"))):
@@ -2353,6 +2381,7 @@ GROUPS = {
     "loader-doors": _group_loader,
     "intel-flash": verify_intel_flash_mutation,
     "amd-flash": verify_amd_flash_mutation,
+    "top-ds2": verify_top_ds2_guard,
     "features-ms410": lambda: _group_older("MS41.0"),
     "features-ms411": lambda: _group_older("MS41.1"),
     "features-ms412": _group_features_412,

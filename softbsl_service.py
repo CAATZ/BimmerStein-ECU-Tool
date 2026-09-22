@@ -43,6 +43,7 @@ class SoftBSLBootSession:
     baud: str
     chip_family: str
     driver_signature: bytes
+    bank_marker: str | None = None
 
     @property
     def is_open(self):
@@ -65,10 +66,16 @@ class SoftBSLWriteRecovery:
     write_bootloader: bool
     chip_family: object
     error: Exception
+    replay_attempted: bool = False
+    expected_bank: str | None = None
 
     @property
     def is_open(self):
         return bool(getattr(self.ds2, "is_open", False))
+
+    @property
+    def retry_supported(self):
+        return self.is_open and not self.replay_attempted
 
     def close_after_confirmed_power_cycle(self):
         """Release the host handle only after recovery or an operator-confirmed cycle."""
@@ -517,7 +524,7 @@ def open_boot_recovery(port, log, *, baud="high", timeout=15.0,
         boot_timeout=timeout,
         serial_factory=serial_factory,
     )
-    return SoftBSLBootSession(
+    session = SoftBSLBootSession(
         port=str(port),
         ds2=d,
         agent=sb,
@@ -525,6 +532,21 @@ def open_boot_recovery(port, log, *, baud="high", timeout=15.0,
         chip_family=sb.boot_chip_family,
         driver_signature=sb.boot_driver_signature,
     )
+
+    try:
+        # Bank metadata selects TOP preparation; an unmarked bank remains a usable
+        # ordinary recovery session, as before this optional metadata was exposed.
+        session.bank_marker = ecu_info.decode_bank_marker(sb.crc_read(
+            ecu_info.BANK_MARKER_ADDR, ecu_info.BANK_MARKER_LEN))
+    except Exception as error:
+        try:
+            if not _recover_marker0(sb, log):
+                raise SoftBSLRecoveryStateError(
+                    "Recovery bank identification failed and normal DS2 could not be confirmed") from error
+        finally:
+            d.close()
+        raise
+    return session
 
 
 def close_boot_recovery(session, log):
@@ -576,7 +598,7 @@ def read_boot_recovery_range(session, address, length):
 
 
 def _retained_write_failed(session, operation, target, scope, prompt, do_verify,
-                           write_bootloader, tracker, error, log):
+                           write_bootloader, tracker, error, log, expected_bank=None):
     if not tracker.destructive_started:
         raise error
     recovery = SoftBSLWriteRecovery(
@@ -592,6 +614,7 @@ def _retained_write_failed(session, operation, target, scope, prompt, do_verify,
         write_bootloader=bool(write_bootloader),
         chip_family=session.chip_family,
         error=error,
+        expected_bank=expected_bank,
     )
     log(
         "FLASH INCOMPLETE: erase began, so the retained CalGuard/Soft-BSL "
@@ -633,13 +656,17 @@ def write_tune_boot_recovery(session, partial, log, progress_cb=None, do_verify=
 
 def run_flash_boot_recovery(
         session, image, scope, prompt, log, progress_cb=None,
-        do_verify=True, write_bootloader=False):
+        do_verify=True, write_bootloader=False, top_full_options=None):
     """Write a full image through the retained recovery agent, with no fallback."""
     if not isinstance(session, SoftBSLBootSession):
         raise TypeError("session must be a SoftBSLBootSession")
     if not session.is_open:
         raise SoftBSLRecoveryStateError("the CalGuard recovery session is closed")
     target = bytes(image)
+    top_options = None if top_full_options is None else dict(top_full_options)
+    if top_options is not None:
+        _validate_top_full_source(target, scope, session.chip_family, write_bootloader)
+    physical_boot_write = bool(write_bootloader or top_options is not None)
     if scope != "sa1":
         hybrid_error = MS41ECU.check_hybrid(target)
         if hybrid_error:
@@ -652,22 +679,34 @@ def run_flash_boot_recovery(
     finalized_by_flash = False
     try:
         _prove_write_link(session.agent, session.baud, log)
+        if top_options is not None:
+            _confirm_top_bank(session.agent)
+            target = _prepare_top_full_image(
+                session.agent, target, write_bootloader, top_options, log)
+            if top_options.get("prepared_image_cb") is not None:
+                try:
+                    top_options["prepared_image_cb"](target)
+                except Exception as error:
+                    raise FlashImageCompatibilityError(
+                        f"Prepared TOP image review failed: {error}") from error
         session.agent.flash_image(
             target,
             scope=scope,
             baud=session.baud,
             prompt=prompt,
             do_verify=do_verify,
-            write_bootloader=write_bootloader,
+            write_bootloader=physical_boot_write,
             progress_cb=tracker,
             chip="28f200" if session.chip_family == "intel" else "29f400",
             baud_is_set=session.baud != "low",
+            **({"assume_half": "T"} if top_options is not None else {}),
         )
         finalized_by_flash = bool(do_verify)
     except Exception as error:
         _retained_write_failed(
             session, "image", target, scope, prompt, do_verify,
-            write_bootloader, tracker, error, log)
+            physical_boot_write, tracker, error, log,
+            expected_bank="T" if top_options is not None else None)
     if not do_verify:
         log("Read-back verification skipped (Verify off). ECU-side finalization will continue.")
     try:
@@ -680,6 +719,69 @@ def run_flash_boot_recovery(
     return True
 
 
+def _validate_top_full_source(image, scope, chip_family, write_bootloader):
+    if scope != "full" or len(image) != MS41ECU.FULL_ROM_SIZE:
+        raise ValueError("TOP preparation requires a complete 256 KB full image")
+    if chip_family != "amd":
+        raise FlashFamilyMismatchError("TOP full writes require the AMD/29F400 RAM agent")
+    if write_bootloader and marker(image) != "T":
+        raise CrossBankSafetyError(
+            "Write Boot on TOP requires a TOP-marked image. Select a TOP image or turn "
+            "Write Boot off to preserve the connected TOP boot region; no bank was switched.")
+
+
+def _confirm_top_bank(sb, *, recovering=False):
+    bank = ecu_info.decode_bank_marker(sb.crc_read(
+        ecu_info.BANK_MARKER_ADDR, ecu_info.BANK_MARKER_LEN))
+    # A retained TOP write may have erased SA7's marker. It is flash content,
+    # not a physical-switch sensor; only a proven opposite bank invalidates the
+    # retained binding. Initial entry still requires the intact TOP marker.
+    if bank == "B" or (not recovering and bank != "T"):
+        raise CrossBankSafetyError(
+            "The active RAM-agent session is not on the expected TOP bank. "
+            "No further erase was issued; no bank-switch prompt will be issued.")
+
+
+def _prepare_top_full_image(sb, image, write_bootloader, options, log):
+    """Graft only preserved live bytes, then freeze the complete physical TOP target."""
+    import identity
+    from checksum import correct_checksums
+
+    prepared = bytearray(image)
+    if not write_bootloader:
+        preserved = bytes(sb.read_range(0, 0x2000, descramble=False))
+        if len(preserved) != 0x2000:
+            raise SoftBSLError("TOP boot preservation read was incomplete; nothing was erased")
+        prepared[0x4000:0x6000] = preserved
+        log("Preserved the connected TOP boot region (8 KiB) in the full-write image.")
+    elif options.get("preserve_boot_identity", True):
+        source = bytearray(image)
+        for lo, hi in identity.IDENTITY_GRAFT_RANGES:
+            preserved = bytes(sb.read_range(lo ^ 0x4000, hi - lo, descramble=False))
+            if len(preserved) != hi - lo:
+                raise SoftBSLError("TOP identity preservation read was incomplete; nothing was erased")
+            source[lo:hi] = preserved
+        prepared = identity.graft_identity(prepared, source)
+        log("Preserved the connected ECU identity and AIF history in the TOP image.")
+
+    family_start = MS41ECU.CODING_FAMILY_FILE_ADDR
+    family = bytes(prepared[family_start:family_start + 3])
+    normalized = MS41ECU.graft_coding_family(prepared, family)
+    family_changed = normalized != prepared
+    prepared = normalized
+    if options.get("correct_checksums", True) or family_changed:
+        prepared, details = correct_checksums(prepared)
+        for detail in details:
+            log(detail)
+    if marker(prepared) != "T":
+        raise CrossBankSafetyError("The prepared image does not preserve the expected TOP bank marker")
+    validate_flash_image_family(prepared, "amd", write_bootloader=True)
+    hybrid_error = MS41ECU.check_hybrid(prepared)
+    if hybrid_error:
+        raise FlashImageCompatibilityError(f"Prepared TOP image is incompatible: {hybrid_error}")
+    return bytes(prepared)
+
+
 def _set_agent_baud_if_needed(sb, tier):
     """Keep compatibility with legacy fakes/manual sessions while staged entry owns the baud."""
     if tier != "low" and not getattr(sb, "staged_entry", False):
@@ -688,14 +790,22 @@ def _set_agent_baud_if_needed(sb, tier):
 
 def run_flash(port, image, scope, prompt, log, baud="low", progress_cb=None,
              do_verify=True, write_bootloader=False, chip_family=None,
-             entry_mode="auto", serial_factory=None):
+             entry_mode="auto", serial_factory=None, top_full_options=None):
     """Live full-image-scope write with a brief pre-erase link gate.
 
     High/mid failures may fall back only while flash is untouched. Once the host emits the
     ``erase`` boundary, an exception retains the open RAM agent and raises
     :class:`SoftBSLWriteRecoveryRequired`. Successful writes finalize E740=0; ``do_verify``
     controls only the requested read-back verification.
+
+    ``top_full_options`` binds this operation to the live TOP bank. ``write_bootloader``
+    remains the logical replace-boot choice; physical SA7 writes are always armed.
+    Options are ``preserve_boot_identity``, ``correct_checksums``, and an optional
+    ``prepared_image_cb(bytes)`` called once before erase with the frozen effective image.
     """
+    top_options = None if top_full_options is None else dict(top_full_options)
+    if top_options is not None:
+        _validate_top_full_source(image, scope, chip_family, write_bootloader)
     if scope != "sa1":
         hybrid_error = MS41ECU.check_hybrid(bytes(image))
         if hybrid_error:
@@ -704,8 +814,11 @@ def run_flash(port, image, scope, prompt, log, baud="low", progress_cb=None,
     validate_flash_image_family(
         image, chip_family, write_bootloader=write_bootloader)
     target = bytes(image)
+    top_prepared = False
+    physical_boot_write = bool(write_bootloader or top_options is not None)
 
     def _attempt(tier):
+        nonlocal target, top_prepared
         d, sb = _open_session(
             port, log, chip_family, require_d2xx=tier != "low", baud_tier=tier,
             entry_mode=entry_mode, serial_factory=serial_factory)
@@ -716,11 +829,23 @@ def run_flash(port, image, scope, prompt, log, baud="low", progress_cb=None,
         try:
             _set_agent_baud_if_needed(sb, tier)
             _prove_write_link(sb, tier, log)
+            if top_options is not None:
+                _confirm_top_bank(sb)
+                if not top_prepared:
+                    target = _prepare_top_full_image(sb, target, write_bootloader, top_options, log)
+                    top_prepared = True
+                    if top_options.get("prepared_image_cb") is not None:
+                        try:
+                            top_options["prepared_image_cb"](target)
+                        except Exception as error:
+                            raise FlashImageCompatibilityError(
+                                f"Prepared TOP image review failed: {error}") from error
             sb.flash_image(target, scope=scope, baud=tier, prompt=prompt,
-                           do_verify=do_verify, write_bootloader=write_bootloader,
+                           do_verify=do_verify, write_bootloader=physical_boot_write,
                            progress_cb=tracker,
                            chip="28f200" if chip_family == "intel" else "29f400",
-                           baud_is_set=tier != "low")
+                           baud_is_set=tier != "low",
+                           **({"assume_half": "T"} if top_options is not None else {}))
             finalized_by_flash = bool(do_verify)
             write_complete = True
             if not do_verify:
@@ -735,8 +860,8 @@ def run_flash(port, image, scope, prompt, log, baud="low", progress_cb=None,
                 recovery = SoftBSLWriteRecovery(
                     port=str(port), ds2=d, agent=sb, operation="image", target=target,
                     scope=scope, baud=tier, prompt=prompt, do_verify=bool(do_verify),
-                    write_bootloader=bool(write_bootloader), chip_family=chip_family,
-                    error=error,
+                    write_bootloader=physical_boot_write, chip_family=chip_family,
+                    error=error, expected_bank="T" if top_options is not None else None,
                 )
                 log(
                     "FLASH INCOMPLETE: erase began, so Soft-BSL is preserving the live RAM "
@@ -864,6 +989,9 @@ def resume_write_recovery(recovery, *, progress_cb=None, log=lambda *_args: None
     if not recovery.is_open:
         raise SoftBSLRecoveryStateError("the retained Soft-BSL recovery session is closed")
 
+    if not recovery.retry_supported:
+        raise SoftBSLWriteRecoveryRequired(recovery)
+    recovery.replay_attempted = True
     sb = recovery.agent
     sb.log = log
     tracker = _WriteProgressTracker(progress_cb)
@@ -874,9 +1002,12 @@ def resume_write_recovery(recovery, *, progress_cb=None, log=lambda *_args: None
                 recovery.target,
                 do_verify=recovery.do_verify,
                 progress_cb=tracker,
+                _sector_replay=True,  # explicit retry already replays the selected region
             )
             finalized_by_flash = False
         elif recovery.operation == "image":
+            if recovery.expected_bank == "T":
+                _confirm_top_bank(sb, recovering=True)
             sb.flash_image(
                 recovery.target,
                 scope=recovery.scope,
@@ -885,8 +1016,10 @@ def resume_write_recovery(recovery, *, progress_cb=None, log=lambda *_args: None
                 do_verify=recovery.do_verify,
                 write_bootloader=recovery.write_bootloader,
                 progress_cb=tracker,
+                _sector_replay=True,  # explicit retry already replays the selected region
                 chip="28f200" if recovery.chip_family == "intel" else "29f400",
                 baud_is_set=recovery.baud != "low",
+                **({"assume_half": "T"} if recovery.expected_bank == "T" else {}),
             )
             finalized_by_flash = bool(recovery.do_verify)
         else:

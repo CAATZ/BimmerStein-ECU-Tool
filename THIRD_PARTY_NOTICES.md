@@ -1,9 +1,10 @@
 # Third-Party Notices
 
-This file records the known third-party components used by or bundled with
-BimmerStein ECU Tool. It is an engineering inventory, not legal advice. The
-release owner remains responsible for confirming the applicable licenses and
-redistribution permissions before publication.
+This file records the licenses, copyright attribution, and redistribution
+conditions for the components used by BimmerStein ECU Tool 0.1.0b17. Runtime
+and license names are retained here to identify the corresponding components
+and their terms. The release owner must confirm the applicable redistribution
+conditions before publication.
 
 Exact license texts collected for the frozen runtime are shipped in
 `THIRD_PARTY_LICENSES/`. Each file is copied from the stated installed runtime
@@ -35,8 +36,7 @@ exposed by the local runtime; `libffi-8.dll` identifies its ABI only.
 
 - Project: Riverbank Computing PyQt5
 - Installed package metadata: GPL version 3 or a commercial Riverbank license
-- Use: desktop user interface; bundled into the PyInstaller and Nuitka Windows
-  packages
+- Use: desktop user interface; bundled into the compiled Windows packages
 
 The public beta uses the free GPLv3 edition of PyQt5 and the application is
 distributed under GNU GPL version 3 (`GPL-3.0-only`). The complete application
@@ -98,19 +98,10 @@ The tracked license is a byte-identical copy from the PyUSB 1.3.1 wheel.
   `THIRD_PARTY_LICENSES/libusb1-3.4.0-COPYING.txt` and
   `THIRD_PARTY_LICENSES/libusb1-3.4.0-COPYING.LESSER.txt`
 
-The tracked texts are byte-identical copies from the libusb1 3.4.0 Windows x64
+The tracked texts are byte-identical copies from the libusb1 3.4.0 Windows x64 and x86
 wheel. The package does not install or replace a device driver. A non-HID USB
 device still needs a libusb-compatible Windows binding such as WinUSB or
 libusbK before PyUSB can open it.
-
-### PyInstaller 6.21.0 bootloader
-
-- Project: PyInstaller
-- Installed package metadata: GPL version 2 or later with the PyInstaller
-  bootloader exception
-- Use: Windows one-folder packaging and the bootloader embedded in the EXE
-- License material:
-  `THIRD_PARTY_LICENSES/PyInstaller-6.21.0-COPYING.txt`
 
 ### Nuitka 4.1.3 runtime
 
@@ -129,10 +120,11 @@ installed Nuitka 4.1.3 distribution. The application remains distributed under
 ### Microsoft Visual C++ runtime
 
 - Frozen files: `VCRUNTIME140.dll`, `VCRUNTIME140_1.dll`, `MSVCP140.dll`, and
-  `MSVCP140_1.dll` in the CPython and Qt application-local runtime directories
-- Origin: copied unchanged by the selected PyInstaller or Nuitka backend from
-  the installed CPython 3.14.6 and PyQt5-Qt5 5.15.2 Windows build dependencies
-- Deployment: application-local in the Windows x64 portable package; users do
+  `MSVCP140_1.dll` in the application-local runtime directory.
+  `VCRUNTIME140_1.dll` is required only for x64.
+- Origin: copied unchanged by the compiler from
+  the installed CPython 3.14.6 runtime and matching MSVC redistributables
+- Deployment: application-local in the Windows x64 and x86 portable package; users do
   not need to install a separate Visual C++ runtime
 
 The tracked CPython license includes its "Additional Conditions for this Windows
@@ -145,34 +137,10 @@ records the exact SHA-256 of every application-local VC++ runtime file in
 `RELEASE-METADATA.json`. The package verifier rejects any runtime file that is
 missing or differs from the corresponding CPython or PyQt5-Qt5 build dependency.
 
-## Build-time dependencies not intentionally frozen
+## Installer notices
 
-### ReportLab 5.0.0
-
-- Installed package metadata: BSD license
-- Use: build-time generation of the PDF user manual
-- Distribution: not imported by the application and not intentionally bundled
-  in the frozen runtime
-
-The manual uses ReportLab's standard PDF fonts. The build does not embed local
-Windows font files.
-
-### Pillow 12.3.0 and charset-normalizer 3.4.9
-
-- Installed package metadata: Pillow uses the MIT-CMU license;
-  charset-normalizer uses the MIT license
-- Use: build-time dependencies of the documentation pipeline
-- Distribution: not intentionally bundled in the frozen application
-
-### Inno Setup 6.7.3
-
-- Project: Inno Setup by Jordan Russell, with portions by Martijn Laan
-- Use: compilation of the per-user Windows installer
-- License: Inno Setup License; use for distributing an application is permitted,
-  and an acknowledgment in product documentation is appreciated but not required
-
-The compiled installer retains the Inno Setup notices embedded by the unmodified
-compiler. Inno Setup is not bundled as a standalone application or compiler.
+The compiled installer retains the notices embedded by its unmodified compiler.
+The compiler itself is not included as a standalone application.
 
 ## Drivers and external software
 
@@ -187,7 +155,8 @@ current redistribution terms first.
 
 The release bundles `BimmerStein MS41 Patch Definitions.xml` and
 `BimmerStein MS41 Logger Definitions.xml`, generated from the project's patch
-descriptors and verified logger mappings for use with BimmerStein Tuning Suite.
+descriptors and verified logger mappings for compatible calibration and logging
+software.
 The ROM Analyzer can also import user-selected MS41 XML definition
 files and stores a private registered copy under the user's local
 application-data folder. The application's GPLv3 license does not cover
@@ -195,7 +164,7 @@ separately imported data.
 
 ## Trademarks and independence
 
-BMW, FTDI, Inno Setup, libusb, Microsoft, Nuitka, Python, PyQt, PyUSB, Qt,
-PyInstaller, ReportLab, pySerial, and OpenSSL names belong to their
+BMW, FTDI, libusb, Microsoft, Nuitka, Python, PyQt, PyUSB, Qt,
+pySerial, and OpenSSL names belong to their
 respective owners. BimmerStein ECU Tool is independent software and is not
 affiliated with or endorsed by those projects or companies.

@@ -246,7 +246,7 @@ class LiveDataView(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         toolbar = QHBoxLayout()
-        self.follow = QCheckBox("Follow latest")
+        self.follow = QCheckBox("Follow latest", self)
         self.follow.setChecked(live)
         self.follow.setVisible(live)
         self.follow.toggled.connect(self._follow_changed)

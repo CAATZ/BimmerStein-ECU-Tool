@@ -15,6 +15,7 @@ from typing import Callable, Mapping, Optional, Tuple, Union
 
 from ds2_fast_contracts import (
     CommitUnknownError,
+    ProgramReadbackMismatch,
     ContractViolation,
     DS2Response,
     FastOperation,
@@ -26,6 +27,7 @@ from ds2_fast_contracts import (
     ResponseStatus,
     SessionState,
     StatusResponseContract,
+    program_readback_window,
     contextual_recovery_contract,
     decode_ds2_response,
     encode_ds2_frame,
@@ -81,6 +83,8 @@ TOKEN_READ_B_LENGTH = 18
 INITIAL_CHALLENGE = CAPTURED_INITIAL_CHALLENGE
 FINALIZE_CHALLENGE = 0x1F
 MAX_FINALIZE_SEED_ATTEMPTS = 45
+# Passive allowance for a delayed program ACK; this never retransmits a block.
+PROGRAM_REPLY_TIMEOUT = 3.0
 
 EventCallback = Callable[[str, Mapping[str, object]], None]
 
@@ -422,6 +426,7 @@ class NativeFastPartialWriteTransport:
         flash_request: Optional[FlashRequest] = None,
         flash_allowed_statuses=frozenset((0x01,)),
         first_byte_timeout: Optional[float] = None,
+        pending_program: Optional[FlashRequest] = None,
     ) -> Union[DS2Response, FlashReply]:
         args = bytes(args)
         if flash_request is None:
@@ -482,7 +487,24 @@ class NativeFastPartialWriteTransport:
                 if first_byte_timeout is None
                 else max(0.01, float(first_byte_timeout))
             )
+            if first_byte_timeout is None and flash_request is not None and (
+                flash_request.operation in (
+                    FlashOperation.PARTIAL_PROGRAM, FlashOperation.FULL_PROGRAM,
+                )
+            ):
+                start_timeout = max(start_timeout, PROGRAM_REPLY_TIMEOUT)
             head = self._read_exact(2, start_timeout)
+            if pending_program is not None and head == b"\x12\x0a":
+                # At most one late ACK, tied to the exact outstanding program.
+                # Recovery reads have >=7 data bytes, so cannot share this shape.
+                raw = head + self._read_exact(8, self.inter_byte_timeout)
+                validate_flash_exchange(
+                    self._FLASH_MODE, pending_program, raw, echo_complete=True,
+                    rate=rate, state=state, label=label + "_late_program_ack",
+                )
+                self._emit("late_program_ack_consumed", address=pending_program.address)
+                head = self._read_exact(2, start_timeout)
+            raw = head
             if len(head) != 2:
                 raise PartialWriteTimeout(
                     f"no complete response header for {label} at {self.baud} baud"
@@ -524,6 +546,7 @@ class NativeFastPartialWriteTransport:
                 baud=self.baud,
                 status=f"0x{response.status:02X}",
                 response_length=len(raw),
+                flash_response_hex=raw.hex(" ") if flash_request is not None else None,
                 duration_s=round(time.monotonic() - started, 6),
             )
             return result
@@ -536,7 +559,9 @@ class NativeFastPartialWriteTransport:
                 and not response_validated
                 and not isinstance(error, (CommitUnknownError, ContractViolation))
             ):
-                classified = CommitUnknownError(flash_request, str(error))
+                classified = CommitUnknownError(
+                    flash_request, str(error), response_length=len(raw),
+                )
             self._emit(
                 "request_failed",
                 label=label,
@@ -544,6 +569,7 @@ class NativeFastPartialWriteTransport:
                 echo_complete=echo_complete,
                 echo_length=len(echo),
                 response_length=len(raw),
+                flash_response_hex=raw.hex(" ") if flash_request is not None else None,
                 error=f"{type(classified).__name__}: {classified}",
                 duration_s=round(time.monotonic() - started, 6),
                 retry_allowed=False if flash_request is not None else None,
@@ -601,6 +627,28 @@ class NativeFastPartialWriteTransport:
         if not isinstance(result, FlashReply):
             raise AssertionError("flash exchange returned a control response")
         return result
+
+    def confirm_program(self, request, *, label, rate, state):
+        """Confirm one missing ACK by reading data; never retransmit the write."""
+        full = self._FLASH_MODE is FastOperation.FULL_WRITE
+        valid = (request.operation == FlashOperation.FULL_PROGRAM and state in (
+            SessionState.HIGH_FULL_PROGRAM, SessionState.HIGH_FULL_TUNE,
+        )) if full else (request.operation == FlashOperation.PARTIAL_PROGRAM
+                        and state is SessionState.HIGH_PARTIAL_WRITE)
+        if not valid or rate is not LinkRate.HIGH:
+            raise PartialWriteStateError("readback recovery requires an active program write")
+        self._validate_flash(request, state)
+        address, count, offset = program_readback_window(request.address, request.count, full=full)
+        response = self._exchange(
+            READ_MEMORY_COMMAND, address.to_bytes(4, "big") + bytes((count,)),
+            label=label + "_commit_readback", rate=rate, state=state,
+            contract=read_response_contract(count), pending_program=request,
+        )
+        actual = response.payload[offset:offset + request.count]
+        if actual != request.data:
+            raise ProgramReadbackMismatch(request.address, request.data, actual)
+        self._emit("program_commit_confirmed_by_readback", address=request.address,
+                   count=request.count, baud=self.baud, retransmitted=False)
 
 
 class NativeFastPartialWriteSession:
@@ -726,7 +774,10 @@ class NativeFastPartialWriteSession:
         )
         return response.payload
 
-    def _read_range(self, address: int, length: int, *, phase: str) -> bytes:
+    def _read_range(
+        self, address: int, length: int, *, phase: str,
+        progress_cb: Optional[Callable[[int, int], None]] = None,
+    ) -> bytes:
         output = bytearray()
         while len(output) < length:
             count = min(MAX_READ_DATA, length - len(output))
@@ -738,7 +789,10 @@ class NativeFastPartialWriteSession:
                     label=f"{phase}_0x{current:05X}_{count}",
                 )
             )
-            self._progress(phase, len(output), length)
+            if progress_cb is None:
+                self._progress(phase, len(output), length)
+            else:
+                progress_cb(len(output), length)
         return bytes(output)
 
     def _require_token(self) -> bytes:
@@ -1175,14 +1229,50 @@ class NativeFastPartialWriteSession:
         *,
         label: str,
         timeout: Optional[float] = None,
-    ) -> FlashReply:
-        return self.transport.flash(
-            request,
-            label=label,
-            rate=self.link,
-            state=self.state,
-            first_byte_timeout=timeout,
-        )
+        allowed_statuses=frozenset((0x01,)),
+    ) -> Optional[FlashReply]:
+        for attempt in range(1, 4):
+            try:
+                return self.transport.flash(
+                    request, label=label, rate=self.link, state=self.state,
+                    first_byte_timeout=timeout, allowed_statuses=allowed_statuses,
+                )
+            except (CommitUnknownError, ContractViolation) as error:
+                # Only a program exchange with a complete echo can reach these
+                # errors. Explicit outer NAKs are state failures, not lost ACKs.
+                if (not request.is_program
+                        or getattr(error, "response_status", None) is not None
+                        or getattr(error, "flash_status", None) not in (None, 1, 2, 3)):
+                    raise
+                try:
+                    self.transport.confirm_program(request, label=label, rate=self.link, state=self.state)
+                except ProgramReadbackMismatch as read_error:
+                    if attempt < 3:
+                        if read_error.blank:
+                            self._record("program_blank_retry", address=request.address,
+                                         attempt=attempt + 1, max_attempts=3)
+                            continue
+                        if request.operation == FlashOperation.PARTIAL_PROGRAM:
+                            prefix = next(i for i, (expected, actual) in enumerate(
+                                zip(read_error.expected, read_error.actual)) if expected != actual)
+                            # Exact application-wrapper qualification covers only
+                            # a matching prefix followed by entirely erased bytes.
+                            # Never resend committed bytes or repair arbitrary holes.
+                            if read_error.actual[prefix:] == b"\xff" * (request.count - prefix):
+                                request = FlashRequest(request.operation, request.address + prefix,
+                                                       request.data[prefix:])
+                                self._record("program_erased_suffix_retry", address=request.address,
+                                             count=request.count, attempt=attempt + 1, max_attempts=3)
+                                continue
+                    raise read_error from error
+                except Exception as read_error:
+                    # Preserve an explicit NAK observed during readback so the
+                    # retained-session gate cannot offer an invalid erase replay.
+                    error.response_status = getattr(read_error, "response_status", None)
+                    self._record("program_commit_readback_failed", address=request.address,
+                                 error=f"{type(read_error).__name__}: {read_error}")
+                    raise error from read_error
+                return None
 
     def _erase_and_program(self) -> Tuple[int, int]:
         if self.plan is None:
@@ -1210,18 +1300,14 @@ class NativeFastPartialWriteSession:
             "partial_program_started",
             blocks=total,
             payload_bytes=payload_bytes,
-            retry_policy="none",
+            retry_policy="readback-confirmed blank or erased suffix; 3 total packet attempts",
+            missing_ack_policy="error-only calibration readback",
         )
         done = 0
         self._progress("Writing calibration region", done, payload_bytes)
         for index, request in enumerate(self.plan.program, 1):
-            self._flash(
-                request,
-                label=(
-                    f"fast_partial_program_{index:03d}_"
-                    f"0x{request.address:06X}_{request.count}"
-                ),
-            )
+            label = f"fast_partial_program_{index:03d}_0x{request.address:06X}_{request.count}"
+            self._flash(request, label=label)
             done += request.count
             self._progress("Writing calibration region", done, payload_bytes)
             self._sleep(self.timing.between_program_requests)
@@ -1239,7 +1325,7 @@ class NativeFastPartialWriteSession:
         self._set_state(
             state=SessionState.WRITE_FINALIZE_HIGH,
             link=LinkRate.HIGH,
-            reason="all planned program replies validated",
+            reason="all planned blocks acknowledged or confirmed by readback",
         )
         self._sleep(self.timing.pre_finalize_delay)
         self._request(

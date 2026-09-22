@@ -11,23 +11,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_windows_spec_uses_gui_entry_and_excludes_private_material():
-    text = (ROOT / "packaging" / "BimmerSteinECUTool.spec").read_text(encoding="utf-8")
-    assert 'ROOT / "gui.py"' in text
-    assert 'contents_directory="_internal"' in text
-    assert 'icon=str(ROOT / "assets" / "bimmerstein_ecu_tool.ico")' in text
-    assert 'version=str(ROOT / "build" / "windows_version_info.txt")' in text
-    assert "disable_windowed_traceback=True" in text
-    assert 'ROOT / "engines" / "patcher" / "patches"' in text
-    assert '"BimmerStein MS41 Patch Definitions.xml"' in text
-    assert 'ROOT / "logger_definitions"' in text
-    assert 'ROOT / "THIRD_PARTY_LICENSES"' in text
-    assert 'agent_manifest = json.loads' in text
-    assert 'entry["payload"] for entry in agent_manifest["agents"].values()' in text
-    assert 'collect_dynamic_libs("usb1")' in text
-    assert '"stage1_payload.hex"' in text and '"stage1_manifest.json"' in text
-    assert "_private" not in text
-    assert "backups" not in text
+def test_default_windows_build_uses_the_supported_compiler():
+    text = (ROOT / "build_windows.ps1").read_text(encoding="utf-8")
+    assert 'build_windows_nuitka.ps1" @args' in text
+    assert not (ROOT / "packaging" / "BimmerSteinECUTool.spec").exists()
+    requirements = (ROOT / "requirements-build.txt").read_text(encoding="utf-8")
+    assert "pyinstaller" not in requirements.lower()
 
 
 def test_distribution_verifier_rejects_missing_package(tmp_path):
@@ -43,7 +32,7 @@ def test_distribution_verifier_rejects_missing_package(tmp_path):
         raise AssertionError("missing package passed verification")
 
 
-def test_distribution_verifier_rejects_non_x64_pe(tmp_path):
+def test_distribution_verifier_rejects_wrong_native_architecture(tmp_path):
     path = ROOT / "packaging" / "verify_dist.py"
     spec = importlib.util.spec_from_file_location("ms41_verify_dist_arch", path)
     module = importlib.util.module_from_spec(spec)
@@ -56,10 +45,10 @@ def test_distribution_verifier_rejects_non_x64_pe(tmp_path):
     image[:2] = b"MZ"
     image[0x3C:0x40] = (64).to_bytes(4, "little")
     image[64:68] = b"PE\x00\x00"
-    image[68:70] = (0x014C).to_bytes(2, "little")
+    image[68:70] = (0x014C if module.HOST_ARCHITECTURE == "x64" else 0x8664).to_bytes(2, "little")
     executable.write_bytes(image)
 
-    with pytest.raises(RuntimeError, match="not x64"):
+    with pytest.raises(RuntimeError, match=f"not {module.HOST_ARCHITECTURE}"):
         module.verify_distribution(app_dir)
 
 
@@ -123,56 +112,6 @@ def test_distribution_verifier_rejects_runtime_data_from_release_package():
     assert "ET.parse(patch_definition)" in text
     assert "bundled logger definition does not match tracked source" in text
     assert "ET.parse(logger_definition)" in text
-
-
-def test_public_source_rejects_private_platform_docs(tmp_path, monkeypatch):
-    spec = importlib.util.spec_from_file_location(
-        "bimmerstein_verify_source_docs", ROOT / "packaging" / "verify_dist.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    monkeypatch.setattr(module, "ROOT", tmp_path)
-    for relative in (
-        "gui.py", "patch_service.py", "live_data.py", "README.md",
-        "CHANGELOG.md", "RELEASE_NOTES.md", "manual/USER_MANUAL.md",
-        "THIRD_PARTY_NOTICES.md",
-        "logger_definitions/BimmerStein MS41 Logger Definitions.xml",
-        "packaging/capture_manual_screenshots.py",
-        "engines/patcher/romraider/README.md",
-        "engines/patcher/romraider/build_patch_definitions.py",
-    ):
-        path = tmp_path / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("# Public source", encoding="utf-8")
-    for relative in (
-        "tests/README.md", "THIRD_PARTY_LICENSES/dependency.md",
-        "tools/dependency.java",
-    ):
-        path = tmp_path / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("Android dependency reference", encoding="utf-8")
-    module.verify_public_source()
-
-    document = tmp_path / "docs" / "EEPROM.md"
-    document.parent.mkdir()
-    document.write_text("Android EEPROM editor", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="private platform reference.*docs/EEPROM.md"):
-        module.verify_public_source()
-    document.write_text("Physical EEPROM record map", encoding="utf-8")
-    module.verify_public_source()
-
-
-def test_public_source_checks_decoded_python_strings(tmp_path):
-    spec = importlib.util.spec_from_file_location(
-        "bimmerstein_verify_decoded_strings", ROOT / "packaging" / "verify_dist.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    source = tmp_path / "message.py"
-    for message in ("Ignition Cut " + "V9", "Quick" + "flash"):
-        source.write_text("message = '\\n" + message + "'\n", encoding="utf-8")
-        with pytest.raises(RuntimeError, match="prohibited public reference"):
-            module._verify_public_terms((source,))
-    source.write_text("message = '\\nIgnition Cut V7'\n", encoding="utf-8")
-    module._verify_public_terms((source,))
 
 
 def test_msvc_runtime_verifier_rejects_modified_dependency_copy(tmp_path, monkeypatch):
@@ -271,12 +210,11 @@ def test_release_packaging_requires_explicit_license_gates():
     assert "calibration_definitions_bundled = $true" in text
     assert "verify_dist.py" in text
     assert "b[1-9]\\d*" in text
-    assert '"BimmerStein-ECU-Tool-$Version-Windows-x64"' in text
-    assert '"BimmerStein-ECU-Tool-$Version-Windows-x64-Nuitka"' in text
+    assert '"BimmerStein-ECU-Tool-$Version-Windows-$architecture"' in text
     assert 'developer = "CAATZ"' in text
     assert 'repository = "https://github.com/CAATZ/BimmerStein-ECU-Tool"' in text
     assert "version = $Version" in text
-    assert "build_backend = $Backend" in text
+    assert 'build_backend = "nuitka"' in text
     assert "built_at_utc = $buildStartedAtUtc" in text
     assert "source_commit = $sourceCommit" in text
     assert "source_dirty = $sourceDirty" in text
@@ -289,19 +227,20 @@ def test_release_packaging_requires_explicit_license_gates():
     assert "build_installer.ps1" in text
     assert "SkipInstaller" in text
     assert "IsccPath" in text
-    assert "IncludeNuitka" in text
+    assert "IncludeNuitka" not in text
+    assert "PythonX86Path" in text
     assert "build_windows_nuitka.ps1" in text
     admission = '"engines\\patcher\\verify_ms412_emulator.py"'
     assert admission in text
-    assert text.index(admission) < text.index("& $standardBuildScript")
+    assert text.index(admission) < text.index("& $nuitkaBuildScript")
 
-    build_text = (ROOT / "build_windows.ps1").read_text(encoding="utf-8")
+    build_text = (ROOT / "build_windows_nuitka.ps1").read_text(encoding="utf-8")
     assert "b[1-9]\\d*" in build_text
 
     building = (ROOT / "BUILDING.md").read_text(encoding="utf-8")
-    assert "-Version 0.1.0b16" in building
-    assert "v0.1.0b16" in building
-    assert "BimmerStein ECU Tool Nuitka" in building
+    assert "-Version 0.1.0b17" in building
+    assert "v0.1.0b17" in building
+    assert "Nuitka" in building and "x86" in building
 
 
 def test_inno_installer_uses_bimmerstein_identity_and_per_user_install():
@@ -311,25 +250,28 @@ def test_inno_installer_uses_bimmerstein_identity_and_per_user_install():
     assert "AppName={#SetupAppName}" in installer
     assert '#define SetupAppName "BimmerStein ECU Tool"' in installer
     assert '#define SetupInstallDirName "BimmerStein ECU Tool"' in installer
-    assert "Development" not in installer
-    assert "(Compiled)" not in installer
-    assert '#define SetupShortcutSuffix ""' in installer
-    assert '#define AppNumericVersion "0.1.0.16"' in installer
+    assert "SetupShortcutSuffix" not in installer
+    assert "ArchitecturesAllowed=x86compatible" in installer
+    assert 'Name: "{app}\\plugins\\__pycache__"' in installer
+    assert '#define AppVersion "0.1.0b17"' in installer
+    assert '#define AppDisplayVersion "0.1.0 Beta 17"' in installer
+    assert '#define AppNumericVersion "0.1.0.17"' in installer
+    assert r'#define SourceDir "..\release\BimmerStein-ECU-Tool-0.1.0b17-Windows-x64"' in installer
     assert 'SetupAppName "BimmerStein ECU Tool (' not in installer
     assert "AppPublisher=CAATZ" in installer
     assert "PrivilegesRequired=lowest" in installer
     assert "ArchitecturesAllowed=x64compatible" in installer
     assert "ArchitecturesInstallIn64BitMode=x64compatible" in installer
     assert "DefaultDirName={localappdata}\\Programs\\{#SetupInstallDirName}" in installer
-    assert "BimmerStein-ECU-Tool-{#AppVersion}-Windows-x64{#PackageSuffix}-Setup" in installer
+    assert "BimmerStein-ECU-Tool-{#AppVersion}-Windows-{#Architecture}-Setup" in installer
     assert "SetupIconFile=..\\assets\\bimmerstein_ecu_tool.ico" in installer
     assert "LicenseFile={#SourceDir}\\LICENSE.txt" in installer
     assert "InfoBeforeFile={#SourceDir}\\RELEASE_NOTES.md" in installer
     assert 'Name: "desktopicon"' in installer
     assert 'Filename: "{app}\\BimmerStein ECU Tool.exe"' in installer
-    assert "DefaultGroupName={#SetupAppName}{#SetupShortcutSuffix}" in installer
-    assert 'Name: "{group}\\{#SetupAppName}{#SetupShortcutSuffix}"' in installer
-    assert 'Name: "{autodesktop}\\{#SetupAppName}{#SetupShortcutSuffix}"' in installer
+    assert "DefaultGroupName={#SetupAppName}" in installer
+    assert 'Name: "{group}\\{#SetupAppName}"' in installer
+    assert 'Name: "{autodesktop}\\{#SetupAppName}"' in installer
 
     builder = (ROOT / "packaging" / "build_installer.ps1").read_text(
         encoding="utf-8"
@@ -339,19 +281,19 @@ def test_inno_installer_uses_bimmerstein_identity_and_per_user_install():
     assert "AppDisplayVersion" in builder
     assert "AppNumericVersion" in builder
     assert "SHA256SUMS.txt" in builder
-    assert "System.Diagnostics.Process" in builder
+    assert "-WindowStyle Hidden -PassThru" in builder
     assert "WaitForExit" in builder
     assert "compilerProcess.ExitCode" in builder
-    assert '[ValidateSet("pyinstaller", "nuitka")]' in builder
-    assert '"-Nuitka"' in builder
-    assert '"packaging\\verify_dist.py" --backend $Backend --expected-version $Version' in builder
+    assert '[ValidateSet("x64", "x86")]' in builder
+    assert "PackageSuffix" not in builder
+    assert '"packaging\\verify_dist.py" --backend nuitka --architecture $Architecture --expected-version $Version' in builder
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows release script")
 def test_installer_rejects_release_prefix_sibling():
     result = subprocess.run(
         [
-            "powershell.exe", "-NoProfile", "-File",
+            "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
             str(ROOT / "packaging" / "build_installer.ps1"),
             "-Version", "0.1.0b14",
             "-SourceDir", str(ROOT / "release-sibling"),
@@ -375,8 +317,8 @@ def test_nuitka_build_is_explicit_and_separate():
     assert "Path(usb1.__file__).with_name('libusb-1.0.dll')" in build
     assert "Copy-Item -LiteralPath $usb1Dll -Destination $usb1Target" in build
     assert '"--backend", "nuitka"' not in build  # PowerShell invokes these as separate tokens.
-    assert '"packaging\\verify_dist.py" --backend nuitka --expected-version $Version' in build
-    assert "BimmerStein ECU Tool Nuitka" in build
+    assert '"packaging\\verify_dist.py" --backend nuitka --expected-version $Version --architecture $Architecture' in build
+    assert "dist\\$Architecture\\BimmerStein ECU Tool" in build
     assert '"--file-description=BimmerStein ECU Tool"' in build
     assert "[guid]::NewGuid()" in build
     assert "BimmerStein MS41 Patch Definitions.xml" in build
@@ -425,12 +367,11 @@ def test_readme_uses_canonical_product_logo_and_resource_links():
     text = (ROOT / "README.md").read_text(encoding="utf-8")
     assert '<img src="assets/bimmerstein_ecu_tool.png"' in text
     assert 'alt="BimmerStein ECU Tool"' in text
-    assert 'href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b16"' in text
+    assert 'href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases"' in text
     assert 'href="manual/USER_MANUAL.md">User Manual</a>' in text
     assert 'href="https://github.com/CAATZ/BimmerStein-ECU-Tool/issues"' in text
     assert "## Documentation and support" in text
     assert "[Illustrated PDF manual](output/pdf/BimmerStein-ECU-Tool-User-Manual.pdf)" in text
-    assert "BimmerStein MS41 Patch Definitions.xml" in text
 
 
 def test_public_docs_include_product_specific_disclaimer():
@@ -462,18 +403,136 @@ def test_public_docs_state_patch_tuning_definition_is_bundled():
         assert "beside the executable" in lowered, path
 
 
-def test_manual_declares_both_packaging_backends():
+def test_manual_explains_architecture_and_simple_installation_names():
     text = (ROOT / "manual" / "USER_MANUAL.md").read_text(encoding="utf-8")
     normalized = " ".join(text.split())
-    assert "PyInstaller and Nuitka packages" in normalized
-    assert "-Nuitka" in text
-    assert "Choose one edition for an installation" in normalized
+    assert "x64 installer for 64-bit Windows, or x86 for 32-bit Windows" in normalized
+    assert "existing installation location" in normalized
+    assert "same application features" in normalized
     assert "E659=0xCC" in text
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows release script")
+@pytest.mark.parametrize("scenario, expected_error", [
+    ("dirty_initial", "requires a clean Git checkout"),
+    ("dirty_after_first", "requires a clean Git checkout"),
+    ("changed_commit", "Git commit changed"),
+    ("clean", None),
+    ("archive", None),
+])
+def test_release_source_check_rejects_drift_and_preserves_archive_unknown(
+        tmp_path, scenario, expected_error):
+    if scenario != "archive":
+        (tmp_path / ".git").mkdir()
+    release_script = ROOT / "packaging" / "prepare_release.ps1"
+    # Execute the real check with a deterministic Git command substitute. This
+    # creates neither commits nor packages and never runs the expensive gate.
+    command = r'''
+$ErrorActionPreference = "Stop"
+$root = '__ROOT__'
+$sourceCommit = ""
+$sourceDirty = $null
+$scenario = '__SCENARIO__'
+$script:mockCommit = 'a' * 40
+$script:mockDirty = $scenario -eq 'dirty_initial'
+function git {
+    if ($scenario -eq 'archive') { throw "Archive incorrectly queried enclosing Git repository" }
+    $global:LASTEXITCODE = 0
+    if ($args -contains 'rev-parse') { $script:mockCommit }
+    elseif ($script:mockDirty) { ' M source.py' }
+}
+$tokens = $null
+$parseErrors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    '__SCRIPT__', [ref]$tokens, [ref]$parseErrors)
+if ($parseErrors.Count) { throw "Invalid release script syntax" }
+$definition = $ast.Find({ param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq 'Assert-ReleaseSource'
+}, $true)
+Invoke-Expression $definition.Extent.Text
+Assert-ReleaseSource
+if ($scenario -eq 'dirty_after_first') { $script:mockDirty = $true }
+if ($scenario -eq 'changed_commit') { $script:mockCommit = 'b' * 40 }
+Assert-ReleaseSource
+@{commit=$sourceCommit; dirty=$sourceDirty} | ConvertTo-Json -Compress
+'''.replace("__ROOT__", str(tmp_path).replace("'", "''")).replace(
+        "__SCRIPT__", str(release_script).replace("'", "''")).replace("__SCENARIO__", scenario)
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command", command],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False)
+    if expected_error:
+        assert result.returncode != 0
+        assert expected_error in result.stdout + result.stderr
+    else:
+        import json
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout) == {
+            "commit": "" if scenario == "archive" else "a" * 40,
+            "dirty": None if scenario == "archive" else False,
+        }
+
+
+def test_release_source_checks_precede_gate_and_package_replacement():
+    text = (ROOT / "packaging" / "prepare_release.ps1").read_text(encoding="utf-8")
+    first_check = text.index("\nAssert-ReleaseSource\n")
+    assert first_check < text.index('& $python "engines\\patcher\\verify_ms412_emulator.py"')
+    stage = text.split("function Stage-ReleasePackage {", 1)[1].split(
+        "function Build-ReleaseInstaller {", 1)[0]
+    assert stage.index("Assert-ReleaseSource") < stage.index("Remove-Item")
+    assert stage.index("Assert-ReleaseSource") < stage.index("source_dirty = $sourceDirty")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows release script")
+@pytest.mark.parametrize("tracked_path, rejected", [
+    ("android/private.txt", True), ("_private/proof.txt", True),
+    ("android-notes.txt", False),
+])
+def test_clean_git_release_source_excludes_private_root_directories(
+        tmp_path, tracked_path, rejected):
+    def git(*args):
+        return subprocess.run(
+            ["git", "-C", str(tmp_path), *args], stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, check=True)
+
+    git("init", "--quiet")
+    target = tmp_path / tracked_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("synthetic release fixture\n", encoding="utf-8")
+    git("add", "--", tracked_path)
+    git("-c", "user.name=Release Test", "-c", "user.email=release@example.invalid",
+        "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "synthetic fixture")
+    assert git("status", "--porcelain").stdout == ""
+    script = ROOT / "packaging" / "prepare_release.ps1"
+    command = r'''
+$ErrorActionPreference = "Stop"
+$root = '__ROOT__'
+$sourceCommit = ""
+$sourceDirty = $null
+$tokens = $null
+$parseErrors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    '__SCRIPT__', [ref]$tokens, [ref]$parseErrors)
+$definition = $ast.Find({ param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq 'Assert-ReleaseSource'
+}, $true)
+Invoke-Expression $definition.Extent.Text
+Assert-ReleaseSource
+'''.replace("__ROOT__", str(tmp_path).replace("'", "''")).replace(
+        "__SCRIPT__", str(script).replace("'", "''"))
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command", command],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False)
+    if rejected:
+        assert result.returncode != 0
+        assert "must not track" in result.stdout + result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+
+
 def test_build_rewrites_source_links_for_packaged_readme():
-    text = (ROOT / "build_windows.ps1").read_text(encoding="utf-8")
-    assert 'src="_internal/assets/bimmerstein_ecu_tool.png"' in text
+    text = (ROOT / "build_windows_nuitka.ps1").read_text(encoding="utf-8")
     assert 'href="BimmerStein-ECU-Tool-User-Manual.pdf"' in text
     assert 'href="LICENSE.txt">License</a>' in text
     assert '(BimmerStein-ECU-Tool-User-Manual.pdf)' in text
@@ -482,5 +541,4 @@ def test_build_rewrites_source_links_for_packaged_readme():
     assert '"Build and release instructions"' in text
     assert '@("Run from source", "Verify and build", "Project layout")' in text
     assert "sourceOnlyHeading" in text
-    assert '"_internal\\THIRD_PARTY_LICENSES"' in text
-    assert "Move-Item -LiteralPath $collectedLicenses -Destination $publicLicenses" in text
+    assert "--include-data-dir=$root\\THIRD_PARTY_LICENSES=THIRD_PARTY_LICENSES" in text

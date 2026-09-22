@@ -138,9 +138,11 @@ def _stub_run_task(monkeypatch, w):
     actually handed to _ds2_write, without touching real serial I/O."""
     captured = {}
 
-    def fake_ds2_write(kind, image_bytes, progress_fn, log_fn):
+    def fake_ds2_write(kind, image_bytes, progress_fn, log_fn, *, verify_write):
+        assert verify_write == w.chk_verify.isChecked()
         captured["kind"] = kind
         captured["image"] = image_bytes
+        captured["verify_write"] = verify_write
 
     monkeypatch.setattr(w, "_ds2_write", fake_ds2_write)
 
@@ -271,7 +273,7 @@ def test_conversion_without_a_prior_full_read_is_allowed_when_boot_is_preserved(
         w._ecu_variant = "MS41.1"
         w._last_full_read = None
         source = ref("MS41.1")
-        w._ds2 = _CodingFamilyDS2(
+        w._ds2 = session = _CodingFamilyDS2(
             source[CODING_FAMILY_FILE_ADDR:CODING_FAMILY_FILE_ADDR + 3]
         )
         _warning_router(monkeypatch, {"Variant Conversion": QMessageBox.Yes})
@@ -286,7 +288,8 @@ def test_conversion_without_a_prior_full_read_is_allowed_when_boot_is_preserved(
 
         assert not critical_calls
         assert captured.get("ran") is True
-        assert w._ds2.reads == [(gui.MS41ECU.CODING_FAMILY_DS2_ADDR, 3)]
+        assert session.reads == [(gui.MS41ECU.CODING_FAMILY_DS2_ADDR, 3)]
+        assert w._ds2 is None
     finally:
         w.close()
 
@@ -305,7 +308,11 @@ def test_boot_preserving_family_graft_reaches_every_full_write_route(
             target[address] = ord("9")
 
         w._ecu_variant = "MS41.1"
-        w._ds2 = _CodingFamilyDS2(b"606")
+        w._ds2 = session = _CodingFamilyDS2(b"606")
+        w._ecu_program_variant = "MS41.1"
+        w._ecu_program_compatibility_id = "0941"
+        w._ecu_softbsl_marker = "B"
+        w._ecu_softbsl_hook_present = True
         monkeypatch.setattr(w, "_auto_transfer_route", lambda: route)
         monkeypatch.setattr(
             gui.MS41ECU, "detect_variant", staticmethod(lambda _data: "MS41.1")
@@ -322,7 +329,6 @@ def test_boot_preserving_family_graft_reaches_every_full_write_route(
         monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: QMessageBox.Yes)
         monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
         monkeypatch.setattr(w, "_finish_flash_success", lambda *a, **k: None)
-        monkeypatch.setattr(w, "_disconnect", lambda: None)
         captured = {}
 
         monkeypatch.setattr(
@@ -363,7 +369,12 @@ def test_boot_preserving_family_graft_reaches_every_full_write_route(
             assert written[address:address + 3] == b"606"
         for address in CODING_FAMILY_CAL_ADDRS:
             assert written[address] == ord("6")
-        assert w._ds2.reads == [(gui.MS41ECU.CODING_FAMILY_DS2_ADDR, 3)]
+        assert session.reads == [(gui.MS41ECU.CODING_FAMILY_DS2_ADDR, 3)]
+        assert w._ds2 is None
+        assert w._ecu_program_variant is None
+        assert w._ecu_program_compatibility_id is None
+        assert w._ecu_softbsl_marker is None
+        assert w._ecu_softbsl_hook_present is False
         if route == "native_ds2":
             assert captured["native_kwargs"]["variant_conversion"] is False
     finally:
@@ -444,7 +455,7 @@ def test_boot_overwrite_normalizes_mixed_target_to_its_own_boot_family(monkeypat
             target[address] = ord("9")
 
         w._ecu_variant = "MS41.2"
-        w._ds2 = _CodingFamilyDS2(b"909")
+        w._ds2 = session = _CodingFamilyDS2(b"909")
         w.chk_bootloader_write.setEnabled(True)
         w.chk_bootloader_write.setChecked(trigger == "checkbox")
         if trigger != "checkbox":
@@ -482,7 +493,8 @@ def test_boot_overwrite_normalizes_mixed_target_to_its_own_boot_family(monkeypat
         monkeypatch.setattr(w, "_bootloader_write_file_warning", lambda _data: None)
         monkeypatch.setattr(w, "_softbsl_missing_after_full_write", lambda *a, **k: ())
         monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: QMessageBox.Yes)
-        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k:
+                            QMessageBox.Yes if trigger == "checkbox" or approve else QMessageBox.No)
         approvals = []
         def confirm(*args, **kwargs):
             approvals.append(args[2])
@@ -511,10 +523,26 @@ def test_boot_overwrite_normalizes_mixed_target_to_its_own_boot_family(monkeypat
 
         w._ds2_write_full(target, "mixed-boot.bin")
 
-        assert len(approvals) == 1
         if trigger != "checkbox":
-            assert "BOTTOM bank" in approvals[0]
+            # TOP no longer escalates cached/sparse mismatches into a boot overwrite.
+            # The shared owner receives the donor and grafts its live boot before erase.
+            assert approvals == []
             assert not w.chk_bootloader_write.isChecked()
+            assert session.reads == []
+            if approve:
+                assert captured["kwargs"]["write_bootloader"] is False
+                assert captured["kwargs"]["top_full_options"]["preserve_boot_identity"] is False
+                written = captured["image"]
+                assert written[CODING_FAMILY_FILE_ADDR:CODING_FAMILY_FILE_ADDR + 3] == b"606"
+                for address in CODING_FAMILY_PROGRAM_ADDRS:
+                    assert written[address:address + 3] == b"909"
+                if trigger.endswith("sector"):
+                    assert written[0x6050] == 0x17
+                assert w._ds2 is None
+            else:
+                assert not captured
+            return
+        assert len(approvals) == 1
         if not approve:
             assert not captured
             return
@@ -528,7 +556,8 @@ def test_boot_overwrite_normalizes_mixed_target_to_its_own_boot_family(monkeypat
             assert written[address] == ord("6")
         assert captured["kwargs"]["write_bootloader"] is True
         expected_reads = [(0x1CF4, 3)] if trigger.startswith("sparse") else []
-        assert w._ds2.reads == expected_reads
+        assert session.reads == expected_reads
+        assert w._ds2 is None
     finally:
         w._ds2 = None
         w.close()

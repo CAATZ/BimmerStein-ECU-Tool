@@ -420,6 +420,14 @@ class SoftBSLError(Exception):
     pass
 
 
+class ProgramReadbackMismatch(SoftBSLError):
+    """CRC-qualified bytes cannot be repaired by programming the same data again."""
+
+    def __init__(self, address):
+        self.address = address
+        super().__init__(f"program readback requires erase at CPU 0x{address:05X}")
+
+
 def _door_patch_ids(version):
     try:
         return _DOOR_PATCH_IDS[version]
@@ -471,10 +479,15 @@ class _RetainedInstallFlash:
     transfer_baud: str
     chip: object
     error: Exception
+    replay_attempted: bool = False
 
     @property
     def is_open(self):
         return bool(getattr(self.ds2, "is_open", False))
+
+    @property
+    def retry_supported(self):
+        return self.is_open and not self.replay_attempted
 
     def close_after_confirmed_power_cycle(self):
         self.ds2.close()
@@ -590,11 +603,20 @@ class SoftBSL:
         if not echo_enabled or chunk_size <= 0:
             # D2XX/pyserial drain RX in their drivers, so preserve the proven
             # one-write Soft-BSL frames on desktop transports.
-            ser.write(data)
-            ser.flush()
-            if echo_enabled:
-                timeout = 2.0 + len(data) * 12 / max(self.ds2.baud, 1)
-                self.ds2._read_exact(len(data), timeout)
+            try:
+                written = ser.write(data)
+                if written is not None and written != len(data):
+                    raise SoftBSLError(f"short serial write: wrote {written}/{len(data)} bytes")
+                ser.flush()
+                if echo_enabled:
+                    timeout = 2.0 + len(data) * 12 / max(self.ds2.baud, 1)
+                    echoed = bytes(self.ds2._read_exact(len(data), timeout))
+                    if echoed != data:
+                        raise SoftBSLError("K-line echo length/content mismatch")
+            except SoftBSLError:
+                raise
+            except Exception as error:
+                raise SoftBSLError(f"serial send failed: {error}") from error
             return
 
         # Injected USB transports may not have a background reader while a long
@@ -950,18 +972,96 @@ class SoftBSL:
         #   the agent folds a2,a1,a0 then the 1024 data bytes, so a flipped address byte fails the CRC
         #   -> status 4 -> nothing programmed (was data-only = a flipped addr silently mis-targeted)
         frame = bytes([CHK]) + a3 + data + ck.to_bytes(2, "big")   # crc big-endian
-        self._txs(frame)
-        # A status-read timeout (dropped status byte, or a desync the agent's bounded rx recovered
-        # from) is RETRYABLE - the agent is back at main; return sentinel 0 so flash_image re-sends.
         try:
-            st = self._rx(timeout=8.0)                           # 1 ok / 2 fail / 3 deny / 4 CRC
-        except SoftBSLError:
+            self._txs(frame)
+            st = self._rx(timeout=8.0)
+        except SoftBSLError as error:
+            # Wait for incomplete-frame cleanup, then prove command-loop readiness with
+            # the existing CRC read. Only the error path adds a read or a quiet interval.
+            self._drain_until_quiet()
+            back = self.crc_read(addr, CHUNK_SIZE)
+            if back == data:
+                self.log(f"chunk @CPU 0x{addr:05X}: missing ACK confirmed by readback")
+                return 1
+            if any(wanted & ~actual for wanted, actual in zip(data, back)):
+                raise ProgramReadbackMismatch(addr)
+            self.log(f"chunk @CPU 0x{addr:05X}: link recovered after {error}")
             return 0
-        if st not in (1, 2, 3, 4):                               # residual-echo insurance (see program())
-            extra = self.ds2._read_exact(1, 0.5)
-            if extra:
-                st = extra[0]
+        if st not in (1, 2, 3, 4):
+            raise SoftBSLError(f"invalid program status 0x{st:02X}")
         return st
+
+    def _drain_until_quiet(self):
+        """Error-only drain: no command bytes until the incomplete-frame tail is quiet."""
+        ser = self._ser()
+        previous_timeout = ser.timeout
+        deadline = time.perf_counter() + 3.0
+        quiet_since = time.perf_counter()
+        try:
+            ser.timeout = 0.01
+            while time.perf_counter() < deadline:
+                if ser.read(64):
+                    quiet_since = time.perf_counter()
+                elif time.perf_counter() - quiet_since >= 0.25:
+                    return
+            raise SoftBSLError("agent stream did not become quiet; write retry blocked")
+        finally:
+            ser.timeout = previous_timeout
+
+    def _program_chunk_with_retries(self, address, data):
+        """Keep nine identical-packet attempts; inspect only unresolved failures."""
+        status = self.program_chunk(address, data)
+        for attempt in range(PROG_RETRIES):
+            if status not in (0, 2, 4):
+                break
+            self.log(f"  retry {attempt + 1}/{PROG_RETRIES} chunk @CPU 0x{address:05X} (status {status})")
+            status = self.program_chunk(address, data)
+        if status == 1:
+            return
+        if status in (0, 2):
+            back = self.crc_read(address, len(data))
+            if back == data:
+                return
+            if any(wanted & ~actual for wanted, actual in zip(data, back)):
+                raise ProgramReadbackMismatch(address)
+        raise SoftBSLError(f"chunk @CPU 0x{address:05X} failed (status {status}) after packet retries")
+
+    def _replay_image_sector(self, address, image, *, scope, half, chip, sectors,
+                             write_bootloader, replayed):
+        """Repair one complete hardware sector, at most once in this image write."""
+        geometry, _lo, _hi = _flash_scope("full", half=half, chip=chip)
+        # Intel main-D begins at CPU 0x8000; 0x10000 is its established erase address.
+        geometry = sorted((0x8000 if chip == "28f200" and a == 0x10000 else a, a, protected)
+                          for a, _name, protected in geometry)
+        for index, (base, erase_address, protected) in enumerate(geometry):
+            end = geometry[index + 1][0] if index + 1 < len(geometry) else IMAGE_SIZE
+            if base <= address < end:
+                break
+        else:
+            raise SoftBSLError("failed address has no qualified erase sector")
+        if replayed:
+            raise SoftBSLError("this write already used its one automatic sector replay")
+        if (erase_address not in {a for a, _name, _p in sectors}
+                or (protected and not write_bootloader) or len(image) != IMAGE_SIZE):
+            raise SoftBSLError("sector repair would exceed the selected complete image scope")
+        addresses = [a for a in range(base, end, CHUNK_SIZE) if not _in_hole(a)]
+        if any(not _scope_prog_ok(scope, a) for a in addresses):
+            raise SoftBSLError("sector repair is missing intended neighboring bytes")
+        self.crc_read(address, 8)  # prove the retained command loop before destructive replay
+        replayed.add(base)        # consume the bound even if erase or programming fails
+        self.log(f"Replaying sector CPU 0x{base:05X}-0x{end - 1:05X} once after confirmed mismatch.")
+        if self.erase(erase_address) != 1:
+            raise SoftBSLError(f"recovery erase @CPU 0x{erase_address:05X} failed")
+        for a in addresses:
+            offset = a ^ DESCR
+            block = image[offset:offset + CHUNK_SIZE]
+            if block != b"\xFF" * len(block):
+                self._program_chunk_with_retries(a, block)
+        for a in addresses:
+            offset = a ^ DESCR
+            if self.crc_read(a, CHUNK_SIZE) != image[offset:offset + CHUNK_SIZE]:
+                raise SoftBSLError(f"sector recovery verify failed @CPU 0x{a:05X}")
+        return base, end
 
     def read_back(self, addr, n):
         time.sleep(_SETTLE)
@@ -1043,7 +1143,7 @@ class SoftBSL:
                    f"floating bus, NOT flash)")
         return bytes(out)
 
-    def write_tune_partial(self, partial, *, do_verify=True, progress_cb=None):
+    def write_tune_partial(self, partial, *, do_verify=True, progress_cb=None, _sector_replay=False):
         """Write the 24 KB calibration/tune PARTITION to the CURRENTLY-VISIBLE bank — the agent
         counterpart of ds2.write_partial, for a Fast (soft-BSL) tune write. Erase the cal block
         @CPU 0x10000, then program the 24 KB contiguously to CPU 0x10000 (partial[i] -> CPU
@@ -1083,15 +1183,14 @@ class SoftBSL:
             if not blk or blk == b"\xFF" * len(blk):
                 continue                                       # erased flash already reads FF
             cpu = base + off
-            st = self.program_chunk(cpu, blk)
-            tries = 0
-            while st in (0, 2, 4) and tries < PROG_RETRIES:    # transient (timeout/fail/CRC); re-send (idempotent)
-                tries += 1
-                self.log(f"  retry {tries}/{PROG_RETRIES} chunk @CPU 0x{cpu:05X} (status {st})")
-                st = self.program_chunk(cpu, blk)
-            if st != 1:
-                raise SoftBSLError(f"tune chunk @CPU 0x{cpu:05X} failed (status {st}"
-                                   f"{' = policy-deny' if st == DENY else ''}) after {tries} retries")
+            try:
+                self._program_chunk_with_retries(cpu, blk)
+            except ProgramReadbackMismatch:
+                if _sector_replay:
+                    raise
+                self.log("Replaying the calibration sector once after confirmed mismatch.")
+                return self.write_tune_partial(
+                    partial, do_verify=do_verify, progress_cb=progress_cb, _sector_replay=True)
             nprog += 1
         if progress_cb:
             progress_cb(TUNE_PARTIAL_SIZE, TUNE_PARTIAL_SIZE, "program")
@@ -1117,6 +1216,10 @@ class SoftBSL:
             if progress_cb and not bad:
                 progress_cb(TUNE_PARTIAL_SIZE, TUNE_PARTIAL_SIZE, "verify")
             if bad:
+                if not _sector_replay:
+                    self.log("Replaying the calibration sector once after verified mismatch.")
+                    return self.write_tune_partial(
+                        partial, do_verify=do_verify, progress_cb=progress_cb, _sector_replay=True)
                 raise SoftBSLError(f"tune verify failed ({bad}+ mismatched blocks)")
             self.log("tune verify OK.")
 
@@ -1305,7 +1408,7 @@ class SoftBSL:
 
     def flash_image(self, image, *, scope="full", write_bootloader=False,
                     baud="high", do_verify=True, prompt=input, assume_half=None,
-                    progress_cb=None, chip=None, baud_is_set=False):
+                    progress_cb=None, chip=None, baud_is_set=False, _sector_replay=False):
         """Flash a checksum-CORRECTED image to the half it is marked for.
 
         The host does NOT compute image checksums - run checksum.py / build_softbsl_image.py
@@ -1375,6 +1478,8 @@ class SoftBSL:
         self.log(f"erase done ({time.time() - t_erase:.1f}s).")
 
         # --- program in 1024B CRC16 chunks (skip all-FF + param1) ---
+        replayed = {None} if _sector_replay else set()
+        repaired_ranges = []
         nprog = 0; prog_bytes = 0; t_prog = time.time()
         bar = None if progress_cb else _progress_bar("program")
         for f in range(prog_lo, prog_hi, CHUNK_SIZE):
@@ -1389,27 +1494,19 @@ class SoftBSL:
                     or (half != "upper" and PARAM1_FILE[0] <= f < PARAM1_FILE[1])):
                 continue                                      # CHUNK_SIZE divides param1's 8K boundary
             cpu = f ^ DESCR
+            if any(lo <= cpu < hi for lo, hi in repaired_ranges):
+                continue
             if _in_hole(cpu):
                 continue
             blk = image[f:f + CHUNK_SIZE]
             if not blk or blk == b"\xFF" * len(blk):
                 continue                                      # FF-skip (sector already erased to FF)
-            st = self.program_chunk(cpu, blk)
-            tries = 0
-            # 0 (status-timeout) / 2 (program-fail) / 4 (CRC mismatch) are transient: a CRC-fail or
-            # timeout programmed NOTHING (or programmed correctly + the status dropped), and AMD
-            # re-program is idempotent, so re-send the chunk. 3 (policy-deny) is permanent.
-            while st in (0, 2, 4) and tries < PROG_RETRIES:
-                tries += 1
-                if bar:
-                    _tty_newline()                    # break the bar line before the retry note
-                self.log(f"  retry {tries}/{PROG_RETRIES} chunk @file 0x{f:05X} (status {st})")
-                st = self.program_chunk(cpu, blk)
-            if st != 1:
-                if bar:
-                    _tty_newline()
-                raise SoftBSLError(f"chunk @file 0x{f:05X} failed (status {st}"
-                                   f"{' = policy-deny' if st == DENY else ''}) after {tries} retries")
+            try:
+                self._program_chunk_with_retries(cpu, blk)
+            except ProgramReadbackMismatch:
+                repaired_ranges.append(self._replay_image_sector(
+                    cpu, image, scope=scope, half=half, chip=chip, sectors=sectors,
+                    write_bootloader=write_bootloader, replayed=replayed))
             nprog += 1
             prog_bytes += len(blk)
             if not bar and (f & 0x3FFF) == 0:
@@ -1425,7 +1522,6 @@ class SoftBSL:
         # --- read-back verify (every programmed block) ---
         if do_verify:
             self.log("verify (read-back) ...")
-            bad = 0
             t_verify = time.time()
             vbar = None if progress_cb else _progress_bar("verify")
             for f in range(prog_lo, prog_hi, CHUNK_SIZE):
@@ -1447,20 +1543,16 @@ class SoftBSL:
                     continue
                 back = self.crc_read(cpu, len(blk))               # CRC-verified 1 KB read-back
                 if back != blk:
-                    bad += 1
                     if vbar:
                         _tty_newline()
-                    self.log(f"  MISMATCH @file 0x{f:05X}")
-                    if bad >= 5:
-                        break
+                    repaired_ranges.append(self._replay_image_sector(
+                        cpu, image, scope=scope, half=half, chip=chip, sectors=sectors,
+                        write_bootloader=write_bootloader, replayed=replayed))
             if vbar:
-                if not bad:
-                    vbar(prog_hi - prog_lo, prog_hi - prog_lo)   # snap to 100% only on a clean pass
+                vbar(prog_hi - prog_lo, prog_hi - prog_lo)
                 _tty_newline()                           # terminate the bar line either way
-            if progress_cb and not bad:
+            if progress_cb:
                 progress_cb(prog_hi - prog_lo, prog_hi - prog_lo, "verify")
-            if bad:
-                raise SoftBSLError(f"verify failed ({bad}+ mismatched blocks)")
             self.log(f"verify OK ({time.time() - t_verify:.1f}s).")
             self.reset()
         else:
@@ -2008,6 +2100,9 @@ def _resume_retained_install_flash(recovery, progress_cb=None):
     if not recovery.is_open:
         raise SoftBSLError("the retained installer RAM-agent session is closed")
 
+    if not recovery.retry_supported:
+        raise _RetainedInstallFlashRequired(recovery)
+    recovery.replay_attempted = True
     args = copy.copy(recovery.args)
     sb = recovery.agent
     tracker = _EraseBoundaryTracker(progress_cb)
@@ -2031,6 +2126,7 @@ def _resume_retained_install_flash(recovery, progress_cb=None):
             chip=recovery.chip or "29f400",
             # The retained agent is already running at this exact tier.
             baud_is_set=recovery.transfer_baud != "low",
+            _sector_replay=True,  # explicit replay must not renew the automatic erase budget
         )
     except Exception as error:
         recovery.error = error
@@ -2893,7 +2989,7 @@ def _compose_image(base_bytes, patch_ids, *, marker=None, return_log=False):
             if (
                     loader
                     and "softbsl_loader" in patch_ids
-                    and "softbsl_loader" not in missing):
+                    and image_marker(build_base) is not None):
                 loader_marker = next(
                     edit for edit in loader["edits"]
                     if int(edit["off"]) == MARKER_OFF)
@@ -3212,6 +3308,8 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
     if len(base) != IMAGE_SIZE:
         raise SoftBSLError(f"base is {len(base)} B, expected {IMAGE_SIZE} (256 KB)")
     version = _patch_base_version(base)
+    source_marker = image_marker(base)
+    effective_marker = marker or source_marker
     if with_alphan and version != "MS41.3":
         raise SoftBSLError(
             "the alphan_failsafe restore patch is only applicable to MS41.3")
@@ -3245,24 +3343,33 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
     patch_defs = load_patches()
     bootstrap_door_id, persistent_door_id = _door_patch_ids(version)
     clean_base = base
+    top_guard = patch_defs["top_ds2_guard"]
+    top_guard_state = _patch_state(clean_base, top_guard)
+    if top_guard_state == "partial":
+        raise SoftBSLError(
+            "partial/inconsistent boot patch state detected for top_ds2_guard; "
+            "restore the boot region from a known-good backup before migration")
+    if top_guard_state == "applied":
+        # Reapply only for TOP. An explicit BOTTOM rebuild restores the exact stock gate.
+        clean_base = bytes(revert(clean_base, top_guard))
     exact_guards = []
     for old_guard_id in _DEPRECATED_CAL_GUARD_IDS:
         old_guard = patch_defs.get(old_guard_id)
         normalized = (
-            _normalize_patch_marker_for_match(clean_base, old_guard, marker)
+            _normalize_patch_marker_for_match(clean_base, old_guard, source_marker)
             if old_guard else clean_base)
         if old_guard and is_applied(normalized, old_guard):
             exact_guards.append(old_guard_id)
     for old_guard_id in exact_guards:
         old_guard = patch_defs[old_guard_id]
         normalized = (
-            _normalize_patch_marker_for_match(clean_base, old_guard, marker)
+            _normalize_patch_marker_for_match(clean_base, old_guard, source_marker)
             if old_guard else clean_base)
         clean_base = bytes(revert(normalized, old_guard))
     for old_loader_id in _DEPRECATED_LOADER_IDS:
         old_loader = patch_defs.get(old_loader_id)
         normalized = (
-            _normalize_patch_marker_for_match(clean_base, old_loader, marker)
+            _normalize_patch_marker_for_match(clean_base, old_loader, source_marker)
             if old_loader else clean_base)
         if old_loader and is_applied(normalized, old_loader):
             # Exact installed-state matching restores each revision's declared
@@ -3279,7 +3386,7 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
     guard_states = {
         patch_id: deprecated_aif_patch_state(
             _normalize_patch_marker_for_match(
-                clean_base, patch_defs[patch_id], marker),
+                clean_base, patch_defs[patch_id], source_marker),
             patch_defs[patch_id],
         )
         for patch_id in _DEPRECATED_CAL_GUARD_IDS
@@ -3291,7 +3398,7 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
 
     current_loader = patch_defs["softbsl_loader"]
     normalized_loader = _normalize_patch_marker_for_match(
-        clean_base, current_loader, marker)
+        clean_base, current_loader, source_marker)
     loader_boot = {
         **current_loader,
         "edits": [edit for edit in current_loader["edits"]
@@ -3326,6 +3433,8 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
             "partial/inconsistent boot patch state detected for "
             + ", ".join(bad_boot)
             + "; restore the boot region from a known-good backup before migration")
+    if is_amd_target and current_boot_states["amd_flash"] == "legacy":
+        driver_patches = ["amd_flash"]
     if (current_boot_states["cal_guard"] == "applied"
             and _patch_state(clean_base, guard_program) not in ("absent", "applied")):
         raise SoftBSLError(
@@ -3335,7 +3444,7 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
     loader_states = {
         patch_id: deprecated_aif_patch_state(
             _normalize_patch_marker_for_match(
-                clean_base, patch_defs[patch_id], marker),
+                clean_base, patch_defs[patch_id], source_marker),
             patch_defs[patch_id],
         )
         for patch_id in _DEPRECATED_LOADER_IDS
@@ -3351,7 +3460,9 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
     patch_ids = (["softbsl_loader", persistent_door_id]
                  + (["cal_guard"] if with_calguard else [])
                  + (["alphan_failsafe"] if with_alphan else [])
-                 + driver_patches)
+                 + driver_patches
+                 + (["top_ds2_guard"]
+                    if is_amd_target and effective_marker == "T" else []))
     # Reinstall composition is idempotent: normalize any selected persistent patch that is
     # already present before asking the patch builder to apply it again. Unselected feature
     # current feature patches (for example AlphaN or CalGuard V5 when unselected)
@@ -3359,7 +3470,7 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
     for patch_id in patch_ids:
         patch = patch_defs.get(patch_id)
         normalized = (
-            _normalize_patch_marker_for_match(clean_base, patch, marker)
+            _normalize_patch_marker_for_match(clean_base, patch, source_marker)
             if patch else clean_base)
         if patch and is_applied(normalized, patch):
             clean_base = bytes(revert(normalized, patch))
@@ -3372,6 +3483,7 @@ def compose_persistent_image(base, chip, *, with_calguard=False, with_alphan=Fal
     Returns ``(image, patch_ids, build_log)``.  ``marker='T'`` produces a golden-bank image and
     recomputes its boot CRC even when every persistent patch was already present in the base.
     """
+    marker = marker or image_marker(base)
     clean_base, patch_ids, _driver_patches = _persistent_patch_plan(
         base, chip, with_calguard=with_calguard, with_alphan=with_alphan,
         marker=marker)
@@ -3499,16 +3611,18 @@ def _install_resolve_images(args):
     _emit(f"  patch target: {target_version}")
     bootstrap_door_id, _persistent_door_id = _door_patch_ids(target_version)
 
+    marker = image_marker(base)
     try:
         target_base, tgt_patches, amd = _persistent_patch_plan(
             base, chip,
             with_calguard=getattr(args, "with_calguard", False),
-            with_alphan=getattr(args, "with_alphan", False))
+            with_alphan=getattr(args, "with_alphan", False), marker=marker)
     except SoftBSLError as error:
         raise SoftBSLError(f"  {error}")
     if not amd and str(chip).startswith("29"):
         _emit("  (base already carries the AMD driver -- amd_flash not needed)")
-    boot_patches = ["softbsl_loader", bootstrap_door_id] + amd
+    boot_patches = (["softbsl_loader", bootstrap_door_id] + amd
+                    + (["top_ds2_guard"] if "top_ds2_guard" in tgt_patches else []))
     from engines.patcher.patch_ms41 import load_patches
     patch_defs = load_patches()
     relevant_patches = list(dict.fromkeys(boot_patches + tgt_patches))
@@ -3561,8 +3675,8 @@ def _install_resolve_images(args):
     if displaced:
         _emit("  bootstrap temporarily displaces: " + ", ".join(displaced)
               + " (restored by the Phase-2 target)")
-    boot_img = _compose_image(bootstrap_base, boot_patches)
-    tgt_img = _compose_image(target_base, tgt_patches)
+    boot_img = _compose_image(bootstrap_base, boot_patches, marker=marker)
+    tgt_img = _compose_image(target_base, tgt_patches, marker=marker)
     td = tempfile.mkdtemp(prefix="softbsl_install_")
     args.bootstrap = os.path.join(td, "bootstrap_0x43.bin")
     args.target = os.path.join(td, "target.bin")

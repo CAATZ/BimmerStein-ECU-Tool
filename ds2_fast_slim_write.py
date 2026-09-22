@@ -16,6 +16,7 @@ from typing import Callable, Optional, Tuple
 import ecu_info
 from ds2_fast_contracts import (
     CommitUnknownError,
+    ProgramReadbackMismatch,
     FastOperation,
     FlashOperation,
     FlashRequest,
@@ -315,19 +316,17 @@ class SlimNativeFastPartialWriteSession(
 
     @property
     def can_recover_in_place(self) -> bool:
-        """Whether the failed ECU handler is still qualified for tune replay."""
-        return bool(
-            self.destructive_started
-            and not self.flash_completed
-            and self.failure_state is SessionState.HIGH_PARTIAL_WRITE
-            and not self.recovery_replay_attempted
-        )
+        # The native application wrapper clears E658 after erase/program.
+        # Its retained high-rate handler rejects another erase with A2.
+        return False
 
     def _verify_requested_tune(self) -> int:
+        self._progress("Verifying", 0, TUNE_SIZE)
         actual = self._read_range(
             TUNE_START,
             TUNE_SIZE,
             phase="Verifying calibration region",
+            progress_cb=lambda done, total: self._progress("Verifying", done, total),
         )
         if actual != self.target_tune:
             index = next(
@@ -513,6 +512,8 @@ class SlimNativeFastPartialWriteSession(
                     destructive_started=self.destructive_started,
                     safe_legacy_fallback=self.safe_legacy_fallback,
                     verify_requested=self.verify_write,
+                    retry_supported=self.can_recover_in_place,
+                    transport_retained=self.transport.is_open,
                     power_cycle_required=power_cycle_required,
                 )
             raise
@@ -683,73 +684,11 @@ class SlimNativeFastPartialWriteSession(
             raise
 
     def recover_in_place(self) -> SlimPartialWriteResult:
-        if not self.destructive_started or self.plan is None:
-            raise PartialWriteStateError("no destructive partial-write state is available")
-        if not self.can_recover_in_place:
-            raise PartialWriteStateError(
-                "same-session partial-write replay is no longer qualified; the "
-                "retained handler is not safe for another destructive retry"
-            )
-        if not self.transport.is_open:
-            raise PartialWriteStateError("retained partial-write transport is closed")
-        if self.journal.closed:
-            raise PartialWriteStateError("recovery requires a new open recovery journal")
-        self.transport.event_cb = self.journal.event_callback
-        self.transport.set_baud(
-            self.rates.high,
-            reason="retained partial-write recovery resumes at high rate",
+        raise PartialWriteStateError(
+            "same-session partial-write replay is no longer qualified; "
+            "the native handler clears erase authorization after writing. "
+            "The transport is retained for recovery."
         )
-        self.link = LinkRate.HIGH
-        self.state = SessionState.HIGH_PARTIAL_WRITE
-        self.cleanup_attempted = False
-        self._record(
-            "partial_write_recovery_started",
-            strategy="same-session complete re-erase and rewrite",
-        )
-        try:
-            self.recovery_replay_attempted = True
-            blocks, payload_bytes = self._erase_and_program()
-            finalize_attempts = self._finalize()
-            self.flash_completed = True
-            verified_bytes = (
-                self._verify_requested_tune() if self.verify_write else 0
-            )
-            cleanup_confirmed = self._cleanup_to_low()
-            result = self._result(
-                blocks, payload_bytes, finalize_attempts, verified_bytes
-            )
-            self.journal.finish(
-                "success" if cleanup_confirmed else "power_cycle_required",
-                recovery=True,
-                verify_requested=self.verify_write,
-                verified_bytes=verified_bytes,
-                final_link="low",
-                cleanup_confirmed=cleanup_confirmed,
-            )
-            return result
-        except Exception as error:
-            self.failure_state = self.state
-            self.fast_write_armed = False
-            self.state = (
-                SessionState.COMMIT_UNKNOWN
-                if isinstance(error, CommitUnknownError)
-                else SessionState.POWER_CYCLE_REQUIRED
-            )
-            if not self.journal.closed:
-                self.journal.finish(
-                    "commit_unknown"
-                    if isinstance(error, CommitUnknownError)
-                    else "power_cycle_required",
-                    recovery=True,
-                    error=f"{type(error).__name__}: {error}",
-                    state=self.state.value,
-                    link=self.link.name.lower(),
-                    destructive_started=True,
-                    retry_supported=False,
-                    transport_retained=self.transport.is_open,
-                    power_cycle_required=not isinstance(error, CommitUnknownError),
-                )
-            raise
 
 
 class SlimNativeFastFullWriteSession(
@@ -951,12 +890,17 @@ class SlimNativeFastFullWriteSession(
                 target[PROGRAM_HIGH_START:PROGRAM_HIGH_END],
             ),
         )
+        total = sum(end - start for start, end, _expected in ranges)
+        self._progress("Verifying", 0, total)
         checked = 0
         for start, end, expected in ranges:
             actual = self._read_range(
                 start,
                 end - start,
                 phase=f"full_optional_verify_{start:05X}",
+                progress_cb=lambda done, _length, base=checked: self._progress(
+                    "Verifying", base + done, total
+                ),
             )
             if actual != expected:
                 offset = next(
@@ -1012,7 +956,8 @@ class SlimNativeFastFullWriteSession(
         self._record(
             "destructive_boundary_crossed",
             operation="program_only_array_erase",
-            retry_policy="no automatic retry or baud fallback",
+            retry_policy="no erase retry or baud fallback",
+            program_retry_policy="error-only readback; 3 blank packet attempts; one partial phase replay",
         )
         self._flash_full(plan.program_erase, "program_only_array_erase", 6.0)
         self._progress("Waiting for program erase to settle", 0, 1)
@@ -1028,15 +973,21 @@ class SlimNativeFastFullWriteSession(
         if self.plan is None:
             raise FullWriteError("program-only plan is unavailable during verification")
         target = self.plan.effective_target_ds2
-        checked = 0
-        for start, end in (
+        ranges = (
             (PROGRAM_LOW_START, PROGRAM_LOW_END),
             (PROGRAM_HIGH_START, PROGRAM_HIGH_END),
-        ):
+        )
+        total = sum(end - start for start, end in ranges)
+        self._progress("Verifying", 0, total)
+        checked = 0
+        for start, end in ranges:
             actual = self._read_range(
                 start,
                 end - start,
                 phase=f"program_only_optional_verify_{start:05X}",
+                progress_cb=lambda done, _length, base=checked: self._progress(
+                    "Verifying", base + done, total
+                ),
             )
             expected = target[start:end]
             if actual != expected:
@@ -1073,7 +1024,8 @@ class SlimNativeFastFullWriteSession(
         self._record(
             "destructive_boundary_crossed",
             operation="full_program_array_erase",
-            retry_policy="no automatic retry or baud fallback",
+            retry_policy="no erase retry or baud fallback",
+            program_retry_policy="error-only readback; 3 blank packet attempts; one partial phase replay",
         )
         self._flash_full(plan.program_erase, "full_program_array_erase", 6.0)
         self._sleep(self.timing.post_program_erase_delay)
@@ -1090,16 +1042,26 @@ class SlimNativeFastFullWriteSession(
             progress_base=plan.primer.count,
             progress_total=full_payload_total,
         )
+        tune_payload = self._program_tune_plan(program_payload, full_payload_total)
+        return program_payload, tune_payload
+
+    def _program_tune_plan(self, program_payload, full_payload_total, *, recovery=False):
+        assert self.plan is not None
+        plan = self.plan
         self._set_state(
             state=SessionState.HIGH_FULL_TUNE,
             link=LinkRate.HIGH,
-            reason="program array complete; tune phase started",
+            reason="replaying calibration phase" if recovery else "program array complete; tune phase started",
         )
         midpoint_statuses = (
             frozenset((0x01, 0x0E))
             if self.variant_conversion
             else frozenset((0x01,))
         )
+        if recovery:
+            # An incomplete calibration fails its integrity poll with 0F, but
+            # the same poll arms the erase latch. This is not a success status.
+            midpoint_statuses |= frozenset((0x0F,))
         for index, request in enumerate(plan.tune_polls_before, 1):
             reply = self._flash_full(
                 request,
@@ -1127,7 +1089,33 @@ class SlimNativeFastFullWriteSession(
         for index, request in enumerate(plan.tune_polls_after, 1):
             self._flash_full(request, f"full_tune_post_poll_{index}")
             self._sleep(self.timing.post_tune_poll_delay)
-        return program_payload, tune_payload
+        return tune_payload
+
+    def _replay_failed_phase(self):
+        assert self.plan is not None
+        if self.program_only:
+            return self._program_program_only_plan(recovery=True), 0
+        if self.failure_state is SessionState.HIGH_FULL_TUNE:
+            program_payload = self.plan.primer.count + sum(r.count for r in self.plan.program)
+            total = program_payload + sum(r.count for r in self.plan.tune)
+            return program_payload, self._program_tune_plan(program_payload, total, recovery=True)
+        self.state = SessionState.HIGH_FULL_PROGRAM
+        return self._program_full_plan(recovery=True)
+
+    def _program_with_recovery(self):
+        try:
+            if self.program_only:
+                return self._program_program_only_plan(), 0
+            return self._program_full_plan()
+        except ProgramReadbackMismatch as error:
+            if error.blank:
+                raise
+            # A successful read proves the listener is alive and the block is
+            # partial. One replay repairs only the interrupted erase phase.
+            self.failure_state = self.state
+            self._record("automatic_phase_recovery_started", phase=self.state.value,
+                         address=error.address, max_attempts=1)
+            return self._replay_failed_phase()
 
     def execute(self) -> SlimFullWriteResult:
         try:
@@ -1152,7 +1140,7 @@ class SlimNativeFastFullWriteSession(
             self._authorize_once()
             self._arm_and_enter_high_full()
             self._high_rate_stability_check()
-            program_payload, tune_payload = self._program_full_plan()
+            program_payload, tune_payload = self._program_with_recovery()
             self._finalize_full()
             self.flash_completed = True
             verified_bytes = (
@@ -1257,7 +1245,7 @@ class SlimNativeFastFullWriteSession(
             self._arm_and_enter_high_full()
             self._progress("Checking high-rate write link", 0, 1)
             self._high_rate_stability_check()
-            program_payload = self._program_program_only_plan()
+            program_payload, _tune_payload = self._program_with_recovery()
             self._finalize_full()
             self.flash_completed = True
             verified_bytes = (
@@ -1369,12 +1357,7 @@ class SlimNativeFastFullWriteSession(
             # An interrupted program can report an unwritten end sentinel (0x0C).
             # Its poll still arms the stock erase latch. Accept it only before
             # re-erasing this retained program failure, never as final success.
-            program_recovery = self.failure_state is SessionState.HIGH_FULL_PROGRAM
-            if self.program_only:
-                program_payload = self._program_program_only_plan(recovery=program_recovery)
-                tune_payload = 0
-            else:
-                program_payload, tune_payload = self._program_full_plan(recovery=program_recovery)
+            program_payload, tune_payload = self._replay_failed_phase()
             self._finalize_full()
             self.flash_completed = True
             if self.program_only:

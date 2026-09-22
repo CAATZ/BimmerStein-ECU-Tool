@@ -27,7 +27,7 @@ Write/flash commands:
     0x90  SEED_KEY   — BMW seed-key challenge/response (2-step)
     0x07  FLASH_OP   — sub-command byte selects operation:
               sub 0x0F  erase-sector poll   (send ×2 before erase)
-              sub 0x06  erase sector        (single 0x4000 / 16 KB sector)
+              sub 0x06  erase region        (calibration block or program array)
               sub 0x02  write block         (up to 243 data bytes per frame)
 
 Partial-write sequence (captured control flow with production payload sizing):
@@ -42,9 +42,14 @@ Partial-write sequence (captured control flow with production payload sizing):
 import sys
 import time
 import logging
+from dataclasses import dataclass
+from contextlib import contextmanager
 from enum import IntEnum
 
-from ds2_fast_contracts import MAX_FLASH_DATA
+from ds2_fast_contracts import (
+    MAX_FLASH_DATA, FastDS2Error, FastOperation, FlashRequest,
+    program_readback_window, validate_flash_exchange,
+)
 from operation_log import send_to_sink
 
 try:
@@ -160,6 +165,66 @@ class DS2NegativeResponse(DS2Error):
         self.payload = self.response[3:-1] if len(self.response) >= 4 else b""
 
 
+class DS2ProgramMismatch(DS2Error):
+    """A completed read proves this packet is not the intended data."""
+
+    def __init__(self, address, expected, actual):
+        super().__init__(f"Write completion unknown at 0x{address:06X}; program readback differs")
+        self.address, self.expected, self.actual = address, bytes(expected), bytes(actual)
+
+    @property
+    def blank(self):
+        return self.actual == b"\xff" * len(self.expected)
+
+
+@dataclass
+class LegacyWriteRecovery:
+    """The target and phase owned by an open conventional DS2 write."""
+
+    ds2: object
+    target: bytes
+    operation: str
+    phase: str
+    error: Exception = None
+    destructive_started: bool = False
+    automatic_replay_attempted: bool = False
+    manual_replay_attempted: bool = False
+    completed: bool = False
+    verify_write: bool = False
+
+    @property
+    def port(self):
+        return self.ds2.port
+
+    @property
+    def is_open(self):
+        return self.ds2.is_open
+
+    @property
+    def power_cycle_required(self):
+        return (self.completed or getattr(self.error, "status", None) == 0xA2
+                or bool(getattr(self.error, "power_cycle_required", False)))
+
+    @property
+    def retry_supported(self):
+        return (self.is_open and self.destructive_started and not self.completed
+                and self.phase in ("program", "tune")
+                and not self.manual_replay_attempted and not self.power_cycle_required)
+
+    def close_after_confirmed_power_cycle(self):
+        self.ds2.close()
+
+
+class LegacyWriteRecoveryRequired(DS2Error):
+    def __init__(self, recovery):
+        self.recovery = recovery
+        if recovery.power_cycle_required:
+            detail = "follow the controlled ignition-cycle instructions before releasing the adapter"
+        else:
+            detail = "keep ignition ON; the slow DS2 session is retained for recovery"
+        super().__init__(f"{recovery.error}. FLASH INCOMPLETE — {detail}")
+
+
 # ECU flash-engine result code (DAT_00e528 in the firmware).  It is the last
 # byte of every 0x07 write response (10-byte frame: [..., count, STATUS, XOR]).
 # 0x01 = OK; anything else is a flash error.  Decoded from the MS41 firmware
@@ -210,6 +275,9 @@ class DS2Interface:
         self.serial_factory = serial_factory
         self._ser     = None
         self.transport_name = None
+        self.diagnostic_fn = None
+        self.operation_check = None
+        self.write_recovery = None
 
     @property
     def uses_d2xx(self):
@@ -222,6 +290,7 @@ class DS2Interface:
     # ── connection ───────────────────────────────────────────────────────────
     def open(self):
         import os
+        self._check_operation()
         # Prefer direct FTDI D2XX over the Windows VCP path because it is more
         # reliable at elevated baud rates. SOFTBSL_D2XX=0 forces pyserial.
         d2xx_pref = os.environ.get("SOFTBSL_D2XX", "1") != "0"
@@ -250,6 +319,7 @@ class DS2Interface:
                 d2xx_error = e
                 log.debug("D2XX transport unavailable (%s); falling back to pyserial", e)
                 self._ser = None
+        self._check_operation()
         if self._ser is None and self.serial_factory is None:
             if serial is None:
                 detail = f"; D2XX unavailable: {d2xx_error}" if d2xx_error else ""
@@ -269,13 +339,21 @@ class DS2Interface:
             )
             self.transport_name = "pyserial"
             log.debug("DS2 port %s open via pyserial (%d 8E2)", self.port, self.baud)
+        self._check_operation()
         try:
             self._ser.setDTR(False)
-            self._ser.setRTS(False)
         except Exception:
             pass
+        else:
+            self._check_operation()
+            try:
+                self._ser.setRTS(False)
+            except Exception:
+                pass
+        self._check_operation()
 
     def close(self):
+        # Cleanup must remain possible after operation_check starts raising.
         if self._ser and self._ser.is_open:
             self._ser.close()
 
@@ -283,12 +361,48 @@ class DS2Interface:
     def is_open(self) -> bool:
         return self._ser is not None and self._ser.is_open
 
+    def cancel_pending_io(self):
+        """Best-effort interrupt only; call off the UI thread, as drivers may stall."""
+        transport = self._ser
+        for name in ("cancel_read", "cancel_write"):
+            try:
+                cancel = getattr(transport, name, None)
+                if cancel is not None:
+                    cancel()
+            except Exception:
+                pass
+
     # ── low-level transport ──────────────────────────────────────────────────
+    def _check_operation(self):
+        check = getattr(self, "operation_check", None)
+        if check is not None:
+            check()
+
+    def _checked_io(self, operation, *args):
+        self._check_operation()
+        try:
+            return operation(*args)
+        finally:
+            self._check_operation()
+
+    def _flush_output(self):
+        if self.transport_name != "pyserial":
+            self._checked_io(self._ser.flush)
+            return
+        # pyserial.flush() has no timeout; retain TX drain with a finite bound.
+        timeout = getattr(self._ser, "write_timeout", 3.0)
+        deadline = time.monotonic() + (3.0 if timeout is None else timeout)
+        while self._checked_io(getattr, self._ser, "out_waiting"):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise DS2Timeout("serial transmit queue did not drain before write timeout")
+            time.sleep(min(0.05, remaining))
+
     def _read_exact(self, n: int, timeout: float) -> bytes:
-        self._ser.timeout = timeout
+        self._checked_io(setattr, self._ser, "timeout", timeout)
         buf = bytearray()
         while len(buf) < n:
-            chunk = self._ser.read(n - len(buf))
+            chunk = self._checked_io(self._ser.read, n - len(buf))
             if not chunk:
                 break
             buf.extend(chunk)
@@ -323,6 +437,7 @@ class DS2Interface:
         BMW diagnostic / flash tools).  If self.echo is False the adapter
         suppresses the echo and we skip.
         """
+        self._check_operation()
         if not self.echo:
             return b""
         # Wait for TX to complete on the wire before reading echo
@@ -346,17 +461,18 @@ class DS2Interface:
         reply. The method still checks that the adapter accepted every byte and,
         on a half-duplex K-line, that the complete transmitted frame echoed back.
         """
+        self._check_operation()
         if not self.is_open:
             raise DS2Error("port not open")
         frame = self._command_frame(command, args)
         if self.verbose:
             log.debug("TX (no response expected) %s", frame.hex(" "))
-        self._ser.reset_input_buffer()
-        written = self._ser.write(frame)
+        self._checked_io(self._ser.reset_input_buffer)
+        written = self._checked_io(self._ser.write, frame)
         if written != len(frame):
             raise DS2Error(
                 f"short write for command 0x{command:02X}: {written}/{len(frame)} bytes")
-        self._ser.flush()
+        self._flush_output()
         echoed = self._discard_echo(frame)
         if self.echo:
             if len(echoed) != len(frame):
@@ -366,8 +482,46 @@ class DS2Interface:
             if echoed != frame:
                 raise DS2Error(
                     f"K-line echo mismatch for command 0x{command:02X}")
+        self._check_operation()
 
-    def execute(self, command: int, args: bytes = b"", timeout: float = None) -> bytes:
+    def execute(self, command: int, args: bytes = b"", timeout: float = None,
+                *, pending_program=None) -> bytes:
+        """Execute a command, optionally recording payload-free transport diagnostics."""
+        context = {
+            "command": command,
+            "baud": self.baud,
+            "request_length": len(args) + 4,
+            "phase": "port_check",
+        }
+        if command == DS2Commands.FLASH_OP and len(args) >= 5:
+            context.update(
+                subcommand=args[0], address=int.from_bytes(args[1:4], "big"),
+                data_length=args[4],
+            )
+        started = time.monotonic()
+        callback = self.diagnostic_fn
+        if callback:
+            callback("request_started", dict(context))
+        try:
+            self._check_operation()
+            result = self._execute(command, args, timeout, context, pending_program=pending_program)
+            self._check_operation()
+        except Exception as error:
+            if isinstance(error, DS2Error):
+                error.request_context = dict(context)
+            if callback:
+                callback("request_failed", dict(
+                    context, error_type=type(error).__name__,
+                    duration_s=round(time.monotonic() - started, 6),
+                ))
+            raise
+        if callback:
+            callback("request_completed", dict(
+                context, duration_s=round(time.monotonic() - started, 6),
+            ))
+        return result
+
+    def _execute(self, command, args, timeout, context, *, pending_program=None):
         """
         Send a DS2 command and return the response payload (data bytes only,
         addr/length/command/checksum stripped).  Raises on timeout/checksum error.
@@ -376,21 +530,62 @@ class DS2Interface:
         READ_TIMEOUT; pass a larger value for slow ops (e.g. a full program-array
         erase, which the ECU does not ACK until physically complete).
         """
+        self._check_operation()
         if not self.is_open:
             raise DS2Error("port not open")
+        if pending_program is not None:
+            address, count, _offset = program_readback_window(
+                pending_program.address, pending_program.count, full=True,
+            )
+            if (pending_program.operation != 2 or command != DS2Commands.READ_MEM
+                    or args != address.to_bytes(4, "big") + bytes((count,))
+                    or not self.echo or self.baud != 9600):
+                raise DS2Error("readback recovery requires a slow program write")
         if timeout is None:
             timeout = READ_TIMEOUT
         frame = self._command_frame(command, args)
         if self.verbose:
             log.debug("TX %s", frame.hex(" "))
 
-        self._ser.reset_input_buffer()
-        self._ser.write(frame)
-        self._ser.flush()
-        self._discard_echo(frame)
+        context["phase"] = "transmit"
+        self._checked_io(self._ser.reset_input_buffer)
+        written = self._checked_io(self._ser.write, frame)
+        context["write_complete"] = written == len(frame)
+        self._flush_output()
+        destructive_flash = command == DS2Commands.FLASH_OP and args[:1] in (b"\x02", b"\x06")
+        if destructive_flash and written != len(frame):
+            raise DS2Error("incomplete flash request transmission")
+        context["phase"] = "echo"
+        echoed = self._discard_echo(frame)
+        context["echo_length"] = len(echoed)
+        context["echo_complete"] = echoed == frame if self.echo else None
+        if ((pending_program is not None or destructive_flash) and self.echo
+                and (echoed != frame or written != len(frame))):
+            raise DS2Error("readback recovery requires a complete write and exact K-line echo")
 
         # Read response header: [addr, length]
+        context["phase"] = "response_header"
         head = self._read_exact(2, timeout)
+        if pending_program is not None and head == bytes((self.ecu_addr, 10)):
+            late = head + self._read_exact(8, INTER_BYTE_TMO + 0.5)
+            try:
+                validate_flash_exchange(
+                    FastOperation.FULL_WRITE, pending_program, late, echo_complete=True,
+                )
+            except FastDS2Error as error:
+                status = getattr(error, "response_status", None)
+                if status is not None:
+                    raise DS2NegativeResponse(
+                        f"ECU rejected program readback recovery: {error}",
+                        command=command, status=status, response=late,
+                    ) from error
+                raise DS2Error(f"invalid delayed program acknowledgement: {error}") from error
+            if self.diagnostic_fn:
+                self.diagnostic_fn("late_program_ack_consumed", {"address": pending_program.address})
+            head = self._read_exact(2, timeout)
+        context["response_length"] = len(head)
+        if command == DS2Commands.FLASH_OP:
+            context["flash_response_hex"] = head.hex(" ")
         if len(head) < 2:
             raise DS2Timeout(
                 f"no response to command 0x{command:02X} (got {len(head)} byte(s))")
@@ -402,13 +597,21 @@ class DS2Interface:
             raise DS2Error(f"implausible response length {resp_len}")
 
         # Read remaining bytes of response
+        context["phase"] = "response_body"
+        context["expected_response_length"] = resp_len
         rest = self._read_exact(resp_len - 2, INTER_BYTE_TMO + 0.5)
         resp = head + rest
+        context["response_length"] = len(resp)
+        # Only flash acknowledgements are diagnostic data; never save identity,
+        # seed/key, RAM or ROM response payloads here.
+        if command == DS2Commands.FLASH_OP:
+            context["flash_response_hex"] = resp.hex(" ")
         if len(resp) != resp_len:
             raise DS2Timeout(
                 f"short response to 0x{command:02X}: expected {resp_len}, got {len(resp)}")
         if self.verbose:
             log.debug("RX %s", resp.hex(" "))
+        context["phase"] = "response_validation"
         if _xor(resp[:-1]) != resp[-1]:
             raise DS2ChecksumError(
                 f"bad checksum: calc 0x{_xor(resp[:-1]):02X} != 0x{resp[-1]:02X}")
@@ -418,7 +621,8 @@ class DS2Interface:
         # status 0xFF = PREPARE (0xA2) positive response — documented exception
         # anything else is a NAK from the ECU
         status = resp[2]
-        if status not in (0xA0, 0xFF):
+        context["status"] = status
+        if status not in ((0xA0,) if command == DS2Commands.FLASH_OP else (0xA0, 0xFF)):
             raise DS2NegativeResponse(
                 f"ECU NAK on cmd 0x{command:02X}: status=0x{status:02X}  "
                 f"frame={resp.hex(' ')}",
@@ -427,6 +631,17 @@ class DS2Interface:
                 response=resp,
             )
 
+        if pending_program is not None and (status != 0xA0 or len(resp) != args[4] + 4):
+            raise DS2Error("readback recovery response has an unexpected status or length")
+        if command == DS2Commands.FLASH_OP and args[:1] == b"\x02":
+            request = FlashRequest(2, int.from_bytes(args[1:4], "big"), args[5:])
+            try:
+                validate_flash_exchange(FastOperation.FULL_WRITE, request, resp,
+                                        echo_complete=True)
+            except FastDS2Error as error:
+                failure = DS2Error(f"invalid program acknowledgement: {error}")
+                failure.flash_status = resp[8] if len(resp) == 10 else None
+                raise failure from error
         return resp[3:-1]
 
     # ── read commands ────────────────────────────────────────────────────────
@@ -445,18 +660,19 @@ class DS2Interface:
 
         `frame` must be a full [addr, len, cmd, data..., xor] byte sequence.
         """
+        self._check_operation()
         if not self.is_open:
             raise DS2Error("port not open")
         if timeout is None:
             timeout = READ_TIMEOUT
         frame = bytes(frame)
-        self._ser.reset_input_buffer()
-        written = self._ser.write(frame)
+        self._checked_io(self._ser.reset_input_buffer)
+        written = self._checked_io(self._ser.write, frame)
         if written != len(frame):
             raise DS2Error(
                 f"short write to module 0x{resp_addr:02X}: "
                 f"{written}/{len(frame)} bytes")
-        self._ser.flush()
+        self._flush_output()
         self._discard_echo(frame)
 
         head = self._read_exact(2, timeout)
@@ -476,6 +692,7 @@ class DS2Interface:
                              f"expected {resp_len}, got {len(resp)}")
         if _xor(resp[:-1]) != resp[-1]:
             raise DS2ChecksumError(f"bad checksum on module 0x{resp_addr:02X} response")
+        self._check_operation()
         return resp
 
     def send_bmw_fast(self, body: bytes, target: int, timeout: float = None) -> bytes:
@@ -484,6 +701,7 @@ class DS2Interface:
         Wire bodies use ``B8 target source payload_length payload...``; the
         transport appends the XOR byte. This is the framing used by E46 MK60.
         """
+        self._check_operation()
         if not self.is_open:
             raise DS2Error("port not open")
         if timeout is None:
@@ -493,12 +711,12 @@ class DS2Interface:
                 or body[2] != 0xF1 or body[3] != len(body) - 4):
             raise ValueError("invalid BMW-Fast request body")
         frame = body + bytes((_xor(body),))
-        self._ser.reset_input_buffer()
-        written = self._ser.write(frame)
+        self._checked_io(self._ser.reset_input_buffer)
+        written = self._checked_io(self._ser.write, frame)
         if written != len(frame):
             raise DS2Error(
                 f"short BMW-Fast write to 0x{target:02X}: {written}/{len(frame)} bytes")
-        self._ser.flush()
+        self._flush_output()
         self._discard_echo(frame)
 
         head = self._read_exact(4, timeout)
@@ -515,6 +733,7 @@ class DS2Interface:
         if _xor(response[:-1]) != response[-1]:
             raise DS2ChecksumError(
                 f"bad checksum on BMW-Fast module 0x{target:02X} response")
+        self._check_operation()
         return response
 
     def read_dtc(self, specific_fault: int = 1) -> bytes:
@@ -1073,14 +1292,14 @@ class DS2Interface:
 
     def _erase_sector(self, ds2_addr: int, log_fn=None,
                       step: float = ERASE_STEP_DELAY,
-                      settle: float = POST_ERASE_DELAY) -> None:
+                      settle: float = POST_ERASE_DELAY, boundary_cb=None) -> None:
         """Erase the flash sector at ds2_addr.
 
         Sends erase-poll (0x0F) twice then erase-sector (0x06).  `step` is the
         gap between those sub-commands and `settle` is the wait after the erase
         ACK before the caller writes.  The erase ACK is fast (it does NOT mean
         the erase is physically done), so `settle` must cover the real erase
-        time — short for a 16 KB tune sector, seconds for the whole program
+        time — short for the calibration erase, seconds for the whole program
         array (see PROGRAM_ERASE_* constants).
         """
         a3 = self._ds2_addr3(ds2_addr)
@@ -1088,66 +1307,76 @@ class DS2Interface:
         time.sleep(step)
         self._flash_sub(0x0F, a3)   # poll ×2
         time.sleep(step)
-        self._flash_sub(0x06, a3, timeout=ERASE_TIMEOUT)   # erase
+        if boundary_cb:
+            boundary_cb()
+        reply = self._flash_sub(0x06, a3, timeout=ERASE_TIMEOUT)
+        if reply != b"\x06" + a3 + b"\x00\x01":
+            raise DS2Error(f"invalid erase acknowledgement at 0x{ds2_addr:06X}: {reply.hex()}")
         time.sleep(settle)
         if log_fn:
             send_to_sink(log_fn, f"Flash sector at DS2 0x{ds2_addr:06X} erased")
 
     def _write_block(self, ds2_addr: int, data: bytes, log_fn=None) -> None:
-        """Write one flash block (1..243 bytes) at ds2_addr.
+        """Accept a complete ACK, or resolve an uncertain packet before retrying.
 
-        The ECU ACKs with [sub=0x02, next_addr(3), accepted_count, 0x01].
-
-        Resends the same block up to WRITE_RETRIES times on a NAK or comms
-        error before giving up. Resending the same frame to the same
-        address is safe: on freshly-erased flash it is idempotent, and the frame
-        carries its address explicitly so a retry targets the same bytes.
-        Raises DS2NegativeResponse / DS2Error only after all attempts fail.
+        Exact readback permits continuation. Only a wholly blank packet may be
+        resent, at most three total transmissions. Partial data requires a
+        phase replay; an unreadable result leaves the live session retained.
         """
         if not (0 < len(data) <= self.WRITE_CHUNK):
             raise ValueError(f"Write block data must be 1..{self.WRITE_CHUNK} bytes")
-        a3 = self._ds2_addr3(ds2_addr)
-        last_err = None
+        request = FlashRequest(2, ds2_addr, data)
         for attempt in range(self.WRITE_RETRIES):
             try:
-                resp = self._flash_sub(0x02, a3, data)
-            except DS2Error as e:
-                # comms-level failure (timeout / NAK / checksum) — retryable
-                last_err = e
-                if log_fn:
-                    send_to_sink(
-                        log_fn,
-                        f"Write retry {attempt+1}/{self.WRITE_RETRIES} at "
-                        f"0x{ds2_addr:06X}: {last_err}",
-                        "warn",
+                self._flash_sub(2, self._ds2_addr3(ds2_addr), data)
+            except DS2Error as error:
+                context = getattr(error, "request_context", {})
+                if (self.baud != 9600 or not self.echo
+                        or context.get("write_complete") is not True
+                        or context.get("echo_complete") is not True
+                        or context.get("phase") not in (
+                            "response_header", "response_body", "response_validation")
+                        or context.get("status", 0xA0) != 0xA0
+                        or getattr(error, "flash_status", None) not in (None, 1, 2, 3)):
+                    raise
+                try:
+                    address, count, offset = program_readback_window(ds2_addr, len(data), full=True)
+                    actual = self.execute(
+                        DS2Commands.READ_MEM, address.to_bytes(4, "big") + bytes((count,)),
+                        pending_program=request,
+                    )[offset:offset + len(data)]
+                except Exception as read_error:
+                    failure = DS2Error(
+                        f"Write completion unknown at 0x{ds2_addr:06X}; "
+                        f"readback did not confirm the block: {read_error}"
                     )
-                time.sleep(WRITE_RETRY_DELAY)
-                continue
-            if resp and resp[0] == 0x02:
-                # resp[5] = ECU flash-engine status (DAT_00e528): 0x01 = OK.
-                # A non-OK code is a real flash error (e.g. 0x03 = not blank),
-                # NOT a comms glitch — retrying the same block won't help, so
-                # surface it immediately with the decoded meaning.
-                fs = resp[5] if len(resp) > 5 else 0x01
-                if fs != 0x01:
-                    raise DS2NegativeResponse(
-                        f"Flash error writing 0x{ds2_addr:06X}: "
-                        f"{describe_flash_status(fs)} (status=0x{fs:02X})")
-                # Brief gap before the next block — matches the factory tool's
-                # ~12 ms floor (the ECU's ~50 ms write-ACK latency paces most).
-                time.sleep(INTER_WRITE_DELAY)
-                return
-            last_err = DS2NegativeResponse(
-                f"Write block at 0x{ds2_addr:06X} NAK: {resp.hex(' ')}")
-            if log_fn:
-                send_to_sink(
-                    log_fn,
-                    f"Write retry {attempt+1}/{self.WRITE_RETRIES} at "
-                    f"0x{ds2_addr:06X}: {last_err}",
-                    "warn",
-                )
-            time.sleep(WRITE_RETRY_DELAY)
-        raise last_err
+                    # Preserve an ECU rejection through the readback wrapper.
+                    failure.status = getattr(read_error, "status", None)
+                    raise failure from read_error
+                if actual != data:
+                    mismatch = DS2ProgramMismatch(ds2_addr, data, actual)
+                    if not mismatch.blank or attempt + 1 == self.WRITE_RETRIES:
+                        raise mismatch from error
+                    if self.diagnostic_fn:
+                        self.diagnostic_fn("blank_program_retry", {
+                            "address": ds2_addr, "attempt": attempt + 2,
+                            "maximum_attempts": self.WRITE_RETRIES,
+                        })
+                    if log_fn:
+                        send_to_sink(log_fn, f"Write retry {attempt + 2}/{self.WRITE_RETRIES} "
+                                     f"at 0x{ds2_addr:06X}; readback confirms blank bytes", "warn")
+                    time.sleep(WRITE_RETRY_DELAY)
+                    continue
+                if self.diagnostic_fn:
+                    self.diagnostic_fn("program_commit_confirmed_by_readback", {
+                        "address": ds2_addr, "count": len(data), "baud": self.baud,
+                        "retransmitted": attempt > 0,
+                    })
+                if log_fn:
+                    send_to_sink(log_fn, f"Write ACK uncertain at 0x{ds2_addr:06X}; "
+                                 "data confirmed by readback")
+            time.sleep(INTER_WRITE_DELAY)
+            return
 
     def _write_program_sectors(self, ds2: bytes, lo: int, hi: int, log_fn=None,
                                progress_cb=None, prog_total=0, prog_done=0):
@@ -1281,280 +1510,142 @@ class DS2Interface:
         return ok, compared, mismatches, first_bad
 
     # ── high-level write ─────────────────────────────────────────────────────
-    def write_partial(self, data: bytes, progress_cb=None, log_fn=None,
-                      skip_unlock: bool = False, skip_prepare: bool = False) -> None:
-        """Write the 24 KB tune/calibration partition (DS2 0x10000–0x15FFF).
-
-        Sequence:
-          prepare → read(0x2001,12) → status → unlock → read(0x1CF4,3)
-          → read(0x1000E,2) → erase 0x10000 → status → write blocks (skip all-0xFF)
-
-        Args:
-            data: Exactly 24576 bytes.  Must pass checksum validation before call.
-
-        The stock program-integrity finalizer is always run after programming.  It commits
-        E740=0 inside the ECU and is separate from any optional host read-back verification.
-        """
-        if len(data) != self.PARTIAL_SIZE:
-            raise ValueError(
-                f"Partial write expects {self.PARTIAL_SIZE} bytes, got {len(data)}")
-
-        def _log(msg, level="info"):
-            if log_fn:
-                send_to_sink(log_fn, msg, level)
-
-        start = self.PARTIAL_DS2_ADDR   # 0x10000
-
-        if not skip_prepare:
-            _log("Preparing ECU for write (0xA2)…")
-            self._prepare()
-
-            _log("Reading ECU state (0x2001)…")
-            self.read_mem(0x2001, 12)
-
-            _log("Requesting ECU status (0x0D)…")
-            self.status()
-
-        if not skip_unlock:
-            _log("Unlocking write (DS2 seed-key)…")
-            self.unlock_write(log_fn=_log, progress_cb=progress_cb)
-
-        # Post-unlock diagnostic reads (observed in capture)
-        self.read_mem(0x1CF4, 3)
-        self.read_mem(0x1000E, 2)
-
-        _log(f"Erasing tune sector (DS2 0x{start:06X})…")
-        self._erase_sector(start, log_fn=log_fn)
-
-        # Capture shows STATUS only between erase and the first write block
-        # (no IDENTIFY).  Matched byte-for-byte against Capture Partial Write.csv.
-        self.status()
-
-        # Skip all-0xFF blocks.  Two reasons:
-        #   1. The trailing FF at the end of the tune region (0x15EBF-0x16000)
-        #      must NOT be written — the ECU NAKs (0xB0) a write there.  The
-        #      factory tool stops at the last real block (0x15DD8).
-        #   2. The remaining non-FF blocks all sit inside the single erased tune
-        #      sector, so the skip-induced jump (e.g. 0x13624 → 0x15DD8) is an
-        #      INTRA-sector jump, which the ECU accepts.  (Cross-sector jumps to
-        #      a non-aligned address are what fail — see write_full Phase 1.)
-        _log("Writing tune data…")
-        n               = len(data)
-        data_end        = len(data.rstrip(b"\xFF"))
-        off             = 0
-        chunks_written  = 0
-        chunks_skipped  = 0
-
-        while off < data_end:
-            sz    = min(self.WRITE_CHUNK, data_end - off)
-            chunk = data[off:off + sz]
-
-            if chunk == b"\xFF" * sz:
-                chunks_skipped += 1
-            else:
-                self._write_block(start + off, chunk, log_fn=log_fn)
-                chunks_written += 1
-
-            off += sz
-            if progress_cb:
-                progress_cb(off, n, "Flash write")
-
-        if progress_cb and off < n:
-            progress_cb(n, n, "Flash write")
-
-        _log(f"Tune write complete: {chunks_written} blocks written, "
-             f"{chunks_skipped} skipped (all-0xFF)")
-
-        # ECU-side protocol finalization is mandatory even when the host Verify checkbox is
-        # off.  This does not read or compare the tune bytes; the stock ECU operation commits
-        # the clean marker (E740=0) after validating the program-integrity gate.
-        _log("Running stock program-integrity finalizer (0x07/0x0F @ DS2 0x001D07)…")
-        ok, status = self.verify_program_region(log_fn=log_fn)
-        if not ok:
-            shown = f"0x{status:02X}" if status is not None else "no status"
-            raise DS2NegativeResponse(
-                f"Stock write finalizer did not pass ({shown}); E740=0 was not committed"
-            )
-        _log("Stock write finalizer passed; E740=0 committed.")
-
-    # ── full ROM write ───────────────────────────────────────────────────────
-    # On BOTH MS41.1 (ECU 1437806) and MS41.2 (ECU 1406464) the sequence is
-    # identical: erase 0x002000, write program,
-    # erase 0x010000, write tune.
-    #
-    # Flash address map (DS2 address space, 256 KB):
-    #   DS2 0x000000-0x001FFF  boot block (hardware-protected, NEVER written)
-    #   DS2 0x002000-0x00FFFF  program-low   (written in Phase 1)
-    #   DS2 0x010000-0x01FFFF  tune/cal      (written in Phase 2)
-    #   DS2 0x020000-0x03FFFF  program-high  (written in Phase 1)
-    #
-    # File → DS2 mapping (same XOR-0x4000 swap as read):
-    #   ds2_addr = (file_block ^ 1) * 0x4000 + (file_offset % 0x4000)
-    #
-    # Write sequence (matched byte-for-byte against a real full-write capture on
-    # BOTH MS41.1 and MS41.2):
-    #   Phase 1 — program:
-    #     prepare → read(0x2001,12) → status → unlock → read(0x1CF4,3)
-    #     → erase 0x002000  (ONE erase clears the whole program array)
-    #     → write DS2 0x002000..0x00FFFF then 0x020000..0x03FFFF, one
-    #       0x4000-aligned sector at a time (_write_program_sectors)
-    #     (tune sector 0x010000-0x01FFFF is deliberately excluded from Phase 1)
-    #
-    #   Phase 2 — tune sector (written last):
-    #     → erase 0x010000 → status
-    #     → write DS2 0x010000..0x01FFFF (skip all-0xFF; intra-sector jumps OK)
-    #
-    # THE RULE (from the captures + HW): a write start address must be contiguous
-    # with the previous block OR a 0x4000-aligned sector boundary.  Phase 1 spans
-    # many program sectors, so it must resume every FF-skip on a 0x4000 boundary
-    # (a non-aligned resume like 0x5F2A→0xC7D6 is NAK'd 0xB0 — the brick).  The
-    # tune region is a single erased sector, so its FF-skip jumps stay intra-
-    # sector and are accepted (proven by the working partial write).
-    #
-    # NOTE: the capture also emits one initial 128-byte write at 0x002000 that
-    # is immediately overwritten by the following 231-byte block (same data, to
-    # freshly-erased flash → identical end state).  We omit that redundant block;
-    # the resulting flash content is byte-identical.  See review notes.
-
-    # DS2 address of the tune sector start/end (excluded from Phase 1)
     _TUNE_DS2_START = 0x010000
-    _TUNE_DS2_END   = 0x01FFFF   # 64 KB tune sector
+    _TUNE_DS2_END = 0x01FFFF
+
+    def write_partial(self, data: bytes, progress_cb=None, log_fn=None,
+                      skip_unlock: bool = False, skip_prepare: bool = False,
+                      boundary_cb=None) -> None:
+        """Write the calibration, retaining the actual erase phase on failure."""
+        with self._legacy_write_session(data, "tune", progress_cb, log_fn,
+                                        skip_unlock, skip_prepare, boundary_cb):
+            self._check_write_finalizer(self.verify_program_region(log_fn=log_fn), log_fn)
 
     def write_full(self, data: bytes, progress_cb=None, log_fn=None,
-                   skip_unlock: bool = False, skip_prepare: bool = False) -> None:
-        """Write the complete 256 KB ROM image over DS2.
+                   skip_unlock: bool = False, skip_prepare: bool = False,
+                   boundary_cb=None) -> None:
+        """Write program then calibration; recovery repeats only the failed phase."""
+        with self._legacy_write_session(data, "full", progress_cb, log_fn,
+                                        skip_unlock, skip_prepare, boundary_cb):
+            self._check_write_finalizer(self.verify_program_region(log_fn=log_fn), log_fn)
 
-        This is a two-phase write:
-          Phase 1 writes the program sectors (0x002000-0x00FFFF and 0x020000-0x03FFFF),
-          Phase 2 erases and writes the tune/cal sector (0x010000-0x01FFFF).
+    @contextmanager
+    def _legacy_write_session(self, data, operation, progress_cb, log_fn,
+                              skip_unlock, skip_prepare, boundary_cb):
+        expected = self.FULL_SIZE if operation == "full" else self.PARTIAL_SIZE
+        if len(data) != expected:
+            raise ValueError(f"{operation} write expects {expected} bytes, got {len(data)}")
+        previous = self.write_recovery
+        if previous and previous.destructive_started and not previous.completed:
+            raise LegacyWriteRecoveryRequired(previous)
+        recovery = LegacyWriteRecovery(self, bytes(data), operation,
+                                       "program" if operation == "full" else "tune")
+        self.write_recovery = recovery
+        try:
+            if not skip_prepare:
+                self._prepare()
+                self.read_mem(0x2001, 12)
+                self.status()
+            if not skip_unlock:
+                self.unlock_write(log_fn=log_fn, progress_cb=progress_cb)
+            self.read_mem(0x1CF4, 3)
+            if operation == "tune":
+                self.read_mem(0x1000E, 2)
+            self._run_legacy_phases(recovery, progress_cb, log_fn, boundary_cb)
+            recovery.phase = "finalize"
+            yield recovery
+            recovery.completed = True
+        except Exception as error:
+            if not recovery.destructive_started:
+                self.write_recovery = None
+                raise
+            recovery.error = error
+            raise LegacyWriteRecoveryRequired(recovery) from error
 
-        Sectors are erased before each phase.  The boot block (0x000000-0x001FFF)
-        is hardware-protected and is never written.
-
-        Args:
-            data: Exactly 262144 bytes (full 256 KB ROM, standard file layout).
-        """
-        if len(data) != self.FULL_SIZE:
-            raise ValueError(
-                f"Full ROM write expects {self.FULL_SIZE} bytes, got {len(data)}")
-
-        def _log(msg, level="info"):
-            if log_fn:
-                send_to_sink(log_fn, msg, level)
-
-        # ── Build DS2 address space from file (inverse block-swap) ──────────
-        # File uses the XOR-0x4000 layout: file block N ↔ DS2 block N^1.
-        ds2 = bytearray(self.FULL_SIZE)
-        nblk = self.FULL_SIZE // self._BLOCK
-        for blk in range(nblk):
-            src = blk * self._BLOCK
-            dst = (blk ^ 1) * self._BLOCK
-            ds2[dst:dst + self._BLOCK] = data[src:src + self._BLOCK]
-
-        # ── Phase 1 preamble ─────────────────────────────────────────────────
-        if not skip_prepare:
-            _log("Preparing ECU for write (0xA2)…")
-            self._prepare()
-            _log("Reading ECU state (0x2001)…")
-            self.read_mem(0x2001, 12)
-            _log("Requesting ECU status (0x0D)…")
-            self.status()
-        if not skip_unlock:
-            _log("Unlocking write (DS2 seed-key)…")
-            self.unlock_write(log_fn=_log, progress_cb=progress_cb)
-        self.read_mem(0x1CF4, 3)
-
-        # ── Phase 1 — program sectors ─────────────────────────────────────────
-        # The capture issues a SINGLE erase at 0x002000 before writing both the
-        # program-low (0x002000-0x00FFFF) and program-high (0x020000-0x03FFFF)
-        # ranges — this one ECU-level erase clears the whole program array.  We
-        # do NOT erase 0x020000/0x030000 separately: the real tool doesn't, and
-        # those addresses are not confirmed valid erase-sector bases.
-        _log("Erasing program array (DS2 0x002000)…")
-        # The program-array erase clears the whole ~200 KB region; the tool
-        # spaces its polls ~0.45 s apart and waits ~2.6 s after the ACK before
-        # writing (the ACK is not erase-complete).  Match that so we never write
-        # into an unfinished erase.
-        self._erase_sector(0x002000, log_fn=log_fn,
-                           step=PROGRAM_ERASE_STEP_DELAY,
-                           settle=POST_PROGRAM_ERASE_DELAY)
-
-        # Phase 1 writes the two PROGRAM windows only.  These are the exact DS2
-        # program ranges (the two PROGRAM windows), which write ONLY:
-        #     program-low  DS2 0x002000-0x005FFF  (never past ~0x5F95)
-        #     tune         DS2 0x010000-0x015FFF  (Phase 2)
-        #     program-high DS2 0x020000-0x03FFFF
-        # Everything else — boot (0x0-0x1FFF), the gap 0x006000-0x00FFFF, and
-        # 0x016000-0x01FFFF — is NEVER written by the factory tool and must be
-        # left alone.  Writing into the 0x008000-0x00FFFF gap is what produced the
-        # 0xC000/0xC7D6 0xB0 NAKs (that region is outside the writable program
-        # array; a real ROM may hold factory data there that the flasher does not
-        # touch).  Validated against both real full-write captures.
-        # Progress is reported as ONE bar spanning both phases: a single grand
-        # total of program bytes + tune bytes, with Phase 2 continuing where
-        # Phase 1 left off (so the bar fills 0→100% once, not twice).
-        _log("Writing program data (Phase 1)…")
-        prog_low   = (0x002000, 0x006000)
-        prog_high  = (0x020000, self.FULL_SIZE)
-        prog_bytes = (prog_low[1] - prog_low[0]) + (prog_high[1] - prog_high[0])
-        tune_span  = self._TUNE_DS2_END - self._TUNE_DS2_START + 1
-        grand_total = prog_bytes + tune_span
-        w1, s1 = self._write_program_sectors(
-            ds2, *prog_low, log_fn=log_fn, progress_cb=progress_cb,
-            prog_total=grand_total, prog_done=0)
-        w2, s2 = self._write_program_sectors(
-            ds2, *prog_high, log_fn=log_fn, progress_cb=progress_cb,
-            prog_total=grand_total, prog_done=prog_low[1] - prog_low[0])
-        written1, skipped1 = w1 + w2, s1 + s2
-
-        _log(f"Phase 1 complete: {written1} blocks written, {skipped1} skipped.")
-
-        # ── Phase 2 — tune/cal sector ─────────────────────────────────────────
-        _log("Erasing tune sector (DS2 0x010000)…")
-        self._erase_sector(self._TUNE_DS2_START, log_fn=log_fn)
-
-        # Capture shows STATUS only between the tune erase and the first tune
-        # write block (no IDENTIFY).  Matched against Capture Full Write.csv.
-        self.status()
-
-        # Same FF-skip as write_partial: the trailing FF must not be written
-        # (0xB0), and the remaining real blocks stay inside the erased tune
-        # sector so the skip jumps are intra-sector and accepted.
-        written2 = skipped2 = 0
-        _log("Writing tune/cal data (Phase 2)…")
-        off = self._TUNE_DS2_START
-        tune_data_end = self._TUNE_DS2_START + len(
-            bytes(ds2[self._TUNE_DS2_START:self._TUNE_DS2_END + 1]).rstrip(b"\xFF")
-        )
-        while off < tune_data_end:
-            sz    = min(self.WRITE_CHUNK, tune_data_end - off)
-            chunk = bytes(ds2[off:off + sz])
-            if chunk == b"\xFF" * sz:
-                skipped2 += 1
-            else:
-                self._write_block(off, chunk, log_fn=log_fn)
-                written2 += 1
-            off += sz
-            if progress_cb:
-                progress_cb(prog_bytes + (off - self._TUNE_DS2_START),
-                            grand_total, "DS2 full write")
-
-        if progress_cb and off <= self._TUNE_DS2_END:
-            progress_cb(grand_total, grand_total, "DS2 full write")
-
-        _log(f"Phase 2 complete: {written2} blocks written, {skipped2} skipped.")
-        _log(f"Full ROM write done: {written1+written2} blocks written total.")
-
-        # Keep ECU-side finalization separate from the optional host read-back.  Every
-        # successful DS2 write must leave the stock clean marker, even with Verify OFF.
-        _log("Running stock program-integrity finalizer (0x07/0x0F @ DS2 0x001D07)…")
-        ok, status = self.verify_program_region(log_fn=log_fn)
+    @staticmethod
+    def _check_write_finalizer(result, log_fn):
+        ok, status = result
         if not ok:
             shown = f"0x{status:02X}" if status is not None else "no status"
             raise DS2NegativeResponse(
-                f"Stock write finalizer did not pass ({shown}); E740=0 was not committed"
-            )
-        _log("Stock write finalizer passed; E740=0 committed.")
+                f"Stock write finalizer did not pass ({shown}); E740=0 was not committed")
+        if log_fn:
+            send_to_sink(log_fn, "Stock write finalizer passed; E740=0 committed.")
+
+    def _confirm_legacy_recovery(self):
+        # Recovery-only reads: never issue another challenge/key in an unknown
+        # retained state, and never close or change the existing baud here.
+        if not self.is_open or self.baud != 9600:
+            raise DS2Error("retained slow recovery requires the original open 9600-baud session")
+        from ds2_write_authorization import AUTHORIZATION_STATE_ADDRESS, WRONG_KEY_COUNTER_ADDRESS
+        authorization = self.read_mem(AUTHORIZATION_STATE_ADDRESS, 1)
+        wrong_keys = self.read_mem(WRONG_KEY_COUNTER_ADDRESS, 1)
+        if authorization != b"\x02" or len(wrong_keys) != 1 or wrong_keys[0] >= 2:
+            error = DS2Error("retained slow write authorization could not be confirmed")
+            error.power_cycle_required = (authorization == b"\x01"
+                                          or (len(wrong_keys) == 1 and wrong_keys[0] >= 2))
+            raise error
+
+    def _run_legacy_phases(self, recovery, progress_cb=None, log_fn=None, boundary_cb=None):
+        from ds2_fast_plans import file_image_to_ds2_layout
+
+        full = recovery.operation == "full"
+        image = file_image_to_ds2_layout(recovery.target) if full else None
+        tune = image[self._TUNE_DS2_START:self._TUNE_DS2_END + 1] if full else recovery.target
+        program_bytes = 0x4000 + 0x20000 if full else 0
+        total = program_bytes + len(tune)
+
+        def before_erase():
+            if not recovery.destructive_started:
+                if boundary_cb:
+                    boundary_cb()
+                recovery.destructive_started = True
+            if self.diagnostic_fn:
+                self.diagnostic_fn("destructive_boundary_crossed", {"phase": recovery.phase})
+
+        phases = ("program", "tune") if full and recovery.phase == "program" else ("tune",)
+        for phase in phases:
+            recovery.phase = phase
+            while True:
+                try:
+                    if phase == "program":
+                        self._erase_sector(0x2000, log_fn=log_fn, step=PROGRAM_ERASE_STEP_DELAY,
+                                           settle=POST_PROGRAM_ERASE_DELAY, boundary_cb=before_erase)
+                        self._write_program_sectors(image, 0x2000, 0x6000, log_fn=log_fn,
+                                                    progress_cb=progress_cb, prog_total=total)
+                        self._write_program_sectors(image, 0x20000, self.FULL_SIZE, log_fn=log_fn,
+                                                    progress_cb=progress_cb, prog_total=total,
+                                                    prog_done=0x4000)
+                    else:
+                        self._erase_sector(self.PARTIAL_DS2_ADDR, log_fn=log_fn,
+                                           boundary_cb=before_erase)
+                        self.status()
+                        self._write_tune_blocks(tune, progress_cb, log_fn, program_bytes, total)
+                    break
+                except DS2ProgramMismatch as error:
+                    if error.blank or recovery.automatic_replay_attempted:
+                        raise
+                    recovery.automatic_replay_attempted = True
+                    self._confirm_legacy_recovery()
+                    if self.diagnostic_fn:
+                        self.diagnostic_fn("automatic_phase_replay", {"phase": phase, "maximum": 1})
+                    if log_fn:
+                        send_to_sink(log_fn, f"Retrying the {phase} erase/write once in the retained session", "warn")
+        if progress_cb:
+            progress_cb(total, total, "DS2 full write" if full else "Flash write")
+
+    def _write_tune_blocks(self, data, progress_cb, log_fn, done, total):
+        end = len(data.rstrip(b"\xff"))
+        offset = 0
+        while offset < end:
+            address = self.PARTIAL_DS2_ADDR + offset
+            count = min(self.WRITE_CHUNK, end - offset, 0x4000 - (address & 0x3FFF))
+            chunk = data[offset:offset + count]
+            if chunk != b"\xff" * count:
+                self._write_block(address, chunk, log_fn=log_fn)
+            offset += count
+            if progress_cb:
+                progress_cb(done + offset, total, "Flash write")
 
     # ── utility ──────────────────────────────────────────────────────────────
     @staticmethod
@@ -1566,3 +1657,55 @@ class DS2Interface:
         # would make the `serial is None` check above raise UnboundLocalError.
         from serial.tools import list_ports as _list_ports
         return [p.device for p in _list_ports.comports()]
+
+
+def resume_legacy_recovery(recovery, *, progress_cb=None, log_fn=None, boundary_cb=None):
+    """Replay the held phase once without reopening, changing baud or authorizing anew."""
+    if not isinstance(recovery, LegacyWriteRecovery) or not recovery.retry_supported:
+        raise DS2Error("same-session slow-write replay is not available")
+    recovery.manual_replay_attempted = True
+    # A user-triggered replay must not secretly start another automatic replay.
+    recovery.automatic_replay_attempted = True
+    try:
+        recovery.ds2._confirm_legacy_recovery()
+        recovery.ds2._run_legacy_phases(recovery, progress_cb, log_fn, boundary_cb)
+        recovery.phase = "finalize"
+        recovery.ds2._check_write_finalizer(
+            recovery.ds2.verify_program_region(log_fn=log_fn), log_fn)
+        recovery.completed = True
+    except Exception as error:
+        recovery.error = error
+        raise LegacyWriteRecoveryRequired(recovery) from error
+
+
+def open_identified(port, *, echo=True, serial_factory=None, interface_factory=None,
+                    expected_identity=None, expected_ecu_id=None, attempts=12, delay=0.3,
+                    diagnostic_fn=None, log_fn=None):
+    """Bounded normal-DS2 reconnect, called only after qualified low-rate cleanup."""
+    factory = interface_factory or DS2Interface
+    if attempts < 1:
+        raise ValueError("reconnect requires at least one attempt")
+    for attempt in range(attempts):
+        interface = factory(port=port, baud=9600, verbose=False, echo=echo, serial_factory=serial_factory)
+        interface.diagnostic_fn = diagnostic_fn
+        try:
+            interface.open()
+            identity = bytes(interface.identify())
+            if len(identity) != 42:
+                raise DS2Error(f"normal DS2 identity has {len(identity)} bytes, expected 42")
+        except Exception:
+            interface.close()
+            if attempt + 1 == attempts:
+                raise
+            if log_fn:
+                send_to_sink(log_fn, f"Waiting for normal DS2 identity ({attempt + 1}/{attempts})")
+            time.sleep(delay)
+            continue
+        if ((expected_identity is not None and identity != bytes(expected_identity))
+                or (expected_ecu_id is not None
+                    and identity[:7] != str(expected_ecu_id).encode("ascii"))):
+            interface.close()
+            raise DS2Error("reconnected ECU identity does not match the original ECU")
+        if attempt and log_fn:
+            send_to_sink(log_fn, f"ECU back up after the Fast operation (attempt {attempt + 1}).")
+        return interface, identity

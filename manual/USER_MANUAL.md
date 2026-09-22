@@ -2,7 +2,7 @@
 
 **BMW MS41 Programming, Diagnostics, and Recovery**
 
-Version 0.1.0b16 — Windows x64
+Version 0.1.0b17 — Windows x64 and x86
 
 BimmerStein ECU Tool combines normal DS2 diagnostics, stock-ECU high-speed DS2 transfers,
 Soft-BSL programming, hardware bootstrap recovery, offline ROM utilities, and firmware patch
@@ -28,9 +28,10 @@ Read this section before connecting to an ECU or opening a write workflow.
 - Keep hardware BSL recovery available when testing boot-region or experimental firmware changes.
 
 > [!DANGER]
-> If a write fails after erase has started, do not turn ignition off. Do not disconnect the
-> adapter and do not close the application. Use **Retry Flash Recovery** while the retained
-> high-speed or RAM-agent session is still active.
+> If a write fails after erase has started, keep ignition on and the adapter connected.
+> Keep the application open and use **Retry Flash Recovery** while retry is available.
+> Only when the application explicitly permits an ignition cycle, follow its instructions
+> and choose **Confirm Ignition Cycle** to release the session and reconnect.
 
 > [!WARNING]
 > Hardware BSL and armed Soft-BSL boot-region writes can rewrite code required for normal ECU
@@ -45,7 +46,8 @@ Every successful Flash-tab write ends with the same operator instruction:
 3. Turn ignition ON.
 
 The ignition cycle is an operational handoff, not a substitute for flash finalization or optional
-read-back verification.
+read-back verification. After a full-ROM write, reconnect so the application detects the
+new program identity and available transfer routes.
 
 <!-- pagebreak -->
 
@@ -59,7 +61,7 @@ read-back verification.
 | Soft-BSL | Persistent loader plus RAM agents | Installation modifies firmware and requires the guided workflow. |
 | Hardware BSL | Intel 28F200 and AMD/JEDEC 29F200/29F400 | Uses a separate direct ASC0 tap, not the normal K-Line connection. |
 | File sizes | 256 KB full ROM and 24 KB tune | Choose the operation matching the file and intended region. |
-| Host platform | Windows x64 installer or portable release | Both package editions contain the same application features. |
+| Host platform | Windows x64 or x86 installer or portable release | Both architectures contain the same application features. |
 
 ### Flash-chip families
 
@@ -75,13 +77,12 @@ read-back verification.
 
 ### Windows installer
 
-1. Download the Windows x64 installer for your system. Use the Windows 7 package on Windows 7 SP1 x64.
+1. Download the x64 installer for 64-bit Windows, or x86 for 32-bit Windows. Use the Windows 7 package on Windows 7 SP1.
 2. Run it for a per-user installation with no administrator access required.
 3. Install the driver for the intended FTDI adapter, then launch **BimmerStein ECU Tool**.
 
-PyInstaller and Nuitka packages provide the same features; Nuitka downloads use the `-Nuitka` suffix.
-The installer uses the BimmerStein ECU Tool folder and shortcut name. Choose one edition for an installation.
-Include the complete package filename when describing startup or packaging behavior.
+The application folder and shortcuts are named **BimmerStein ECU Tool**.
+An update keeps the existing installation location.
 
 ### Portable Windows package
 
@@ -90,8 +91,7 @@ Include the complete package filename when describing startup or packaging behav
 3. Run `BimmerStein ECU Tool.exe` from the extracted application folder.
 
 Keep the complete extracted folder together. Application runtimes, protocol resources, patch
-descriptors, and RAM-agent payloads are required beside the executable or in its `_internal`
-directory, depending on the package edition.
+descriptors, and RAM-agent payloads are required beside the executable.
 
 The executable may not be code-signed. Windows can show an unknown-publisher warning. Confirm the
 release filename and matching `.zip.sha256` value before continuing.
@@ -126,6 +126,12 @@ and operation history.
 The connection bar remains visible above all tabs. It contains the normal DS2 COM selection,
 Connect button, direct-tap choice, connection state, ECU variant, and transfer-mode information.
 The shared log and progress controls remain visible below it.
+
+Normal **Connect** has a 30-second limit and offers **Cancel** while identifying.
+Cancellation or timeout restores offline controls, and the window can close even if the
+serial driver remains stuck. The adapter stays reserved until the pending call and cleanup
+finish; reconnect only when the connection control becomes available again. This applies
+to normal identification; active writes and retained recovery keep their existing safeguards.
 
 ### Normal K-Line versus direct tap
 
@@ -186,13 +192,20 @@ active session for recovery instead of changing transports.
 
 ### Write options
 
-- **Correct checksums** is enabled by default. MS41.3 boot and calibration checksums
-  are corrected; its program checksum remains unchanged because stock program verification is
-  disabled.
+- **Correct checksums** is enabled by default and corrects the final prepared image, including
+  its boot, program, and calibration checksum fields.
 - **Back up before write** is optional and follows the operator's selection.
-- **Verify after write** controls host-side byte-for-byte read-back verification.
+- **Verify after write** controls host-side byte-for-byte read-back verification, with one
+  cumulative progress indicator across the selected regions.
 - ECU-side flash finalization is independent of the optional host Verify checkbox.
-- Boot/parameter writes remain separately armed because they carry a larger recovery risk.
+- For a TOP full write, **Write boot** off preserves the live 8 KiB boot region, including
+  its identity. **Graft identity** is inactive because those bytes are already preserved.
+- **Write boot** on uses the boot region from a TOP-marked file. **Graft identity** on copies
+  the live 670 production/AIF bytes into it; off keeps the file identity.
+- Soft-BSL reads only the required preservation bytes, once on the RAM-agent connection,
+  before erase. It then writes the complete TOP image, including the coarse sector that
+  contains the boot region. Retrying uses that same prepared image.
+- BOTTOM boot/parameter writes retain their existing separate arming behavior.
 
 <!-- pagebreak -->
 
@@ -208,11 +221,33 @@ restart through normal DS2 at 9600 only after the normal low-rate ECU state has 
 After erase begins, changing baud rate, reopening the port, or cycling ignition can discard the
 only live recovery path. The application therefore retains:
 
-- The D2XX native-fast session for a native DS2 write failure.
+- The current adapter session for either a normal or native-fast DS2 write failure.
 - The loaded RAM agent and port ownership for a Soft-BSL write failure.
 - The exact prepared target bytes required for a same-session retry.
 
-Follow the red recovery message exactly. Keep ignition ON and select **Retry Flash Recovery**.
+The app first attempts the recovery supported by the active protocol:
+
+- **DS2:** an uncertain program reply triggers a read of that packet. Matching bytes allow the
+  write to continue. Blank bytes can be sent again, with three total packet attempts. Native-fast
+  calibration can also continue at the first mismatching byte when the rest of that packet is
+  proven erased. It never resends the already committed prefix.
+- **Normal DS2 and native-fast full writes:** a confirmed partial packet can trigger one automatic
+  replay of the failed erase/write phase. If calibration fails after the program phase completed,
+  only calibration is erased and rewritten. DS2 erases firmware-defined regions, not individual
+  packets. One further operator-requested replay is available when the retained session permits it.
+- **Native-fast calibration:** another erase in the interrupted high-rate session is not supported.
+  The app retains the connection but does not offer a re-erase that would be rejected by the ECU.
+- **Soft-BSL:** up to nine identical packet transmissions handle retryable errors. An interrupted
+  frame is drained before a CRC-protected read confirms communication. A confirmed mismatch that
+  requires erase can replay one complete selected physical sector once, using the prepared image.
+  One operator-requested retained replay is available if automatic recovery cannot finish.
+
+These checks run after failures; they do not add readback to successful writes. Mandatory DS2
+finalization and the selected optional Verify still run after recovery.
+
+Follow the red recovery message exactly. Keep ignition ON while a session is retained. Select
+**Retry Flash Recovery** only when it is offered; do not independently change baud or reconnect.
+Use the app's controlled ignition-cycle instructions when it reports that a cycle is required.
 
 ### When hardware BSL is required
 
@@ -628,6 +663,13 @@ daily operations use the persistent loader and current RAM agents.
 Dual-bank support for the 29F400BB is tested and working. The tool can write both
 halves and manage each bank's patches and Soft-BSL.
 
+New AMD TOP images automatically include a resident DS2 guard. It rejects full/program writes
+before erase while allowing normal 24 KB calibration writes. Soft-BSL full and partial writes
+remain available through the existing workflow. BOTTOM images retain normal DS2 behavior.
+The guard requires installing the newly prepared TOP image; an application update alone does
+not modify the ECU. This new protection has offline emulator qualification; powered validation
+is still required.
+
 Golden-bank and boot-region workflows are advanced, recovery-sensitive operations. Follow the
 displayed A17/bank instructions and verify the selected physical half. Do not use them as a routine
 replacement for normal tune or program writes.
@@ -704,7 +746,7 @@ integrity before retrying.
 ### The ROM Analyzer cannot load definitions
 
 Use **Load Definition...** to select a valid compatible MS41 XML file. Do not copy XML files
-into `_internal` or any other packaged runtime directory. If a registered definition was changed or
+into a packaged runtime directory. If a registered definition was changed or
 damaged outside the application, delete it and import a known-good copy again. Confirm the BIN size
 and exact ECU software identity before relying on matched values.
 

@@ -66,6 +66,7 @@ def test_available_patches_filters_by_version():
     assert "launch_control_v4" not in ids            # overlapping V4 is remove-only
     assert "launch_control_v5" in ids                # current MS41.3 revision
     assert "door_0x43" not in ids                    # installer-only Soft-BSL bootstrap
+    assert "top_ds2_guard" not in ids               # automatic TOP-image protection
     assert "alphan_failsafe" in ids
     assert len(avail) == 7                            # the 7 user-facing MS41.3 patches
     cg = next(p for p in avail if p["id"] == "cal_guard")
@@ -75,9 +76,9 @@ def test_available_patches_filters_by_version():
         "relocated outside BMW AIF programming history.")
     assert "@0x" not in cg["user_description"]
     amd = next(p for p in avail if p["id"] == "amd_flash")
-    assert amd["version"] == "V2"
-    assert amd["status"] == "TESTED"
-    assert amd["tested"] is True
+    assert amd["version"] == "V3"
+    assert amd["status"] == "IMPLEMENTED"
+    assert amd["tested"] is False  # V3 recovery correction is offline-qualified only.
     alphan = next(p for p in avail if p["id"] == "alphan_failsafe")
     assert alphan["status"] == "TESTED"
     assert alphan["tested"] is True
@@ -102,7 +103,7 @@ def test_patch_versions_are_badges_not_title_text():
         "alphan_failsafe_v1": "V1",
         "alphan_failsafe_v2": "V2",
         "alphan_failsafe": "V3",
-        "amd_flash": "V2",
+        "amd_flash": "V3",
         "cal_guard_v1": "V1",
         "cal_guard_v2": "V2",
         "cal_guard_v4": "V4",
@@ -827,6 +828,56 @@ def test_revert_legacy_v2_then_apply_v9():
 def test_revert_patch_raises_if_not_applied():
     with pytest.raises(patch_ms41.PatchError):
         patch_service.revert_patch(ref("MS41.3"), "ignition_cut")
+
+
+
+@pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
+def test_protected_top_loader_removal_and_reinstall_preserve_bank(version):
+    import checksum
+    import softbsl_install
+
+    patches = patch_service.definitions()
+    top, _ids, _log = softbsl_install.compose_persistent_target(
+        ref(version), with_calguard=False, marker="T", chip="29f400")
+    _bootstrap, door_id = softbsl_install._sb._door_patch_ids(version)
+    without_door = patch_service.revert_patch(top, door_id)
+    without_loader = patch_service.revert_patch(without_door, "softbsl_loader")
+
+    assert without_loader[0x5FFC:0x6000] == b"\xA5\x5A\x54\xAB"
+    assert not patch_ms41.is_applied(without_loader, patches["softbsl_loader"])
+    assert patch_ms41.is_applied(without_loader, patches["top_ds2_guard"])
+    assert all(checksum.checksum_status(without_loader)[key]
+               for key in ("boot", "program", "cal"))
+    rows = {row["id"]: row for row in patch_service.available_patches(without_loader)}
+    assert "top_ds2_guard" not in rows
+    assert rows["amd_flash"]["removable"] is False
+    assert rows["amd_flash"]["required_by"] == ["top_ds2_guard"]
+    with pytest.raises(patch_service.PatchError, match="top_ds2_guard"):
+        patch_service.revert_patch(without_loader, "amd_flash")
+
+    rebuilt, _log = patch_service.build_image(without_loader, ["softbsl_loader"])
+    assert rebuilt == without_door
+    with pytest.raises(patch_service.PatchError, match="requires a TOP bank"):
+        patch_service.build_image(without_loader, ["softbsl_loader"], marker="B")
+
+
+@pytest.mark.parametrize("marker", ["B", "T"])
+def test_loader_build_preserves_valid_existing_bank_metadata(marker):
+    base, _log = patch_ms41.build(ref("MS41.2"), [], marker=marker)
+    image, _log = patch_service.build_image(base, ["softbsl_loader"])
+    assert image[0x5FFC:0x6000] == base[0x5FFC:0x6000]
+    assert patch_ms41.is_applied(image, patch_service.definitions()["softbsl_loader"])
+
+    override = "T" if marker == "B" else "B"
+    explicit, _log = patch_service.build_image(base, ["softbsl_loader"], marker=override)
+    assert explicit[0x5FFE] == ord(override)
+
+
+def test_loader_build_still_rejects_a_corrupt_bank_marker():
+    base = bytearray(ref("MS41.2"))
+    base[0x5FFC:0x6000] = b"\xA5\x5A\x54\xAA"
+    with pytest.raises(patch_service.PatchError, match="softbsl_loader @0x05FFC"):
+        patch_service.build_image(base, ["softbsl_loader"])
 
 
 def test_available_patches_flags_needs_boot():

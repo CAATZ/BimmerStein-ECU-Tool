@@ -22,23 +22,37 @@ def latest_file(directory, patterns):
         return ""
 
 
-def _write_redacted_operation_journal(archive, source):
+def _write_redacted_operation_journal(archive, source, member, *, diagnostic=False):
     with open(source, "r", encoding="utf-8", errors="replace") as stream:
-        with archive.open("operation-journal.jsonl", "w") as target:
+        with archive.open(member, "w") as target:
             for line in stream:
                 try:
                     record = json.loads(line)
                 except ValueError:
                     continue
                 if isinstance(record, dict):
+                    if diagnostic and record.get("event") == "owner_log":
+                        continue  # Free text can contain filenames or ECU identity.
+                    fields = record.get("fields", {})
                     record = {
                         key: record[key]
                         for key in (
                             "sequence", "utc", "operationId", "operation", "phase",
                             "destructiveStarted", "terminal", "transportRoute",
+                            "schema", "operation_id", "event",
                         )
                         if key in record
                     }
+                    if diagnostic and isinstance(fields, dict):
+                        record["fields"] = {
+                            key: fields[key] for key in (
+                                "command", "subcommand", "address", "data_length",
+                                "baud", "request_length", "phase", "echo_length",
+                                "echo_complete", "response_length",
+                                "expected_response_length", "flash_response_hex",
+                                "status", "duration_s", "error_type", "outcome",
+                            ) if key in fields
+                        }
                     target.write(
                         (json.dumps(record, sort_keys=True) + "\n").encode("utf-8")
                     )
@@ -46,7 +60,8 @@ def _write_redacted_operation_journal(archive, source):
 
 def create_support_bundle(
         destination, build_info, *, bin_metadata=None, live_csv="",
-        native_journal="", operation_journal="", session_log=""):
+        native_journal="", operation_journal="", session_log="",
+        native_journals=(), operation_journals=(), diagnostic_journals=()):
     """Write a privacy-scoped support ZIP atomically and return its member names."""
     destination = os.path.abspath(destination)
     os.makedirs(os.path.dirname(destination), exist_ok=True)
@@ -65,15 +80,25 @@ def create_support_bundle(
                     "selected-bin.json",
                     json.dumps(bin_metadata, indent=2, sort_keys=True) + "\n")
                 members.append("selected-bin.json")
-            for source, member in (
-                    (live_csv, "live-data.csv"),
-                    (native_journal, "native-fast-journal.jsonl")):
-                if source and os.path.isfile(source):
-                    archive.write(source, member)
+            if live_csv and os.path.isfile(live_csv):
+                archive.write(live_csv, "live-data.csv")
+                members.append("live-data.csv")
+            for prefix, sources in (
+                    ("native-fast-journal", (native_journal, *native_journals)),
+                    ("operation-journal", (operation_journal, *operation_journals)),
+                    ("diagnostic-journal", diagnostic_journals)):
+                paths = dict.fromkeys(str(path) for path in sources if path)
+                for index, source in enumerate(path for path in paths if os.path.isfile(path)):
+                    member = (f"{prefix}.jsonl" if index == 0
+                              else f"{prefix}s/{index:04d}.jsonl")
+                    if prefix == "native-fast-journal":
+                        archive.write(source, member)
+                    else:
+                        _write_redacted_operation_journal(
+                            archive, source, member,
+                            diagnostic=prefix == "diagnostic-journal",
+                        )
                     members.append(member)
-            if operation_journal and os.path.isfile(operation_journal):
-                _write_redacted_operation_journal(archive, operation_journal)
-                members.append("operation-journal.jsonl")
             if session_log and os.path.isfile(session_log):
                 archive.write(session_log, "session-log.txt")
                 members.append("session-log.txt")

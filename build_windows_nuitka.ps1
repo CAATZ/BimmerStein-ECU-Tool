@@ -1,5 +1,8 @@
 param(
     [switch]$SkipTests,
+    [switch]$SkipDocumentation,
+    [ValidateSet("x64", "x86")][string]$Architecture = "x64",
+    [string]$PythonPath,
     [ValidatePattern('^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:b[1-9]\d*|-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$')]
     [string]$Version = "0.0.0-dev"
 )
@@ -8,13 +11,21 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $root = $PSScriptRoot
-$python = Join-Path $root ".venv\Scripts\python.exe"
+$python = if ($PythonPath) { [System.IO.Path]::GetFullPath($PythonPath) } else { Join-Path $root ".venv\Scripts\python.exe" }
+$originalTemp = $env:TEMP
+$originalTmp = $env:TMP
+$originalQtPlatform = $env:QT_QPA_PLATFORM
+$originalQtFontDir = $env:QT_QPA_FONTDIR
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
     throw "Virtual environment not found. Create .venv and install requirements-build.txt first."
 }
 
 Push-Location $root
 try {
+    $actualArchitecture = & $python -c "import struct; print('x64' if struct.calcsize('P') == 8 else 'x86')"
+    if ($LASTEXITCODE -ne 0 -or $actualArchitecture -ne $Architecture) {
+        throw "The selected Python runtime does not match $Architecture."
+    }
     $env:BIMMERSTEIN_VERSION = $Version
     & $python -c "import nuitka, PyQt5, reportlab, usb.core, usb.backend.libusb1, usb1"
     if ($LASTEXITCODE -ne 0) {
@@ -25,16 +36,19 @@ try {
         throw "The libusb1 Windows runtime DLL is missing."
     }
 
-    & $python "packaging\generate_icon.py"
-    if ($LASTEXITCODE -ne 0) { throw "Application icon generation failed." }
-    & $python "packaging\generate_version_info.py" --version $Version
-    if ($LASTEXITCODE -ne 0) { throw "Windows version-metadata generation failed." }
+    if (-not $SkipDocumentation) {
+        & $python "packaging\generate_icon.py"
+        if ($LASTEXITCODE -ne 0) { throw "Application icon generation failed." }
+        & $python "packaging\generate_version_info.py" --version $Version
+        if ($LASTEXITCODE -ne 0) { throw "Windows version-metadata generation failed." }
 
-    $env:QT_QPA_PLATFORM = "offscreen"
-    & $python "packaging\capture_manual_screenshots.py"
-    if ($LASTEXITCODE -ne 0) { throw "Manual screenshot generation failed." }
-    & $python "packaging\build_user_manual.py"
-    if ($LASTEXITCODE -ne 0) { throw "User-manual build failed." }
+        $env:QT_QPA_PLATFORM = "offscreen"
+        $env:QT_QPA_FONTDIR = Join-Path $env:WINDIR "Fonts"
+        & $python "packaging\capture_manual_screenshots.py"
+        if ($LASTEXITCODE -ne 0) { throw "Manual screenshot generation failed." }
+        & $python "packaging\build_user_manual.py"
+        if ($LASTEXITCODE -ne 0) { throw "User-manual build failed." }
+    }
 
     & $python -m engines.softbsl.verify_agent_artifacts
     if ($LASTEXITCODE -ne 0) { throw "RAM-agent artifact verification failed." }
@@ -51,11 +65,11 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Automated tests failed." }
     }
 
-    $appDir = Join-Path $root "dist\BimmerStein ECU Tool Nuitka"
-    $buildDir = Join-Path $root "build\BimmerSteinECUToolNuitka"
+    $appDir = Join-Path $root "dist\$Architecture\BimmerStein ECU Tool"
+    $buildDir = Join-Path $root "build\nuitka-$Architecture"
     foreach ($target in @($appDir, $buildDir)) {
         $fullTarget = [System.IO.Path]::GetFullPath($target)
-        if (-not $fullTarget.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+        if (-not $fullTarget.StartsWith(($root.TrimEnd('\') + '\'), [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "Refusing to clean a build path outside the repository: $fullTarget"
         }
         if (Test-Path -LiteralPath $fullTarget) {
@@ -63,6 +77,7 @@ try {
         }
     }
 
+    New-Item -ItemType Directory -Path (Split-Path -Parent $appDir) -Force | Out-Null
     $outputDir = Join-Path $buildDir "output"
     $cacheDir = Join-Path $root ".tmp\nuitka-cache"
     $tempDir = Join-Path $buildDir "temp"
@@ -84,6 +99,7 @@ try {
         "-m", "nuitka",
         "--mode=standalone",
         "--msvc=latest",
+        "--jobs=8",
         "--assume-yes-for-downloads",
         "--enable-plugin=pyqt5",
         "--include-module=serial.tools.list_ports_windows",
@@ -162,13 +178,17 @@ try {
     Copy-Item -LiteralPath "THIRD_PARTY_NOTICES.md" -Destination $appDir
     Copy-Item -LiteralPath "output\pdf\BimmerStein-ECU-Tool-User-Manual.pdf" -Destination $appDir
 
-    & $python "packaging\verify_dist.py" --backend nuitka --expected-version $Version $appDir
+    & $python "packaging\verify_dist.py" --backend nuitka --expected-version $Version --architecture $Architecture $appDir
     if ($LASTEXITCODE -ne 0) { throw "Nuitka packaged-runtime verification failed." }
 
-    Write-Host "Nuitka package ready: dist\BimmerStein ECU Tool Nuitka"
+    Write-Host "Nuitka package ready: dist\$Architecture\BimmerStein ECU Tool"
 }
 finally {
     Remove-Item Env:BIMMERSTEIN_VERSION -ErrorAction SilentlyContinue
     Remove-Item Env:NUITKA_CACHE_DIR -ErrorAction SilentlyContinue
+    $env:TEMP = $originalTemp
+    $env:TMP = $originalTmp
+    $env:QT_QPA_PLATFORM = $originalQtPlatform
+    $env:QT_QPA_FONTDIR = $originalQtFontDir
     Pop-Location
 }

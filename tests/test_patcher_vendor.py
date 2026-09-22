@@ -7,7 +7,7 @@ import checksum
 import pytest
 
 EXPECTED_IDS = {
-    "alphan_failsafe", "alphan_failsafe_v1", "alphan_failsafe_v2", "amd_flash",
+    "alphan_failsafe", "alphan_failsafe_v1", "alphan_failsafe_v2", "amd_flash", "top_ds2_guard",
     "cal_guard", "cal_guard_v1", "cal_guard_v2", "cal_guard_v3_compatibility",
     "cal_guard_v4", "cal_guard_v4_bench_failed", "door_0x43",
     "door_0x43_ms410", "door_0x43_ms411", "door_magic", "door_magic_ms410",
@@ -29,6 +29,36 @@ def test_vendored_module_loads_all_patches():
     assert set(patches) == EXPECTED_IDS
     assert patch_ms41.FULL == 262144
 
+
+
+@pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
+def test_top_ds2_guard_requires_final_top_marker_and_current_amd(version):
+    patches = patch_ms41.load_patches()
+    base = ref(version)
+    ids = ["amd_flash", "top_ds2_guard"]
+    for marker in (None, "B"):
+        with pytest.raises(patch_ms41.PatchError, match="requires a TOP bank"):
+            patch_ms41.build(base, ids, marker=marker)
+    with pytest.raises(patch_ms41.PatchError, match="requires"):
+        patch_ms41.build(base, ["top_ds2_guard"], marker="T")
+
+    top, _ = patch_ms41.build(base, ids, marker="T")
+    assert patch_ms41.is_applied(top, patches["top_ds2_guard"])
+    assert patch_ms41.is_applied(top, patches["amd_flash"])
+    assert all(checksum.checksum_status(top)[key] for key in ("boot", "program", "cal"))
+    assert patch_ms41.build(top, ids)[0] == top
+    with pytest.raises(patch_ms41.PatchError, match="requires a TOP bank"):
+        patch_ms41.build(top, [], marker="B")
+
+    # A subsequent loader must not silently replace the protected TOP marker.
+    loader = patches["softbsl_loader"]
+    marker_edit = next(e for e in loader["edits"] if e["off"] == 0x5FFC)
+    markerless = bytearray(top)
+    markerless[0x5FFC:0x6000] = bytes.fromhex(marker_edit["expect"])
+    with pytest.raises(patch_ms41.PatchError, match="requires a TOP bank"):
+        patch_ms41.build(markerless, ["softbsl_loader"])
+    protected, _ = patch_ms41.build(markerless, ["softbsl_loader"], marker="T")
+    assert patch_ms41.is_applied(protected, patches["top_ds2_guard"])
 
 def test_every_edit_restores_the_full_written_range():
     # Removal must restore every byte a patch wrote. A shorter ``expect`` span
@@ -168,7 +198,7 @@ def test_needs_boot_write_flags_only_the_sa1_patches():
         "softbsl_loader", "softbsl_loader_v2", "softbsl_loader_v3_bench_failed",
         "softbsl_loader_v9", "softbsl_loader_v10", "softbsl_loader_legacy",
         "softbsl_loader_relocated_v1", "cal_guard_v3_compatibility",
-        "cal_guard_v4_bench_failed", "amd_flash",
+        "cal_guard_v4_bench_failed", "amd_flash", "top_ds2_guard",
     }
     # Program/cal patches are DS2-writable.
     assert patch_ms41.needs_boot_write(patches["ignition_cut_v7"]) is False

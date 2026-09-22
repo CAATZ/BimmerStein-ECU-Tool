@@ -7,19 +7,19 @@
   "agents": {
     "amd": {
       "source": "agent_build.asm",
-      "source_text_sha256": "593ca1495fe9746a3e5a95974f2db38100a348d1aef49ba7e8fe7729055a0ac2",
-      "preprocessed_sha256": "1e9d871fe17be25cb8a17319bebbb8411d1b6ed093f728e8aeb77f558e74e1cb",
+      "source_text_sha256": "1a627f878c7c214c3621cadf773a07b331ca4d17ad2fc96eeff578c3a71f026c",
+      "preprocessed_sha256": "30bd0a7ef0c2cbcaca92f73396b0cd56a1523a520956fedd4311a48572280690",
       "payload": "agent.hex",
-      "payload_size": 1498,
-      "payload_sha256": "00eea04eae248f35f77140913bd27a0ffc0003251acd361db2ee80c4b336cb72"
+      "payload_size": 1416,
+      "payload_sha256": "59543efcda316e670e3290444e9acd8bf99e48dbc85946aa17129ddcb89f72b9"
     },
     "intel_28f200": {
       "source": "agent_28f_build.asm",
-      "source_text_sha256": "7e3a9064521a94b2c7f396c00e343ba3da8a6964186d08e97cd90e38ebcce876",
-      "preprocessed_sha256": "5ea5efb1269dbf422716362e62aabf122a9c4bdfb4d618e29e642c2103fd1d39",
+      "source_text_sha256": "0ff08cccc6f31d6a9c8a4e578093f7eba94c757873230ffad91b6188bdc9ab0a",
+      "preprocessed_sha256": "503fe402b814a7a0f6206cee3072681f1740244e3b0eefb233049c270549ee29",
       "payload": "agent_28f.hex",
-      "payload_size": 1464,
-      "payload_sha256": "5c35c219cf350f9dfd936be92907b2a44d9c52e0cb40d0831f805f49f8a418c2"
+      "payload_size": 1382,
+      "payload_sha256": "8096c69eac3d26ccb1daa1d81e3fab7be6b073c2cb6f1b1f7491abee19f4a668"
     },
     "eeprom_ms41": {
       "source": "eeprom_agent_build.asm",

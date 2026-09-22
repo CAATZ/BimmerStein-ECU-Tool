@@ -127,7 +127,7 @@ class FullWriteStockSerial(PartialWriteStockSerial):
             + int(cursor).to_bytes(3, "big")
             + bytes((count, status))
         )
-        self._response(0xA0, payload)
+        self._response(0xA0, payload, corrupt=flash_index == self.corrupt_flash_response_at)
 
 
 def _session(
@@ -641,7 +641,7 @@ def test_retained_program_recovery_accepts_incomplete_pre_erase_polls(
     tmp_path, program_only, missing_response
 ):
     session, serial, _journal = _authorization_full_session(
-        tmp_path, missing_flash_response_at=missing_response
+        tmp_path, corrupt_flash_response_at=missing_response
     )
     target = bytearray(session.target_file_image)
     target[0x6000:0x6400] = b"\x55" * 0x400
@@ -654,14 +654,20 @@ def test_retained_program_recovery_accepts_incomplete_pre_erase_polls(
     transport = session.transport
     operation = session.execute_program_only if program_only else session.execute
 
+    # Keep this a retained-session test: the recovery read is also unavailable.
+    confirm_program = session.transport.confirm_program
+    def unreadable(*_args, **_kwargs):
+        raise PartialWriteTimeout("injected readback timeout")
+    session.transport.confirm_program = unreadable
     with pytest.raises(CommitUnknownError):
         operation()
+    session.transport.confirm_program = confirm_program
     assert serial.flash_requests[-1][0:2] == (
         FlashOperation.FULL_PROGRAM,
         0x2000 if missing_response == 4 else 0x20F3,
     )
 
-    serial.missing_flash_response_at = None
+    serial.corrupt_flash_response_at = None
     serial.flash_status_by_request[(int(FlashOperation.POLL), 0x2000)] = 0x0C
     before_flash = len(serial.flash_requests)
     before_wire = len(serial.requests)
@@ -702,7 +708,7 @@ def test_initial_program_polls_reject_incomplete_status(tmp_path, program_only):
     assert not session.destructive_started
 
 
-def test_retained_tune_phase_failure_keeps_program_polls_strict(tmp_path):
+def test_retained_tune_phase_failure_preserves_completed_program(tmp_path):
     session, serial, _journal = _authorization_full_session(
         tmp_path, missing_flash_response_at=7
     )
@@ -714,10 +720,14 @@ def test_retained_tune_phase_failure_keeps_program_polls_strict(tmp_path):
     serial.flash_status_by_request[(int(FlashOperation.POLL), 0x2000)] = 0x0C
     before = len(serial.flash_requests)
     session.journal = FullMemoryJournal(tmp_path / "recovery-tune-phase.jsonl")
-    with pytest.raises(ContractViolation, match="flash status 0x0C"):
-        session.recover_in_place()
+    session.recover_in_place()
 
-    assert serial.flash_requests[before:] == [(FlashOperation.POLL, 0x2000, b"")]
+    replay = serial.flash_requests[before:]
+    assert replay[0] == (FlashOperation.POLL, 0x100, b"")
+    assert (FlashOperation.ERASE, TUNE_START, b"") in replay
+    assert not any(address == 0x2000 for _op, address, _data in replay)
+    assert sum(op == FlashOperation.ERASE for op, _address, _data in replay) == 1
+    assert session.flash_completed and serial.final_key_accepted
     assert session.transport.is_open
     assert not session.can_recover_in_place
 
@@ -730,13 +740,19 @@ def test_retained_recovery_keeps_later_polls_strict(
     tmp_path, program_only, poll_address
 ):
     session, serial, _journal = _authorization_full_session(
-        tmp_path, missing_flash_response_at=4
+        tmp_path, corrupt_flash_response_at=4
     )
     operation = session.execute_program_only if program_only else session.execute
+    # Keep this a retained-session test: the recovery read is also unavailable.
+    confirm_program = session.transport.confirm_program
+    def unreadable(*_args, **_kwargs):
+        raise PartialWriteTimeout("injected readback timeout")
+    session.transport.confirm_program = unreadable
     with pytest.raises(CommitUnknownError):
         operation()
+    session.transport.confirm_program = confirm_program
 
-    serial.missing_flash_response_at = None
+    serial.corrupt_flash_response_at = None
     serial.flash_status_by_request = {
         (int(FlashOperation.POLL), 0x2000): 0x0C,
         (int(FlashOperation.POLL), poll_address): 0x0C,

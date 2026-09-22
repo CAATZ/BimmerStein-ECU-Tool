@@ -1395,7 +1395,8 @@ def test_retained_tune_recovery_reuses_same_session_and_respects_verify_off(monk
 
     resumed = []
 
-    def successful_retry(partial, *, do_verify=True, progress_cb=None):
+    def successful_retry(partial, *, do_verify=True, progress_cb=None, _sector_replay=False):
+        assert _sector_replay
         resumed.append((bytes(partial), do_verify))
         progress_cb(0, len(partial), "erase")
         progress_cb(len(partial), len(partial), "program")

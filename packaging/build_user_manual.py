@@ -38,10 +38,10 @@ def _release_version() -> str:
 DISPLAY_VERSION = _release_version()
 if DISPLAY_VERSION == "Development Build":
     FOOTER_VERSION_TEXT = "User Manual - Development Build"
-    COVER_VERSION_TEXT = "Development Build - Windows x64"
+    COVER_VERSION_TEXT = "Development Build - Windows"
 else:
     FOOTER_VERSION_TEXT = f"User Manual - Version {DISPLAY_VERSION}"
-    COVER_VERSION_TEXT = f"Version {DISPLAY_VERSION} - Windows x64"
+    COVER_VERSION_TEXT = f"Version {DISPLAY_VERSION} - Windows"
 
 
 def _inline(text: str) -> str:

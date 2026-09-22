@@ -2,10 +2,10 @@
 
 The stock ECU remains unmodified.  Entry is direct from normal 9600-host DS2
 to the ECU-exact 187500 tier.  A token read proves the selected rate before
-the program-array erase.  Once erase begins there is no automatic retry,
-fallback, reset, cleanup, or port close; the caller must retain this object for
-controlled recovery.  Successful full writes intentionally remain at high
-rate and are followed by an operator ignition-cycle instruction.
+the program-array erase. After erase, uncertain program replies use readback
+and bounded packet or phase recovery. No automatic baud fallback, reset, cleanup,
+or port close is allowed; the caller retains the session for controlled recovery.
+Successful full writes remain at high rate until the operator ignition cycle.
 """
 
 from __future__ import annotations
@@ -214,14 +214,8 @@ class NativeFastFullWriteSession(NativeFastPartialWriteSession):
         *,
         allowed_statuses=frozenset((0x01,)),
     ):
-        return self.transport.flash(
-            request,
-            label=label,
-            rate=self.link,
-            state=self.state,
-            allowed_statuses=frozenset(allowed_statuses),
-            first_byte_timeout=timeout,
-        )
+        return self._flash(request, label=label, timeout=timeout,
+                           allowed_statuses=frozenset(allowed_statuses))
 
     def _program_requests(
         self,
