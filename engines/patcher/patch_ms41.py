@@ -254,6 +254,12 @@ def scan_cave_intraseg(patch):
     return warns
 
 
+def _matches_loader_bank_marker(patch, offset, declared, actual):
+    return (patch.get("id", "").startswith("softbsl_loader") and offset == 0x5FFC
+            and declared in (b"\xa5\x5a\x42\xbd", b"\xa5\x5a\x54\xab")
+            and actual in (b"\xa5\x5a\x42\xbd", b"\xa5\x5a\x54\xab"))
+
+
 def is_applied(data, patch):
     """Match installed bytes, allowing either valid bank ID for a Soft-BSL loader."""
     for e in patch["edits"]:
@@ -261,9 +267,7 @@ def is_applied(data, patch):
         actual = bytes(data[off:off + len(dat)])
         # Bank identity is metadata, not a loader revision. Check all four bytes;
         # missing/corrupt markers and every executable edit still fail closed.
-        if (patch.get("id", "").startswith("softbsl_loader") and off == 0x5FFC
-                and dat in (b"\xa5\x5a\x42\xbd", b"\xa5\x5a\x54\xab")
-                and actual in (b"\xa5\x5a\x42\xbd", b"\xa5\x5a\x54\xab")):
+        if _matches_loader_bank_marker(patch, off, dat, actual):
             continue
         if actual != dat:
             return False
@@ -544,6 +548,8 @@ def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=F
             exp = bytes.fromhex(e["expect"])
             cur = bytes(data[off:off + len(exp)])
             dat = bytes.fromhex(e["data"])
+            if _matches_loader_bank_marker(p, off, dat, cur):
+                continue
             if cur not in (exp, dat):
                 upgrades = e.get("upgrade_expect", [])
                 if isinstance(upgrades, str):
@@ -557,6 +563,8 @@ def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=F
                     f"{p['id']} @0x{off:05X}: exact prior revision detected; upgrading")
         for e in p["edits"]:
             off = e["off"]; dat = bytes.fromhex(e["data"])
+            if _matches_loader_bank_marker(p, off, dat, bytes(data[off:off + len(dat)])):
+                continue  # Preserve existing bank metadata; an explicit override follows below.
             data[off:off + len(dat)] = dat
         recompute |= recompute_flags(p, target)
         log.append(f"applied {p['id']}: {len(p['edits'])} edits")
@@ -566,6 +574,11 @@ def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=F
         data[0x5FFC:0x6000] = bytes([0xA5, 0x5A, half, half ^ 0xFF])
         recompute.add("boot_crc")
         log.append(f"set bank marker @0x5FFC -> {marker}")
+
+    top_guard = patches.get("top_ds2_guard")
+    if (top_guard and is_applied(data, top_guard)
+            and data[0x5FFC:0x6000] != b"\xA5\x5A\x54\xAB"):
+        raise PatchError("TOP DS2 protection requires a TOP bank image")
 
     if recompute:
         corrected, details = checksum.correct_checksums(

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import ctypes
 import hashlib
 import importlib.util
@@ -13,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import struct
 import xml.etree.ElementTree as ET
 
 
@@ -21,12 +21,11 @@ APP_NAME = "BimmerStein ECU Tool"
 PATCH_DEFINITION_NAME = "BimmerStein MS41 Patch Definitions.xml"
 LOGGER_DEFINITION_NAME = "BimmerStein MS41 Logger Definitions.xml"
 PE_MACHINE_AMD64 = 0x8664
+PE_MACHINES = {"x64": PE_MACHINE_AMD64, "x86": 0x014C}
+HOST_ARCHITECTURE = "x64" if struct.calcsize("P") == 8 else "x86"
 REQUIRED_LICENSE_FILES = {
     "Nuitka-4.1.3-LICENSE-RUNTIME.txt": (
         "20ff0ae581adf436a7b06e50e67a6c8913aec1ea4e60dba138d0a0bee7ee520c"
-    ),
-    "PyInstaller-6.21.0-COPYING.txt": (
-        "dcf75fdb959db1e3b41c0f8505069d2ece781b5ec6b3d0a4d30975cfc6580245"
     ),
     "PyQt5-sip-12.18.0-BSD-2-Clause.txt": (
         "3e6f5b427c36f94ecf86bc01698af7030a1ed6eb3748110d5dbb8d142d804611"
@@ -203,10 +202,9 @@ def _nuitka_msvc_runtime_sources(
     """Resolve the unchanged CPython/MSVC redistributables selected by Nuitka."""
     python_root = Path(sys.base_prefix)
     sources: dict[Path, tuple[Path, str]] = {
-        NUITKA_MSVC_RUNTIME_FILES[0]: (
-            python_root / NUITKA_MSVC_RUNTIME_FILES[0], "CPython 3.14.6"),
-        NUITKA_MSVC_RUNTIME_FILES[1]: (
-            python_root / NUITKA_MSVC_RUNTIME_FILES[1], "CPython 3.14.6"),
+        relative: (python_root / relative, "CPython 3.14.6")
+        for relative in NUITKA_MSVC_RUNTIME_FILES[:2]
+        if HOST_ARCHITECTURE == "x64" or relative.name != "VCRUNTIME140_1.dll"
     }
     program_files_x86 = os.environ.get("ProgramFiles(x86)")
     if not program_files_x86:
@@ -221,7 +219,7 @@ def _nuitka_msvc_runtime_sources(
             raise RuntimeError(f"packaged VC++ runtime file is missing: {relative.as_posix()}")
         packaged_digest = hashlib.sha256(packaged.read_bytes()).hexdigest()
         candidates = sorted(
-            redist_root.glob(f"*/x64/Microsoft.VC143.CRT/{relative.name}"),
+            redist_root.glob(f"*/{HOST_ARCHITECTURE}/Microsoft.VC143.CRT/{relative.name}"),
             reverse=True,
         )
         source = next(
@@ -331,65 +329,11 @@ def _verify_patch_tree(packaged: Path) -> int:
 
 
 
-def verify_public_source() -> dict:
-    """Reject private inputs before either frozen backend is built."""
-    for forbidden in ("android", "_private"):
-        if (ROOT / forbidden).exists():
-            raise RuntimeError(f"private source directory entered release source: {forbidden}")
-
-    patcher = ROOT / "engines" / "patcher"
-
-    romraider = patcher / "romraider"
-    inputs = [
-        ROOT / "gui.py",
-        ROOT / "patch_service.py",
-        ROOT / "live_data.py",
-        ROOT / "README.md",
-        ROOT / "CHANGELOG.md",
-        ROOT / "RELEASE_NOTES.md",
-        ROOT / "manual" / "USER_MANUAL.md",
-        ROOT / "THIRD_PARTY_NOTICES.md",
-        ROOT / "logger_definitions" / LOGGER_DEFINITION_NAME,
-        ROOT / "packaging" / "capture_manual_screenshots.py",
-        romraider / "README.md",
-        romraider / "build_patch_definitions.py",
-        *romraider.glob("*.xml"),
-        *(patcher / "patches").glob("*.json"),
-    ]
-    missing = [str(path) for path in inputs if not path.is_file()]
-    if missing:
-        raise RuntimeError("public release input is missing:\n" + "\n".join(missing))
-    # Scan production sources and documentation, keeping dependency licenses intact.
-    excluded = {
-        ".git", ".venv", ".tmp", "__pycache__", "build", "dist", "release",
-        "output", "backups", "logs", "tests", "THIRD_PARTY_LICENSES",
-    }
-    text_extensions = {
-        ".py", ".pyw", ".spec", ".ps1", ".bat", ".cmd", ".md", ".txt",
-        ".xml", ".json", ".asm", ".c", ".h", ".toml", ".ini", ".yml",
-        ".yaml", ".html", ".svg",
-    }
-    for directory, names, filenames in os.walk(ROOT, followlinks=False):
-        names[:] = [name for name in names if name not in excluded]
-        for filename in filenames:
-            path = Path(directory) / filename
-            if path.suffix.lower() in text_extensions:
-                inputs.append(path)
-    inputs = sorted(set(inputs))
-    for path in inputs:
-        if path.suffix.lower() != ".md" or path.name == "THIRD_PARTY_NOTICES.md":
-            continue
-        if re.search(rb"\bandroid\b", path.read_bytes(), re.IGNORECASE):
-            raise RuntimeError(
-                "private platform reference in public documentation: "
-                + path.relative_to(ROOT).as_posix())
-    return {"source_inputs": len(inputs), "private_paths": 0}
-
-
 def verify_distribution(
         app_dir: Path,
         *,
         expected_backend: str | None = None,
+        expected_architecture: str | None = None,
         expected_version: str | None = None,
 ) -> dict:
     app_dir = Path(app_dir).resolve()
@@ -399,9 +343,12 @@ def verify_distribution(
     machine = _pe_machine(executable)
     if machine is None:
         raise RuntimeError(f"missing or invalid Windows executable: {executable}")
-    if machine != PE_MACHINE_AMD64:
+    architecture = expected_architecture or HOST_ARCHITECTURE
+    if architecture != HOST_ARCHITECTURE:
+        raise RuntimeError("Run verification with the matching architecture Python runtime")
+    if machine != PE_MACHINES[architecture]:
         raise RuntimeError(
-            f"Windows executable is not x64 (PE machine 0x{machine:04X}): {executable}")
+            f"Windows executable is not {architecture} (PE machine 0x{machine:04X}): {executable}")
 
     content = app_dir / "_internal"
     backend = "pyinstaller"
@@ -436,7 +383,6 @@ def verify_distribution(
         content / "libssl-3.dll",
         content / "libffi-8.dll",
         content / "VCRUNTIME140.dll",
-        content / "VCRUNTIME140_1.dll",
         content / "usb1" / "libusb-1.0.dll",
         content / "engines" / "softbsl" / "agent.hex",
         content / "engines" / "softbsl" / "agent_28f.hex",
@@ -446,6 +392,8 @@ def verify_distribution(
         content / "engines" / "softbsl" / "agent_manifest.json",
         content / "engines" / "patcher" / "patches" / "softbsl_loader.json",
     )
+    if architecture == "x64":
+        required += (content / "VCRUNTIME140_1.dll",)
     if backend == "pyinstaller":
         required += (
             content / "PyQt5" / "Qt5" / "bin" / "Qt5Core.dll",
@@ -460,8 +408,9 @@ def verify_distribution(
         raise RuntimeError("packaged runtime files are missing:\n" + "\n".join(missing))
 
     libusb_runtime = content / "usb1" / "libusb-1.0.dll"
-    if _pe_machine(libusb_runtime) != PE_MACHINE_AMD64:
-        raise RuntimeError(f"bundled libusb runtime is not x64: {libusb_runtime}")
+    for native in (*content.rglob("*.dll"), *content.rglob("*.pyd")):
+        if _pe_machine(native) != PE_MACHINES[architecture]:
+            raise RuntimeError(f"bundled native runtime is not {architecture}: {native}")
     if libusb_runtime.read_bytes() != _libusb_runtime_source().read_bytes():
         raise RuntimeError(
             "bundled libusb runtime does not match its unmodified build dependency")
@@ -573,6 +522,7 @@ def verify_distribution(
         "patch_definition": PATCH_DEFINITION_NAME,
         "logger_definition": LOGGER_DEFINITION_NAME,
         "pe_machine": f"0x{machine:04X}",
+        "architecture": architecture,
         "executable_bytes": executable.stat().st_size,
         "patch_count": patch_file_count,
         "version": expected_version,
@@ -594,23 +544,17 @@ def main() -> int:
         help="require packaged documents and metadata to identify this version",
     )
     parser.add_argument(
-        "--source-only",
-        action="store_true",
-        help="verify public release inputs without requiring a built application",
-    )
-    parser.add_argument(
         "app_dir",
         nargs="?",
         type=Path,
         default=ROOT / "dist" / APP_NAME,
     )
+    parser.add_argument("--architecture", choices=("x64", "x86"))
     args = parser.parse_args()
-    if args.source_only:
-        print(json.dumps(verify_public_source(), indent=2))
-        return 0
     result = verify_distribution(
         args.app_dir,
         expected_backend=args.backend,
+        expected_architecture=args.architecture,
         expected_version=args.expected_version,
     )
     print(json.dumps(result, indent=2))

@@ -695,7 +695,8 @@ def test_golden_top_composer_shares_persistent_install_patch_set():
     image, patch_ids, log = softbsl_install.compose_persistent_target(
         ref("MS41.3"), with_calguard=True, marker="T", chip="29f400")
 
-    assert patch_ids == ["softbsl_loader", "door_magic", "cal_guard", "amd_flash"]
+    assert patch_ids == [
+        "softbsl_loader", "door_magic", "cal_guard", "amd_flash", "top_ds2_guard"]
     assert image[0x5FFC:0x6000] == bytes([0xA5, 0x5A, 0x54, 0xAB])
     assert image[0x423C:0x4244] == softbsl_install._sb._DRV_SIG_AMD
     assert any("set bank marker" in line for line in log)
@@ -704,8 +705,120 @@ def test_golden_top_composer_shares_persistent_install_patch_set():
     # expect-anchor failure.
     rebuilt, rebuilt_ids, _ = softbsl_install.compose_persistent_target(
         image, with_calguard=True, marker="T", chip="29f400")
-    assert rebuilt_ids == ["softbsl_loader", "door_magic", "cal_guard"]
+    assert rebuilt_ids == [
+        "softbsl_loader", "door_magic", "cal_guard", "top_ds2_guard"]
     assert rebuilt == image
+
+
+def _exact_legacy_amd_image(version):
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+
+    amd = patch_ms41.load_patches()["amd_flash"]
+    current, _log = patch_ms41.build(ref(version), ["amd_flash"])
+    legacy = bytearray(current)
+    for edit in amd["edits"]:
+        if "upgrade_expect" in edit:
+            payload = bytes.fromhex(edit["upgrade_expect"])
+            legacy[edit["off"]:edit["off"] + len(payload)] = payload
+    assert softbsl_install._sb._patch_state(legacy, amd) == "legacy"
+    return bytes(legacy)
+
+
+@pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
+@pytest.mark.parametrize("marker", [None, "B", "T"])
+def test_persistent_composer_upgrades_exact_legacy_amd(version, marker):
+    import checksum
+    from engines.patcher import patch_ms41
+
+    patches = patch_ms41.load_patches()
+    image, patch_ids, _log = softbsl_install.compose_persistent_target(
+        _exact_legacy_amd_image(version), with_calguard=True,
+        marker=marker, chip="29f400")
+
+    assert "amd_flash" in patch_ids
+    assert patch_ms41.is_applied(image, patches["amd_flash"])
+    assert patch_ms41.is_applied(image, patches["top_ds2_guard"]) is (marker == "T")
+    assert softbsl_install._sb.image_marker(image) == (marker or "B")
+    assert all(checksum.checksum_status(image)[key]
+               for key in ("boot", "program", "cal"))
+    rebuilt, rebuilt_ids, _log = softbsl_install.compose_persistent_target(
+        image, with_calguard=True, marker=marker, chip="29f400")
+    assert "amd_flash" not in rebuilt_ids
+    assert rebuilt == image
+
+
+@pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
+def test_top_guard_follows_effective_bank_and_bottom_rebuild_removes_it(version):
+    import checksum
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+
+    patches = patch_ms41.load_patches()
+    top, _ids, _log = softbsl_install.compose_persistent_target(
+        ref(version), with_calguard=True, marker="T", chip="29f400")
+    rebuilt, rebuilt_ids, _log = softbsl_install.compose_persistent_target(
+        top, with_calguard=True, chip="29f400")
+    assert rebuilt == top
+    assert "top_ds2_guard" in rebuilt_ids
+
+    bottom, bottom_ids, _log = softbsl_install.compose_persistent_target(
+        top, with_calguard=True, marker="B", chip="29f400")
+    ordinary, _ids, _log = softbsl_install.compose_persistent_target(
+        ref(version), with_calguard=True, marker="B", chip="29f400")
+    assert bottom == ordinary
+    assert "top_ds2_guard" not in bottom_ids
+    assert not patch_ms41.is_applied(bottom, patches["top_ds2_guard"])
+    assert softbsl_install._sb.image_marker(bottom) == "B"
+    assert all(checksum.checksum_status(bottom)[key]
+               for key in ("boot", "program", "cal"))
+
+    # The extra TOP policy changes only its exact guard, marker, and boot CRC.
+    expected_changes = set(range(0x5FFC, 0x6000)) | {0x5C80, 0x5C81}
+    for edit in patches["top_ds2_guard"]["edits"]:
+        expected_changes.update(range(edit["off"], edit["off"] + len(bytes.fromhex(edit["data"]))))
+    assert {off for off, pair in enumerate(zip(top, bottom))
+            if pair[0] != pair[1]} <= expected_changes
+
+
+@pytest.mark.parametrize("marker", [None, "B", "T"])
+def test_persistent_composer_refuses_unknown_top_guard_bytes(marker):
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+
+    top, _ids, _log = softbsl_install.compose_persistent_target(
+        ref("MS41.3"), with_calguard=False, marker="T", chip="29f400")
+    corrupt = bytearray(top)
+    edit = patch_ms41.load_patches()["top_ds2_guard"]["edits"][0]
+    corrupt[edit["off"]] ^= 1
+    with pytest.raises(softbsl_install.SoftBSLInstallError, match="partial.*top_ds2_guard"):
+        softbsl_install.compose_persistent_target(
+            corrupt, with_calguard=False, marker=marker, chip="29f400")
+
+
+@pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
+@pytest.mark.parametrize("marker", [None, "T"])
+def test_installer_composes_current_amd_and_preserves_top(version, marker):
+    from engines.patcher import patch_ms41
+
+    patches = patch_ms41.load_patches()
+    base = _exact_legacy_amd_image(version)
+    if marker == "T":
+        base, _log = patch_ms41.build(base, [], marker="T")
+    args = softbsl_install._sb.InstallRequest(
+        port="COM_TEST", prompt=lambda _message: None, base=base, chip="29f400")
+    try:
+        softbsl_install._sb._install_resolve_images(args)
+        for path in (args.bootstrap, args.target):
+            image = Path(path).read_bytes()
+            assert patch_ms41.is_applied(image, patches["amd_flash"])
+            assert patch_ms41.is_applied(image, patches["top_ds2_guard"]) is (marker == "T")
+            assert softbsl_install._sb.image_marker(image) == (marker or "B")
+            assert all(patch_ms41.checksum.checksum_status(image)[key]
+                       for key in ("boot", "program", "cal"))
+    finally:
+        if args.target:
+            shutil.rmtree(Path(args.target).parent, ignore_errors=True)
 
 
 @pytest.mark.parametrize("legacy_id", ["cal_guard_v1", "cal_guard_v2"])
@@ -1147,6 +1260,7 @@ def test_installer_composes_relocated_loader_for_both_flash_families(
 
         for image in (bootstrap, target):
             assert patch_ms41.is_applied(image, patches["softbsl_loader"])
+            assert not patch_ms41.is_applied(image, patches["top_ds2_guard"])
             assert image[0x55A0:0x55A4] == bytes.fromhex("da008c1f")
             assert image[0x5D07:0x5F8B] == stock[0x5D07:0x5F8B]
             assert image[0x4412:0x4416] == bytes.fromhex("4fd87eb7")

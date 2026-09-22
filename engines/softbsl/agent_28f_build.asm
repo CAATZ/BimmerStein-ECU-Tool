@@ -29,7 +29,6 @@ base 0d800h
 BUF     EQU 0E000h        ; chunk buffer base, 1024 B (0xE000-0xE3FF)
 MARKER  EQU 0E400h        ; cached bank-ID byte
 BLFLAG  EQU 0E401h        ; bootloader-write armed flag
-HALF    EQU 0E402h        ; 0=bottom(working) 1=top(golden)
 ACRC    EQU 0E404h        ; 3-byte stash for the chunk address (a2,a1,a0), folded INTO the chunk
 ;                           CRC16 so a flipped address byte rejects the chunk before programming.
 ;                           Lives in the free gap 0xE403-0xE655 between HALF and the v5 vars @0xE656.
@@ -112,15 +111,10 @@ c_ident:
 
 ; ---- POLICY GUARD: given a target sector in r6, may we erase/program it? ----
 ; rules:  either visible half -> allow, EXCEPT the low boot-containing sector unless BLFLAG armed
-; HALF remains cached for identify/reporting compatibility, but is not a write lock.
+; Bank selection remains host-owned; the boot-write arm is checked here.
 ; returns RL4=0 ok, RL4=1 denied
-policy_check:                       ; in r8/r9 = addr ; out RL4=0 ok / 1 deny (uses r4)
-        MOVB  RL4,HALF
-        CMPB  RL4,#1
-        JMPR  cc_UC,pc_bot          ; TOP and BOTTOM use the same RAM-resident writer
-        MOVB  RL4,#1               ; unreachable padding keeps the assembled layout stable
-        rets
-pc_bot: CMP   r9,#0                ; a2 != 0 -> addr >= 0x10000 -> not bootloader
+policy_check:                       ; CPU < 0x2000 requires the existing boot-write arm
+        CMP   r9,#0                ; a2 != 0 -> addr >= 0x10000 -> not bootloader
         JMPR  cc_NE,pc_ok
         CMP   r8,#02000h           ; r8 >= 0x2000 -> not bootloader
         JMPR  cc_NC,pc_ok
@@ -577,13 +571,10 @@ rxb_w:  srvwdt                        ; keep WDT alive while waiting for the hos
         bclr  0ff6eh.7
         rets
 
-; rx - bounded receive. Identical to rx_block but gives up after ~0xFFFF spins
-;   (~100ms @12MHz; WDT serviced throughout; << host 8s status wait; >> the ~1.25ms inter-byte gap
-;   in a 9600 burst, so it never false-times-out mid-burst). On timeout returns sentinel 0 so a
-;   DROPPED frame byte makes the frame DESYNC -> CRC/cksum FAIL -> status 4 -> host retries, instead
-;   of HANGING the agent mid-frame (which after an erase = a blank-sector brick). Used for ALL
-;   in-frame reads (rx_word, chunk receive + CRC, erase cksum, ...). Still clobbers ONLY RL4
-;   (r5 is saved/restored on the system stack).
+; rx - bounded in-frame receive. An incomplete command must never substitute bytes and
+; continue into program/erase. After the first inter-byte timeout, abandon nested receive
+; calls, drain any delayed tail through a second quiet interval, then report existing
+; status 4 and return to main. No flash command has started during these receive calls.
 rx:
         bset  0ffb0h.4                ; S0REN=1 (re-enable RX after our last TX)
         bclr  0ff6eh.7                ; clear any stale S0RIR
@@ -597,9 +588,21 @@ rx_w:   srvwdt                        ; keep WDT alive while waiting
         rets
 rx_chk: sub   r5,#1
         jmpr  cc_NE,rx_w              ; budget left -> keep waiting
-        pop   r5                      ; TIMEOUT: give up -> sentinel -> frame desyncs -> CRC fail
-        movb  RL4,#0
-        rets
+        mov   SP,#0FC00h             ; abandon the incomplete command's receive stack
+rx_quiet:
+        mov   r5,#0ffffh
+rx_drain:
+        srvwdt
+        jnb   0ff6eh.7,rx_idle
+        movb  RL4,0feb2h             ; discard delayed payload, never dispatch it
+        bclr  0ff6eh.7
+        jmpr  cc_UC,rx_quiet         ; require a fresh quiet interval after every byte
+rx_idle:
+        sub   r5,#1
+        jmpr  cc_NE,rx_drain
+        movb  RL4,#4
+        calls tx
+        jmpa  cc_UC,main
 
 tx:                                   ; in: RL4 = byte. STOCK echo handling: drop the
         bclr  0ffb0h.4                ; receiver while transmitting (S0REN=0) so our own
@@ -652,10 +655,9 @@ rx_magic_ok:
 rmx:    ret                           ; NE
 
 
-; ---- identify: read the bank-ID marker -> MARKER/HALF; return marker byte ----
+; ---- identify: preserve the existing raw bank-marker reply ----
 ; marker @ file 0x5FFC = CPU 0x1FFC: A5 5A <half> <~half> ; FF*4 = blank/uninit.
-; HALF records the recognized bank marker for identify/reporting. It no longer controls
-; erase/program permission because this agent executes from RAM on either visible half.
+; No unused HALF state: the RAM agent can write either visible half.
 identify:
         mov   0fe00h,#0               ; DPP0 = 0 so [0x1FFC] hits the lows window
         mov   r6,#01ffch              ; marker base ptr in r6 (RL6/RH6 unused
@@ -663,42 +665,7 @@ identify:
                                       ;   pointer because r4 and RL4 share the same word register.
         movb  RL5,[r6+#2]             ; cache the half byte for the 'I' reply
         movb  MARKER,RL5
-        movb  RL4,#1                  ; default = PROTECTED
-        movb  HALF,RL4
-        ; --- allowance 1: all four marker bytes 0xFF -> blank/fresh install -> bottom ---
-        movb  RL4,[r6]
-        cmpb  RL4,#0FFh
-        jmpr  cc_NE,id_sig
-        movb  RL4,[r6+#1]
-        cmpb  RL4,#0FFh
-        jmpr  cc_NE,id_sig
-        movb  RL4,[r6+#2]
-        cmpb  RL4,#0FFh
-        jmpr  cc_NE,id_sig
-        movb  RL4,[r6+#3]
-        cmpb  RL4,#0FFh
-        jmpr  cc_NE,id_sig
-        movb  RL4,#0                  ; blank -> bottom/writable
-        movb  HALF,RL4
-        jmpr  cc_UC,id_d
-id_sig: ; --- allowance 2: A5 5A signature + exact complement + half byte == 'B' (0x42) ---
-        movb  RL4,[r6]
-        cmpb  RL4,#0A5h
-        jmpr  cc_NE,id_d              ; bad signature -> stay PROTECTED
-        movb  RL4,[r6+#1]
-        cmpb  RL4,#05Ah
-        jmpr  cc_NE,id_d
-        movb  RL4,[r6+#2]            ; half
-        movb  RL5,[r6+#3]            ; ~half
-        xorb  RL4,RL5
-        cmpb  RL4,#0FFh              ; complement must be exact
-        jmpr  cc_NE,id_d             ; bad complement -> PROTECTED
-        movb  RL4,[r6+#2]
-        cmpb  RL4,#042h ; 'B'
-        jmpr  cc_NE,id_d             ; 'T'/garbage -> PROTECTED (golden-safe)
-        movb  RL4,#0                 ; valid 'B' -> bottom/writable
-        movb  HALF,RL4
-id_d:   movb  RL4,MARKER
+        movb  RL4,MARKER
         rets
 ; ===== INTEL erase core (replaces erase_amd_core; SAME name kept for callers) =====
 ; Erases ONE 28F200 block containing [0xE656].  VPP already ON (caller brackets it).

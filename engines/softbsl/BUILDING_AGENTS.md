@@ -48,8 +48,8 @@ four comparisons are exact. The current reviewed results are:
 
 | Family | Load address | Size | Runtime SHA-256 |
 | --- | ---: | ---: | --- |
-| AMD/JEDEC | `0xD800` | 1498 | `00eea04eae248f35f77140913bd27a0ffc0003251acd361db2ee80c4b336cb72` |
-| Intel 28F200 | `0xD800` | 1464 | `5c35c219cf350f9dfd936be92907b2a44d9c52e0cb40d0831f805f49f8a418c2` |
+| AMD/JEDEC | `0xD800` | 1416 | `59543efcda316e670e3290444e9acd8bf99e48dbc85946aa17129ddcb89f72b9` |
+| Intel 28F200 | `0xD800` | 1382 | `8096c69eac3d26ccb1daa1d81e3fab7be6b073c2cb6f1b1f7491abee19f4a668` |
 | MS41 EEPROM | `0xD800` | 1442 | `e1c17e3a4e3684ab99f8d3ca98506a1829d37315028a00ff86a04c6f4ca3949f` |
 | ST9030 bounded probe/gate/telemetry | `0xD800` | 1944 | `cd43358bde39c4e2a5dd00884b7775df1662802d08886df9a209027c32706ee2` |
 
@@ -187,16 +187,23 @@ retune ASC0 and receive the EEPROM agent at the requested tier. `auto` tries
 187,500 baud first and repeats the complete pre-write entry at 9,600 if the fast
 path fails; no EEPROM byte is written during either entry attempt.
 
-The current payloads retain their reviewed sizes and layout. Relative to the
-previous payloads, the bank policy changes exactly one opcode in each agent:
-`JMPR cc_NE,pc_bot` (`0x3D`) becomes `JMPR cc_UC,pc_bot` (`0x0D`). This lets the
-same RAM-resident writer operate on either visible half while retaining the
-existing boot-sector arm, CRC, erase/program, and verification paths. The
-successful finalize path commits marker zero, arms `WDTCON=0xFF00` as a hardware
-fallback, services it once, and executes protected `SRST`; all operational
-watchdog servicing remains intact. The previous spin-until-watchdog payloads
-(`7542ca...` AMD and `d335c9...` Intel) are deprecated after isolated emulator
-validation plus 5/5 high-baud hardware trials on each flash family.
+The current flash agents abort an incomplete request and drain its delayed tail
+through a quiet receive interval before accepting another command. This uses the
+existing rejection status and command format. The AMD agent also exits the
+program loop on its first failed word, preserving that failure instead of letting
+a later successful word hide it. Removing unused half-selection calculations and
+unreachable bank-policy code keeps both agents below the existing 1500-byte
+loader limit. Both visible halves remain writable subject to the existing
+boot-sector arm and address guards.
+
+The successful finalize path still commits marker zero, arms `WDTCON=0xFF00`
+as a hardware fallback, services it once, and executes protected `SRST`; all
+operational watchdog servicing remains intact. The earlier switch from
+spin-until-watchdog payloads (`7542ca...` AMD and `d335c9...` Intel) to this
+reset sequence had isolated emulator validation and 5/5 high-baud hardware
+trials on each flash family. Those trials covered the previous payloads,
+not the new recovery revision. The current hashes above have source/artifact
+and exact-byte emulator validation only and still require powered qualification.
 
 Run the repository-side integrity check after any source or payload change:
 

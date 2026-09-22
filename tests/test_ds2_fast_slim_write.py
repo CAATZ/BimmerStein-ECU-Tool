@@ -408,6 +408,58 @@ def test_slim_full_verify_reads_only_the_affected_ranges_once(tmp_path):
     assert _read_requests_at(serial, 0x20000) == 1
 
 
+@pytest.mark.parametrize(
+    "operation,regions",
+    [
+        ("partial", ((0x10000, 0x16000, "Verifying calibration region"),)),
+        ("full", (
+            (0x02000, 0x08000, "full_optional_verify_02000"),
+            (0x10000, 0x20000, "full_optional_verify_10000"),
+            (0x20000, 0x40000, "full_optional_verify_20000"),
+        )),
+        ("program_only", (
+            (0x02000, 0x06000, "program_only_optional_verify_02000"),
+            (0x20000, 0x40000, "program_only_optional_verify_20000"),
+        )),
+    ],
+)
+def test_slim_verify_progress_is_continuous_and_preserves_read_labels(
+    tmp_path, operation, regions,
+):
+    progress = []
+    create_session = _partial_session if operation == "partial" else _full_session
+    session, _serial, journal, *_ = create_session(
+        tmp_path, verify_write=True,
+        progress_cb=lambda *event: progress.append(event),
+    )
+
+    result = (session.execute_program_only() if operation == "program_only"
+              else session.execute())
+
+    total = sum(end - start for start, end, _label in regions)
+    verification = [event for event in progress if event[0] == "Verifying"]
+    assert verification[0] == ("Verifying", 0, total)
+    assert verification[-1] == ("Verifying", total, total)
+    assert {size for _phase, _done, size in verification} == {total}
+    completed = [done for _phase, done, _total in verification]
+    assert completed == sorted(completed)
+    assert result.verified_bytes == total
+    boundary = 0
+    for start, end, _label in regions:
+        boundary += end - start
+        assert boundary in completed
+
+    prefixes = tuple(label + "_0x" for _start, _end, label in regions)
+    labels = [fields["label"] for event, fields in journal.events
+              if event == "request_started"
+              and fields["label"].startswith(prefixes)]
+    assert labels == [
+        f"{label}_0x{address:05X}_{min(247, end - address)}"
+        for start, end, label in regions
+        for address in range(start, end, 247)
+    ]
+
+
 def test_slim_full_finalizer_failure_disables_destructive_replay(
     monkeypatch, tmp_path
 ):

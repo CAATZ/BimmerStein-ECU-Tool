@@ -15,11 +15,11 @@ from engines.patcher import patch_ms41
 
 PatchError = patch_ms41.PatchError
 
-# This bootstrap is an internal Soft-BSL installation detail, not a general-purpose
-# firmware patch. Keep its definition available to the installer while omitting it
-# from the Patches-tab catalogue, where baking it into a BIN can cause collisions.
+# These patches belong to the installation/TOP image builders, not the general
+# Patches-tab catalogue.
 PATCH_TAB_HIDDEN_IDS = frozenset({
     "door_0x43", "door_0x43_ms410", "door_0x43_ms411",
+    "top_ds2_guard",
 })
 
 
@@ -669,7 +669,13 @@ def revert_patch(base_data, patch_id):
             f"cannot remove '{patch_id}': installed patch(es) {joined} require it; "
             "remove the dependent patch(es) first"
         )
-    return patch_ms41.revert(bytes(base_data), p)
+    result = patch_ms41.revert(bytes(base_data), p)
+    top_guard = patches.get("top_ds2_guard")
+    if (bytes(base_data[0x5FFC:0x6000]) == b"\xA5\x5A\x54\xAB"
+            and result[0x5FFC:0x6000] != b"\xA5\x5A\x54\xAB"
+            and top_guard and patch_ms41.is_applied(result, top_guard)):
+        result, _log = patch_ms41.build(result, [], patches=patches, marker="T")
+    return result
 
 
 def build_image(base_data, selected_ids, marker=None):

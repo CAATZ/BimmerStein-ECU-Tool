@@ -1,5 +1,29 @@
 # Changelog
 
+All notable changes to this project are documented in this file.
+
+Release numbers use a `major.minor.patch` base and the compact `bN` beta suffix
+shared by BimmerStein applications.
+
+## [0.1.0b17] - 2026-09-21
+
+### Fixed
+
+- Improved interrupted-write recovery and return to slow communication.
+- Preserved the selected boot and identity options throughout full-write recovery.
+- Rejected unsupported TOP-bank DS2 full writes earlier, with a clear explanation.
+- Prevented stalled serial adapters from freezing connection attempts and app closure.
+- Removed obsolete operation-record blocking of a deliberately started new write.
+- Fixed brief blank windows during startup and updated the AMD flash driver.
+
+### Changed
+
+- Verification now reports continuous progress across the entire write.
+- Windows releases use one compiled edition, with x64 and x86 installers and
+  portable packages. New installations use a simple application name for the
+  folder and shortcuts; updates retain their existing location.
+
+
 ## 0.1.0 Beta 16
 
 EEPROM editing, Bins folders, improved live and saved data viewing, searchable logs,

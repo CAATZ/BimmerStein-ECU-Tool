@@ -30,16 +30,20 @@ def test_write_retry_accepts_one_argument_log_sink(monkeypatch):
     def flash_sub(*_args):
         attempts.append(None)
         if len(attempts) == 1:
-            raise ds2.DS2Error("transient")
-        return bytes((0x02, 0, 0, 0, 0, 0x01))
+            failure = ds2.DS2Timeout("missing ACK")
+            failure.request_context = dict(phase="response_header", response_length=0,
+                                           write_complete=True, echo_complete=True)
+            raise failure
+        return bytes((0x02, 1, 0, 1, 1, 0x01))
 
     monkeypatch.setattr(interface, "_flash_sub", flash_sub)
+    monkeypatch.setattr(interface, "execute", lambda *_args, **_kwargs: b"\xff" * 7)
     monkeypatch.setattr(ds2.time, "sleep", lambda _seconds: None)
 
     interface._write_block(0x10000, b"\x01", log_fn=messages.append)
 
     assert len(attempts) == 2
-    assert len(messages) == 1 and "Write retry 1/" in messages[0]
+    assert len(messages) == 1 and "Write retry 2/" in messages[0]
 
 
 class _LegacyAuthorizationHarness(DS2Interface):
@@ -910,3 +914,163 @@ def test_adaptation_clear_uses_factory_family_frame_lengths():
         (ds2.DS2Commands.CLEAR_ADAPT, b"\xFF"),
         (ds2.DS2Commands.CLEAR_ADAPT, b"\xFF\xFF"),
     ]
+
+
+@pytest.mark.parametrize("method", ["execute", "send_no_response", "send_frame", "send_bmw_fast"])
+@pytest.mark.parametrize("write_timeout", [0.15, None])
+def test_pyserial_stuck_drain_is_bounded_for_every_shared_sender(monkeypatch, method, write_timeout):
+    class StuckSerial(_FakeReadSerial):
+        out_waiting = 1
+        def flush(self):
+            pytest.fail("unbounded pyserial.flush must not be called")
+        def read(self, count):
+            pytest.fail("must not read a response before TX drains")
+
+    now = [0.0]
+    monkeypatch.setattr(ds2.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(ds2.time, "sleep", lambda delay: now.__setitem__(0, now[0] + delay))
+    d = DS2Interface("COM_TEST", echo=False)
+    d._ser = StuckSerial()
+    d._ser.write_timeout = write_timeout
+    d.transport_name = "pyserial"
+    args = {
+        "execute": (0x00,), "send_no_response": (0x2A,),
+        "send_frame": (bytes.fromhex("44 04 00 40"), 0x44),
+        "send_bmw_fast": (bytes.fromhex("B8 29 F1 01 00"), 0x29),
+    }[method]
+    with pytest.raises(ds2.DS2Timeout, match="transmit queue did not drain"):
+        getattr(d, method)(*args)
+    assert now[0] == pytest.approx(3.0 if write_timeout is None else write_timeout)
+
+
+def test_output_drain_waits_for_empty_queue_and_preserves_other_transports(monkeypatch):
+    queued = iter((2, 1, 0))
+    calls = []
+    class Serial:
+        write_timeout = 3.0
+        @property
+        def out_waiting(self):
+            return next(queued)
+        def flush(self):
+            calls.append("flush")
+
+    monkeypatch.setattr(ds2.time, "sleep", lambda delay: calls.append(delay))
+    d = DS2Interface("COM_TEST")
+    d._ser = Serial()
+    d.transport_name = "pyserial"
+    d._flush_output()
+    assert calls == [0.05, 0.05]
+    for transport in ("d2xx", "android_usb", None):
+        d.transport_name = transport
+        d._flush_output()
+    assert calls == [0.05, 0.05, "flush", "flush", "flush"]
+
+
+@pytest.mark.parametrize("cancel_at", ["purge", "write", "flush", "header", "body"])
+def test_cancelled_io_cannot_continue_or_accept_a_late_response(cancel_at):
+    events = []
+    cancelled = [False]
+    def event(name):
+        events.append(name)
+        if name == cancel_at:
+            cancelled[0] = True
+    def check():
+        if cancelled[0]:
+            raise RuntimeError("cancelled Identify")
+    class Serial(_FakeReadSerial):
+        def reset_input_buffer(self):
+            super().reset_input_buffer()
+            event("purge")
+        def write(self, frame):
+            result = super().write(frame)
+            event("write")
+            return result
+        def flush(self):
+            event("flush")
+        def read(self, count):
+            result = super().read(count)
+            event("header" if count == 2 else "body")
+            return result
+
+    d = DS2Interface("COM_TEST", echo=False)
+    d._ser = Serial()
+    d.operation_check = check
+    with pytest.raises(RuntimeError, match="cancelled Identify"):
+        d.identify()
+    order = ["purge", "write", "flush", "header", "body"]
+    expected = order[:order.index(cancel_at) + 1]
+    assert events == expected
+    with pytest.raises(RuntimeError, match="cancelled Identify"):
+        d.identify()
+    assert events == expected  # Even a caller swallowing cancellation cannot send another probe.
+
+
+@pytest.mark.parametrize("cancel_at", ["open", "dtr"])
+def test_cancel_during_open_suppresses_remaining_setup_and_allows_cleanup(cancel_at):
+    events = []
+    def check():
+        if cancel_at in events:
+            raise RuntimeError("cancelled Identify")
+    class Serial:
+        is_open = True
+        def __init__(self, **_kwargs): events.append("open")
+        def setDTR(self, _value): events.append("dtr")
+        def setRTS(self, _value): events.append("rts")
+        def close(self): events.append("close")
+
+    d = DS2Interface("COM_TEST", serial_factory=Serial)
+    d.operation_check = check
+    with pytest.raises(RuntimeError, match="cancelled Identify"):
+        d.open()
+    assert events == (["open"] if cancel_at == "open" else ["open", "dtr"])
+    d.close()
+    assert events[-1] == "close"
+
+
+def test_cancelled_d2xx_open_cannot_fall_back_to_pyserial(monkeypatch):
+    cancelled = [False]
+    class FailedD2XX:
+        def __init__(self, **_kwargs):
+            cancelled[0] = True
+            raise OSError("driver open failed after cancellation")
+    def check():
+        if cancelled[0]:
+            raise RuntimeError("cancelled Identify")
+    monkeypatch.setenv("SOFTBSL_D2XX", "1")
+    monkeypatch.setattr(ds2, "_import_d2xx_serial", lambda: FailedD2XX)
+    monkeypatch.setattr(ds2.serial, "Serial", lambda **_kwargs: pytest.fail("cancelled fallback"))
+    d = DS2Interface("COM_TEST")
+    d.operation_check = check
+    with pytest.raises(RuntimeError, match="cancelled Identify"):
+        d.open()
+    assert d._ser is None
+
+
+def test_execute_rechecks_cancellation_after_returned_payload(monkeypatch):
+    d = DS2Interface("COM_TEST")
+    cancelled = [False]
+    def check():
+        if cancelled[0]:
+            raise RuntimeError("cancelled Identify")
+    def late_response(*_args, **_kwargs):
+        cancelled[0] = True
+        return bytes(42)
+    d.operation_check = check
+    monkeypatch.setattr(d, "_execute", late_response)
+    with pytest.raises(RuntimeError, match="cancelled Identify"):
+        d.identify()
+
+
+def test_cancel_pending_io_is_best_effort_and_never_closes():
+    calls = []
+    class Serial:
+        def cancel_read(self):
+            calls.append("cancel_read")
+            raise OSError("read already completed")
+        def cancel_write(self): calls.append("cancel_write")
+        def close(self): pytest.fail("cancellation must not close the transport")
+    d = DS2Interface("COM_TEST")
+    d.cancel_pending_io()  # Opening may not yet have produced a handle.
+    d._ser = Serial()
+    d.cancel_pending_io()
+    assert calls == ["cancel_read", "cancel_write"]

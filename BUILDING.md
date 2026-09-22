@@ -1,153 +1,82 @@
 # Building BimmerStein ECU Tool
 
-Beta 16 is a Windows x64 desktop release only. It is built with both PyInstaller
-and Nuitka and distributed as portable ZIPs and per-user installers.
-All commands below run from the repository root in PowerShell.
+Beta 17 uses Nuitka for Windows x64 and x86 installers and portable packages.
+The public project is `GPL-3.0-only` and is marked **OFF-ROAD USE ONLY**.
 
-## 1. Create the build environment
+## Build environments
+
+Use CPython 3.14.6 and the MSVC build tools. Install `requirements-build.txt`
+in a virtual environment for each architecture. The Python interpreter must
+match the intended package architecture. The x86 build needs the x86 compiler
+and dependencies; running an x64 interpreter cannot produce an x86 application.
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install --upgrade pip
 .venv\Scripts\python.exe -m pip install -r requirements-build.txt
 ```
 
-Install Inno Setup 6 when building the installer EXE. The release scripts find
-`ISCC.exe` from `INNO_ISCC`, the standard Program Files locations, or an
-explicit `-IsccPath` argument.
+The tracked runtime license inventory matches CPython 3.14.6, Qt 5.15.2,
+PyQt5-sip 12.18.0 and Nuitka 4.1.3. Update notices and verifier hashes before
+changing those versions. Required dependency licenses must remain in packages.
+Do not bundle the FTDI D2XX DLL. Application-local Microsoft runtime files must
+remain unchanged; verification compares them with their build dependencies.
 
-`requirements-build.txt` also pins the Nuitka compiler and its build helpers.
-The Nuitka path uses MSVC because Python 3.14 is not supported by
-Nuitka's MinGW mode.
-
-The FTDI D2XX driver is a system dependency used at runtime when available. It
-is not installed or redistributed by this repository.
-
-## 2. Run validation
+## Validation and documentation
 
 ```powershell
 $env:QT_QPA_PLATFORM = "offscreen"
 .venv\Scripts\python.exe -m ruff check . --select F,E9
-.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp .pytest-release
+.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp .tmp\pytest-release
 .venv\Scripts\python.exe -m engines.softbsl.verify_agent_artifacts
-```
-
-The RAM-agent verification is mandatory. It confirms that the checked-in HEX
-payloads match their manifests and reproducible source artifacts.
-The owner-only exact-byte execution admission is also mandatory for release
-preparation and is invoked by the release script. It executes composed patch
-bytes and the Intel/AMD flash drivers against hash-bound private reference ROMs.
-Those development inputs are not imported, packaged, or shipped; missing inputs
-fail release preparation. Passing this offline gate does not establish bench or
-on-car behavior.
-
-## 3. Rebuild the documentation
-
-```powershell
-$env:QT_QPA_PLATFORM = "offscreen"
 .venv\Scripts\python.exe packaging\capture_manual_screenshots.py
 .venv\Scripts\python.exe packaging\build_user_manual.py
 ```
 
-The screenshot tool uses synthetic in-memory labels only. It does not open a
-serial port or read a private ROM. The PDF is written to:
+The release script also requires the owner's exact-byte execution admission
+against the private reference images. This gate runs even with `-SkipTests`.
+Those inputs are not shipped. Offline checks do not establish physical ECU or
+on-car behavior. Render and inspect every manual PDF page before publication.
 
-`output\pdf\BimmerStein-ECU-Tool-User-Manual.pdf`
+## Public firmware policy
 
-Render and visually inspect every PDF page before publishing a release.
+Keep Ignition Cut V7 and Launch Control V4/V5 in public releases until the
+release owner confirms the replacements work on a vehicle. Development revisions
+remain in the development checkout. Prepare the public snapshot from the last
+public release, carrying over the reviewed application and AMD flashing fixes.
+Compare the retained patch descriptors and tuning definitions byte-for-byte
+with that public baseline before building.
 
-## 4. Build the portable package
+## Prepare Beta 17
 
-```powershell
-.\build_windows.ps1 -Version 0.1.0b16
-```
-
-The script regenerates metadata-clean icons, rebuilds the manual, runs the
-static/test/artifact gates, creates the PyInstaller package, adds the public
-release documents and tracked third-party license texts, and validates the
-frozen output.
-
-Output:
-
-`dist\BimmerStein ECU Tool\`
-
-Keep the complete folder together. `BimmerStein ECU Tool.exe` depends on the
-adjacent `_internal` directory.
-
-To compile the Nuitka portable package:
+Build from a clean, reviewed source checkout. Release metadata records the
+source commit and must show `source_dirty: false`. Keep private projects,
+reference images and user data outside the source snapshot.
 
 ```powershell
-.\build_windows_nuitka.ps1 -Version 0.1.0b16
+.\packaging\prepare_release.ps1 -Version 0.1.0b17 -PyQtLicenseBasis GPLv3
 ```
 
-Its output is `dist\BimmerStein ECU Tool Nuitka\`. It is a flat Nuitka
-standalone directory and does not use PyInstaller's `_internal` layout. Both
-builds place `BimmerStein MS41 Patch Definitions.xml` beside the executable.
-
-## 5. Licensing and publication gate
-
-The public project is licensed under GNU GPL version 3 (`GPL-3.0-only`), and a
-frozen public binary also carries the licenses and redistribution conditions of
-its dependencies.
-
-The public package is marked **OFF-ROAD USE ONLY** in its application UI,
-documentation, and release metadata.
-Review `THIRD_PARTY_NOTICES.md` before public distribution. In particular:
-
-- Record the GPLv3 PyQt5 license path selected for the public beta.
-- Keep the application-local Microsoft Visual C++ runtime files unchanged. The
-  package verifier compares them byte-for-byte with the CPython and PyQt5-Qt5
-  build dependencies and the release metadata records their SHA-256 hashes.
-- Do not bundle FTDI's D2XX DLL unless its redistribution terms have been
-  reviewed and accepted separately.
-
-The tracked `THIRD_PARTY_LICENSES/` inventory matches the current Windows
-release toolchain: CPython 3.14.6, Qt 5.15.2, PyQt5-sip 12.18.0, pyserial 3.5,
-PyInstaller 6.21.0, and the Nuitka 4.1.3 runtime exception. If any of those
-versions or the Python-carried OpenSSL or libffi libraries change, update the
-source license texts, hashes in `packaging/verify_dist.py`, and
-`THIRD_PARTY_NOTICES.md` before building a release. The package verifier rejects
-missing or altered tracked texts.
-
-Publication still requires the release owner's final package review.
-
-## 6. Prepare the versioned release artifacts
-
-Prepare Beta 16 from a clean, reviewed public source checkout. Keep private
-projects, reference images, engineering archives, and user data outside that
-checkout. Verify that `git status --porcelain` is empty before the build and
-review any generated changes afterward. Final release metadata must identify
-the intended source commit and record `source_dirty: false`.
-
-Create the release artifacts with the GPLv3 licensing gate selected:
-
-Beta versions use the same compact `bN` suffix as BimmerStein Tuning Suite.
-The release candidate is `0.1.0b16`; its intended release tag is `v0.1.0b16`.
-Preparing the artifacts does not create that tag or publish a release.
+For both architectures, pass the path to a prepared 32-bit environment:
 
 ```powershell
-.\packaging\prepare_release.ps1 `
-    -Version 0.1.0b16 `
-    -PyQtLicenseBasis GPLv3 `
-    -IncludeNuitka `
-    -IsccPath "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+.\packaging\prepare_release.ps1 -Version 0.1.0b17 -PyQtLicenseBasis GPLv3 `
+    -Architectures x64,x86 -PythonX86Path '<x86-venv>\Scripts\python.exe'
 ```
 
-The `Commercial` option is reserved for a future distribution whose application
-code and dependencies have been separately cleared for proprietary release. The
-script performs a fresh build, verifies every staged x64 package, records the
-backend, project license, bundled-definition status, and selected PyQt5 basis in
-`RELEASE-METADATA.json`, and writes the portable ZIPs, per-user installer EXEs,
-individual checksum files, and one complete `SHA256SUMS.txt` under `release\`.
-Before building, it runs the same mandatory owner-only exact-byte execution
-admission using the release owner's private local configuration.
+Use `-PythonPath` to select a different x64 environment, and `-IsccPath` if
+Inno Setup is not in its usual installation location. `-SkipInstaller` produces
+portable packages only. To build a single application folder, use
+`build_windows_nuitka.ps1 -Version 0.1.0b17 -Architecture x64`; the old
+`build_windows.ps1` command forwards to the same build.
 
-The installers use one product identity and installation directory. Choose one
-edition for each installation. All use the BimmerStein icon and the same
-user-facing application and shortcut name, install under the current user's
-local application-data folder without requiring administrator access, create a
-Start Menu shortcut, and offer an optional desktop shortcut. Nuitka artifacts
-use the `-Nuitka` suffix. Use
-`-SkipInstaller` only when intentionally preparing a portable-only build.
+Application folders are written to `dist\x64\BimmerStein ECU Tool` and
+`dist\x86\BimmerStein ECU Tool`. The complete folders are required at runtime.
+Versioned ZIPs, installers, metadata and SHA-256 manifests are written under
+`release\`. Downloads include the architecture; folders and shortcuts use
+**BimmerStein ECU Tool**. Updates retain an existing installation location.
 
-This script does not commit, push, tag, or publish anything.
+Verify each portable package and installer by starting the app, then installing,
+starting and uninstalling in an isolated test directory. Check archive CRCs,
+manifest hashes, native runtime architecture, public content and required notices.
+
+The intended tag is `v0.1.0b17`. Preparation does not create a tag, commit, push
+or publish. Publication requires the release owner's final review.

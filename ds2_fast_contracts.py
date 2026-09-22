@@ -32,10 +32,12 @@ class FrameValidationError(FastDS2Error):
 class ContractViolation(FastDS2Error):
     """A valid DS2 frame violates the response contract for this transition."""
 
-    def __init__(self, message: str, *, response_status: Optional[int] = None):
+    def __init__(self, message: str, *, response_status: Optional[int] = None,
+                 flash_status: Optional[int] = None):
         self.response_status = (
             None if response_status is None else int(response_status)
         )
+        self.flash_status = flash_status
         super().__init__(message)
 
 
@@ -48,13 +50,28 @@ class CommitUnknownError(FastDS2Error):
 
     retry_allowed = False
 
-    def __init__(self, request: "FlashRequest", reason: str):
+    def __init__(self, request: "FlashRequest", reason: str, *, response_length=None):
         self.request = request
         self.reason = reason
+        self.response_length = response_length
         super().__init__(
             f"commit unknown for flash operation 0x{request.operation:02X} "
             f"at 0x{request.address:06X}: {reason}"
         )
+
+
+class ProgramReadbackMismatch(FastDS2Error):
+    """A completed recovery read proves that the requested bytes differ."""
+
+    def __init__(self, address: int, expected: bytes, actual: bytes):
+        self.address = address
+        self.expected = bytes(expected)
+        self.actual = bytes(actual)
+        if len(self.actual) != len(self.expected) or not self.expected:
+            raise ValueError("program readback must cover the complete requested block")
+        self.blank = self.actual == b"\xff" * len(self.actual)
+        super().__init__(f"program readback differs at DS2 0x{address:06X}"
+                         + (" (block is still erased)" if self.blank else " (partly programmed)"))
 
 
 class LinkRate(Enum):
@@ -265,6 +282,23 @@ def read_response_contract(length: int) -> StatusResponseContract:
     )
 
 
+def program_readback_window(address: int, count: int, *, full=False):
+    """A program read distinguishable from a delayed six-byte flash ACK.
+
+    Keep short-block padding in the same 16 KB page and writable region.
+    The returned offset selects only the originally requested program bytes.
+    """
+    ranges = ((0x2000, 0x6000), (0x10000, 0x16000), (0x20000, 0x40000)) if full else ((0x10000, 0x16000),)
+    region_end = next((end for start, end in ranges if start <= address < address + count <= end), None)
+    if not (1 <= count <= MAX_FLASH_DATA and region_end is not None
+            and address // 0x4000 == (address + count - 1) // 0x4000):
+        raise ValueError("readback recovery requires one writable-page block")
+    length = max(7, count)
+    limit = min((address // 0x4000 + 1) * 0x4000, region_end)
+    start = min(address, limit - length)
+    return start, length, address - start
+
+
 def contextual_recovery_contract(
     *statuses: int,
     exact_payload_length: Optional[int] = None,
@@ -383,16 +417,16 @@ class FlashReplyContract:
         if operation != self.operation:
             raise ContractViolation(
                 f"{self.name}: operation 0x{operation:02X}, expected "
-                f"0x{self.operation:02X}"
+                f"0x{self.operation:02X}", flash_status=status
             )
         if address != self.address:
             raise ContractViolation(
                 f"{self.name}: address/cursor 0x{address:06X}, expected "
-                f"0x{self.address:06X}"
+                f"0x{self.address:06X}", flash_status=status
             )
         if self.count is not None and count != self.count:
             raise ContractViolation(
-                f"{self.name}: count {count}, expected {self.count}"
+                f"{self.name}: count {count}, expected {self.count}", flash_status=status
             )
         if status not in self.allowed_statuses:
             expected = ", ".join(
@@ -400,7 +434,7 @@ class FlashReplyContract:
             )
             raise ContractViolation(
                 f"{self.name}: flash status 0x{status:02X}, expected "
-                f"{expected}"
+                f"{expected}", flash_status=status
             )
         return FlashReply(operation, address, count, status, response)
 

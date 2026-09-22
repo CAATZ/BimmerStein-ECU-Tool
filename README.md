@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <strong><a href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b16">Download Beta 16</a></strong>
+  <strong><a href="https://github.com/CAATZ/BimmerStein-ECU-Tool/releases">Download Beta 17</a></strong>
   &nbsp;&middot;&nbsp;
   <a href="manual/USER_MANUAL.md">User Manual</a>
   &nbsp;&middot;&nbsp;
@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <code>Windows x64</code>&nbsp;&nbsp;
+  <code>Windows x64 / x86</code>&nbsp;&nbsp;
   <code>BMW MS41 focused</code>&nbsp;&nbsp;
   <code>GPL-3.0-only</code>
 </p>
@@ -48,17 +48,11 @@ BimmerStein ECU Tool brings BMW MS41 flashing, diagnostics, configuration, patch
 - Install and use Soft-BSL for supported high-speed operations.
 - Recover an unbootable ECU through the separate hardware-BSL workflow.
 
-Beta 16 is a **Windows x64 desktop release only**. PyInstaller and Nuitka builds are distributed as
-per-user installers and complete portable packages. The PyInstaller executable must remain beside
-its `_internal` directory; the Nuitka build uses a flat application folder. The required Visual C++
-runtime is included in every Windows package, so no separate runtime installation is required.
-
-Beta 16 adds an EEPROM editor, folders and file organization in Bins, searchable logs,
-and live and recorded data views with selectable channels. The main window is resizable,
-and separate Windows 7 SP1 x64 portable and installer downloads are available.
-Tested 29F400BB dual-bank support writes both halves and manages each bank's patches
-and Soft-BSL. The Windows 7 package is also tested and working.
-The firmware patch versions and bytes remain unchanged from Beta 15. See [release notes](RELEASE_NOTES.md).
+Beta 17 (`0.1.0b17`) improves flashing recovery, simplifies full-write preparation,
+and prevents a stalled serial adapter from freezing the desktop.
+Choose the download matching your Windows version and processor: x64 or x86.
+Installing the application does not change ECU firmware automatically.
+See [release notes](RELEASE_NOTES.md).
 
 ## Safety
 
@@ -224,13 +218,11 @@ fuel limiter.
 
 ## Installation
 
-1. Download either versioned Windows x64 installer, or its corresponding complete portable ZIP.
+1. Download the installer or portable ZIP matching your Windows version and architecture.
 2. Run the installer; it installs for the current user without requiring administrator access and
    offers an optional desktop shortcut.
 3. For portable use, extract the complete ZIP and keep the entire application folder together.
-4. Assets containing `-Nuitka` use the Nuitka backend and install under a distinct product identity
-   so both builds can coexist. Report the selected backend when describing a packaging problem.
-5. Install the driver for the intended FTDI adapter, then run `BimmerStein ECU Tool.exe`.
+4. Install the driver for the intended FTDI adapter, then run `BimmerStein ECU Tool.exe`.
 
 D2XX is preferred for native-fast DS2, Soft-BSL, and hardware BSL. Normal DS2 and supported
 hardware-BSL paths can use pyserial where the optimized D2XX path is unavailable.
@@ -251,7 +243,7 @@ native-fast journal. Raw ROMs are excluded. Session logs require an explicit pri
 The illustrated manual covers normal flashing, recovery behavior, Soft-BSL, hardware BSL,
 diagnostics, offline tools, patches, and final checklists:
 
-- [Download BimmerStein ECU Tool 0.1.0 Beta 16](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b16)
+- [Download BimmerStein ECU Tool 0.1.0 Beta 17](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b17)
 - [Illustrated PDF manual](output/pdf/BimmerStein-ECU-Tool-User-Manual.pdf)
 - [User manual (web-readable Markdown)](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/manual/USER_MANUAL.md)
 - [Build and release instructions](https://github.com/CAATZ/BimmerStein-ECU-Tool/blob/main/BUILDING.md)
@@ -284,7 +276,7 @@ The FTDI D2XX driver supplies `ftd2xx.dll`; no separate Python D2XX package is r
 .venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .venv\Scripts\python.exe -m pytest -q
 .venv\Scripts\python.exe -m engines.softbsl.verify_agent_artifacts
-.\build_windows.ps1 -Version 0.1.0b16
+.\build_windows.ps1 -Version 0.1.0b17
 ```
 
 The verified one-folder package is written to `dist\BimmerStein ECU Tool\`.

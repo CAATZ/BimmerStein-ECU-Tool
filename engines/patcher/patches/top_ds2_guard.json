@@ -1,0 +1,46 @@
+{
+  "id": "top_ds2_guard",
+  "version": "V1",
+  "status": "IMPLEMENTED",
+  "tested": false,
+  "title": "TOP-bank DS2 write protection",
+  "user_description": "Protects the backup TOP bank from ordinary DS2 full writes while retaining calibration writes and Soft-BSL.",
+  "description": "TOP-build-only resident DS2 classifier guard. Uses the existing B0 rejection before program erase, programming, or E740/E743 and EEPROM dirty-state changes. Redirects only the application full-write jump-table pointer to the guarded worker, so the first request returns normally. Allows calibration-class requests and the stock class-0 finalizer. Reuses unreachable classifier bytes; no added RAM, cave, listener, or AMD/Soft-BSL payload changes. Offline emulator qualification does not imply powered testing.",
+  "target": "MS41.3",
+  "targets": [
+    "MS41.0",
+    "MS41.1",
+    "MS41.2",
+    "MS41.3"
+  ],
+  "recompute": [
+    "boot_crc"
+  ],
+  "requires": [
+    "amd_flash"
+  ],
+  "conflicts": [],
+  "cave": null,
+  "edits": [
+    {
+      "off": 20254,
+      "expect": "f2f436e7",
+      "data": "ea00740f"
+    },
+    {
+      "off": 20258,
+      "expect": "f2f538e748503d0246f400208d0ce005c2f43ae702f436e712f5",
+      "data": "f3f823e449c32d0547f80f003d0449c03d02ea00d40fea000011"
+    },
+    {
+      "off": 20432,
+      "expect": "f3f823e4",
+      "data": "ea00220f"
+    },
+    {
+      "off": 16896,
+      "expect": "3c070000",
+      "data": "860e0000"
+    }
+  ]
+}

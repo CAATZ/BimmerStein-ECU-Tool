@@ -41,7 +41,7 @@ def test_both_agents_finalize_marker0_before_hybrid_srst():
     finalize = bytes.fromhex(
         "e108f7f840e7da00621ae6d700ffa758a7a7b748b7b70dff")
     old_watchdog_finalize = bytes.fromhex("e108f7f840e7da00621a0dff")
-    for name, expected_size in (("agent.hex", 1498), ("agent_28f.hex", 1464)):
+    for name, expected_size in (("agent.hex", 1416), ("agent_28f.hex", 1382)):
         agent = softbsl_host.load_agent(os.path.join(pkg, name))
         assert len(agent) == expected_size
         assert agent.count(finalize) == 1
@@ -52,14 +52,11 @@ def test_both_agents_finalize_marker0_before_hybrid_srst():
 def test_both_agents_allow_the_same_ram_writer_on_top_and_bottom():
     from engines.softbsl import softbsl_host
     pkg = os.path.dirname(os.path.abspath(softbsl_host.__file__))
-    # policy_check keeps the marker read/CMP for layout stability, but the branch to
-    # pc_bot is unconditional (0D) instead of the old top-denying cc_NE (3D).
-    allowed = bytes.fromhex("f3f802e449810d02e118db004890")
-    denied = bytes.fromhex("f3f802e449813d02e118db004890")
+    # Both banks use the same CPU-address boot-arm guard; obsolete HALF branches are gone.
+    guard = bytes.fromhex("48903d0a46f800209d07f3f801e447f8a5002d02e118db00e108db00")
     for name in ("agent.hex", "agent_28f.hex"):
         agent = softbsl_host.load_agent(os.path.join(pkg, name))
-        assert agent.count(allowed) == 1
-        assert denied not in agent
+        assert agent.count(guard) == 1
 
 
 def test_agent_build_inputs_are_packaged_with_the_runtime_payloads():

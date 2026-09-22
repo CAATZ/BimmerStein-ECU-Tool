@@ -2269,10 +2269,10 @@ def test_native_read_requires_complete_original_identity_before_handoff(
 @pytest.mark.parametrize(
     ("reopened_identity", "detail"),
     [
-        (b"J" * 42, "differs from the original"),
+        (b"J" * 42, "does not match the original ECU"),
         (
             b"I" * 41,
-            "41 bytes; expected 42",
+            "41 bytes, expected 42",
         ),
     ],
 )
@@ -2547,7 +2547,7 @@ def test_native_pre_erase_fallback_respects_verify_choice(
         monkeypatch.setattr(w, "_run_via_native_fast_write", fail_before_erase)
         monkeypatch.setattr(
             w, "_ds2_write",
-            lambda *args, **kwargs: calls.append("write"),
+            lambda *args, **kwargs: calls.append(("write", kwargs["verify_write"])),
         )
         monkeypatch.setattr(
             w, "_ds2_verify_after_write",
@@ -2563,7 +2563,7 @@ def test_native_pre_erase_fallback_respects_verify_choice(
             verify_write=verify_write,
         )
 
-        assert calls == (["write", "verify"] if verify_write else ["write"])
+        assert calls == [("write", verify_write)]
     finally:
         w._ds2 = None
         w.close()
@@ -2953,6 +2953,7 @@ def test_direct_tap_disables_echo_and_locks_connection_controls(monkeypatch):
         w._connect()
         assert created == {"port": "COM_TEST", "baud": 9600, "echo": False}
         assert w._ds2 is instances[0]
+        assert w._ds2.operation_check is None
         assert closed == []
         assert log_starts == [True]
         assert w._ecu_program_compatibility_id == "0960"
@@ -3044,7 +3045,7 @@ def test_connect_failure_closes_provisional_transport_before_releasing_owner(
         assert w._port_owner.is_free()
         assert w._connection_port is None
         assert [label for _done, _total, label in progress] == [
-            "Opening COM_TEST", "Identifying ECU",
+            "Opening COM_TEST", "Identifying ECU", "Closing connection",
         ]
         assert any("open via pyserial" in message for message, _level in worker_logs)
         assert dialogs and "identify failed" in dialogs[0][2]
@@ -4499,7 +4500,7 @@ def test_softbsl_crossbank_top_base_is_composed_with_persistent_patches(version)
             "MS41.1": "door_magic_ms411",
         }.get(version, "door_magic")
         assert w._softbsl_xbank_patch_ids == [
-            "softbsl_loader", door_id, "cal_guard", "amd_flash"]
+            "softbsl_loader", door_id, "cal_guard", "amd_flash", "top_ds2_guard"]
         preview = w._softbsl_preview.toPlainText()
         assert "Prepared image" in preview
         assert "Target: TOP backup bank" in preview
@@ -5536,7 +5537,7 @@ def test_run_via_softbsl_hands_off_port_and_restores_connection(monkeypatch):
             def __init__(self, **kw): opened.append(kw)
             def open(self): pass
             def close(self): closed.append(True)
-            def identify(self): return b"SHINDE1" + b"\xFF" * 10
+            def identify(self): return b"SHINDE1" + b"\xFF" * 35
 
         monkeypatch.setattr(gui, "DS2Interface", FakeDS2)
         w._ds2 = FakeDS2(port="COM1", baud=9600)
@@ -6119,8 +6120,8 @@ def test_unqualified_recovery_hides_unsafe_retry(
         assert w._offer_active_flash_recovery("Injected finalizer failure") is True
 
         assert w._native_write_recovery is recovery
-        assert w.btn_native_recovery.isHidden() is True
-        assert w.btn_native_recovery.isEnabled() is False
+        assert w.btn_native_recovery.isHidden() is (not power_cycle_required)
+        assert w.btn_native_recovery.isEnabled() is power_cycle_required
         assert "no longer qualified" in shown["args"][2]
         assert expected_guidance in shown["args"][2]
     finally:
@@ -6186,6 +6187,10 @@ def test_softbsl_recovery_ui_reuses_target_and_verify_choice(
         )
         w._softbsl_write_recovery = recovery
         w._connection_port = "COM1"
+        w._ecu_program_variant = "MS41.1"
+        w._ecu_program_compatibility_id = "0941"
+        w._ecu_softbsl_marker = "B"
+        w._ecu_softbsl_hook_present = True
         w._port_owner.acquire("softbsl")
         resumed = []
         reopened = []
@@ -6220,8 +6225,13 @@ def test_softbsl_recovery_ui_reuses_target_and_verify_choice(
         assert resumed == [(recovery, target, verify_requested, family)]
         assert w._softbsl_write_recovery is None
         assert retained_ds2.is_open is False
-        assert w._port_owner.owner == "flasher"
-        assert reopened == ["COM1"]
+        assert w._port_owner.owner == ("flasher" if operation == "tune" else None)
+        assert reopened == (["COM1"] if operation == "tune" else [])
+        if operation != "tune":
+            assert w._ecu_program_variant is None
+            assert w._ecu_program_compatibility_id is None
+            assert w._ecu_softbsl_marker is None
+            assert w._ecu_softbsl_hook_present is False
         assert completed and completed[0][0] == "Flash Recovery Complete"
         if verify_requested:
             assert "verification passed" in completed[0][1]
@@ -6374,7 +6384,7 @@ def test_reopen_ds2_retries_past_a_transient_permission_error(monkeypatch):
                 attempts.append(1)
                 if len(attempts) < 3:
                     raise PermissionError(13, "Acceso denegado.", None, 5)
-            def identify(self): return b"SHINDE1" + b"\xFF" * 10   # ECU answers once the port opens
+            def identify(self): return b"SHINDE1" + b"\xFF" * 35   # ECU answers once the port opens
             def close(self): pass
 
         monkeypatch.setattr(gui_module, "DS2Interface", FlakyThenOK)
@@ -6403,7 +6413,7 @@ def test_reopen_ds2_retries_when_port_opens_but_ecu_not_answering_yet(monkeypatc
                 ident_attempts.append(1)
                 if len(ident_attempts) < 4:
                     raise Exception("no response to command 0x00")   # ECU still mid-reboot
-                return b"SHINDE1" + b"\xFF" * 10
+                return b"SHINDE1" + b"\xFF" * 35
             def close(self): pass
 
         monkeypatch.setattr(gui_module, "DS2Interface", PortOKEcuBooting)
@@ -6473,7 +6483,7 @@ def test_main_tab_native_read_restores_low_ds2_for_following_native_write(
         class ReopenedDS2:
             uses_d2xx = True
 
-            def __init__(self, *, port, baud, verbose, echo):
+            def __init__(self, *, port, baud, verbose, echo, serial_factory=None):
                 assert (port, baud, verbose, echo) == ("COM1", 9600, False, False)
                 reopened.append(self)
                 self.closed = False
@@ -8236,11 +8246,47 @@ def test_config_live_program_edit_reuses_cached_full_without_another_read(monkey
         w.close()
 
 
-def test_config_live_program_edit_reads_and_archives_full_when_cache_missing(monkeypatch):
+@pytest.mark.parametrize("route", ("legacy_ds2", "native_ds2"))
+def test_config_top_program_edit_rejected_before_full_read(monkeypatch, route):
+    app, w = _gui()
+    try:
+        _prepare_live_id12_config(w, _synthetic_id12_full(), cache=False)
+        w._ecu_softbsl_marker = "T"
+        monkeypatch.setattr(w, "_auto_transfer_route", lambda: route)
+        w._config_combos[
+            "O2 Feedback Program Gate (Experimental)"].setCurrentText(
+                "Feedback Disabled")
+        messages = []
+        monkeypatch.setattr(
+            QMessageBox, "critical",
+            staticmethod(lambda parent, title, text: messages.append((title, text))))
+        monkeypatch.setattr(
+            QMessageBox, "warning",
+            staticmethod(lambda *a, **k: pytest.fail("must reject before read confirmation")))
+        monkeypatch.setattr(
+            w, "_run_task",
+            lambda *a, **k: pytest.fail("unsupported full write must not read the ECU"))
+
+        w._on_config_write_ecu()
+
+        assert len(messages) == 1
+        assert messages[0][0] == "TOP Full Write Requires Soft-BSL"
+    finally:
+        w._ds2 = None
+        w.close()
+
+
+@pytest.mark.parametrize("bank, route", (
+    ("B", "legacy_ds2"), ("B", "native_ds2"), ("T", "softbsl"),
+))
+def test_config_live_program_edit_reads_and_archives_full_when_cache_missing(
+        monkeypatch, bank, route):
     app, w = _gui()
     try:
         image = _synthetic_id12_full()
         _prepare_live_id12_config(w, image, cache=False)
+        w._ecu_softbsl_marker = bank
+        monkeypatch.setattr(w, "_auto_transfer_route", lambda: route)
         w._config_combos[
             "O2 Feedback Program Gate (Experimental)"].setCurrentText(
                 "Feedback Disabled")
@@ -8284,11 +8330,14 @@ def test_config_live_program_edit_reads_and_archives_full_when_cache_missing(mon
         w.close()
 
 
-def test_config_calibration_only_edit_keeps_partial_write_route(monkeypatch):
+@pytest.mark.parametrize("route", ("legacy_ds2", "native_ds2", "softbsl"))
+def test_config_calibration_only_edit_keeps_partial_write_route(monkeypatch, route):
     app, w = _gui()
     try:
         image = _synthetic_id12_full()
         _prepare_live_id12_config(w, image, cache=False)
+        w._ecu_softbsl_marker = "T"
+        monkeypatch.setattr(w, "_auto_transfer_route", lambda: route)
         vanos = w._config_combos["VANOS"]
         vanos.setCurrentText("Disabled" if vanos.currentText() == "Enabled" else "Enabled")
         routed = {}
@@ -8587,44 +8636,6 @@ def test_reset_adaptations_handler_is_live(monkeypatch):
         w._on_reset_adaptations()              # reaches the not-connected branch => wired, not a stub
         assert shown.get("v") is True
     finally:
-        w.close()
-
-
-def test_close_event_vetoes_provisional_connect_without_releasing_port(monkeypatch):
-    from PyQt5.QtGui import QCloseEvent
-
-    app, w = _gui()
-    shown = []
-    try:
-        w._connect_attempt = object()
-        w._task_busy = True
-        w._port_owner.acquire("flasher")
-        monkeypatch.setattr(
-            QMessageBox,
-            "warning",
-            staticmethod(lambda *args, **kwargs: shown.append((args, kwargs))),
-        )
-        monkeypatch.setattr(
-            w,
-            "_disconnect",
-            lambda: pytest.fail(
-                "a worker-owned provisional handle must not be disconnected "
-                "from the GUI thread"
-            ),
-        )
-
-        event = QCloseEvent()
-        w.closeEvent(event)
-
-        assert not event.isAccepted()
-        assert w._port_owner.owner == "flasher"
-        assert shown and shown[0][0][1] == "Serial Connection Still Active"
-        assert "unplug it" in shown[0][0][2].lower()
-    finally:
-        w._connect_attempt = None
-        w._task_busy = False
-        w._port_owner.release("flasher")
-        monkeypatch.undo()
         w.close()
 
 
@@ -8980,3 +8991,655 @@ def test_resizable_panels_fit_wide_windows_and_restore_user_sizes(tmp_path, monk
         if other is not None:
             other.close()
         app.setFont(old_font)
+
+
+@pytest.mark.parametrize("operation", ["tune", "full"])
+def test_slow_write_failure_retains_shared_owner_and_resumes_with_verify(monkeypatch, operation):
+    app, w = _gui()
+    calls = []
+    target = bytes(24 * 1024 if operation == "tune" else 256 * 1024)
+
+    class Session:
+        port = "COM1"
+        is_open = True
+        write_recovery = None
+
+        def write_partial(self, image, **_kwargs):
+            self.write_recovery = gui.LegacyWriteRecovery(
+                self, image, operation, "program" if operation == "full" else "tune",
+                RuntimeError("program interrupted"),
+                destructive_started=True,
+            )
+            raise gui.LegacyWriteRecoveryRequired(self.write_recovery)
+
+        write_full = write_partial
+
+        def close(self):
+            self.is_open = False
+            calls.append("close")
+
+    session = Session()
+    try:
+        w._ds2 = session
+        w._connection_port = session.port
+        w._port_owner.acquire("flasher")
+        with pytest.raises(gui.LegacyWriteRecoveryRequired):
+            w._ds2_write(operation, target, lambda *_: None, lambda *_: None, verify_write=True)
+        recovery = w._native_write_recovery
+        assert recovery is session.write_recovery
+        assert recovery.target == target
+        assert recovery.verify_write is True
+        assert session.is_open is True
+        assert w._ds2 is None
+        assert w._active_write_recovery() == ("DS2 (slow)", recovery)
+
+        def resume(actual, **_kwargs):
+            assert actual is recovery
+            assert actual.ds2 is session
+            calls.append("resume")
+            actual.completed = True
+
+        def verify(which, image, *_args):
+            assert which == operation and image == target
+            assert w._ds2 is session
+            calls.append("verify")
+
+        def run(task, on_success=None, on_failure=None):
+            result = task(lambda *_: None, lambda *_: None)
+            on_success(result)
+
+        monkeypatch.setattr(gui, "resume_legacy_recovery", resume)
+        monkeypatch.setattr(w, "_ds2_verify_after_write", verify)
+        monkeypatch.setattr(w, "_run_state_changing_task", run)
+        monkeypatch.setattr(w, "_finish_flash_success", lambda *_: calls.append("success"))
+        w._start_native_flash_recovery(confirmed=True)
+        assert calls == ["resume", "verify", "success"] + (["close"] if operation == "full" else [])
+        assert w._native_write_recovery is None
+        assert w._ds2 is (None if operation == "full" else session)
+        assert session.is_open is (operation == "tune")
+    finally:
+        w._native_write_recovery = None
+        w.close()
+
+
+def test_slow_verify_failure_retains_completed_owner_without_erase_retry(monkeypatch):
+    app, w = _gui()
+    target = bytes(24 * 1024)
+
+    class Session:
+        port = "COM1"
+        is_open = True
+
+        def write_partial(self, image, **_kwargs):
+            self.write_recovery = gui.LegacyWriteRecovery(
+                self, image, "tune", "tune", destructive_started=True, completed=True,
+            )
+        def close(self): self.is_open = False
+
+    session = Session()
+    try:
+        w._ds2 = session
+        monkeypatch.setattr(
+            w, "_ds2_verify_after_write",
+            lambda *_: (_ for _ in ()).throw(RuntimeError("readback differs")),
+        )
+        with pytest.raises(gui.LegacyWriteRecoveryRequired, match="readback differs"):
+            w._ds2_write("tune", target, lambda *_: None, lambda *_: None, verify_write=True)
+        recovery = w._native_write_recovery
+        assert recovery.completed is True
+        assert recovery.retry_supported is False
+        assert recovery.power_cycle_required is True
+        assert session.is_open is True
+        assert w._ds2 is None
+    finally:
+        w._native_write_recovery = None
+        session.close()
+        w._ds2 = None
+        w.close()
+
+
+@pytest.mark.parametrize(
+    "cycle_allowed, confirmed, close_error",
+    [(True, True, False), (True, False, False), (False, True, False), (True, True, True)],
+)
+def test_cycle_qualified_recovery_releases_without_application_restart(
+        monkeypatch, cycle_allowed, confirmed, close_error):
+    app, w = _gui()
+    calls = []
+
+    class Recovery:
+        is_open = True
+        retry_supported = False
+        power_cycle_required = cycle_allowed
+
+        def close_after_confirmed_power_cycle(self):
+            calls.append("close")
+            if close_error:
+                raise RuntimeError("adapter close failed")
+            self.is_open = False
+
+    recovery = Recovery()
+    try:
+        w._native_write_recovery = recovery
+        w._connection_port = "COM1"
+        w._port_owner.acquire("native_fast_ds2")
+        w._ecu_program_variant = "MS41.1"
+        w._ecu_program_compatibility_id = "0941"
+        monkeypatch.setattr(
+            QMessageBox, "warning",
+            lambda *_args, **_kwargs: calls.append("confirm") or (
+                QMessageBox.Yes if confirmed else QMessageBox.No))
+        monkeypatch.setattr(
+            QMessageBox, "critical", lambda *_args, **_kwargs: calls.append("error"))
+        monkeypatch.setattr(
+            w, "_run_task", lambda *_args, **_kwargs: pytest.fail("must not start any ECU task"))
+
+        w._set_all_buttons_enabled(True)
+        assert w.btn_native_recovery.isEnabled() is cycle_allowed
+        assert w.btn_native_recovery.isHidden() is (not cycle_allowed)
+        assert not w.btn_connect.isEnabled()
+        w._start_native_flash_recovery()
+
+        released = cycle_allowed and confirmed and not close_error
+        assert (w._native_write_recovery is None) is released
+        assert w._port_owner.is_free() is released
+        assert w.btn_connect.isEnabled() is released
+        assert calls.count("confirm") == int(cycle_allowed)
+        assert calls.count("close") == int(cycle_allowed and confirmed)
+        if released:
+            assert w._connection_port is None
+            assert w._ecu_program_variant is None
+            assert w._ecu_program_compatibility_id is None
+        else:
+            assert recovery.is_open
+            assert w._native_write_recovery is recovery
+    finally:
+        w._native_write_recovery = None
+        w._port_owner.release("native_fast_ds2")
+        w.close()
+
+
+def _wait_connect_test(app, condition, timeout=3):
+    import time
+    deadline = time.monotonic() + timeout
+    while not condition() and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.005)
+    app.processEvents()
+    assert condition(), "connection worker did not reach the expected state"
+
+
+@pytest.mark.parametrize("phase", ["identify", "cleanup"])
+@pytest.mark.parametrize("action", ["cancel", "deadline", "close"])
+def test_initial_connect_can_cancel_or_close_a_blocked_driver(monkeypatch, phase, action):
+    import threading
+    from PyQt5.QtGui import QCloseEvent
+    app, w = _gui()
+    blocked = threading.Event()
+    release = threading.Event()
+    calls = []
+    instances = []
+
+    class DS2:
+        transport_name = "fake driver"
+        def __init__(self, **kwargs):
+            instances.append(self)
+        def open(self):
+            calls.append("open")
+        def identify(self):
+            calls.append("identify")
+            if phase == "identify":
+                blocked.set()
+                assert release.wait(4)
+                return b"1437806" + bytes(35)
+            raise TimeoutError("identify timed out")
+        def read_mem(self, *args):
+            pytest.fail("no probes may follow connection cancellation")
+        def close(self):
+            calls.append("close")
+            if phase == "cleanup":
+                blocked.set()
+                assert release.wait(4)
+        def cancel_pending_io(self):
+            calls.append("cancel_io")
+
+    monkeypatch.setattr(gui, "DS2Interface", DS2)
+    if action == "deadline":
+        monkeypatch.setattr(gui, "CONNECT_TIMEOUT_S", 0.08)
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: pytest.fail(str(args)))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: pytest.fail(str(args)))
+    worker = None
+    try:
+        w.cb_port.clear()
+        w.cb_port.addItem("FAKE_NO_SERIAL")
+        w._connect()
+        worker = w._worker
+        assert isinstance(worker, gui._ConnectWorker)
+        assert worker._thread.daemon
+        _wait_connect_test(app, blocked.is_set)
+        assert w.btn_connect.text() == "Cancel"
+        assert w.btn_connect.isEnabled()
+        if action == "close":
+            event = QCloseEvent()
+            w.closeEvent(event)
+            assert event.isAccepted()
+        elif action == "cancel":
+            w._on_connect_toggle(False)
+        else:
+            _wait_connect_test(app, lambda: w._connect_attempt is None)
+        assert not w._task_busy
+        assert w._connect_attempt is None
+        assert w._connect_pending is not None
+        assert w._port_owner.owner == "flasher"
+        assert w._ds2 is None
+        assert not w.btn_connect.isEnabled()
+        assert not w.cb_port.isEnabled()
+        assert worker.isRunning()
+        w._connect()  # PortOwner.acquire('flasher') alone would permit this duplicate.
+        assert len(instances) == 1
+        release.set()
+        _wait_connect_test(app, lambda: w._connect_pending is None)
+        assert w._port_owner.is_free()
+        assert w._ds2 is None
+        assert calls.count("close") == 1
+        if action != "close":
+            assert w.btn_connect.text() == "Connect"
+            assert w.btn_connect.isEnabled()
+    finally:
+        release.set()
+        if worker is not None:
+            worker._thread.join(2)
+        app.processEvents()
+        w._connect_attempt = w._connect_pending = None
+        w._worker = None
+        w._task_busy = False
+        w._port_owner.release("flasher")
+        w.close()
+
+
+def test_cancelled_queued_connect_success_closes_off_ui_without_touching_new_task(monkeypatch):
+    import threading
+    app, w = _gui()
+    close_started = threading.Event()
+    close_release = threading.Event()
+    close_threads = []
+
+    class DS2:
+        transport_name = "fake driver"
+        def __init__(self, **kwargs): pass
+        def open(self): pass
+        def identify(self): return b"1437806" + bytes(35)
+        def read_mem(self, address, length): return bytes(length)
+        def read_vin(self): return ""
+        def close(self):
+            close_threads.append(threading.get_ident())
+            close_started.set()
+            assert close_release.wait(4)
+        def cancel_pending_io(self): pass
+
+    monkeypatch.setattr(gui, "DS2Interface", DS2)
+    monkeypatch.setattr(gui.softbsl_service, "calguard_recovery_ready", lambda *args: False)
+    monkeypatch.setattr(w, "_read_new_info_fields", lambda *args: {})
+    monkeypatch.setattr(w, "_read_live_identity_source", lambda *args: None)
+    monkeypatch.setattr(w, "_on_connected", lambda *args: pytest.fail("stale connection was accepted"))
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: pytest.fail(str(args)))
+    worker = None
+    try:
+        w.cb_port.clear()
+        w.cb_port.addItem("FAKE_NO_SERIAL")
+        w._connect()
+        worker = w._worker
+        # Do not process Qt events: success is queued, but has not been accepted.
+        worker._thread.join(2)
+        assert not worker.isRunning()
+        assert w._connect_attempt is not None
+        w._cancel_connect()
+        newer_worker = object()
+        w._worker = newer_worker
+        w._task_busy = True
+        w.progress_label.setText("New offline task")
+        _wait_connect_test(app, close_started.is_set)
+        assert w._connect_pending is not None
+        assert w._port_owner.owner == "flasher"
+        assert close_threads == [close_threads[0]]
+        assert close_threads[0] != threading.get_ident()
+        close_release.set()
+        _wait_connect_test(app, lambda: w._connect_pending is None)
+        assert w._worker is newer_worker
+        assert w._task_busy
+        assert w.progress_label.text() == "New offline task"
+        assert w._port_owner.is_free()
+        assert w._ds2 is None
+        assert w.btn_connect.text() == "Connect"
+        assert not w.btn_connect.isEnabled()
+    finally:
+        close_release.set()
+        if worker is not None:
+            worker._thread.join(2)
+        app.processEvents()
+        w._worker = None
+        w._task_busy = False
+        w._connect_attempt = w._connect_pending = None
+        w._port_owner.release("flasher")
+        w.close()
+
+
+def test_startup_does_not_show_unparented_controls(monkeypatch):
+    from PyQt5.QtCore import QObject
+    from PyQt5.QtWidgets import QWidget
+
+    app = QApplication.instance() or QApplication([])
+    shown = []
+
+    class StartupWindows(QObject):
+        def eventFilter(self, widget, event):
+            if (event.type() == QEvent.Show and isinstance(widget, QWidget)
+                    and widget.isWindow()):
+                shown.append(type(widget).__name__)
+            return False
+
+    observer = StartupWindows()
+    app.installEventFilter(observer)
+    monkeypatch.setattr(gui.DS2Interface, "list_ports", lambda: [])
+    window = None
+    try:
+        window = gui.MS41FlashGUI()
+        assert shown == []
+    finally:
+        app.removeEventFilter(observer)
+        if window is not None:
+            window.close()
+
+def _top_full_write_gui(monkeypatch, *, write_boot=False, preserve_identity=True,
+                        entry_mode="auto"):
+    """Exercise the real GUI preparation with an offline shared-service boundary."""
+    app, window = _gui()
+    state = {"questions": [], "errors": [], "writes": [], "completed": [], "effective": []}
+    window._ds2 = SimpleNamespace(
+        close=lambda: None,
+        read_mem=lambda *_args: pytest.fail("TOP preparation performed a DS2 read"),
+        read_memory_range=lambda *_args: pytest.fail("TOP preparation performed the old sector read"))
+    window._ecu_softbsl_marker = "T"
+    window._ecu_softbsl_hook_present = True
+    window._ecu_program_variant = "MS41.3"
+    window._ecu_variant = "MS41.3"
+    window._ecu_program_compatibility_id = "0912"
+    window.chk_backup_before_write.setChecked(False)
+    window.chk_verify.setChecked(False)
+    window.chk_bootloader_write.setEnabled(True)
+    window.chk_bootloader_write.setChecked(write_boot)
+    window.chk_boot_preserve_identity.setChecked(preserve_identity)
+    monkeypatch.setattr(window, "_auto_transfer_route", lambda: "softbsl")
+    monkeypatch.setattr(window, "_softbsl_entry_mode", lambda: entry_mode)
+    monkeypatch.setattr(window, "_fast_chip_family", lambda: "amd")
+    monkeypatch.setattr(window, "_prewrite_battery_notice", lambda: "")
+    monkeypatch.setattr(window, "_live_coding_family", lambda *_args: pytest.fail("TOP family read before agent entry"))
+    monkeypatch.setattr(window, "_identity_graft_source", lambda: pytest.fail("TOP used a stale identity snapshot"))
+    monkeypatch.setattr(window, "_bootloader_write_file_warning", lambda _image: "Example file warning")
+    monkeypatch.setattr(QMessageBox, "question", lambda _w, title, message, *_args:
+                        state["questions"].append((title, message)) or QMessageBox.Yes)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *_args: pytest.fail("Extra TOP confirmation"))
+    monkeypatch.setattr(QInputDialog, "getText", lambda *_args: pytest.fail("Extra typed TOP confirmation"))
+    monkeypatch.setattr(QMessageBox, "critical", lambda _w, title, message, *_args:
+                        state["errors"].append((title, message)))
+    monkeypatch.setattr(window, "_finish_flash_success", lambda *args: state["completed"].append(args))
+    monkeypatch.setattr(window, "_softbsl_missing_after_full_write", lambda image, **kwargs:
+                        state["effective"].append((bytes(image), kwargs)) or ())
+    monkeypatch.setattr(window, "_run_via_softbsl", lambda operation, log, progress, **_kwargs:
+                        operation("offline", progress, log))
+    monkeypatch.setattr(window, "_run_retained_softbsl_write", lambda operation: operation("retained-offline"))
+
+    def service(owner, image, scope, prompt, log, **kwargs):
+        state["writes"].append((owner, bytes(image), scope, kwargs))
+        kwargs["top_full_options"]["prepared_image_cb"](state.get("prepared", image))
+        return True
+
+    def run_task(task, on_success, on_failure):
+        try:
+            result = task(lambda *_args: None, lambda *_args: None)
+        except Exception as error:
+            on_failure(error)
+        else:
+            on_success(result)
+
+    monkeypatch.setattr(gui.softbsl_service, "run_flash", service)
+    monkeypatch.setattr(gui.softbsl_service, "run_flash_boot_recovery", service)
+    monkeypatch.setattr(window, "_run_state_changing_task", run_task)
+    return app, window, state
+
+
+@pytest.mark.parametrize("write_boot,preserve_identity,donor_marker", [
+    (False, True, None), (False, False, "B"), (False, True, "T"),
+    (True, True, "T"), (True, False, "T"),
+])
+def test_top_full_write_defers_live_graft_and_confirms_once(
+        monkeypatch, write_boot, preserve_identity, donor_marker):
+    import softbsl_install
+    target = ref("MS41.3")
+    if donor_marker:
+        target, _ids, _log = softbsl_install._sb.compose_persistent_image(
+            target, "29f400", marker=donor_marker)
+    app, window, state = _top_full_write_gui(
+        monkeypatch, write_boot=write_boot, preserve_identity=preserve_identity)
+    try:
+        source = bytearray(target)
+        # A differing cache must neither escalate Write Boot nor be used as live data.
+        window._last_full_read = ref("MS41.1")
+        prepared = bytearray(target)
+        prepared[0x4000] ^= 1
+        state["prepared"] = bytes(prepared)
+        window._ds2_write_full(source, "donor.bin")
+
+        assert source == target
+        assert not state["errors"]
+        assert len(state["questions"]) == 1
+        title, text = state["questions"][0]
+        assert title == "Confirm Full ROM Write"
+        assert "shared 64 KB sector is erased and rewritten in either case" in text
+        assert "Keep the bank switch on TOP" in text
+        if write_boot:
+            assert "will use the selected TOP file" in text
+            assert "Example file warning" in text
+            assert ("live ECU identity/AIF history will be read" in text) is preserve_identity
+        else:
+            assert "will preserve the ECU's current 8 KB" in text
+            assert "retained with its existing boot region" in text
+        assert len(state["writes"]) == 1
+        _owner, _image, scope, kwargs = state["writes"][0]
+        assert scope == "full"
+        assert kwargs["write_bootloader"] is write_boot
+        assert kwargs["top_full_options"]["preserve_boot_identity"] is (write_boot and preserve_identity)
+        assert kwargs["top_full_options"]["correct_checksums"] is True
+        assert state["effective"] == [(bytes(prepared), {"write_bootloader": True})]
+        assert state["completed"]
+        assert window._last_full_read is None
+        assert window._ds2 is None
+    finally:
+        window._ds2 = None
+        window.close()
+
+
+def test_top_full_conversion_is_part_of_single_confirmation(monkeypatch):
+    app, window, state = _top_full_write_gui(monkeypatch)
+    try:
+        window._ds2_write_full(bytearray(ref("MS41.1")), "conversion.bin")
+        assert not state["errors"]
+        assert len(state["questions"]) == 1
+        assert "Variant conversion: MS41.3" in state["questions"][0][1]
+        assert "MS41.1" in state["questions"][0][1]
+        assert len(state["writes"]) == 1
+    finally:
+        window._ds2 = None
+        window.close()
+
+
+@pytest.mark.parametrize("case,title", [
+    ("explicit_edit", "Write Boot Required for This Edit"),
+    ("wrong_file", "TOP Boot Image Required"),
+    ("ds2", "TOP Full Write Requires Soft-BSL"),
+])
+def test_top_full_write_rejects_incompatible_request_before_preparation(monkeypatch, case, title):
+    app, window, state = _top_full_write_gui(monkeypatch, write_boot=case == "wrong_file")
+    try:
+        if case == "ds2":
+            monkeypatch.setattr(window, "_auto_transfer_route", lambda: "native_ds2")
+        window._ds2_write_full(
+            bytearray(ref("MS41.3")), "donor.bin", require_boot_write=case == "explicit_edit")
+        assert state["errors"][0][0] == title
+        assert not state["questions"]
+        assert not state["writes"]
+        assert not state["completed"]
+        assert window.chk_bootloader_write.isChecked() is (case == "wrong_file")
+    finally:
+        window._ds2 = None
+        window.close()
+
+
+@pytest.mark.parametrize("entry_mode", ["retained", "direct"])
+@pytest.mark.parametrize("write_boot", [False, True])
+def test_top_retained_full_write_passes_logical_boot_preservation_to_shared_owner(
+        monkeypatch, entry_mode, write_boot):
+    import softbsl_install
+    target, _ids, _log = softbsl_install._sb.compose_persistent_image(
+        ref("MS41.3"), "29f400", marker="T")
+    app, window, state = _top_full_write_gui(
+        monkeypatch, write_boot=write_boot, entry_mode=entry_mode)
+    try:
+        window._ds2_write_full(bytearray(target), "top.bin")
+        assert not state["errors"]
+        owner, _image, _scope, kwargs = state["writes"][0]
+        assert owner == ("retained-offline" if entry_mode == "retained" else "offline")
+        assert kwargs["write_bootloader"] is write_boot
+        assert kwargs["top_full_options"]["preserve_boot_identity"] is write_boot
+        assert state["completed"]
+    finally:
+        window._ds2 = None
+        window.close()
+
+
+
+@pytest.mark.parametrize("preserve_identity", [True, False])
+def test_top_boot_off_identity_option_explains_preservation(monkeypatch, preserve_identity):
+    app, window, state = _top_full_write_gui(monkeypatch, preserve_identity=preserve_identity)
+    try:
+        window._update_bootloader_checkbox_state()
+        assert window.chk_bootloader_write.text() == "Write Boot (use file boot region)"
+        assert not window.chk_boot_preserve_identity.isEnabled()
+        assert window.chk_boot_preserve_identity.isChecked() is preserve_identity
+        assert "already preserved with boot" in window.chk_boot_preserve_identity.text()
+        assert "8 KB boot region" in window.chk_boot_preserve_identity.toolTip()
+        window.chk_bootloader_write.setChecked(True)
+        assert window.chk_boot_preserve_identity.isEnabled()
+        assert window.chk_boot_preserve_identity.text() == "Graft ECU identity / AIF history"
+        assert window.chk_boot_preserve_identity.isChecked() is preserve_identity
+        window.chk_bootloader_write.setChecked(False)
+        assert not window.chk_boot_preserve_identity.isEnabled()
+        assert window.chk_boot_preserve_identity.isChecked() is preserve_identity
+    finally:
+        window._ds2 = None
+        window.close()
+
+
+@pytest.mark.parametrize("boot_edit,write_boot", [(False, False), (True, False), (True, True)])
+def test_top_patch_build_uses_common_confirmation_and_respects_boot_option(
+        monkeypatch, boot_edit, write_boot):
+    import patch_service
+    import softbsl_install
+    base, _ids, _log = softbsl_install._sb.compose_persistent_image(
+        ref("MS41.3"), "29f400", marker="T")
+    built = bytearray(base)
+    built[0x4000 if boot_edit else 0x18000] ^= 1
+    built, _details = gui.correct_checksums(built)
+    app, window, state = _top_full_write_gui(monkeypatch, write_boot=write_boot)
+    try:
+        window._patch_base = base
+        window._patch_installed_ids = set()
+        window._patch_checkboxes = {"test": window.chk_correct_cksum}
+        monkeypatch.setattr(patch_service, "build_image", lambda *_args: (bytes(built), ["ok"]))
+        monkeypatch.setattr(window._backup_mgr, "add_data", lambda *_args, **_kwargs:
+                            SimpleNamespace(filename="patched.bin"))
+        monkeypatch.setattr(window, "_refresh_backup_table", lambda: None)
+        monkeypatch.setattr(window, "_offer_additional_read_copy", lambda *_args, **_kwargs: None)
+        window._on_patches_build()
+        if boot_edit and not write_boot:
+            assert state["errors"][0][0] == "Write Boot Required for This Edit"
+            assert not state["questions"]
+            assert not state["writes"]
+        else:
+            assert not state["errors"]
+            assert len(state["questions"]) == 1
+            assert "Patch changes:" in state["questions"][0][1]
+            assert len(state["writes"]) == 1
+            assert state["writes"][0][3]["write_bootloader"] is write_boot
+    finally:
+        window._ds2 = None
+        window.close()
+
+
+def test_top_config_full_preview_is_passed_to_combined_confirmation(monkeypatch):
+    app, window = _gui()
+    try:
+        image = _synthetic_id12_full(program_crc=0xFF)
+        _prepare_live_id12_config(window, image, cache=True)
+        window._ecu_softbsl_marker = "T"
+        window._config_combos["Program CRC Check"].setCurrentText("Enabled")
+        window.chk_config_fix.setChecked(False)
+        monkeypatch.setattr(QMessageBox, "warning", lambda *_args: pytest.fail("Extra TOP config confirmation"))
+        captured = {}
+        monkeypatch.setattr(window, "_ds2_write_full", lambda data, filename, **kwargs:
+                            captured.update(data=bytes(data), kwargs=kwargs))
+        window._config_write_apply_full(bytearray(image))
+        assert captured["data"][0x605C] == 0x30
+        assert captured["kwargs"]["archived_prewrite_image"] == image
+        assert "Configuration changes:" in captured["kwargs"]["write_notes"]
+        assert "Program CRC Check" in captured["kwargs"]["write_notes"]
+    finally:
+        window._ds2 = None
+        window.close()
+
+
+def test_top_full_confirmation_cancel_performs_no_preparation(monkeypatch):
+    app, window, state = _top_full_write_gui(monkeypatch)
+    try:
+        monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.No)
+        window._ds2_write_full(bytearray(ref("MS41.3")), "donor.bin")
+        assert not state["writes"]
+        assert not state["completed"]
+        assert not state["errors"]
+    finally:
+        window._ds2 = None
+        window.close()
+
+
+def test_top_full_shared_preparation_failure_does_not_report_success(monkeypatch):
+    app, window, state = _top_full_write_gui(monkeypatch)
+    try:
+        def fail_preparation(*_args, **_kwargs):
+            raise gui.softbsl_service.FlashImageCompatibilityError("final TOP image rejected before erase")
+        monkeypatch.setattr(gui.softbsl_service, "run_flash", fail_preparation)
+        monkeypatch.setattr(window, "_offer_active_flash_recovery", lambda *_args: False)
+        window._ds2_write_full(bytearray(ref("MS41.3")), "donor.bin")
+        assert not state["completed"]
+        assert not state["effective"]
+        assert "final TOP image rejected before erase" in state["errors"][0][1]
+    finally:
+        window._ds2 = None
+        window.close()
+
+
+@pytest.mark.parametrize("bank_marker,boot_enabled", [("T", True), ("B", False)])
+def test_retained_connection_uses_shared_bank_identity_for_boot_option(
+        monkeypatch, bank_marker, boot_enabled):
+    app, window = _gui()
+    try:
+        session = SimpleNamespace(is_open=True, chip_family="amd", bank_marker=bank_marker,
+                                  driver_signature=b"", port="offline")
+        monkeypatch.setattr(window, "_start_session_log", lambda: None)
+        window._on_calguard_boot_connected(session)
+        assert window._ecu_softbsl_marker == bank_marker
+        assert window._auto_transfer_route() == "softbsl"
+        assert window.chk_bootloader_write.isEnabled() is boot_enabled
+        assert not window.chk_boot_preserve_identity.isEnabled()
+    finally:
+        window._softbsl_boot_session = None
+        window.close()

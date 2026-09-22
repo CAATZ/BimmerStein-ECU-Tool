@@ -1,66 +1,53 @@
-# BimmerStein ECU Tool Release Notes
+# BimmerStein ECU Tool — Beta 17
 
-## 0.1.0 Beta 16
+Version `0.1.0b17`
 
-Beta 16 makes everyday work easier: organize your saved files, edit EEPROM settings
-with clearer controls, and explore live data and recorded logs. A separate Windows 7
-download brings the same desktop features to older computers. Dual-bank 29F400BB
-support lets you work with both halves of the flash chip.
+This update focuses on more reliable flashing and fewer delays when preparing a
+write. It also fixes a desktop freeze when a serial adapter stops responding.
 
-### What's new
+## What's improved
 
-- **Tested 29F400BB dual-bank support:** write both halves of the flash chip and
-  manage each bank's patches and Soft-BSL.
-- **EEPROM editor:** find settings by name or category, edit supported values, undo
-  and redo changes, and review everything before saving or writing. Compare images
-  from the same ECU family and repair supported record checks when needed.
-- **A more useful Bins library:** create folders, rename and move files, and open an
-  editable copy in BimmerStein Tuning Suite. Frequently used actions are easier to reach.
-- **Live data your way:** choose channels and view graphs, gauges, or digital values.
-  Select a logger definition and recording rate, and save a CSV while watching the data.
-- **Better log browsing:** search, preview, copy, and export logs and recovery records.
-  Open saved CSV recordings to compare channels, zoom in, and inspect values with a cursor.
-- **Windows 7 downloads:** a portable package and installer for Windows 7 SP1 x64,
-  with the simple BimmerStein ECU Tool name in the installation folder and shortcuts.
+- Interrupted writes now have better recovery and a more reliable return to
+  slow communication. When a write acknowledgement is missing, the app checks
+  what reached the ECU before deciding how to continue.
+- Full writes now follow the switches you selected. With **Write boot** off,
+  the ECU's existing 8 KB boot area is preserved. With it on, the boot area
+  comes from your file. **Graft identity** copies the ECU's 670 identity bytes
+  when using the file's boot area.
+- TOP-bank full writes use Soft-BSL. Forced DS2 mode reports this restriction
+  earlier, avoiding the lengthy preparation that previously ended in rejection.
+  Partial DS2 writes remain available.
+- Verification uses one continuous progress indicator for the whole write.
+- A stalled serial adapter no longer holds the desktop open indefinitely.
+  Connection attempts can time out, and closing the app stays responsive.
+- Incomplete operation records no longer block a deliberately started new
+  write. Saved recovery information remains available for review.
+- Fixed the brief blank squares that appeared while the desktop was starting.
+- Updated the AMD flash driver and its TOP-bank full-write protection.
 
-### Improvements and fixes
+## Downloads
 
-- The main window now starts at a more compact size and can be resized. Scrolling
-  keeps controls within reach on smaller screens.
-- Diagnostics show clearer stored and shadow fault details, including available
-  freeze-frame information. Clearing faults refreshes the list and reports any errors.
-- Adaptation values can be refreshed without reopening the page.
-- Improved handling of TOP and BOTTOM flash banks when reading, detecting installed
-  Soft-BSL, and checking whether a boot-region write is needed.
-- Bins folder operations preserve file information and handle naming conflicts more reliably.
+Choose **x64** for a 64-bit PC or **x86** for 32-bit Windows. Each has an installer
+and a complete portable ZIP. Separate Windows 7 SP1 downloads are provided
+for both architectures. Windows 7 requires KB2533623 or a superseding update. Installation folders and shortcuts use the name
+**BimmerStein ECU Tool**. Updates keep the existing installation location.
 
-### Firmware patches
+The packages include the user manual and `BimmerStein MS41 Patch Definitions.xml`
+beside the executable. Keep the complete portable folder together.
 
-The firmware patches are unchanged from Beta 15: **Ignition Cut V7**, **Launch
-Control V4** for MS41.0/MS41.1/MS41.2, and **Launch Control V5** for MS41.3.
-Installing this application does not change the firmware in your ECU.
+Installing this update does not change the firmware already in your ECU.
 
-**AlphaN MAF-failsafe V3, Soft-BSL V11, and CalGuard V5 are tested.**
-Ignition Cut V7 and Launch Control V4/V5 remain experimental and require vehicle
-testing. Vehicle module coding remains highly experimental and has not completed
-vehicle testing.
+## Firmware notes
 
-**IGNITION CUT HAZARD:** Ignition Cut may suppress spark while injection continues.
-Unburned fuel can damage catalytic converters and exhaust components; never use it
-on a car with catalytic converters.
+This release keeps **Ignition Cut V7** and **Launch Control V4/V5** from Beta 16.
+Newer revisions remain outside public releases until vehicle testing confirms them.
+AlphaN MAF-failsafe V3, Soft-BSL V11 and CalGuard V5 retain their tested status.
 
-### Downloads
+Ignition cut and launch control remain experimental. Spark suppression can
+send unburned fuel into the exhaust and damage catalytic converters and other
+components. Do not use ignition cut with catalytic converters fitted.
+Other firmware options retain the test status shown in the Patches tab.
 
-Version `0.1.0b16` is available as Windows x64 portable ZIPs and per-user installers,
-with a separate Windows 7 SP1 x64 package. Each includes the user manual, patch
-definitions (`BimmerStein MS41 Patch Definitions.xml`, beside the executable), and required application libraries. No separate Python installation
-is needed. Install the appropriate interface driver separately.
-
-The Windows 7 package requires KB2533623 or a superseding Windows update.
-The Windows 7 package is tested and working. Installers are unsigned.
-SHA-256 checksums accompany the downloads.
-
-**OFF-ROAD, COMPETITION, RESEARCH, AND BENCH USE ONLY.** Do not use this software
-to modify a vehicle operated on public roads. Use stable power and follow the
-application's recovery instructions if a write is interrupted. Distributed under
-GPL-3.0-only.
+**OFF-ROAD, COMPETITION, RESEARCH, AND BENCH USE ONLY.**
+The project is distributed under GNU GPL version 3 (`GPL-3.0-only`). Required
+runtime licenses and notices are included.
