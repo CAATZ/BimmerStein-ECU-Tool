@@ -4,6 +4,10 @@ Version `0.1.0b18`
 
 Beta 18 makes patch configuration easier to use and improves ECU boot recovery.
 
+**The Coding tab is highly experimental.** Do not use it unless you have a backup
+of the module you are coding, or the tools and knowledge needed to recover that
+module if something goes wrong.
+
 ## What's improved
 
 - Configure selected patches before building an image. Numeric settings now use
