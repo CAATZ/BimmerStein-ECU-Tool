@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 Release numbers use a `major.minor.patch` base and the compact `bN` beta suffix
 shared by BimmerStein applications.
 
-## [0.1.0b18] - Release candidate
+## [0.1.0b18] - 2026-10-01
 
 ### Fixed
 
