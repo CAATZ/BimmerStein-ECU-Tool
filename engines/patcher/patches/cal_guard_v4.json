@@ -3,7 +3,7 @@
   "label": "V4 AIF-overlapping guard",
   "deprecated": true,
   "version": "V4",
-  "status": "DEPRECATED - MIGRATE TO V5",
+  "status": "DEPRECATED - MIGRATE TO V6",
   "tested": true,
   "title": "CalGuard compatibility + recovery guard",
   "user_description": "Bench-proven prior CalGuard retained only for exact installed-state detection and migration. Its boot cave occupies BMW AIF records 6-14.",

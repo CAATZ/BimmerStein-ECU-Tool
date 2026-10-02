@@ -5,7 +5,7 @@ Standard mode: DS2 command 0x06 range reads from RAM.
 Telegram mode: MS41 DS2 command 0x0B/0x01 — one registered-address response
   containing every displayed RAM parameter.
 
-Standard and telegram modes use the same selected XML logger definition.
+Standard and telegram modes use the same selected RomRaider logger definition.
 Addresses are absolute 24-bit C166 logical addresses for the Siemens 80C166
 processor; the definition selects the applicable address for the detected ECU
 ID and owns storage, scaling, units, and display formatting.
@@ -41,6 +41,7 @@ _WBO2_ENABLE_ADDR = 0xFD22
 _WBO2_ENABLE_MASK = 0x0100
 _NARROWBAND_EMULATION_ADDR = 0xFD5A
 _NARROWBAND_EMULATION_MASK = 0x0004
+_CUT_STATE_ADDR = 0xE847
 # Calibration SA 0x33C0 is visible to a DS2 CPU-memory read at 0x133C0.
 # Its little-endian word is the live 10-bit ADC source pointer used by FUN_024570.
 _WBO2_INPUT_SELECT_DS2_ADDR = 0x133C0
@@ -73,23 +74,84 @@ _PROFILE_DISPLAY_ROWS = [
     ("Wideband Input Voltage", "V"),
     ("Wideband AFR", "AFR"),
     ("AFR Target", "AFR"),
+    ("Cut Input 80", ""),
+    ("Cut Input 81", ""),
+    ("Cut Input 82", ""),
+    ("Ignition Cut Switch", ""),
+    ("Ignition Cut RPM", "RPM"),
+    ("Cut Hysteresis", "RPM"),
+    ("Cut Fixed IPW", "ms"),
+    ("Launch Control Switch", ""),
+    ("Launch Cut Type", ""),
+    ("Launch Clutch Polarity", ""),
+    ("Launch Control RPM", "RPM"),
+    ("Launch Arm Speed", "km/h"),
+    ("Launch Max Speed", "km/h"),
+    ("Launch Min TPS", "%"),
+    ("Launch Hard Cut RPM", "RPM"),
+    ("Launch Ignition Hysteresis", "RPM"),
+    ("Launch Ignition Fixed IPW", "ms"),
+    ("Ignition Cut Request", ""),
+    ("Launch Ignition Request", ""),
+    ("Launch Fuel Cut Active", ""),
+    ("Intentional Combustion Cut", ""),
+    ("Cut Patch Runtime", ""),
+    ("Launch Armed", ""),
+    ("Launch Legacy FD5A.7", ""),
+    ("Stock Limiter Active", ""),
+    ("Fuel Cut Stage Count", ""),
+    ("Cut RPM", "RPM"),
+    ("Launch TPS", "%"),
+    ("Launch Speed", "km/h"),
+    ("Fuel Trim Additive", "ms"),
+    ("Fuel Trim Additive B2", "ms"),
+    ("Lambda Regulation B1", ""),
+    ("Lambda Regulation B2", ""),
+    ("O2 Heater Front B1", "%"),
+    ("O2 Heater Front B2", "%"),
+    ("O2 Heater Rear B1", "%"),
+    ("O2 Heater Rear B2", "%"),
+    ("Lambda Monitor Counter", ""),
+    ("Lambda Functions FD0E", ""),
+    ("Lambda Functions FD10", ""),
 ]
 PROFILE_DISPLAY_NAMES = frozenset(name for name, _unit in _PROFILE_DISPLAY_ROWS)
 _PROFILE_STATUS_NAMES = frozenset({
     "Wideband Mode", "Wideband Input Source", "Narrowband Emulation",
 })
 
-# Non-gauge presentation kinds remain code-owned for runtime probes;
-# every dial range comes from the selected definition.
+# Non-gauge presentation kinds remain code-owned for runtime probes and raw
+# diagnostic values; every dial range comes from the selected definition.
 _LIVE_STATUS_CHANNELS = frozenset({
     ("Closed Throttle", ""), ("Part Load", ""), ("Full Load", ""),
     ("Decel Fuel Cut", ""), ("Engine Start", ""),
     ("Wideband Mode", ""), ("Narrowband Emulation", ""),
+    ("Cut Input 80", ""), ("Cut Input 81", ""), ("Cut Input 82", ""),
+    ("Ignition Cut Request", ""), ("Launch Ignition Request", ""),
+    ("Launch Fuel Cut Active", ""), ("Intentional Combustion Cut", ""),
+    ("Cut Patch Runtime", ""), ("Launch Armed", ""),
+    ("Launch Legacy FD5A.7", ""), ("Stock Limiter Active", ""),
+    ("Lambda Regulation B1", ""), ("Lambda Regulation B2", ""),
 })
 
 _LIVE_VALUE_CHANNELS = frozenset({
     ("Injector PW", "ms"), ("Wideband Input Source", ""),
+    ("Ignition Cut Switch", ""), ("Ignition Cut RPM", "RPM"),
+    ("Cut Hysteresis", "RPM"), ("Cut Fixed IPW", "ms"),
+    ("Launch Control Switch", ""), ("Launch Cut Type", ""),
+    ("Launch Clutch Polarity", ""), ("Launch Control RPM", "RPM"),
+    ("Launch Arm Speed", "km/h"), ("Launch Max Speed", "km/h"),
+    ("Launch Min TPS", "%"), ("Launch Hard Cut RPM", "RPM"),
+    ("Launch Ignition Hysteresis", "RPM"),
+    ("Launch Ignition Fixed IPW", "ms"), ("Cut RPM", "RPM"),
+    ("Launch TPS", "%"), ("Launch Speed", "km/h"),
 })
+
+_LIVE_RAW_CHANNELS = frozenset({
+    ("Fuel Cut Stage Count", ""), ("Lambda Monitor Counter", ""),
+    ("Lambda Functions FD0E", ""), ("Lambda Functions FD10", ""),
+})
+
 
 def live_display_spec(name: str, unit: str, definition_path=None) -> dict:
     """Return evidence-bounded viewer metadata for an exact live-data channel."""
@@ -109,11 +171,14 @@ def live_display_spec(name: str, unit: str, definition_path=None) -> dict:
         break
     if key in _LIVE_STATUS_CHANNELS:
         return {"kind": "status", "evidence": "core"}
+    if key in _LIVE_RAW_CHANNELS:
+        return {"kind": "raw", "evidence": "core"}
     return {
         "kind": "value",
         "evidence": "core" if key in _LIVE_VALUE_CHANNELS else "unknown",
     }
 
+_CUT_PATCH_IDS = frozenset({"1406464", "SHINDE1", "1429861", "1437806"})
 # Definition-derived axis locations converted to live DS2 CPU addresses.
 # Only variants with proven Knock Tables X/Y definitions are listed.
 _ADAPTATION_AXES = {
@@ -142,22 +207,24 @@ def _load_definition(definition_path=None) -> LoggerDefinition:
 
 def telegram_params_for(ecu_id, profile: str = PROFILE_STANDARD,
                         wideband_input_addr: int = _DEFAULT_WBO2_INPUT_ADDR,
-                        definition_path=None,
+                        include_cut: bool = False, definition_path=None,
                         definition: LoggerDefinition | None = None
                         ) -> List[LoggerParameter]:
-    """Resolve the selected XML definition for one exact ECU ID/profile."""
+    """Resolve the selected RomRaider definition for one exact ECU ID/profile."""
     if profile not in {PROFILE_STANDARD, PROFILE_WIDEBAND}:
         raise ValueError(f"unknown live-data profile {profile!r}")
     definition = definition or _load_definition(definition_path)
     params = []
     for param in definition.parameters_for(str(ecu_id or "")):
-        # The XML format also permits ADC selectors and predefined group offsets;
+        # RomRaider also permits ADC selectors and predefined group offsets;
         # this owner only issues absolute DS2 memory reads for those channels.
         if param.address < 0x20 or param.groupsize:
             continue
         if param.id.startswith("BS_STD_") and profile != PROFILE_STANDARD:
             continue
         if param.id.startswith("BS_WB_") and profile != PROFILE_WIDEBAND:
+            continue
+        if param.id.startswith("BS_CUT_") and not include_cut:
             continue
         if param.id == "BS_WB_INPUT":
             param = param.with_address(wideband_input_addr)
@@ -224,8 +291,7 @@ def read_adaptations(ds2, ecu_id):
     }
 
 
-# Default bundled metadata keeps the desktop logger unchanged. Callers can pass
-# a selected definition path into the same functions.
+# Callers may select their own metadata path; the desktop uses the bundled default.
 _BUNDLED_DEFINITION = _load_definition()
 _TELEGRAM_PARAMS: List[LoggerParameter] = telegram_params_for(
     "1437806", definition=_BUNDLED_DEFINITION)
@@ -421,11 +487,11 @@ class LiveDataPoller:
     Polls MS41 live data on a background thread.
 
     Standard mode (use_telegram=False):
-      Reads the selected RAM-address set via DS2 command 0x06, grouped into
+      Reads the RomRaider RAM-address set via DS2 command 0x06, grouped into
       contiguous ranges (multiple round trips per sample).
 
     Telegram mode (use_telegram=True):
-      Registers the selected MS41 RAM-address set via DS2 0x0B/0x01 and then
+      Registers the RomRaider MS41 RAM-address set via DS2 0x0B/0x01 and then
       retrieves the complete sample with one 0x0B/0x00 response.
 
     Stores latest values in a thread-safe dict; the GUI reads via a QTimer.
@@ -443,6 +509,7 @@ class LiveDataPoller:
         self._ecu_variant  = ecu_variant
         self._profile      = PROFILE_STANDARD
         self._profile_ready = False
+        self._cut_patch_active = False
         self._wideband_input_addr = _DEFAULT_WBO2_INPUT_ADDR
         self._logger_definition = _load_definition(definition_path)
         # Resolve only parameters explicitly mapped for this ECU ID.
@@ -494,7 +561,8 @@ class LiveDataPoller:
     def stop(self):
         self._stop.set()
         if self._thread:
-            self._thread.join(timeout=4)
+            # Callers reuse or close the connection as soon as this returns.
+            self._thread.join()
             self._thread = None
         self._close_csv()
 
@@ -621,10 +689,20 @@ class LiveDataPoller:
                             "showing the Front O2 Bank 1 input")
 
         key = self._ecu_id
+        if self._ds2 is not None and str(key) in _CUT_PATCH_IDS:
+            try:
+                cut_state = bytes(self._ds2.read_mem(_CUT_STATE_ADDR, 1))
+                if len(cut_state) != 1:
+                    raise ValueError(f"short read {len(cut_state)}/1")
+                self._cut_patch_active = (cut_state[0] & 0xF0) == 0xA0
+            except Exception as error:
+                with self._lock:
+                    self._errors.append(
+                        f"Cut-patch runtime status unavailable ({error})")
         self._profile = profile
         self._wideband_input_addr = input_addr
         self._tel_params = telegram_params_for(
-            key, profile, input_addr,
+            key, profile, input_addr, include_cut=self._cut_patch_active,
             definition=self._logger_definition)
         self._tel_blocks = _build_telegram_blocks(self._tel_params)
         self._batch_layout = batch_layout_for(
@@ -641,10 +719,25 @@ class LiveDataPoller:
     def _poll_loop(self):
         # Live data is read over DS2: batch telegram (0x0B/0x01) or individual
         # block reads (0x06).  (MS41 has no working KWP2000 path.)
-        if self._use_telegram:
-            self._poll_loop_ds2_batch()
-        else:
-            self._poll_loop_ds2_reads()
+        failure = None
+        try:
+            if self._use_telegram:
+                self._poll_loop_ds2_batch()
+            else:
+                self._poll_loop_ds2_reads()
+        except Exception as error:
+            failure = error
+        finally:
+            try:
+                self._close_csv()
+            except Exception as error:
+                failure = failure or error
+            if failure is not None:
+                message = f"Live Data stopped: {failure}"
+                with self._lock:
+                    self._terminal_error = self._terminal_error or message
+                    self._errors.append(message)
+                self._stop.set()
 
     def _poll_loop_ds2_reads(self):
         """DS2 standard mode: individual block reads via DS2 cmd 0x06 (READ_MEM).
@@ -701,6 +794,10 @@ class LiveDataPoller:
         """
         self._prepare_live_profile()
         self._ensure_csv()
+        if self._cut_patch_active:
+            self._telegram_unavailable(
+                "Cut-patch diagnostics require direct standard DS2 reads")
+            return
         if self._batch_layout is None:
             self._telegram_unavailable(
                 "Telegram logging is not mapped for this ECU ID")
@@ -796,7 +893,7 @@ class LiveDataPoller:
         wrote_csv = self._csv_writer is not None
         if self._csv_writer:
             self._csv_writer.writerow(row)
-            # Buffer logger output: avoid a synchronous disk flush
+            # Match RomRaider's buffered logger behavior: avoid a synchronous disk flush
             # in the serial acquisition loop for every sample, while still making an active
             # log visible on disk at least once per second.
             now = time.monotonic()
@@ -820,7 +917,7 @@ class LiveDataPoller:
 
     def _close_csv(self):
         self._pending_log_path = None
-        if self._csv_file:
-            self._csv_file.close()
-            self._csv_file   = None
-            self._csv_writer = None
+        stream, self._csv_file = self._csv_file, None
+        self._csv_writer = None
+        if stream:
+            stream.close()

@@ -181,7 +181,8 @@ def test_runtime_calguard_detector_does_not_use_the_abhishek_credit():
         "MS41.3", "MS41.3", True)
 
 
-def test_calguard_mismatch_selects_direct_entry_without_marker_one(monkeypatch):
+@pytest.mark.parametrize("guard_id", ["cal_guard", "cal_guard_v5"])
+def test_calguard_mismatch_selects_direct_entry_without_marker_one(monkeypatch, guard_id):
     from engines.softbsl import softbsl_host as sh
 
     class FakeDS2:
@@ -191,7 +192,7 @@ def test_calguard_mismatch_selects_direct_entry_without_marker_one(monkeypatch):
 
     logs = []
     sb = sh.SoftBSL(FakeDS2(), log=logs.append)
-    monkeypatch.setattr(sh, "_live_patch_applied", lambda _ds2, patch_id: patch_id == "cal_guard")
+    monkeypatch.setattr(sh, "_live_patch_applied", lambda _ds2, patch_id: patch_id == guard_id)
     monkeypatch.setattr(
         sh, "_detect_ecu_variant",
         lambda _ds2, **_kwargs: ("MS41.2", "MS41.1", False))
@@ -225,16 +226,18 @@ def test_live_calguard_check_reads_every_exact_descriptor_byte():
     ]
 
 
-def test_consistent_calguard_image_keeps_normal_entry(monkeypatch):
+@pytest.mark.parametrize("marker", [0, 3])
+def test_consistent_calguard_image_keeps_normal_entry_without_patch_reads(monkeypatch, marker):
     from engines.softbsl import softbsl_host as sh
 
     class FakeDS2:
         def read_mem(self, address, length):
             assert (address, length) == (0xE740, 1)
-            return b"\x03"
+            return bytes((marker,))
 
     sb = sh.SoftBSL(FakeDS2(), log=lambda _line: None)
-    monkeypatch.setattr(sh, "_live_patch_applied", lambda _ds2, _patch_id: True)
+    monkeypatch.setattr(sh, "_live_patch_applied", lambda *_args: pytest.fail(
+        "Normal matching firmware must not read the complete CalGuard patch."))
     monkeypatch.setattr(
         sh, "_detect_ecu_variant",
         lambda _ds2, **_kwargs: ("MS41.1", "MS41.1", True))
@@ -243,6 +246,48 @@ def test_consistent_calguard_image_keeps_normal_entry(monkeypatch):
         lambda _ds2: ("0960", "0960", b"909", True))
 
     assert sb.calguard_direct_entry_ready() is False
+
+
+@pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
+def test_matching_firmware_checks_only_small_markers_for_softbsl_entry(version):
+    from engines.patcher.patch_ms41 import build
+    from engines.softbsl import softbsl_host as sh
+    from tests.conftest import ref
+
+    image, _ = build(ref(version), ["softbsl_loader", "cal_guard"])
+    reads = []
+
+    class ReadOnlyDS2:
+        def read_mem(self, address, length):
+            reads.append((address, length))
+            if address == 0xE740:
+                return b"\x00"
+            offset = address ^ sh.DESCR
+            return bytes(image[offset:offset + length])
+
+        def read_memory_range(self, *_args):
+            pytest.fail("Normal entry must not read patch code through DS2.")
+
+    assert sh.SoftBSL(ReadOnlyDS2(), log=lambda *_: None).calguard_direct_entry_ready() is False
+    assert len(reads) == 10
+    assert sum(length for _address, length in reads) == 44
+
+
+def test_calguard_mismatch_without_exact_guard_keeps_normal_entry(monkeypatch):
+    from engines.softbsl import softbsl_host as sh
+
+    sb = sh.SoftBSL(types.SimpleNamespace(read_mem=lambda *_args: b"\x00"), log=lambda *_: None)
+    checks = []
+    monkeypatch.setattr(sh, "_detect_ecu_variant", lambda *_args, **_kw: ("MS41.0", "MS41.1", False))
+    monkeypatch.setattr(sh, "_detect_firmware_compatibility", lambda *_args: ("0641", "0960", b"909", False))
+
+    def not_installed(_ds2, patch_id):
+        checks.append(patch_id)
+        return False
+
+    monkeypatch.setattr(sh, "_live_patch_applied", not_installed)
+    assert sb.calguard_direct_entry_ready() is False
+    assert checks == ["cal_guard", "cal_guard_v5"]
 
 
 def test_calguard_exact_id_mismatch_selects_direct_entry(monkeypatch):

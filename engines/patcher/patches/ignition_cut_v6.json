@@ -6,7 +6,7 @@
   "title": "Ignition Cut",
   "user_description": "DEPRECATED and remove-only. On-car testing confirmed that this revision does not interrupt spark. Remove it before installing Ignition Cut V7.",
   "description": "DEPRECATED and remove-only. V6 reached its recurring P3.14 hook and executed its gate, but P3.14 is not the six-cylinder coil final stage, so vehicle testing confirmed no ignition cut. Retained so installed V6 images on MS41.2/MS41.3 can be detected and safely reverted before installing Ignition Cut V7.",
-  "superseded_by": "ignition_cut_v7",
+  "superseded_by": "ignition_cut_v8",
   "target": "MS41.3",
   "targets": ["MS41.2", "MS41.3"],
   "recompute": [],

@@ -1,3 +1,51 @@
+# BimmerStein ECU Tool — Beta 18
+
+Version `0.1.0b18`
+
+- CalGuard V6 owns the existing nominal 40 ms startup wait on Intel and AMD.
+  The AMD flash routines remain independent. The watchdog service, initial recovery window
+  and calibration compatibility check keep the same machine instructions.
+  Reinstallation applies the wait once; no separate startup-wait patch is offered.
+  Removing CalGuard restores the original startup timing while retaining
+  Soft-BSL and the flash driver. Standalone Soft-BSL or AMD driver installations
+  do not add the wait. Exact leftover waits from earlier local builds are cleaned
+  during standalone updates or removal; unknown startup bytes remain rejected.
+- Exact AMD V3 installations can be upgraded or removed. Soft-BSL updates,
+  TOP protection, dependency checks and boot-write gating recognize the
+  historical driver while rejecting unknown or partly installed startup bytes.
+- Includes Launch Control V11 on all four firmware families, Ignition Cut V11
+  on MS41.3 and V10 on MS41.0/.1/.2, CalGuard V6 and Soft-BSL V12.
+- Patch configuration uses numeric inputs with explicit stock/automatic modes,
+  loaded stock hysteresis values, clearer fuel hysteresis A/B labels and zero-IPW
+  help. Compact dialogs, patch-table headers and Details popovers
+  reduce clutter without changing firmware behavior
+  or installation/removal checks.
+- Includes migration from CalGuard V5 / Soft-BSL V11, patch removal,
+  dependency checks and recovery routing.
+- Soft-BSL updates preserve an installed CalGuard and recognize both valid
+  loader bank markers. Ambiguous historical patch bytes remain rejected.
+- Normal Soft-BSL entry checks small firmware markers before recovery detection,
+  avoiding a complete CalGuard read at 9600 baud. Direct recovery still requires
+  exact guard and loader evidence for its existing entry path.
+- Firmware compositions preserve identifiers and calibration. Local bench
+  validation compares protected bytes against the actual ECU before erase.
+- Before this ownership change, the Intel MS41.3 / 28F200 image with these wait bytes passed three cold
+  recovery trials with full matching readbacks. The exact marker-free AMD MS41.0 / 29F400BB
+  lower-bank image passed three cold recovery trials with full matching
+  readbacks. Earlier firmware/bank combinations have emulator evidence.
+  These results remain historical evidence for the unchanged firmware bytes.
+  Removal and standalone-update corrections have offline application-test coverage.
+- The current AMD MS41.0 / 29F400BB TOP image passed exact-image emulator checks,
+  a verified full TOP-bank installation, three cold initial-token recovery trials
+  with matching complete CRC readbacks, and normal cold boots. Identifiers and
+  calibration were preserved. This qualifies that exact ECU/image; destructive
+  calibration-mismatch, program-rewrite and power-loss tests were not performed.
+
+CalGuard and Soft-BSL remain experimental. Installing the application does not
+modify ECU firmware.
+
+---
+
 # BimmerStein ECU Tool — Beta 17
 
 Version `0.1.0b17`

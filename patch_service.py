@@ -30,12 +30,25 @@ _SWITCH_INPUT_CHOICES = (
     ("pin81", "Switch - Pin 81", 0x02),
     ("pin82", "Switch - Pin 82", 0x04),
 )
+_LAUNCH_INPUT_CHOICES = tuple(
+    (value, "Always (no switch)" if value == "always" else label, raw)
+    for value, label, raw in _SWITCH_INPUT_CHOICES
+)
+
+# Native tune scalars consumed by Launch V11's family-specific A/B hooks.
+# These are storage addresses; full-ROM file offsets apply the flash bus XOR.
+_NATIVE_FUEL_HYSTERESIS = {
+    "MS41.0": {"LC_FUEL_HYST_A": 0x01D2, "LC_FUEL_HYST_B": 0x01D1},
+    "MS41.1": {"LC_FUEL_HYST_A": 0x02DA, "LC_FUEL_HYST_B": 0x02D9},
+    "MS41.2": {"LC_FUEL_HYST_A": 0x02BA, "LC_FUEL_HYST_B": 0x02B9},
+    "MS41.3": {"LC_FUEL_HYST_A": 0x02BA, "LC_FUEL_HYST_B": 0x02B9},
+}
 
 # Only patch-owned, user-facing controls belong here. Descriptor ``cave.cals``
 # also contains internal markers; keeping this allow-list separate prevents a
 # UI or caller from turning every symbolic address into a write primitive.
 _EDITABLE_PARAMETER_FAMILIES = {
-    "ignition_cut_v7": (
+    "ignition_cut_v10": (
         {
             "id": "CUTSW", "label": "Switch input", "kind": "choice",
             "codec": "choice", "choices": _SWITCH_INPUT_CHOICES,
@@ -47,18 +60,41 @@ _EDITABLE_PARAMETER_FAMILIES = {
             "maximum": "8160", "step": "32", "decimals": 0,
             "description": "Spark-cut threshold, stored in 32 RPM steps.",
         },
+        {
+            "id": "CUT_HYST", "label": "RPM hysteresis", "kind": "number",
+            "codec": "rpm_hysteresis_u8", "units": "RPM", "minimum": "0",
+            "maximum": "8128", "step": "32", "decimals": 0,
+            "specials": (("@legacy_zero", "Legacy zero hysteresis", 0xFF),),
+            "description": "Spark resumes below the cut RPM by this amount.",
+        },
+        {
+            "id": "CUT_IPW", "label": "Fixed injector pulse width",
+            "kind": "number", "codec": "ipw_u16le", "units": "ms",
+            "minimum": "0", "maximum": "349.95156", "step": "0.00534",
+            "decimals": 5,
+            "specials": (("@stock", "Preserve stock injection", 0xFFFF),),
+            "description": (
+                "Injector base pulse width while standalone spark cut is active. Zero is "
+                "a valid zero base pulse, not Preserve stock injection; native scheduling "
+                "and injector corrections still apply. Preserve stock injection uses the "
+                "ECU's normally calculated pulse width."
+            ),
+        },
     ),
-    "launch_control_v4": (
+    "launch_control_v11": (
         {
             "id": "LC_SW", "label": "Switch / mode", "kind": "choice",
-            "codec": "choice", "choices": _SWITCH_INPUT_CHOICES,
-            "description": "Arms Launch Control from the selected input.",
+            "codec": "choice", "choices": _LAUNCH_INPUT_CHOICES,
+            "description": (
+                "Always needs no switch. All enabled modes respect arming speed, "
+                "maximum speed, and minimum throttle."
+            ),
         },
         {
             "id": "LC_CUTTYPE", "label": "Cut type", "kind": "choice",
             "codec": "choice", "choices": (
                 ("fuel", "Fuel cut (stock injector limiter)", 0x00),
-                ("ignition", "Ignition cut (shared V7 engine)", 0x01),
+                ("ignition", "Ignition cut (shared ignition engine)", 0x01),
             ),
             "description": "Selects the launch limiter strategy.",
         },
@@ -68,19 +104,28 @@ _EDITABLE_PARAMETER_FAMILIES = {
                 ("active_high", "Active-high (depressed = 5V)", 0x00),
                 ("active_low", "Active-low (depressed = 0V)", 0x01),
             ),
-            "description": "Electrical sense of the clutch or toggle input.",
+            "description": (
+                "Electrical sense of the clutch or toggle input; ignored by Always mode. "
+                "Input release retains the latch until the speed or throttle release condition."
+            ),
         },
         {
             "id": "LC_MAXRPM", "label": "Soft cut RPM", "kind": "number",
             "codec": "rpm_u8", "units": "RPM", "minimum": "0",
             "maximum": "8160", "step": "32", "decimals": 0,
-            "description": "Launch limiter threshold, stored in 32 RPM steps.",
+            "description": (
+                "Fuel mode uses the lower of this and the native soft limit, independently of hard RPM. "
+                "Fuel-return settings use this effective soft RPM. Ignition mode cuts spark here."
+            ),
         },
         {
             "id": "LC_ARMSPEED", "label": "Arm speed", "kind": "number",
-            "codec": "u8", "units": "km/h", "minimum": "0",
+            "codec": "u8", "units": "km/h", "minimum": "1",
             "maximum": "255", "step": "1", "decimals": 0,
-            "description": "A cleared launch latch can arm below this speed.",
+            "description": (
+                "A cleared launch latch can arm below this integer speed. "
+                "1 km/h permits arming only at a reported speed of 0 km/h."
+            ),
         },
         {
             "id": "LC_MAXSPEED", "label": "Maximum speed", "kind": "number",
@@ -98,8 +143,57 @@ _EDITABLE_PARAMETER_FAMILIES = {
             "id": "LC_HARDRPM", "label": "Hard cut RPM", "kind": "number",
             "codec": "rpm_reserved_u8", "units": "RPM", "minimum": "0",
             "maximum": "8128", "step": "32", "decimals": 0,
-            "specials": (("@auto", "Automatic: soft cut + 96 RPM", 0xFF),),
-            "description": "Upper fuel-cut threshold; ignition mode ignores it.",
+            "specials": (("@auto", "Automatic", 0xFF),),
+            "description": (
+                "Independent fuel hard threshold, capped by the native hard limit. It may be below "
+                "soft RPM; fuel-return thresholds still derive from effective soft RPM. Automatic "
+                "uses soft + 96 RPM with the same cap. Ignition mode ignores it."
+            ),
+        },
+        {
+            "id": "LC_FUEL_HYST_B", "label": "Fuel hysteresis B",
+            "kind": "number", "codec": "rpm_reserved_u8", "units": "RPM",
+            "minimum": "0", "maximum": "8128", "step": "32", "decimals": 0,
+            "specials": (("@stock", "Follow stock", 0xFF),),
+            "description": (
+                "Fuel mode only: gradual recovery below effective soft RPM minus this "
+                "amount, floored at zero. A's immediate clear takes priority. Follow stock uses "
+                "the tune's native Hysteresis B. Native limiter protection takes priority."
+            ),
+        },
+        {
+            "id": "LC_FUEL_HYST_A", "label": "Fuel hysteresis A",
+            "kind": "number", "codec": "rpm_reserved_u8", "units": "RPM",
+            "minimum": "0", "maximum": "8128", "step": "32", "decimals": 0,
+            "specials": (("@stock", "Follow stock", 0xFF),),
+            "description": (
+                "Fuel mode only: immediate limiter clear below effective soft RPM minus "
+                "this amount, floored at zero. Follow stock uses the tune's native Hysteresis A. "
+                "A and B are independent. Native limiter protection takes priority."
+            ),
+        },
+        {
+            "id": "LC_HYST", "label": "Ignition RPM hysteresis",
+            "kind": "number", "codec": "rpm_hysteresis_u8", "units": "RPM",
+            "minimum": "0", "maximum": "8128", "step": "32", "decimals": 0,
+            "specials": (("@legacy_zero", "Legacy zero hysteresis", 0xFF),),
+            "description": (
+                "Launch spark cut releases below soft RPM minus this amount. "
+                "A value at or above soft RPM uses zero hysteresis. Fuel mode ignores it."
+            ),
+        },
+        {
+            "id": "LC_IPW", "label": "Ignition fixed injector pulse width",
+            "kind": "number", "codec": "ipw_u16le", "units": "ms",
+            "minimum": "0", "maximum": "349.95156", "step": "0.00534",
+            "decimals": 5,
+            "specials": (("@stock", "Preserve stock injection", 0xFFFF),),
+            "description": (
+                "Injector base pulse width while launch spark cut is active. Zero is "
+                "a valid zero base pulse, not Preserve stock injection; native scheduling "
+                "and injector corrections still apply. Preserve stock injection uses the "
+                "ECU's normally calculated pulse width. Fuel mode ignores this setting."
+            ),
         },
     ),
     "vanos_minrpm": (
@@ -112,9 +206,6 @@ _EDITABLE_PARAMETER_FAMILIES = {
         },
     ),
 }
-_EDITABLE_PARAMETER_FAMILIES["launch_control_v5"] = (
-    _EDITABLE_PARAMETER_FAMILIES["launch_control_v4"]
-)
 
 
 def definitions():
@@ -218,14 +309,8 @@ def _decode_parameter(spec, raw):
         return special
 
     codec = spec["codec"]
-    if codec.startswith("rpm_"):
-        value = Decimal(raw * 32)
-    elif codec == "u8":
-        value = Decimal(raw)
-    elif codec == "tps_u8":
-        value = Decimal(raw) * Decimal("0.47")
-    elif codec == "ipw_u16le":
-        value = Decimal(raw) * Decimal("0.00534")
+    if codec.startswith("rpm_") or codec in ("u8", "tps_u8", "ipw_u16le"):
+        value = Decimal(raw) * Decimal(spec["step"])
     else:
         raise PatchError(f"unsupported patch parameter codec: {codec}")
     text = _format_decimal(value, int(spec.get("decimals", 0)))
@@ -247,6 +332,23 @@ def _rounded_raw(value, scale):
     return int((value / scale).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+def normalize_parameter_value(parameter, value):
+    """Round numeric input to the declared storage step; preserve named modes."""
+    token = str(value).strip()
+    if parameter["kind"] != "number" or token.startswith("@"):
+        return token
+    number = _decimal_value(token, parameter["id"])
+    minimum, maximum = Decimal(parameter["minimum"]), Decimal(parameter["maximum"])
+    if not minimum <= number <= maximum:
+        raise PatchError(
+            f"{parameter['id']} must be between {minimum} and {maximum} "
+            f"{parameter.get('units', '')}".strip()
+        )
+    step = Decimal(parameter["step"])
+    return _format_decimal(Decimal(_rounded_raw(number, step)) * step,
+                           int(parameter.get("decimals", 0)))
+
+
 def _encode_parameter(spec, value):
     token = str(value).strip()
     if spec["kind"] == "choice":
@@ -261,27 +363,10 @@ def _encode_parameter(spec, value):
     if token.startswith("@"):
         raise PatchError(f"invalid special value for {spec['id']}: {token}")
 
-    number = _decimal_value(token, spec["id"])
-    minimum = Decimal(spec["minimum"])
-    maximum = Decimal(spec["maximum"])
-    if not minimum <= number <= maximum:
-        raise PatchError(
-            f"{spec['id']} must be between {minimum} and {maximum} {spec.get('units', '')}".strip()
-        )
-
+    number = _decimal_value(normalize_parameter_value(spec, token), spec["id"])
     codec = spec["codec"]
-    if codec.startswith("rpm_"):
-        raw = _rounded_raw(number, Decimal(32))
-        if number != Decimal(raw * 32):
-            raise PatchError(f"{spec['id']} must use 32 RPM steps")
-    elif codec == "u8":
-        raw = _rounded_raw(number, Decimal(1))
-        if number != Decimal(raw):
-            raise PatchError(f"{spec['id']} must be a whole number")
-    elif codec == "tps_u8":
-        raw = _rounded_raw(number, Decimal("0.47"))
-    elif codec == "ipw_u16le":
-        raw = _rounded_raw(number, Decimal("0.00534"))
+    if codec.startswith("rpm_") or codec in ("u8", "tps_u8", "ipw_u16le"):
+        raw = _rounded_raw(number, Decimal(spec["step"]))
     else:
         raise PatchError(f"unsupported patch parameter codec: {codec}")
 
@@ -295,6 +380,22 @@ def _encode_parameter(spec, value):
 def _public_parameter(image, patch, spec):
     raw, _offset, width = _raw_parameter_value(image, patch, spec)
     current, current_display = _decode_parameter(spec, raw)
+    specials = []
+    for token, label, _raw in spec.get("specials", ()):
+        option = {"value": token, "label": label}
+        if token == "@stock" and spec["id"] in ("LC_FUEL_HYST_A", "LC_FUEL_HYST_B"):
+            address = _NATIVE_FUEL_HYSTERESIS[patch["target"]][spec["id"]]
+            value = str(image[(MS41ECU.TUNE_DS2_BASE + address) ^ 0x4000] * 32)
+            option.update(display_value=value, display_text=f"Stock: {value} RPM")
+        elif token == "@stock" and spec["codec"] == "ipw_u16le":
+            option["display_text"] = "Calculated by ECU"
+        elif token == "@stock" and spec["id"] == "VANOSRPM":
+            option["display_text"] = "Original VANOS logic"
+        elif token == "@legacy_zero":
+            option.update(display_value="0", display_text="Zero hysteresis")
+        elif token == "@auto":
+            option["display_text"] = "Soft cut + 96 RPM, capped by native hard cut"
+        specials.append(option)
     return {
         "id": spec["id"],
         "label": spec["label"],
@@ -312,10 +413,7 @@ def _public_parameter(image, patch, spec):
             {"value": token, "label": label}
             for token, label, _raw in spec.get("choices", ())
         ],
-        "specials": [
-            {"value": token, "label": label}
-            for token, label, _raw in spec.get("specials", ())
-        ],
+        "specials": specials,
     }
 
 
@@ -361,7 +459,7 @@ def editable_parameters(data):
 
 
 def _validate_parameter_relationships(image, patch, specs):
-    if _parameter_family(patch) not in {"launch_control_v4", "launch_control_v5"}:
+    if _parameter_family(patch) != "launch_control_v11":
         return
     by_id = {spec["id"]: spec for spec in specs}
 
@@ -370,11 +468,10 @@ def _validate_parameter_relationships(image, patch, specs):
 
     if raw("LC_SW") == 0xFF:
         return
+    if raw("LC_ARMSPEED") == 0:
+        raise PatchError("LC_ARMSPEED must be at least 1 km/h when Launch Control is enabled")
     if raw("LC_MAXSPEED") <= raw("LC_ARMSPEED"):
         raise PatchError("LC_MAXSPEED must be greater than LC_ARMSPEED")
-    if raw("LC_CUTTYPE") == 0x00 and raw("LC_HARDRPM") != 0xFF:
-        if raw("LC_HARDRPM") < raw("LC_MAXRPM"):
-            raise PatchError("LC_HARDRPM must be at or above LC_MAXRPM")
 
 
 def apply_parameter_changes(
@@ -594,9 +691,16 @@ def available_patches(data):
         if not patch_ms41.supports_target(p, ver):
             continue
         errs = patch_ms41.validate_splices(p)
+        # Prior AMD drivers still support TOP protection. Other dependencies
+        # require exact current bytes; supersession alone does not prove compatibility.
         missing_requirements = [
             required_id for required_id in p.get("requires", [])
-            if installed and required_id not in effective_ids
+            if installed and not any(
+                required_id == installed_id or (
+                    required_id == "amd_flash"
+                    and _installed_revision_satisfies(
+                        all_patches, required_id, installed_id))
+                for installed_id in effective_ids)
         ]
         if missing_requirements:
             errs.append(
@@ -670,6 +774,18 @@ def revert_patch(base_data, patch_id):
             "remove the dependent patch(es) first"
         )
     result = patch_ms41.revert(bytes(base_data), p)
+    if (patch_id == "cal_guard" or patch_id.startswith("cal_guard_v")
+            or patch_id in ("softbsl_loader", "amd_flash", "amd_flash_v3")):
+        delay = patch_ms41.startup_wait_definition(patches)
+        if delay:
+            patch_ms41.startup_driver(base_data, patches)
+            if patch_ms41.is_applied(base_data, delay):
+                if not patch_ms41.installed_calguard(result, patches):
+                    result = patch_ms41.revert(result, delay)
+            elif not patch_ms41.is_absent(base_data, delay):
+                raise PatchError(
+                    "partial/unknown CalGuard startup wait; restore the startup "
+                    "anchors from a known-good image before removal")
     top_guard = patches.get("top_ds2_guard")
     if (bytes(base_data[0x5FFC:0x6000]) == b"\xA5\x5A\x54\xAB"
             and result[0x5FFC:0x6000] != b"\xA5\x5A\x54\xAB"
@@ -693,7 +809,12 @@ def build_image(base_data, selected_ids, marker=None):
         patch_id: [
             required_id
             for required_id in all_patches[patch_id].get("requires", [])
-            if required_id not in effective_after_build
+            if not any(
+                required_id == installed_id or (
+                    required_id == "amd_flash"
+                    and _installed_revision_satisfies(
+                        all_patches, required_id, installed_id))
+                for installed_id in effective_after_build)
         ]
         for patch_id in installed_ids - shadowed_ids
     }
@@ -719,10 +840,27 @@ SA1_HI  = patch_ms41.BOOT_FILE_HI      # 0x6000
 SA1_LEN = SA1_HI - SA1_LO              # 0x2000
 
 
-def boot_write_patches_in(image):
-    """IDs of patches present in `image` that write the boot/SA1 region (file 0x4000-0x5FFF).
-    Those bytes are not written by DS2 or an un-armed soft-BSL flash."""
+def _boot_patch_definitions(image):
+    """Track CalGuard's wait and residue from earlier AMD/standalone-loader builds."""
     patches = patch_ms41.load_patches()
+    if patch_ms41.is_applied(image, patches["amd_flash"]):
+        # The old V3 fixture's native startup anchors are not driver requirements.
+        patches.pop("amd_flash_v3", None)
+    delay = patch_ms41.startup_wait_definition(patches)
+    if delay and patch_ms41.is_applied(image, delay):
+        guard = patch_ms41.installed_calguard(image, patches)
+        for owner in ([guard] if guard else []) + ["softbsl_loader", "amd_flash"]:
+            patch = patches[owner]
+            if patch_ms41.is_applied(image, patch):
+                patches[owner] = {**patch, "edits": [*patch["edits"], *delay["edits"]]}
+                break
+    return patches
+
+
+def boot_write_patches_in(image):
+    """Owners of installed boot/SA1 edits in `image` (file 0x4000-0x5FFF).
+    Those bytes are not written by DS2 or an un-armed soft-BSL flash."""
+    patches = _boot_patch_definitions(image)
     return sorted(pid for pid, p in patches.items()
                   if patch_ms41.needs_boot_write(p) and patch_ms41.is_applied(image, p))
 
@@ -734,7 +872,7 @@ def boot_patch_read_ranges(image):
     only each applied patch edit's intersection with file 0x4000..0x5FFF. Overlapping and
     directly-adjacent edits are merged; unrelated descriptor/identity bytes are never read.
     """
-    patches = patch_ms41.load_patches()
+    patches = _boot_patch_definitions(image)
     ranges = []
     for patch_id in boot_write_patches_in(image):
         for edit in patches[patch_id]["edits"]:
@@ -800,7 +938,7 @@ def missing_boot_patches_sparse(image, reads):
     ``reads`` contains ``(file_offset, bytes)`` entries produced from
     :func:`boot_patch_read_ranges`. Missing coverage fails safe and reports the patch missing.
     """
-    patches = patch_ms41.load_patches()
+    patches = _boot_patch_definitions(image)
     missing = []
     for patch_id in boot_write_patches_in(image):
         present = True
@@ -828,6 +966,6 @@ def missing_boot_patches(image, ecu_evidence):
     better a false block than a silent partial patch). Only the patch's own SA1 edit bytes are
     compared, so variant conversions and per-unit identity drift never register as missing."""
     win = sa1_window(ecu_evidence)
-    patches = patch_ms41.load_patches()
+    patches = _boot_patch_definitions(image)
     return [pid for pid in boot_write_patches_in(image)
             if win is None or not _sa1_edits_present(patches[pid], win, image)]

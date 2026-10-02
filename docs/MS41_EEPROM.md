@@ -107,8 +107,8 @@ paths for these fields. This is **firmware-static evidence**, not bench or
 on-car qualification. The A/C idle-air correction is already multiplied by a
 calibration-dependent factor before saving; display the stored percentage,
 not a reconstructed live value. These are stored states, not ordinary tune
-parameters. Their representable storage ranges are not universally safe
-operating limits.
+parameters; advanced editing unlocks their known storage formats. Displayed
+ranges are representable storage ranges, not universally safe operating limits.
 
 The load-model state is the signed filtered difference between throttle-model
 load and measured/filtered load. Positive values raise corrected load and
@@ -116,8 +116,9 @@ negative values lower it. The exact common storage domain is signed Q8.8 load
 counts; the `5.46850393700787 mg/stroke` per whole count projection comes from
 the MS41.0 ID41 DAMOS `lm_add_te_ll` scale and is homologous on the later
 families. MS41.0 restores only the signed high byte at `053`; its low byte at
-`052` is saved and checksummed but not restored. The high byte has
-`5.468503937 mg/stroke` steps; the low byte remains preserved raw state. MS41.1 and MS41.2/.3 restore the complete word and
+`052` is saved and checksummed but not restored, so the editor exposes the high
+byte in `5.468503937 mg/stroke` steps and retains the low byte as separately
+named advanced raw state. MS41.1 and MS41.2/.3 restore the complete word and
 therefore retain `0.0213613435 mg/stroke` fractional steps.
 
 The repeat-start coolant-reference record is at MS41.0 `180..183`, MS41.1
@@ -127,9 +128,9 @@ expired, failed-check sentinel. At the next start, firmware computes
 `max(saved ECT - calibrated drop, 0)` and compares current ECT with that
 threshold. The byte is therefore a stored reference, not a status word or live
 coolant. Payload byte +1 participates in the additive check but has no admitted
-independent producer or consumer and remains preserved raw state. Setting byte
-+0 to `FF` marks the reference unavailable; a temperature uses the ordinary
-quantized encoding. The owning record check must match any changed payload.
+independent producer or consumer and remains advanced raw. The decoded editor's
+named **Set Not available (0xFF)** action writes only byte +0 and the owning
+record check; entering a temperature restores the ordinary quantized encoding.
 
 MS41.1 `1C8..1CB` and MS41.2/.3 `1C6..1C9` similarly use only payload byte +0
 for a persistent saturating warm-up-history counter. Cold-start ECT selects an
@@ -155,7 +156,8 @@ The leading word of every fuel record is stored CO alignment. `0x8000` is
 neutral and the MS41.0 DAMOS representation is
 `(raw-32768)*100/65536 %`; the other families use the homologous centered
 state. OEM service commands read only `(high_byte-0x80)` and write integral
-`0x100` steps. The persisted full word retains the fractional storage value.
+`0x100` steps. The stored full word retains finer resolution than those
+service-command steps.
 
 After the four named trims, MS41.0 has only its record check. MS41.1 stores two
 per-bank upstream-O2 monitor retained indices at `052..055`. Their stock valid
@@ -171,7 +173,8 @@ calibration window, but does not close a Hz or ms conversion, so the editor
 shows internal normalized counts. The final two bytes per bank are learned
 upper and lower O2 switching-voltage thresholds. Their voltage-domain role is
 closed, but an exact volts-per-count conversion is not; the editor therefore
-shows ADC counts. These are diagnostic history, not tune parameters.
+shows ADC counts. All remain advanced-editable diagnostic history, not tune
+parameters.
 
 The older misfire interpretation is superseded: the exact E5/E6 and E7/E8
 descriptors identify lambda/O2 monitoring; misfire and rough-running records
@@ -194,7 +197,8 @@ negative values increase it. The runtime applies the equivalent two-stage
 integer multiply/shift; diagnostic `raw>>8` is only a coarse export, not the
 engineering conversion. The convergence field is initialized from a
 calibration times 24 and driven toward zero; it is not a sixth correction or a
-time value.
+time value. The summary row only collapses the record; every stored child value
+remains advanced-editable.
 
 The signed load-model format and relative ignition-gain interpretation were
 also closed through exact load/save and runtime consumer chains. Older
@@ -212,8 +216,8 @@ averages the six corresponding live cells back into the one persisted table.
 The overall knock correction remains a separate scalar.
 
 The RPM and load breakpoints live in calibration flash, not in the EEPROM.
-Numeric breakpoints from a stock image are canonical reference axes; a tuned
-ROM can change them. Exact axes should come
+The canonical numeric breakpoints are reference axes; a tuned ROM can change
+them. Exact axes should come
 from the matching ROM and definition when those are available. The canonical
 references are:
 
@@ -353,7 +357,9 @@ MS41.2 stores ten fixed six-byte records at `152 + 6*i`. Their lookup order is
 internal IDs `44,45,46,47,48,49,57,58,0D,0E`: cylinder misfire in firing order
 1-5-3-6-2-4, mixture deviation bank 1/2, then post-catalyst lambda regulation
 bank 1/2. These are shared group-retention records, not one record per saved
-occurrence. Duplicate saved IDs refer to the same shared management record.
+occurrence. The editor nests a matching record under the first saved fault card;
+duplicate saved IDs show a reference to that same record, and unmatched records
+remain separate collapsible fault cards.
 
 Bytes +0/+2 are the observed minimum/maximum RPM buckets (`raw*32 RPM`), +1/+3
 are minimum/maximum filtered load (`raw*5.4470588235 mg/stroke`), +4 is state,
@@ -405,7 +411,7 @@ two-byte additive check. Both MS41.1 and MS41.2/.3 assign them one-for-one to
 catalyst-efficiency completions bank 1/2, secondary-air-system completions bank
 1/2, secondary-air-valve mechanical-sticking evaluations, tank-vent/leak
 diagnostic finalizations, and six-cylinder misfire evaluation windows. Four
-MS41.1 increment sites live in raw code islands omitted by the linear disassembly
+MS41.1 increment sites live in raw code islands omitted by the linear Ghidra
 export; direct canonical-image scanning and control-flow comparison recover the
 same seven roles without projecting later-family labels. Active increments are
 ordinary byte adds, so `255` wraps to `0`; DS2 service `89/1` clears all seven.
@@ -471,9 +477,9 @@ lambda-state diagnostic classification: the derived numeric code is 2 when
 saved lambda-state bit 3 is set, otherwise 8 when PT2 bit 1 is set, otherwise
 1; unavailable bank 2 produces 0. The human meanings of codes 1, 2, and 8 are
 unresolved, so no friendly PT2 state label is invented. The
-complete PT2 and lambda-controller words retain their known storage formats;
-only bit 3 of each saved lambda word has a cross-family interpretation as
-regulation active.
+complete PT2 and lambda-controller words remain advanced-editable; only bit 3
+of each saved lambda word receives a named masked edit because it is the sole
+cross-family bit closed as regulation active.
 
 These field roles, family layouts and scales are firmware-static evidence from
 the canonical programs and admitted diagnostic definitions. They are not bench

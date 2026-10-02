@@ -1,9 +1,11 @@
 import os
+import errno
 import sys
 import hashlib
 import json
 from pathlib import Path
 from dataclasses import asdict
+from unittest.mock import Mock
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -557,3 +559,70 @@ def test_concurrent_file_creation_is_never_overwritten(tmp_path, monkeypatch):
     entry, = backup_manager.BackupManager().entries
     assert entry.source == "imported"
     assert entry.sha256 == hashlib.sha256(b"external").hexdigest()
+
+
+@pytest.mark.parametrize("failure", [None, "collision", "copy", "fsync"])
+def test_move_when_android_denies_hardlinks(tmp_path, monkeypatch, failure):
+    source, destination = tmp_path / "source.bin", tmp_path / "destination.bin"
+    source.write_bytes(b"original capture")
+    android_os = Mock(wraps=os)
+    android_os.name = "posix"
+    android_os.link.side_effect = PermissionError(errno.EACCES, "Permission denied")
+    monkeypatch.setattr(backup_manager, "os", android_os)
+
+    def fail_copy(reader, writer):
+        writer.write(reader.read(3))
+        raise OSError("copy interrupted")
+
+    if failure == "collision":
+        destination.write_bytes(b"another capture")
+    elif failure == "copy":
+        monkeypatch.setattr(backup_manager.shutil, "copyfileobj", fail_copy)
+    elif failure == "fsync":
+        android_os.fsync.side_effect = OSError("flush interrupted")
+    if failure:
+        with pytest.raises(FileExistsError if failure == "collision" else OSError):
+            backup_manager._move_file(str(source), str(destination))
+        assert source.read_bytes() == b"original capture"
+        if failure == "collision":
+            assert destination.read_bytes() == b"another capture"
+        else:
+            assert not destination.exists()
+    else:
+        backup_manager._move_file(str(source), str(destination))
+        assert destination.read_bytes() == b"original capture"
+        assert not source.exists()
+    android_os.link.assert_called_once()
+
+
+def test_android_retries_denied_folder_migration_and_can_save_patch(tmp_path, monkeypatch):
+    mgr = _mgr(tmp_path, monkeypatch)
+    entry = mgr.add_data(bytes(512), "recovered.bin", notes="keep", source="ECU read")
+    legacy = asdict(entry)
+    legacy["folder"] = "test"
+    index = Path(backup_manager.INDEX_FILE)
+    index.write_text(json.dumps([legacy]))
+    move = backup_manager._move_file
+    denied = PermissionError(errno.EACCES, "Permission denied")
+    monkeypatch.setattr(backup_manager, "_move_file", Mock(side_effect=denied))
+    with pytest.raises(backup_manager.BackupIndexError, match="Folder migration"):
+        backup_manager.BackupManager()
+    journal = index.parent / ".folder-migration.json"
+    assert journal.exists() and Path(entry.path).read_bytes() == bytes(512)
+
+    monkeypatch.setattr(backup_manager, "_move_file", move)
+    android_os = Mock(wraps=os)
+    android_os.name = "posix"
+    android_os.link.side_effect = denied
+    monkeypatch.setattr(backup_manager, "os", android_os)
+    migrated = backup_manager.BackupManager()
+    recovered, = migrated.entries
+    assert asdict(recovered) == {**legacy, "filename": "test/recovered.bin"}
+    assert migrated.read_data(recovered.filename, recovered.sha256) == bytes(512)
+    assert not Path(entry.path).exists() and not journal.exists()
+    patched = migrated.add_data(bytes([1]) * 512, "patched.bin", source="patched")
+    migrated.update_folder_exact(patched.filename, patched.sha256, "test")
+    migrated.rename_exact(patched.filename, patched.sha256, "renamed.bin")
+    reloaded = backup_manager.BackupManager()
+    assert reloaded.read_data(patched.filename, patched.sha256) == bytes([1]) * 512
+    assert reloaded.exact_entry(patched.filename).source == "patched"

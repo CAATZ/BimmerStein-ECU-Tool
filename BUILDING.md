@@ -1,6 +1,6 @@
 # Building BimmerStein ECU Tool
 
-Beta 17 uses Nuitka for Windows x64 and x86 installers and portable packages.
+Beta 18 uses Nuitka for Windows x64 and x86 installers and portable packages.
 The public project is `GPL-3.0-only` and is marked **OFF-ROAD USE ONLY**.
 
 ## Build environments
@@ -38,34 +38,33 @@ on-car behavior. Render and inspect every manual PDF page before publication.
 
 ## Public firmware policy
 
-Keep Ignition Cut V7 and Launch Control V4/V5 in public releases until the
-release owner confirms the replacements work on a vehicle. Development revisions
-remain in the development checkout. Prepare the public snapshot from the last
-public release, carrying over the reviewed application and AMD flashing fixes.
-Compare the retained patch descriptors and tuning definitions byte-for-byte
-with that public baseline before building.
+Beta 18 includes Ignition Cut V11 on MS41.3 and V10 on MS41.0/.1/.2,
+Launch Control V11, CalGuard V6 and Soft-BSL V12. Preserve historical descriptors
+needed for installed-patch detection, migration and removal. Keep validation
+labels tied to the available evidence; bench and offline checks do not establish
+vehicle testing for every firmware and flash-chip combination.
 
-## Prepare Beta 17
+## Prepare Beta 18
 
 Build from a clean, reviewed source checkout. Release metadata records the
 source commit and must show `source_dirty: false`. Keep private projects,
 reference images and user data outside the source snapshot.
 
 ```powershell
-.\packaging\prepare_release.ps1 -Version 0.1.0b17 -PyQtLicenseBasis GPLv3
+.\packaging\prepare_release.ps1 -Version 0.1.0b18 -PyQtLicenseBasis GPLv3
 ```
 
 For both architectures, pass the path to a prepared 32-bit environment:
 
 ```powershell
-.\packaging\prepare_release.ps1 -Version 0.1.0b17 -PyQtLicenseBasis GPLv3 `
+.\packaging\prepare_release.ps1 -Version 0.1.0b18 -PyQtLicenseBasis GPLv3 `
     -Architectures x64,x86 -PythonX86Path '<x86-venv>\Scripts\python.exe'
 ```
 
 Use `-PythonPath` to select a different x64 environment, and `-IsccPath` if
 Inno Setup is not in its usual installation location. `-SkipInstaller` produces
 portable packages only. To build a single application folder, use
-`build_windows_nuitka.ps1 -Version 0.1.0b17 -Architecture x64`; the old
+`build_windows_nuitka.ps1 -Version 0.1.0b18 -Architecture x64`; the old
 `build_windows.ps1` command forwards to the same build.
 
 Application folders are written to `dist\x64\BimmerStein ECU Tool` and
@@ -78,5 +77,5 @@ Verify each portable package and installer by starting the app, then installing,
 starting and uninstalling in an isolated test directory. Check archive CRCs,
 manifest hashes, native runtime architecture, public content and required notices.
 
-The intended tag is `v0.1.0b17`. Preparation does not create a tag, commit, push
+The intended tag is `v0.1.0b18`. Preparation does not create a tag, commit, push
 or publish. Publication requires the release owner's final review.

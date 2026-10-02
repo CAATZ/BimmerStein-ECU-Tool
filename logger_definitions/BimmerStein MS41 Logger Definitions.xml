@@ -230,6 +230,167 @@
           <conversions><conversion units="AFR" storagetype="uint8" expr="x*0.05+8.25" format="0.00" gauge_min="8" gauge_max="22" gauge_step="1"/></conversions>
         </ecuparam>
 
+        <!-- Ignition-cut and launch-control V9/V7 channels; runtime admission stays in code. -->
+        <ecuparam id="BS_CUT_INPUT_80" name="Cut Input 80" desc="Cut-patch input 80" target="1">
+          <ecu id="1429861"><address>0x0000FD51</address></ecu><ecu id="1406464,SHINDE1,1437806"><address>0x0000FD61</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="BitWise(2,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_INPUT_81" name="Cut Input 81" desc="Cut-patch input 81" target="1">
+          <ecu id="1429861"><address>0x0000FD51</address></ecu><ecu id="1406464,SHINDE1,1437806"><address>0x0000FD61</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="BitWise(1,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_INPUT_82" name="Cut Input 82" desc="Cut-patch input 82" target="1">
+          <ecu id="1429861"><address>0x0000FD50</address></ecu><ecu id="1406464,SHINDE1,1437806"><address>0x0000FD60</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="BitWise(128,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_IGNITION_SWITCH" name="Ignition Cut Switch" desc="Ignition-cut selector" target="1">
+          <ecu id="1429861"><address>0x00013010</address></ecu><ecu id="1437806"><address>0x00013700</address></ecu><ecu id="1406464,SHINDE1"><address>0x00012A65</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="x" format="0"><replace value="0" with="Always"/><replace value="1" with="Input 80"/><replace value="2" with="Input 81"/><replace value="4" with="Input 82"/><replace value="255" with="Off"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_IGNITION_RPM" name="Ignition Cut RPM" desc="Ignition-cut RPM" target="1">
+          <ecu id="1429861"><address>0x00013011</address></ecu><ecu id="1437806"><address>0x00013701</address></ecu><ecu id="1406464,SHINDE1"><address>0x00012A66</address></ecu>
+          <conversions><conversion units="RPM" storagetype="uint8" expr="x*32" format="0"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_HYSTERESIS" name="Cut Hysteresis" desc="Ignition-cut hysteresis" target="1">
+          <ecu id="1429861"><address>0x00013012</address></ecu><ecu id="1437806"><address>0x00013702</address></ecu><ecu id="1406464,SHINDE1"><address>0x00012A67</address></ecu>
+          <conversions><conversion units="RPM" storagetype="uint8" expr="if(x==255,-1,x*32)" format="0"><replace value="-1" with="Legacy (0)"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_FIXED_IPW" name="Cut Fixed IPW" desc="Ignition-cut fixed injector pulse width" target="1">
+          <ecu id="1429861"><address>0x00013013</address></ecu><ecu id="1437806"><address>0x00013703</address></ecu><ecu id="1406464,SHINDE1"><address>0x00012A68</address></ecu>
+          <conversions><conversion units="ms" storagetype="uint16" endian="little" expr="if(x==65535,-1,x*0.00534)" format="0.00"><replace value="-1.00" with="Stock"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_SWITCH" name="Launch Control Switch" desc="Launch-control selector" target="1">
+          <ecu id="1429861"><address>0x00013020</address></ecu><ecu id="1437806"><address>0x00013710</address></ecu><ecu id="1406464"><address>0x0001352C</address></ecu><ecu id="SHINDE1"><address>0x000147E0</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="x" format="0"><replace value="0" with="Always"/><replace value="1" with="Input 80"/><replace value="2" with="Input 81"/><replace value="4" with="Input 82"/><replace value="255" with="Off"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_TYPE" name="Launch Cut Type" desc="Launch-control cut type" target="1">
+          <ecu id="1429861"><address>0x00013021</address></ecu><ecu id="1437806"><address>0x00013711</address></ecu><ecu id="1406464"><address>0x0001352D</address></ecu><ecu id="SHINDE1"><address>0x000147E1</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="x" format="0"><replace value="0" with="Fuel"/><replace value="1" with="Ignition"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_CLUTCH_POLARITY" name="Launch Clutch Polarity" desc="Launch-control clutch-input polarity" target="1">
+          <ecu id="1429861"><address>0x00013022</address></ecu><ecu id="1437806"><address>0x00013712</address></ecu><ecu id="1406464"><address>0x0001352E</address></ecu><ecu id="SHINDE1"><address>0x000147E2</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="x!=0" format="0"><replace value="0" with="Active-high (5V)"/><replace value="1" with="Active-low (0V)"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_RPM" name="Launch Control RPM" desc="Launch-control soft-cut RPM" target="1">
+          <ecu id="1429861"><address>0x00013023</address></ecu><ecu id="1437806"><address>0x00013713</address></ecu><ecu id="1406464"><address>0x0001352F</address></ecu><ecu id="SHINDE1"><address>0x000147E3</address></ecu>
+          <conversions><conversion units="RPM" storagetype="uint8" expr="x*32" format="0"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_ARM_SPEED" name="Launch Arm Speed" desc="Launch-control arming speed" target="1">
+          <ecu id="1429861"><address>0x00013024</address></ecu><ecu id="1437806"><address>0x00013714</address></ecu><ecu id="1406464"><address>0x00013530</address></ecu><ecu id="SHINDE1"><address>0x000147E4</address></ecu>
+          <conversions><conversion units="km/h" storagetype="uint8" expr="x" format="0"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_MAX_SPEED" name="Launch Max Speed" desc="Launch-control maximum speed" target="1">
+          <ecu id="1429861"><address>0x00013025</address></ecu><ecu id="1437806"><address>0x00013715</address></ecu><ecu id="1406464"><address>0x00013531</address></ecu><ecu id="SHINDE1"><address>0x000147E5</address></ecu>
+          <conversions><conversion units="km/h" storagetype="uint8" expr="x" format="0"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_MIN_TPS" name="Launch Min TPS" desc="Launch-control minimum throttle" target="1">
+          <ecu id="1429861"><address>0x00013026</address></ecu><ecu id="1437806"><address>0x00013716</address></ecu><ecu id="1406464"><address>0x00013532</address></ecu><ecu id="SHINDE1"><address>0x000147E6</address></ecu>
+          <conversions><conversion units="%" storagetype="uint8" expr="x*0.47" format="0"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_HARD_RPM" name="Launch Hard Cut RPM" desc="Launch-control hard-cut RPM" target="1">
+          <ecu id="1429861"><address>0x00013027</address></ecu><ecu id="1437806"><address>0x00013717</address></ecu><ecu id="1406464"><address>0x00013533</address></ecu><ecu id="SHINDE1"><address>0x000147E7</address></ecu>
+          <conversions><conversion units="RPM" storagetype="uint8" expr="if(x==255,-1,x*32)" format="0"><replace value="-1" with="Soft + 96"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_IGN_HYST" name="Launch Ignition Hysteresis" desc="Launch ignition-cut hysteresis" target="1">
+          <ecu id="1429861"><address>0x00013028</address></ecu><ecu id="1437806"><address>0x00013718</address></ecu><ecu id="1406464"><address>0x00013534</address></ecu><ecu id="SHINDE1"><address>0x000147E8</address></ecu>
+          <conversions><conversion units="RPM" storagetype="uint8" expr="if(x==255,-1,x*32)" format="0"><replace value="-1" with="Zero (0)"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_FIXED_IPW" name="Launch Ignition Fixed IPW" desc="Launch ignition-cut fixed injector pulse width" target="1">
+          <ecu id="1429861"><address>0x00013029</address></ecu><ecu id="1437806"><address>0x00013719</address></ecu><ecu id="1406464"><address>0x00013535</address></ecu><ecu id="SHINDE1"><address>0x000147E9</address></ecu>
+          <conversions><conversion units="ms" storagetype="uint16" endian="little" expr="if(x==65535,-1,x*0.00534)" format="0.00"><replace value="-1.00" with="Stock"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_IGNITION_REQUEST" name="Ignition Cut Request" desc="Runtime ignition-cut request" target="1">
+          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000E847</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="BitWise(1,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_IGN_REQUEST" name="Launch Ignition Request" desc="Runtime launch ignition-cut request" target="1">
+          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000E847</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="BitWise(2,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_FUEL_ACTIVE" name="Launch Fuel Cut Active" desc="Runtime launch fuel-cut state" target="1">
+          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000E847</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="BitWise(4,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_INTENTIONAL" name="Intentional Combustion Cut" desc="Intentional combustion-cut state" target="1">
+          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000E847</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="(BitWise(240,x,1)==160)&amp;&amp;(BitWise(7,x,1)!=0)" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_RUNTIME" name="Cut Patch Runtime" desc="Cut-patch runtime marker" target="1">
+          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000E847</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="BitWise(240,x,1)==160" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_ARMED" name="Launch Armed" desc="Launch armed latch" target="1">
+          <ecu id="1429861"><address>0x0000FD80</address></ecu><ecu id="1406464,SHINDE1,1437806"><address>0x0000FDB6</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="BitWise(64,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LEGACY_FD5A7" name="Launch Legacy FD5A.7" desc="Legacy launch latch" target="1">
+          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000FD5A</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="BitWise(128,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_STOCK_LIMITER" name="Stock Limiter Active" desc="Stock limiter state" target="1">
+          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000FD13</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="BitWise(128,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_STAGE_COUNT" name="Fuel Cut Stage Count" desc="Fuel-cut stage count" target="1">
+          <ecu id="1429861"><address>0x0000ED51</address></ecu><ecu id="1437806"><address>0x0000F02B</address></ecu><ecu id="1406464,SHINDE1"><address>0x0000F013</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="x" format="0"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_RPM" name="Cut RPM" desc="Runtime cut RPM" target="1">
+          <ecu id="1429861"><address>0x0000FAE6</address></ecu><ecu id="1406464,SHINDE1,1437806"><address>0x0000FC3C</address></ecu>
+          <conversions><conversion units="RPM" storagetype="uint8" expr="x*32" format="0"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_TPS" name="Launch TPS" desc="Runtime launch throttle" target="1">
+          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000E8D0</address></ecu>
+          <conversions><conversion units="%" storagetype="uint8" expr="x*0.47" format="0.0"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_SPEED" name="Launch Speed" desc="Runtime launch speed" target="1">
+          <ecu id="1429861"><address>0x0000EDF4</address></ecu><ecu id="1437806"><address>0x0000F1BE</address></ecu><ecu id="1406464,SHINDE1"><address>0x0000F19A</address></ecu>
+          <conversions><conversion units="km/h" storagetype="uint8" expr="x" format="0"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_FUEL_ADD_B1" name="Fuel Trim Additive" desc="Additive fuel trim bank 1" target="1">
+          <ecu id="1429861"><address>0x0000ED66</address></ecu><ecu id="1437806"><address>0x0000F040</address></ecu><ecu id="1406464,SHINDE1"><address>0x0000F028</address></ecu>
+          <conversions><conversion units="ms" storagetype="uint16" endian="little" expr="(x-32768)*0.00534" format="0.00" gauge_min="-5" gauge_max="5" gauge_step="1"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_FUEL_ADD_B2" name="Fuel Trim Additive B2" desc="Additive fuel trim bank 2" target="1">
+          <ecu id="1429861"><address>0x0000EDA0</address></ecu><ecu id="1437806"><address>0x0000F0FC</address></ecu><ecu id="1406464,SHINDE1"><address>0x0000F0D4</address></ecu>
+          <conversions><conversion units="ms" storagetype="uint16" endian="little" expr="(x-32768)*0.00534" format="0.00" gauge_min="-5" gauge_max="5" gauge_step="1"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAMBDA_REG_B1" name="Lambda Regulation B1" desc="Lambda regulation bank 1" target="1">
+          <ecu id="1429861"><address>0x0000ED58</address></ecu><ecu id="1437806"><address>0x0000F032</address></ecu><ecu id="1406464,SHINDE1"><address>0x0000F01A</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="BitWise(8,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAMBDA_REG_B2" name="Lambda Regulation B2" desc="Lambda regulation bank 2" target="1">
+          <ecu id="1429861"><address>0x0000ED92</address></ecu><ecu id="1437806"><address>0x0000F0EE</address></ecu><ecu id="1406464,SHINDE1"><address>0x0000F0C6</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="BitWise(8,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_O2_FRONT_B1" name="O2 Heater Front B1" desc="Front oxygen-sensor heater bank 1" target="1">
+          <ecu id="1429861"><address>0x0000EDE3</address></ecu><ecu id="1437806"><address>0x0000F1AF</address></ecu><ecu id="1406464,SHINDE1"><address>0x0000F189</address></ecu>
+          <conversions><conversion units="%" storagetype="uint8" expr="x*100/255" format="0.0" gauge_min="0" gauge_max="100" gauge_step="10"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_O2_FRONT_B2" name="O2 Heater Front B2" desc="Front oxygen-sensor heater bank 2" target="1">
+          <ecu id="1429861"><address>0x0000EDEB</address></ecu><ecu id="1437806"><address>0x0000F1B7</address></ecu><ecu id="1406464,SHINDE1"><address>0x0000F191</address></ecu>
+          <conversions><conversion units="%" storagetype="uint8" expr="x*100/255" format="0.0" gauge_min="0" gauge_max="100" gauge_step="10"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_O2_REAR_B1" name="O2 Heater Rear B1" desc="Rear oxygen-sensor heater bank 1" target="1">
+          <ecu id="1437806"><address>0x0000F07C</address></ecu><ecu id="1406464,SHINDE1"><address>0x0000F064</address></ecu>
+          <conversions><conversion units="%" storagetype="uint8" expr="x*100/255" format="0.0" gauge_min="0" gauge_max="100" gauge_step="10"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_O2_REAR_B2" name="O2 Heater Rear B2" desc="Rear oxygen-sensor heater bank 2" target="1">
+          <ecu id="1437806"><address>0x0000F138</address></ecu><ecu id="1406464,SHINDE1"><address>0x0000F110</address></ecu>
+          <conversions><conversion units="%" storagetype="uint8" expr="x*100/255" format="0.0" gauge_min="0" gauge_max="100" gauge_step="10"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAMBDA_COUNTER" name="Lambda Monitor Counter" desc="Lambda monitor counter" target="1">
+          <ecu id="1406464,SHINDE1,1437806"><address>0x0000EDE6</address></ecu>
+          <conversions><conversion units="" storagetype="uint16" endian="little" expr="x" format="0"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAMBDA_FD0E" name="Lambda Functions FD0E" desc="Lambda function flags FD0E" target="1">
+          <ecu id="1406464,SHINDE1"><address>0x0000FD0E</address></ecu>
+          <conversions><conversion units="" storagetype="uint16" endian="little" expr="x" format="0"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAMBDA_FD10" name="Lambda Functions FD10" desc="Lambda function flags FD10" target="1">
+          <ecu id="1406464,SHINDE1"><address>0x0000FD10</address></ecu>
+          <conversions><conversion units="" storagetype="uint16" endian="little" expr="x" format="0"/></conversions>
+        </ecuparam>
       </ecuparams>
     </protocol>
   </protocols>

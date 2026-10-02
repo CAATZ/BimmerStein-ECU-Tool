@@ -50,12 +50,12 @@ def _synthetic_patch_records() -> list[dict]:
         {
             "id": "cal_guard",
             "title": "CalGuard compatibility + recovery guard",
-            "version": "V5",
+            "version": "V6",
             "description": "Adds a compatibility gate and boot-recovery window.",
             "user_description": "Adds a compatibility gate and boot-recovery window.",
             "target": "MS41.3",
-            "status": "TESTED",
-            "tested": True,
+            "status": "EXPERIMENTAL",
+            "tested": False,
             "requires": ["softbsl_loader"],
             "conflicts": [],
             "ok": True,
@@ -86,10 +86,10 @@ def _synthetic_patch_records() -> list[dict]:
             "removable": True,
         },
         {
-            "id": "ignition_cut_v7",
+            "id": "ignition_cut_v11",
             "title": "Ignition Cut",
-            "version": "V7",
-            "description": "Independent ignition-cut limiter using the six-channel coil output gate.",
+            "version": "V11",
+            "description": "Independent ignition-cut limiter with hysteresis and fixed-IPW control.",
             "user_description": "Adds an independent ignition-cut limiter.",
             "target": "MS41.3",
             "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
@@ -105,15 +105,15 @@ def _synthetic_patch_records() -> list[dict]:
             "removable": False,
         },
         {
-            "id": "launch_control_v5",
+            "id": "launch_control_v11",
             "title": "Launch Control / 2-step",
-            "version": "V5",
-            "description": "Independent launch requester using fuel cut or the shared V7 ignition engine.",
+            "version": "V11",
+            "description": "Independent launch requester using fuel cut or the shared V11 ignition engine.",
             "user_description": "Adds independently armed staged launch control.",
             "target": "MS41.3",
             "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
             "tested": False,
-            "requires": ["ignition_cut_v7"],
+            "requires": ["ignition_cut_v11"],
             "conflicts": [],
             "ok": True,
             "badge": "",
@@ -126,12 +126,12 @@ def _synthetic_patch_records() -> list[dict]:
         {
             "id": "softbsl_loader",
             "title": "Soft-BSL 0x5A loader",
-            "version": "V11",
+            "version": "V12",
             "description": "Installs the persistent Soft-BSL entry loader.",
             "user_description": "Installs the persistent Soft-BSL entry loader.",
             "target": "MS41.3",
-            "status": "TESTED",
-            "tested": True,
+            "status": "EXPERIMENTAL",
+            "tested": False,
             "requires": [],
             "conflicts": [],
             "ok": True,
@@ -288,18 +288,24 @@ def main() -> int:
     _save_window(window, app, images / "eeprom.png")
 
     original_available = patch_service.available_patches
+    original_parameters = patch_service.editable_parameters
     try:
         patch_service.available_patches = lambda _data: _synthetic_patch_records()
+        patch_service.editable_parameters = lambda _data: [
+            {"patch_id": patch_id, "editable": True, "blocked_reason": ""}
+            for patch_id in ("ignition_cut_v11", "launch_control_v11")
+        ]
         window._patch_base = bytes(256 * 1024)
         window._patch_base_source = "Synthetic_MS41_3_Demo.bin"
         window.lbl_patch_base.setText(
             "Base: Synthetic_MS41_3_Demo.bin — MS41.3 documentation example"
         )
         window._refresh_patch_list()
-        window._patch_checkboxes["ignition_cut_v7"].setChecked(True)
-        window._patch_checkboxes["launch_control_v5"].setChecked(True)
+        window._patch_checkboxes["ignition_cut_v11"].setChecked(True)
+        window._patch_checkboxes["launch_control_v11"].setChecked(True)
     finally:
         patch_service.available_patches = original_available
+        patch_service.editable_parameters = original_parameters
     _select_tab(window, "Patches")
     _save_window(window, app, images / "patches.png")
 

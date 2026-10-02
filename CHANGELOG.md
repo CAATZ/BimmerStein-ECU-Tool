@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 Release numbers use a `major.minor.patch` base and the compact `bN` beta suffix
 shared by BimmerStein applications.
 
+## [0.1.0b18] - Release candidate
+
+### Fixed
+
+- Restored boot-owned CalGuard recovery and calibration compatibility checks,
+  with a shared 40 ms startup wait that is restored when CalGuard is removed.
+- Corrected Launch Control arming, speed and throttle release conditions,
+  independent cut thresholds, and configurable fuel hysteresis A/B.
+- Avoided reading the full CalGuard patch before normal Soft-BSL entry while
+  retaining exact installed-patch checks for direct recovery.
+- Aligned ECU Info actions and corrected their hover descriptions.
+
+### Changed
+
+- Includes Launch Control V11, Ignition Cut V11 on MS41.3 and V10 on MS41.0/.1/.2,
+  CalGuard V6, Soft-BSL V12 and AMD flash driver V4.
+- Added numeric patch controls, explicit stock and automatic modes, loaded stock
+  hysteresis values, compact descriptions and aligned patch-table headers.
+- Preserved historical patch detection, migration, removal and boot-write checks.
+
 ## [0.1.0b17] - 2026-09-21
 
 ### Fixed
@@ -23,38 +43,39 @@ shared by BimmerStein applications.
   portable packages. New installations use a simple application name for the
   folder and shortcuts; updates retain their existing location.
 
-
-## 0.1.0 Beta 16
-
-EEPROM editing, Bins folders, improved live and saved data viewing, searchable logs,
-resizable layouts, tested 29F400BB dual-bank support, and tested Windows 7 packages. See [release notes](RELEASE_NOTES.md).
-
-
-All notable changes to this project are documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Release numbers use a `major.minor.patch` base and the compact `bN` beta suffix
-shared by BimmerStein applications.
-
-## [0.1.0b15] - 2026-09-04
+## [0.1.0b16] - Release candidate
 
 ### Fixed
 
-- Preserved the system font size and improved scrolling on smaller or scaled displays.
-- Stopped Soft-BSL retries and reconnection when the ECU's return to normal operation
-  cannot be confirmed. Completed reads are preserved with their recovery error.
-- Made interrupted Bins catalogue saves recoverable after the storage problem is
-  resolved, while retaining the exact saved image and its original metadata.
-- Protected Bins metadata from imported filename collisions and reported archive
-  failures without incorrectly displaying a successful backup.
-- Corrected checksum-copy filenames for uppercase `.BIN` and extensionless inputs.
-- Rejected malformed saved definition settings, VIN input, and firmware-ID data.
+- MS41.3 Ignition Cut V11 replaces the defective V10 splice in SS1v2's scheduled
+  wideband routine. The splice overwrote native instruction operands and wrote
+  RPM into Port 3, disabling K-line transmit even with cut off. Fresh installs
+  and V10 upgrades restore the original instructions and preserve calibrations.
+  MS41.3 Launch V7 now requires V11; MS41.0/.1/.2 retain V10.
+- Ignition Cut V10 for MS41.0/.1/.2 and V11 for MS41.3 correct the V8/V9
+  return-stack defect. They restore the native software-stack saves that V8/V9
+  incorrectly replaced with hardware pushes, corrupting the later return even
+  with cut disabled.
+- Cut guards now cover paired fuel-trim updates, learning/mixture qualifiers,
+  accepted oxygen samples and incomplete catalyst observation windows. Recovery
+  uses fresh bank samples and the late-family native misfire recovery counters.
+  Genuine electrical faults, fallback resets and prior fault evidence remain.
+- Corrected DTC100 reason 0x1000's description to include its separate ASC1
+  command 0x103 timeout producer. DTC100 remains enabled.
+- Patch dependencies are validated against the finished image after upgrades.
+- Soft-BSL V11 preserves the supported MS41.2 identity-history storage; CalGuard
+  V5 preserves the native startup branch and the recovery path after ordinary
+  program replacement. Both revisions still require bench validation.
 
 ### Changed
 
-- Refreshed the Windows x64 documentation and recovery instructions for Beta 15.
-- Retained the published Beta 14 firmware patches and matching calibration XML:
-  Ignition Cut V7 and Launch Control V4/V5 remain unchanged.
+- Expanded exact-byte admission through native callers and final returns,
+  including SP/R0, both banks, delayed misfire counting and cut-to-release cases.
+  Retained defective predecessor bytes as negative regression fixtures.
+- Updated patch controls, definitions and the read-only cut diagnostic capture
+  for MS41.3 V11 and MS41.0/.1/.2 V10. The capture distinguishes V9, defective
+  V10, and V11, and reports recovery state only for a matching hook profile.
+  The current revisions require on-car validation.
 
 ## [0.1.0b14] - 2026-08-23
 
@@ -79,27 +100,24 @@ shared by BimmerStein applications.
   different or malformed image cannot be presented as compatible.
 - Improved cleanup and recovery after interrupted reads, writes, coding, and
   conversion operations.
-- Allowed Soft-BSL and CalGuard reinstall or update from recognized older
-  versions when the ECU boot region remains healthy.
-- Kept boot-preserving full-file writes from stopping on an irrelevant
-  flash-chip-family difference.
 
 ### Changed
 
-- Retained the Beta 13 Ignition Cut V7 and Launch Control V4/V5 releases; newer
-  experimental revisions are not included.
-- Added a prominent warning that the Coding tab is highly experimental and has
-  not completed vehicle testing.
+- Refreshed the experimental firmware options and made their test status clear
+  in the app and release notes.
 - Refreshed the Windows x64 manual and release packaging for Beta 14.
 
-## [0.1.0b13] - 2026-08-05
+## [0.1.0b13] - 2026-07-27
 
 ### Added
 
-- Added automatic MS41 EEPROM layout detection with a manual override, CH341A
-  full-image service/recovery workflows, and Windows-safe automatic filenames.
-- Added exact-image release admission for the supported patch suite and
-  Intel/AMD flash drivers; missing required inputs now fail the release gate.
+- Added Ignition Cut V9 and Launch Control V7 for MS41.0, MS41.1, MS41.2,
+  and MS41.3, with independent standalone and launch requests, separate RPM
+  hysteresis and fixed injector-pulse-width settings, and matching bundled
+  patch definitions.
+- Added exact-image exact-byte execution admission to release preparation for the
+  supported patch suite and Intel/AMD flash drivers; missing private reference
+  inputs now fail the release gate instead of skipping it.
 - Restored AlphaN MAF-failsafe V2 with the historical A14-XOR transfer error
   corrected. It remains **UNTESTED** for physical/on-car behavior.
 - Added read-only comparison of two Bins with SHA-256 catalog identity,
@@ -109,11 +127,12 @@ shared by BimmerStein applications.
 
 ### Fixed
 
-- Corrected regular-DS2 write fallback so eligible native-fast startup failures
-  retry at 9600 baud instead of ending the operation immediately.
-- Accepted the two-byte empty DTC response (`00 00`) returned by some ECUs.
-- Allowed CH341A EEPROM reads before a manual layout is selected and sanitized
-  unreadable ECU identifiers before using them in Windows filenames.
+- Corrected MS41.0 cut-switch inputs and MS41.0/MS41.1 launch-speed sources,
+  and added cut-active adaptation and diagnostic cleanup guards while retaining
+  O2-heater electrical monitoring.
+- Hid Ignition Cut and Launch Control diagnostic rows unless the V9 runtime
+  marker is active, and completed the Live Data calibration snapshot with
+  clutch polarity, arm/max speed, minimum TPS, and hard-cut RPM.
 - Hardened Soft-BSL Phase 1 startup with bounded normal-DS2 identity retries
   and no unsafe fallback after an indeterminate native-fast start.
 - Kept provisional Connect transports worker-owned through setup and cleanup,
@@ -134,11 +153,8 @@ shared by BimmerStein applications.
   tooltips. A selected full-ROM Bin can now be opened directly in Patches.
 - Shortened Bins toolbar labels and made single-Bin actions unambiguous when
   two rows are selected for comparison.
-- Retained the Beta 12 Ignition Cut V7 and Launch Control V4/V5 payloads and
-  matching definitions. Newer experimental revisions are not included.
-- Ignition Cut V7 and Launch Control V4/V5 still require the vehicle testing or
-  retesting indicated by their descriptors; AlphaN MAF-failsafe remains
-  untested.
+- Ignition Cut V9 and Launch Control V7 are offline exact-byte verified but still require
+  on-car testing; AlphaN MAF-failsafe remains untested.
 
 ## [0.1.0b12] - 2026-07-26
 
@@ -192,7 +208,7 @@ shared by BimmerStein applications.
 - Revved MS41.3 Launch Control to V5 and relocated its controls to the dedicated
   `0x47E0-0x47E7` calibration block, allowing Launch and boost control together.
   Released V4 remains detectable and remove-only for migration, and the bundled
-  calibration definitions now expose the V5 addresses.
+  Calibration definitions now expose the V5 addresses.
 
 ## [0.1.0b9] - 2026-07-23
 
@@ -203,7 +219,7 @@ shared by BimmerStein applications.
 - Ported Ignition Cut V7 and Launch Control V4 to MS41.0 and MS41.1, with
   firmware-specific splice sites, collision checks, and offline verification gates.
 - Added the closed-throttle VANOS minimum-RPM retrofit to MS41.1 and expanded
-  the bundled calibration patch definitions for MS41.0 and MS41.1 partial and
+  the bundled patch definitions for MS41.0 and MS41.1 partial and
   full-ROM images.
 
 ### Fixed
@@ -263,8 +279,8 @@ shared by BimmerStein applications.
 
 ### Changed
 
-- Promoted the Nuitka installer and portable ZIP to a supported packaging
-  option while retaining the PyInstaller build.
+- Promoted the compiled installer and portable ZIP to a supported packaging
+  option alongside the standard edition.
 - Kept the Soft-BSL-only loader patch out of the general Patches tab.
 
 ## [0.1.0b5] - 2026-07-21
@@ -289,7 +305,7 @@ shared by BimmerStein applications.
 
 ### Added
 
-- Added a Nuitka Windows installer and portable ZIP as a second packaging
+- Added a compiled Windows installer and portable ZIP as a second packaging
   option with a distinct installer identity.
 
 ### Fixed
@@ -353,19 +369,19 @@ configuration, patching, and recovery workflows.
 - DTC read and clear with MS41-specific fault descriptions.
 - Live-data monitoring, fast telegram mode, and adaptation reset workflows.
 - Offline ROM Analyzer for variant, ECU ID, CAL ID, VIN, checksum state, and
-  user-supplied calibration XML definitions.
+  user-supplied XML calibration definitions.
 - Backup cataloguing with automatic VIN and CAL-ID naming.
 - Collision-safe firmware patch composition with checksum recomputation and
   deprecated-patch detection/removal.
 - Soft-BSL install/read/write workflows and in-circuit hardware-BSL recovery
   for Intel 28F200 and AMD/JEDEC 29F200/29F400 flash chips.
 - ECU identity and ISN reading plus EWS2 alignment helpers.
-- PyQt5 desktop interface for live ECU operations and offline analysis.
+- Desktop interface for live ECU operations and offline analysis.
 - Stock native-fast DS2 reads and writes with direct 187,500 baud operation,
   pre-erase stability checks, and safe fallback to normal DS2.
 - Optimized Intel and AMD/JEDEC Soft-BSL RAM agents with retained-session
   recovery after post-erase failures.
-- D2XX-preferred hardware-BSL transport with compatible pyserial fallback.
+- D2XX-preferred hardware-BSL transport with compatible standard serial fallback.
 - BimmerStein ECU Tool product identity, application artwork, illustrated user
   manual, reproducible synthetic screenshots, and release-package verification.
 - Ignition Cut V7 at the proven six-channel P1L coil final-stage charge commands,
@@ -379,7 +395,7 @@ configuration, patching, and recovery workflows.
 ### Changed
 
 - Relicensed the public project from MIT to GNU GPL version 3 and designated the
-  current release track as beta, using the free GPLv3 PyQt5 distribution path.
+  current release track as beta, with the GPLv3 dependency distribution path.
 - Added a persistent off-road-use-only notice to the application, README,
   release notes, user manual, and release metadata.
 - ECU Config live writes now keep calibration-only edits on the 24 KB path while

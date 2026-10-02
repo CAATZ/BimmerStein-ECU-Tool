@@ -1,0 +1,159 @@
+{
+  "id": "launch_control_v11_ms412",
+  "family_id": "launch_control_v11",
+  "version": "V11",
+  "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
+  "tested": false,
+  "verification": "Exact installed V11 bytes passed full private emulator admission on MS41.0/.1/.2/.3, paired original-native staged-limiter comparisons, separate A/B scalar ABI checks, stock-hysteresis priority and disarm/rearm/fault transitions, unchanged activation/spark regressions, and configured predecessor migration/removal. No on-car V11 proof is claimed.",
+  "title": "Launch Control / 2-step",
+  "user_description": "Adds launch control using the native staged fuel limiter or shared ignition cut. Fuel soft and hard RPM remain independent. Separate fuel recovery thresholds can follow stock or use launch settings; native limits and hysteresis take priority.",
+  "description": "MS41.2 Launch Control V11. E847.1 is the launch-only spark-cut request, E847.2 records actual native launch fuel cut, and the launch-arm latch uses IRAM FDB6.6, certified free on the canonical 1406464 image. LC_HYST is RPM/32 (FF means zero hysteresis), and LC_IPW is uint16 x0.00534 ms (FFFF preserves stock injection); both apply only to launch ignition mode. Ignition mode never clears standalone E847.0, and LC_IPW wins while both spark requests are active. Fuel mode retains the native staged limiter and caps the independent explicit or automatic launch hard threshold at native hard RPM. Soft remains min(native soft, launch soft), independently of hard, including crossed thresholds. LC_FUEL_HYST_B/A select native taper/clear hysteresis in RPM/32; FF independently follows stock. E847.3 selects stock hysteresis for the rest of an active native episode when a native bound governs or is reached, or launch fuel disarms. Native stages, countdowns, saturating subtraction, and downstream inhibits remain unchanged. Always mode acts as an asserted input only after the shared speed and throttle gates; it cannot rearm at or above LC_ARMSPEED.",
+  "target": "MS41.2",
+  "recompute": [
+    "program"
+  ],
+  "requires": [
+    "ignition_cut_v10_ms412"
+  ],
+  "conflicts": [
+    "launch_control_v2_ms412",
+    "launch_control_v3_ms412",
+    "launch_control_v4_ms412",
+    "launch_control_v6_ms412",
+    "launch_control_v7_ms412",
+    "launch_control_v8_ms412",
+    "launch_control_v9_ms412",
+    "launch_control_v10_ms412"
+  ],
+  "supersedes": [
+    "launch_control_v2_ms412",
+    "launch_control_v3_ms412",
+    "launch_control_v4_ms412",
+    "launch_control_v6_ms412",
+    "launch_control_v7_ms412",
+    "launch_control_v8_ms412",
+    "launch_control_v9_ms412",
+    "launch_control_v10_ms412"
+  ],
+  "cave": {
+    "region": "proghigh",
+    "base": 237440,
+    "splice_off": 252200,
+    "splice_op": "jmps",
+    "relocatable": false,
+    "splices": [
+      {
+        "off": 252200,
+        "base": 237440,
+        "op": "jmps"
+      },
+      {
+        "off": 149480,
+        "base": 236800,
+        "op": "jmps"
+      },
+      {
+        "off": 149642,
+        "base": 237888,
+        "op": "calls"
+      },
+      {
+        "off": 149802,
+        "base": 237888,
+        "op": "calls"
+      },
+      {
+        "off": 149492,
+        "base": 237088,
+        "op": "calls"
+      },
+      {
+        "off": 149526,
+        "base": 236988,
+        "op": "calls"
+      }
+    ],
+    "cals": {
+      "LC_SW": 95532,
+      "LC_CUTTYPE": 95533,
+      "LC_CLUTCHPOL": 95534,
+      "LC_MAXRPM": 95535,
+      "LC_ARMSPEED": 95536,
+      "LC_MAXSPEED": 95537,
+      "LC_MINTPS": 95538,
+      "LC_HARDRPM": 95539,
+      "LC_HYST": 95540,
+      "LC_IPW": 95541,
+      "LC_FUEL_HYST_B": 95543,
+      "LC_FUEL_HYST_A": 95544
+    }
+  },
+  "edits": [
+    {
+      "off": 149458,
+      "expect": "9a180940",
+      "data": "9a180940"
+    },
+    {
+      "off": 149480,
+      "expect": "8a0902f0",
+      "data": "fa0300dd"
+    },
+    {
+      "off": 149492,
+      "expect": "c2fdba02",
+      "data": "da0320de"
+    },
+    {
+      "off": 149526,
+      "expect": "c2fdb902",
+      "data": "da03bcdd"
+    },
+    {
+      "off": 149642,
+      "expect": "43f887db",
+      "data": "da0340e1"
+    },
+    {
+      "off": 149802,
+      "expect": "43f887db",
+      "data": "da0340e1"
+    },
+    {
+      "off": 236800,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4ecf5e6000400f3f847e867f8f00047f8a0003d288a0904f0e7f8f70065f847e89a5b1b60f3f82d3549803d17f3f814f043f82f35fd08f3fa3cfc41a89d0443fa87db9d010d03e18a75fa47e8f3fa2f3541a89d08f7fa14f00d059a0903f0e18a75fa47e8fcf5fcf4fc008a0902f0fa022609fa02f007ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 236988,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ec00ecf4e6000400c2fdb9029a5b1160f3f82d3549803d0df3f847e867f8f80047f8a0003d06c2f4373546f4ff002d01f0d4fcf4fc00fc88f0dddb00ffff"
+    },
+    {
+      "off": 237088,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ec00ecf4e6000400c2fdba029a5b1160f3f82d3549803d0df3f847e867f8f80047f8a0003d06c2f4383546f4ff002d01f0d4fcf4fc00fc88f0dddb00ffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 237440,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4ecf5ecf6e6000400f3fa47e867faf00047faa0002d04e7faa000f7fa47e8f3f82c3547f8ff002d31f3f89af143f831359d2cf3f8d0e843f832358d27f3f89af143f830359d23f3f82c3549802d1c49813d04f3f861fd69820d0c49823d04f3f861fd69810d0649843d10f3f860fd67f88000f3fa2e3549a02d0349802d040d0649803d010d036f5b0d016e5bf3f8b6fd67f840002d42f3f82d3549802d2c49813d3ce7f8fb0065f847e8f3f847e869822d14f3f8343547f8ff002d07f3fa2f3541a88d032d0221a80d03f3fa2f350d00f3f83cfc418a8d0a0d05f3f83cfc43f82f358d04e12875f847e80d1be7f8fd0065f847e80d16e7f8fd0065f847e8f3f813fd67f880002d04e14875f847e80d09e7f8fb0065f847e80d04e7f8f90065f847e8fcf6fcf5fcf4fc00f3f89af1fa032c99"
+    },
+    {
+      "off": 237824,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 237888,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf5e6000400f3fab6fd67fa40002d18f3fa2d3549a03d14f3fa333547faff003d0af3fa2f3547fafd008d03e7faff000d0209a30d0043fa87db9d02418a0d0243f887dbfcf5fc00db00ffffffffffffffffffff"
+    },
+    {
+      "off": 252200,
+      "expect": "f3f89af1",
+      "data": "fa0380df"
+    }
+  ],
+  "revert_superseded": true
+}

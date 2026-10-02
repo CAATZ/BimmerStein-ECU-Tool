@@ -491,9 +491,11 @@ class _FakeReadSerial:
     Enough to drive read_full/read_memory_range end-to-end without real I/O."""
     is_open = True
 
-    def __init__(self):
+    def __init__(self, payload_deltas=()):
         self.timeout = 1.5
         self._pending = b""
+        self.payload_deltas = iter(payload_deltas)
+        self.requests = []
 
     def reset_input_buffer(self): self._pending = b""
     def reset_output_buffer(self): pass
@@ -504,14 +506,59 @@ class _FakeReadSerial:
     def write(self, frame):
         args = frame[3:-1]                      # READ_MEM args = addr(4) + len(1)
         n = args[4] if len(args) >= 5 else 1
-        resp = bytes([0x12, 0, 0xA0]) + bytes(n)
-        resp = bytes([0x12, len(resp) + 1, 0xA0]) + bytes(n)
+        self.requests.append((int.from_bytes(args[:4], "big"), n))
+        n += next(self.payload_deltas, 0)
+        resp = bytes([0x12, n + 4, 0xA0]) + bytes(n)
         self._pending = resp + bytes([_xor(resp)])
         return len(frame)
 
     def read(self, n):
         chunk, self._pending = self._pending[:n], self._pending[n:]
         return chunk
+
+
+@pytest.mark.parametrize("payload_delta", (-1, 0, 1))
+def test_read_mem_requires_exact_payload_length(payload_delta):
+    d = DS2Interface("COM_TEST", echo=False)
+    d._ser = _FakeReadSerial((payload_delta,))
+
+    if payload_delta:
+        with pytest.raises(ds2.DS2Error, match="expected 4 bytes, got"):
+            d.read_mem(0x10000, 4)
+    else:
+        assert d.read_mem(0x10000, 4) == bytes(4)
+    assert d._ser.requests == [(0x10000, 4)]
+
+
+@pytest.mark.parametrize("payload_delta", (-1, 1))
+def test_read_range_retries_wrong_length_at_same_address(monkeypatch, payload_delta):
+    monkeypatch.setattr(ds2.time, "sleep", lambda _seconds: None)
+    d = DS2Interface("COM_TEST", echo=False)
+    d._ser = _FakeReadSerial((payload_delta,))
+    progress = []
+
+    assert d.read_memory_range(
+        0x10000, 8, chunk=4,
+        progress_cb=lambda done, total, label: progress.append((done, total)),
+    ) == bytes(8)
+    assert d._ser.requests == [(0x10000, 4), (0x10000, 4), (0x10004, 4)]
+    assert progress == [(4, 8), (8, 8)]
+
+
+@pytest.mark.parametrize("payload_delta", (-1, 1))
+def test_read_range_exhausts_wrong_length_retries(monkeypatch, payload_delta):
+    monkeypatch.setattr(ds2.time, "sleep", lambda _seconds: None)
+    d = DS2Interface("COM_TEST", echo=False)
+    d._ser = _FakeReadSerial((payload_delta,) * 3)
+    progress = []
+
+    with pytest.raises(ds2.DS2Error, match="expected 4 bytes, got"):
+        d.read_memory_range(
+            0x10000, 8, chunk=4,
+            progress_cb=lambda done, total, label: progress.append((done, total)),
+        )
+    assert d._ser.requests == [(0x10000, 4)] * 3
+    assert progress == []
 
 
 def test_read_full_forwards_numeric_progress():

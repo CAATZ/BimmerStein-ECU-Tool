@@ -41,6 +41,47 @@ def test_base_version_of_ms41_3():
     assert patch_service.base_version(ref("MS41.3")) == "MS41.3"
 
 
+@pytest.mark.parametrize("marker", [b"\xa5\x5a\x42\xbd", b"\xa5\x5a\x54\xab"])
+def test_loader_bank_marker_does_not_break_dependency_detection(marker):
+    patches = patch_service.definitions()
+    image = bytearray(_synthetic_patch_base("1406464", "12", "0912"))
+    for pid in ("softbsl_loader", "cal_guard", "door_magic"):
+        for edit in patches[pid]["edits"]:
+            data = bytes.fromhex(edit["data"])
+            image[edit["off"]:edit["off"] + len(data)] = data
+    image[0x5FFC:0x6000] = marker
+    original = bytes(image)
+    rows = {row["id"]: row for row in patch_service.available_patches(image)}
+    assert rows["softbsl_loader"]["installed"]
+    for pid in ("cal_guard", "door_magic"):
+        assert rows[pid]["installed"]
+        assert "MISSING REQUIRED PATCH" not in rows[pid]["badge"]
+    assert bytes(image) == original
+    reads = [(lo, bytes(image[lo:hi]))
+             for lo, hi in patch_service.boot_patch_read_ranges(image)]
+    assert patch_service.missing_boot_patches(image, image) == []
+    assert patch_service.missing_boot_patches_sparse(image, reads) == []
+    other_bank = bytearray(image)
+    other_bank[0x5FFC:0x6000] = (b"\xa5\x5a\x54\xab" if marker[2] == 0x42
+                               else b"\xa5\x5a\x42\xbd")
+    assert patch_service.missing_boot_patches(image, other_bank) == ["softbsl_loader"]
+    other_reads = [(lo, bytes(other_bank[lo:hi]))
+                   for lo, hi in patch_service.boot_patch_read_ranges(image)]
+    assert patch_service.missing_boot_patches_sparse(image, other_reads) == ["softbsl_loader"]
+
+    loader = patches["softbsl_loader"]
+    for invalid in (b"\xff" * 4, b"\xa5\x5a\x54\x00", b"\xa5\x5a\x58\xa7"):
+        image[0x5FFC:0x6000] = invalid
+        assert not patch_ms41.is_applied(image, loader)
+    image[0x5FFC:0x6000] = marker
+    for edit in loader["edits"]:
+        if edit["off"] == 0x5FFC:
+            continue
+        image[edit["off"]] ^= 1
+        assert not patch_ms41.is_applied(image, loader)
+        image[edit["off"]] ^= 1
+
+
 def test_patch_catalogue_does_not_inherit_unverified_variant_hooks():
     assert patch_service.base_version(
         _synthetic_patch_base("1429861", "41", "0641")) == "MS41.0"
@@ -55,37 +96,37 @@ def test_available_patches_filters_by_version():
     ids = {p["id"] for p in avail}
     assert "cal_guard" in ids
     assert "vanos_minrpm_v2_ms410" not in ids        # MS41.0 target, filtered out
-    assert "ignition_cut" not in ids                 # V1 deprecated, superseded by V7
-    assert "ignition_cut_v2" not in ids              # V2 deprecated, superseded by V7
+    assert "ignition_cut" not in ids                 # V1 deprecated, superseded by V11
+    assert "ignition_cut_v2" not in ids              # V2 deprecated, superseded by V11
     assert "ignition_cut_v3" not in ids              # V3 deprecated (gated on speed, not rpm)
     assert "ignition_cut_v5" not in ids              # field-failed V5 is remove-only
     assert "launch_control_v2" not in ids             # field-failed V2 is remove-only
     assert "ignition_cut_v6" not in ids              # field-failed V6 is remove-only
-    assert "ignition_cut_v7" in ids                  # current shared-request revision
+    assert "ignition_cut_v7" not in ids              # V7 is remove-only
+    assert "ignition_cut_v11" in ids                  # independent shared-request revision
     assert "launch_control_v3" not in ids            # V3 is retained only for removal
     assert "launch_control_v4" not in ids            # overlapping V4 is remove-only
-    assert "launch_control_v5" in ids                # current MS41.3 revision
+    assert "launch_control_v5" not in ids            # V5 is remove-only
+    assert "launch_control_v11" in ids                # independent ignition requester
     assert "door_0x43" not in ids                    # installer-only Soft-BSL bootstrap
     assert "top_ds2_guard" not in ids               # automatic TOP-image protection
     assert "alphan_failsafe" in ids
     assert len(avail) == 7                            # the 7 user-facing MS41.3 patches
     cg = next(p for p in avail if p["id"] == "cal_guard")
     assert cg["ok"] is True and cg["title"] and cg["target"] == "MS41.3"
-    assert cg["user_description"] == (
-        "Exact compatibility guard with a short K-Line boot-recovery window, "
-        "relocated outside BMW AIF programming history.")
+    assert cg["user_description"] == patch_service.definitions()["cal_guard"]["user_description"]
     assert "@0x" not in cg["user_description"]
     amd = next(p for p in avail if p["id"] == "amd_flash")
-    assert amd["version"] == "V3"
+    assert amd["version"] == "V4"
     assert amd["status"] == "IMPLEMENTED"
-    assert amd["tested"] is False  # V3 recovery correction is offline-qualified only.
+    assert amd["tested"] is False  # Production V4 still needs exact-image bench qualification.
     alphan = next(p for p in avail if p["id"] == "alphan_failsafe")
     assert alphan["status"] == "TESTED"
     assert alphan["tested"] is True
-    assert next(p for p in avail if p["id"] == "softbsl_loader")["tested"] is True
+    assert next(p for p in avail if p["id"] == "softbsl_loader")["tested"] is False
     assert next(p for p in avail if p["id"] == "door_magic")["tested"] is True
-    ic = next(p for p in avail if p["id"] == "ignition_cut_v7")
-    assert ic["status"] == "VEHICLE TEST REQUIRED"
+    ic = next(p for p in avail if p["id"] == "ignition_cut_v11")
+    assert ic["status"] == "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED"
     assert ic["tested"] is False
     assert ic["legacy"] == []                          # clean ref base has no predecessor installed
 
@@ -103,11 +144,13 @@ def test_patch_versions_are_badges_not_title_text():
         "alphan_failsafe_v1": "V1",
         "alphan_failsafe_v2": "V2",
         "alphan_failsafe": "V3",
-        "amd_flash": "V3",
+        "amd_flash": "V4",
+        "amd_flash_v3": "V3",
         "cal_guard_v1": "V1",
         "cal_guard_v2": "V2",
         "cal_guard_v4": "V4",
-        "cal_guard": "V5",
+        "cal_guard": "V6",
+        "cal_guard_v5": "V5",
         "door_magic": "V2",
         "door_magic_ms410": "V2",
         "door_magic_ms411": "V2",
@@ -120,6 +163,19 @@ def test_patch_versions_are_badges_not_title_text():
         "ignition_cut_v7": "V7",
         "ignition_cut_v7_ms410": "V7",
         "ignition_cut_v7_ms411": "V7",
+        "ignition_cut_v8": "V8",
+        "ignition_cut_v8_ms410": "V8",
+        "ignition_cut_v8_ms411": "V8",
+        "ignition_cut_v8_ms412": "V8",
+        "ignition_cut_v9": "V9",
+        "ignition_cut_v10": "V10",
+        "ignition_cut_v11": "V11",
+        "ignition_cut_v9_ms410": "V9",
+        "ignition_cut_v10_ms410": "V10",
+        "ignition_cut_v9_ms411": "V9",
+        "ignition_cut_v10_ms411": "V10",
+        "ignition_cut_v9_ms412": "V9",
+        "ignition_cut_v10_ms412": "V10",
         "launch_control": "V1",
         "launch_control_v2": "V2",
         "launch_control_v2_ms412": "V2",
@@ -130,12 +186,37 @@ def test_patch_versions_are_badges_not_title_text():
         "launch_control_v4_ms411": "V4",
         "launch_control_v4_ms412": "V4",
         "launch_control_v5": "V5",
+        "launch_control_v6": "V6",
+        "launch_control_v6_ms410": "V6",
+        "launch_control_v6_ms411": "V6",
+        "launch_control_v6_ms412": "V6",
+        "launch_control_v7": "V7",
+        "launch_control_v8": "V8",
+        "launch_control_v9": "V9",
+        "launch_control_v10": "V10",
+        "launch_control_v11": "V11",
+        "launch_control_v7_ms410": "V7",
+        "launch_control_v8_ms410": "V8",
+        "launch_control_v9_ms410": "V9",
+        "launch_control_v10_ms410": "V10",
+        "launch_control_v11_ms410": "V11",
+        "launch_control_v7_ms411": "V7",
+        "launch_control_v8_ms411": "V8",
+        "launch_control_v9_ms411": "V9",
+        "launch_control_v10_ms411": "V10",
+        "launch_control_v11_ms411": "V11",
+        "launch_control_v7_ms412": "V7",
+        "launch_control_v8_ms412": "V8",
+        "launch_control_v9_ms412": "V9",
+        "launch_control_v10_ms412": "V10",
+        "launch_control_v11_ms412": "V11",
         "softbsl_loader_relocated_v1": "V1",
         "softbsl_loader_v2": "V2",
         "softbsl_loader_v3_bench_failed": "V3",
         "softbsl_loader_v9": "V9",
         "softbsl_loader_v10": "V10",
-        "softbsl_loader": "V11",
+        "softbsl_loader": "V12",
+        "softbsl_loader_v11": "V11",
         "vanos_minrpm_ms410": "V1",
         "vanos_minrpm_v2_ms410": "V2",
     }
@@ -153,7 +234,7 @@ def test_available_patches_exposes_only_latest_ms412_ports():
 
     assert ids == {
         "amd_flash", "cal_guard", "door_magic",
-        "ignition_cut_v7", "launch_control_v4_ms412", "softbsl_loader",
+        "ignition_cut_v10_ms412", "launch_control_v11_ms412", "softbsl_loader",
     }
     assert all(p["target"] == "MS41.2" for p in avail)
     assert not any(p.get("deprecated") for p in avail)
@@ -201,7 +282,7 @@ def test_ms410_vanos_v2_is_selectable_and_retains_hardware_tested_logic():
     avail = patch_service.available_patches(ref("MS41.0"))
     assert [patch["id"] for patch in avail] == [
         "amd_flash", "cal_guard", "door_magic_ms410",
-        "ignition_cut_v7_ms410", "launch_control_v4_ms410",
+        "ignition_cut_v10_ms410", "launch_control_v11_ms410",
         "softbsl_loader", "vanos_minrpm_v2_ms410",
     ]
     patch = next(
@@ -280,7 +361,7 @@ def test_ms410_vanos_v2_isolated_build_and_revert_have_valid_checksums():
 def test_ms411_exposes_current_feature_ports_and_softbsl():
     assert [patch["id"] for patch in patch_service.available_patches(ref("MS41.1"))] == [
         "amd_flash", "cal_guard", "door_magic_ms411",
-        "ignition_cut_v7_ms411", "launch_control_v4_ms411",
+        "ignition_cut_v10_ms411", "launch_control_v11_ms411",
         "softbsl_loader", "vanos_minrpm_ms411",
     ]
 
@@ -288,8 +369,8 @@ def test_ms411_exposes_current_feature_ports_and_softbsl():
 @pytest.mark.parametrize(
     "variant,ignition_id,launch_id",
     [
-        ("MS41.0", "ignition_cut_v7_ms410", "launch_control_v4_ms410"),
-        ("MS41.1", "ignition_cut_v7_ms411", "launch_control_v4_ms411"),
+        ("MS41.0", "ignition_cut_v10_ms410", "launch_control_v11_ms410"),
+        ("MS41.1", "ignition_cut_v10_ms411", "launch_control_v11_ms411"),
     ],
 )
 def test_older_launch_ports_require_and_compose_with_matching_ignition_port(
@@ -331,23 +412,23 @@ def test_stock_intel_image_is_allowed_on_amd_when_boot_is_preserved(variant):
 
 def test_available_patches_flags_legacy_v1_installed():
     base, _ = _deprecated_fixture(ref("MS41.3"), ["ignition_cut"])
-    ic = next(p for p in patch_service.available_patches(base) if p["id"] == "ignition_cut_v7")
+    ic = next(p for p in patch_service.available_patches(base) if p["id"] == "ignition_cut_v11")
     assert [(l["id"], l["label"]) for l in ic["legacy"]] == [("ignition_cut", "V1")]
-    assert ic["installed"] is False                    # V9's own edits aren't present
+    assert ic["installed"] is False                    # V11's own edits aren't present
 
 
 def test_available_patches_flags_legacy_v2_installed():
     base, _ = _deprecated_fixture(ref("MS41.3"), ["ignition_cut_v2"])
-    ic = next(p for p in patch_service.available_patches(base) if p["id"] == "ignition_cut_v7")
+    ic = next(p for p in patch_service.available_patches(base) if p["id"] == "ignition_cut_v11")
     assert [(l["id"], l["label"]) for l in ic["legacy"]] == [("ignition_cut_v2", "V2")]
     assert ic["installed"] is False
 
 
 @pytest.mark.parametrize(
     "variant,ignition_id",
-    [("MS41.2", "ignition_cut_v7"), ("MS41.3", "ignition_cut_v7")],
+    [("MS41.2", "ignition_cut_v10_ms412"), ("MS41.3", "ignition_cut_v11")],
 )
-def test_field_failed_v6_is_remove_only_and_v9_replaces_it(
+def test_field_failed_v6_is_remove_only_and_v10_replaces_it(
         variant, ignition_id):
     failed_image, _ = _deprecated_fixture(ref(variant), ["ignition_cut_v6"])
     available = {
@@ -370,28 +451,28 @@ def test_field_failed_v6_is_remove_only_and_v9_replaces_it(
     assert patch_service.is_applied(upgraded, definitions[ignition_id])
 
 
-def test_launch_control_requires_and_composes_with_ignition_cut_v7():
-    # V7 requires the shared V9 cut engine to be installed, but its runtime
-    # ignition request is independent of V9's standalone CUTSW state.
+def test_launch_control_requires_and_composes_with_ignition_cut_v10():
+    # Launch V10 requires the shared V11 cut engine, but its runtime
+    # ignition request is independent of V11's standalone CUTSW state.
     with pytest.raises(patch_ms41.PatchError):
-        patch_service.build_image(ref("MS41.3"), ["launch_control_v5"])
+        patch_service.build_image(ref("MS41.3"), ["launch_control_v11"])
     out, _ = patch_service.build_image(
-        ref("MS41.3"), ["ignition_cut_v7", "launch_control_v5"])
+        ref("MS41.3"), ["ignition_cut_v11", "launch_control_v11"])
     assert len(out) == patch_ms41.FULL
-    v9_base, _ = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v7"])
-    out2, _ = patch_service.build_image(v9_base, ["launch_control_v5"])
+    ignition_base, _ = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v11"])
+    out2, _ = patch_service.build_image(ignition_base, ["launch_control_v11"])
     assert len(out2) == patch_ms41.FULL
-    assert "launch_control_v5" not in patch_service.collisions(["ignition_cut_v7"])
-    assert "ignition_cut_v7" not in patch_service.collisions(["launch_control_v5"])
+    assert "launch_control_v11" not in patch_service.collisions(["ignition_cut_v11"])
+    assert "ignition_cut_v11" not in patch_service.collisions(["launch_control_v11"])
 
 
 @pytest.mark.parametrize(
     "variant,ignition_id,launch_id",
     [
-        ("MS41.0", "ignition_cut_v7_ms410", "launch_control_v4_ms410"),
-        ("MS41.1", "ignition_cut_v7_ms411", "launch_control_v4_ms411"),
-        ("MS41.2", "ignition_cut_v7", "launch_control_v4_ms412"),
-        ("MS41.3", "ignition_cut_v7", "launch_control_v5"),
+        ("MS41.0", "ignition_cut_v10_ms410", "launch_control_v11_ms410"),
+        ("MS41.1", "ignition_cut_v10_ms411", "launch_control_v11_ms411"),
+        ("MS41.2", "ignition_cut_v10_ms412", "launch_control_v11_ms412"),
+        ("MS41.3", "ignition_cut_v11", "launch_control_v11"),
     ],
 )
 def test_installed_launch_blocks_removing_its_ignition_dependency(
@@ -427,10 +508,10 @@ def test_installed_launch_blocks_removing_its_ignition_dependency(
 @pytest.mark.parametrize(
     "variant,ignition_id,old_id,new_id",
     [
-        ("MS41.3", "ignition_cut_v7",
-         "launch_control_v3", "launch_control_v5"),
-        ("MS41.2", "ignition_cut_v7",
-         "launch_control_v3_ms412", "launch_control_v4_ms412"),
+        ("MS41.3", "ignition_cut_v11",
+         "launch_control_v3", "launch_control_v11"),
+        ("MS41.2", "ignition_cut_v10_ms412",
+         "launch_control_v3_ms412", "launch_control_v11_ms412"),
     ],
 )
 def test_launch_v3_is_remove_only_and_v4_replaces_it(
@@ -472,7 +553,7 @@ def test_overlapping_ms413_launch_v4_is_detected_removed_and_replaced():
     assert legacy["installed"] is True
     assert legacy["deprecated"] is True
     assert legacy["removable"] is True
-    assert available["launch_control_v5"]["legacy"] == [
+    assert available["launch_control_v11"]["legacy"] == [
         {"id": "launch_control_v4", "label": "V4"}
     ]
 
@@ -483,10 +564,10 @@ def test_overlapping_ms413_launch_v4_is_detected_removed_and_replaced():
     assert cleaned_status["program"]
     assert cleaned_status["cal"]
     upgraded, _log = patch_service.build_image(
-        cleaned, ["ignition_cut_v7", "launch_control_v5"])
+        cleaned, ["ignition_cut_v11", "launch_control_v11"])
     assert not patch_service.is_applied(
         upgraded, definitions["launch_control_v4"])
-    assert patch_service.is_applied(upgraded, definitions["launch_control_v5"])
+    assert patch_service.is_applied(upgraded, definitions["launch_control_v11"])
     assert upgraded[0x1752C:0x17534] == old_values
     assert upgraded[0x107E0:0x107EB] == b"\xFF" * 11
 
@@ -538,9 +619,9 @@ def test_deprecated_calguard_is_detected_removed_and_replaced_by_v5(
     assert available[legacy_id]["installed"] is True
     assert available[legacy_id]["removable"] is True
     assert available["cal_guard"]["installed"] is False
-    assert available["cal_guard"]["version"] == "V5"
-    assert available["cal_guard"]["status"] == "TESTED"
-    assert available["cal_guard"]["tested"] is True
+    assert available["cal_guard"]["version"] == "V6"
+    assert available["cal_guard"]["status"] == "EXPERIMENTAL"
+    assert available["cal_guard"]["tested"] is False
     assert available["cal_guard"]["legacy"] == [{
         "id": legacy_id,
         "label": legacy_label,
@@ -575,9 +656,17 @@ def test_every_deprecated_patch_remains_detectable_and_uninstallable(
         for patch in patch_service.available_patches(installed_image)
     }
 
-    installed = available[patch_id]
+    assert patch_service.is_applied(installed_image, definition)
+    if patch_id == "amd_flash_v3":
+        # The current driver is the same four exact edits; native startup
+        # anchors distinguish the retained fixture, not a separate driver.
+        assert patch_id not in available
+        installed = available["amd_flash"]
+        assert installed["deprecated"] is False
+    else:
+        installed = available[patch_id]
+        assert installed["deprecated"] is True
     assert installed["installed"] is True
-    assert installed["deprecated"] is True
     assert installed["removable"] is True
 
     cleaned = patch_service.revert_patch(installed_image, patch_id)
@@ -693,7 +782,7 @@ def test_softbsl_v2_is_detected_and_directly_upgraded_to_v11():
 
     replacement = available["softbsl_loader"]
     assert replacement["installed"] is False
-    assert replacement["version"] == "V11"
+    assert replacement["version"] == "V12"
     assert replacement["legacy"] == [{
         "id": "softbsl_loader_v2",
         "label": "V2 prior loader",
@@ -776,6 +865,62 @@ def test_collisions_flags_shared_cave():
     assert "cal_guard" not in patch_service.collisions(["door_0x43"])   # no overlap
 
 
+def test_upgrade_checks_dependencies_on_resulting_bytes(monkeypatch):
+    # Historical V9 upgrade retained Launch V4 but removed its required V7.
+    definitions = patch_ms41.load_patches()
+    definitions["ignition_cut_v9"] = dict(
+        definitions["ignition_cut_v9"], deprecated=False)
+    monkeypatch.setattr(patch_ms41, "load_patches", lambda: definitions)
+    image, _ = _deprecated_fixture(
+        ref("MS41.3"), ["ignition_cut_v7", "launch_control_v4"])
+    with pytest.raises(
+            patch_ms41.PatchError,
+            match="launch_control_v4 requires ignition_cut_v7"):
+        patch_service.build_image(image, ["ignition_cut_v9"])
+
+
+@pytest.mark.parametrize("variant,suffix", [
+    ("MS41.0", "_ms410"), ("MS41.1", "_ms411"),
+    ("MS41.2", "_ms412"), ("MS41.3", ""),
+])
+@pytest.mark.parametrize("with_launch", [False, True])
+def test_configured_v9_upgrade_and_v10_removal_preserve_calibration(
+        variant, suffix, with_launch):
+    patches = patch_ms41.load_patches()
+    old_id = "ignition_cut_v9" + suffix
+    new_id = "ignition_cut_v10" + suffix if suffix else "ignition_cut_v11"
+    launch_id = "launch_control_v7" + suffix
+    historical = dict(patches)
+    historical[launch_id] = dict(patches[launch_id], requires=[old_id])
+    old_ids = [old_id] + ([launch_id] if with_launch else [])
+    image, _ = patch_ms41.build(
+        ref(variant), old_ids, patches=historical, allow_deprecated=True)
+    configured = bytearray(image)
+    configured_stock = bytearray(ref(variant))
+    values = {"CUTSW": 0, "CUTRPM": 125, "CUT_HYST": 3, "CUT_IPW": 500,
+              "LC_SW": 255, "LC_CUTTYPE": 1, "LC_CLUTCHPOL": 0,
+              "LC_MAXRPM": 100, "LC_HARDRPM": 103, "LC_HYST": 2,
+              "LC_IPW": 400, "LC_ARMSPEED": 3, "LC_MAXSPEED": 10,
+              "LC_MINTPS": 80}
+    for patch_id in old_ids:
+        for name, address in historical[patch_id]["cave"]["cals"].items():
+            width = 2 if name in {"CUT_IPW", "LC_IPW"} else 1
+            payload = values[name].to_bytes(width, "little")
+            configured[address:address + width] = payload
+            configured_stock[address:address + width] = payload
+    configured, _ = patch_ms41.checksum.correct_checksums(configured)
+    upgraded, _ = patch_service.build_image(configured, [new_id])
+    assert patch_ms41.is_applied(upgraded, patches[new_id])
+    assert not patch_ms41.is_applied(upgraded, patches[old_id])
+    assert patch_ms41.checksum.verify_checksum(bytearray(upgraded))[0]
+    if with_launch:
+        assert patch_ms41.is_applied(upgraded, patches[launch_id])
+        upgraded = patch_service.revert_patch(upgraded, launch_id)
+    restored = patch_service.revert_patch(upgraded, new_id)
+    expected, _ = patch_ms41.checksum.correct_checksums(configured_stock)
+    assert restored == expected
+
+
 def test_build_image_delegates_and_composes():
     out, log = _calguard_image(ref("MS41.3"))
     assert len(out) == patch_ms41.FULL
@@ -809,10 +954,10 @@ def test_revert_legacy_v1_then_apply_v9():
     corrected_stock, _ = patch_ms41.checksum.correct_checksums(ref("MS41.3"))
     assert cleaned == bytes(corrected_stock)             # stock bytes plus corrected program CRC
 
-    ic = next(p for p in patch_service.available_patches(cleaned) if p["id"] == "ignition_cut_v7")
+    ic = next(p for p in patch_service.available_patches(cleaned) if p["id"] == "ignition_cut_v11")
     assert ic["legacy"] == []                            # V1 gone, no longer flagged
 
-    out, log = patch_service.build_image(cleaned, ["ignition_cut_v7"])
+    out, log = patch_service.build_image(cleaned, ["ignition_cut_v11"])
     assert len(out) == patch_ms41.FULL
 
 
@@ -821,7 +966,7 @@ def test_revert_legacy_v2_then_apply_v9():
     cleaned = patch_service.revert_patch(v2_base, "ignition_cut_v2")
     corrected_stock, _ = patch_ms41.checksum.correct_checksums(ref("MS41.3"))
     assert cleaned == bytes(corrected_stock)             # stock bytes plus corrected program CRC
-    out, _ = patch_service.build_image(cleaned, ["ignition_cut_v7"])
+    out, _ = patch_service.build_image(cleaned, ["ignition_cut_v11"])
     assert len(out) == patch_ms41.FULL
 
 
@@ -861,6 +1006,96 @@ def test_protected_top_loader_removal_and_reinstall_preserve_bank(version):
         patch_service.build_image(without_loader, ["softbsl_loader"], marker="B")
 
 
+@pytest.mark.parametrize("variant", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
+@pytest.mark.parametrize("marker", ["B", "T"])
+def test_prior_amd_upgrade_and_removal_preserve_identifiers_and_boot_gate(
+        variant, marker, monkeypatch):
+    patches = patch_service.definitions()
+    historical = dict(patches)
+    historical["top_ds2_guard"] = dict(
+        patches["top_ds2_guard"], requires=["amd_flash_v3"])
+    stock = bytearray(ref(variant))
+    # Distinct per-unit bytes prove migration uses this image's identity.
+    stock[0x5CD5:0x5F8C] = bytes(
+        (offset * 37 + 11) & 0xFF for offset in range(0x5F8C - 0x5CD5))
+    stock, _ = patch_ms41.checksum.correct_checksums(stock)
+    protected_ranges = ((0x5CD5, 0x5F8C), (0x6000, 0x6100), (0x1400C, 0x14016))
+    selected = ["amd_flash_v3"] + (["top_ds2_guard"] if marker == "T" else [])
+    source, _ = patch_ms41.build(
+        stock, selected, patches=historical, marker=marker, allow_deprecated=True)
+    # Expose the installer-only guard to exercise its catalogue health check.
+    monkeypatch.setattr(
+        patch_service, "PATCH_TAB_HIDDEN_IDS",
+        patch_service.PATCH_TAB_HIDDEN_IDS - {"top_ds2_guard"})
+    rows = {row["id"]: row for row in patch_service.available_patches(source)}
+    assert patch_ms41.is_applied(source, patches["amd_flash_v3"])
+    assert "amd_flash_v3" not in rows
+    assert rows["amd_flash"]["installed"] is True
+    assert rows["amd_flash"]["removable"] is (marker == "B")
+    if marker == "T":
+        assert rows["top_ds2_guard"]["ok"] is True
+        assert rows["amd_flash"]["required_by"] == ["top_ds2_guard"]
+        with pytest.raises(patch_service.PatchError, match="top_ds2_guard"):
+            patch_service.revert_patch(source, "amd_flash_v3")
+
+    # Current driver recognition does not add a CalGuard wait or rewrite V3.
+    with_loader, _ = patch_service.build_image(source, ["softbsl_loader"])
+    assert patch_ms41.is_applied(with_loader, patches["amd_flash"])
+    assert patch_ms41.is_applied(with_loader, patches["amd_flash_v3"])
+    assert patch_ms41.is_absent(with_loader, patch_ms41.startup_wait_definition(patches))
+    upgraded, _ = patch_service.build_image(source, ["amd_flash"])
+    assert patch_ms41.is_applied(upgraded, patches["amd_flash"])
+    assert patch_ms41.is_applied(upgraded, patches["amd_flash_v3"])
+    assert upgraded == source
+    assert upgraded[0x5FFC:0x6000] == source[0x5FFC:0x6000]
+    assert patch_service.missing_boot_patches(upgraded, source) == []
+    reads = [(lo, source[lo:hi])
+             for lo, hi in patch_service.boot_patch_read_ranges(upgraded)]
+    assert patch_service.missing_boot_patches_sparse(upgraded, reads) == []
+    assert patch_service.missing_boot_patches(upgraded, upgraded) == []
+    removable = upgraded
+    if marker == "T":
+        assert patch_ms41.is_applied(upgraded, patches["top_ds2_guard"])
+        with pytest.raises(patch_service.PatchError, match="top_ds2_guard"):
+            patch_service.revert_patch(upgraded, "amd_flash")
+        removable = patch_service.revert_patch(upgraded, "top_ds2_guard")
+    restored = patch_service.revert_patch(removable, "amd_flash")
+    expected, _ = patch_ms41.build(stock, [], marker=marker)
+    assert restored == expected
+    for image in (source, with_loader, upgraded, restored):
+        assert image[0x5FFC:0x6000] == source[0x5FFC:0x6000]
+        assert all(image[lo:hi] == stock[lo:hi] for lo, hi in protected_ranges)
+        assert all(patch_ms41.checksum.checksum_status(image)[key]
+                   for key in ("boot", "program", "cal"))
+
+
+@pytest.mark.parametrize("corrupt_offset", [0x4460, 0x4484, 0x423C])
+def test_unknown_calguard_startup_is_separate_from_amd_top_dependency(
+        corrupt_offset, monkeypatch):
+    patches = patch_service.definitions()
+    historical = dict(patches)
+    historical["top_ds2_guard"] = dict(
+        patches["top_ds2_guard"], requires=["amd_flash_v3"])
+    image, _ = patch_ms41.build(
+        ref("MS41.0"), ["amd_flash_v3", "top_ds2_guard"],
+        patches=historical, marker="T", allow_deprecated=True)
+    image = bytearray(image)
+    image[corrupt_offset] ^= 1
+    monkeypatch.setattr(
+        patch_service, "PATCH_TAB_HIDDEN_IDS",
+        patch_service.PATCH_TAB_HIDDEN_IDS - {"top_ds2_guard"})
+    rows = {row["id"]: row for row in patch_service.available_patches(image)}
+    assert rows["top_ds2_guard"]["ok"] is (corrupt_offset != 0x423C)
+    assert rows["amd_flash"]["installed"] is (corrupt_offset != 0x423C)
+    if corrupt_offset == 0x423C:
+        assert rows["top_ds2_guard"]["badge"] == "MISSING REQUIRED PATCH: amd_flash"
+    with pytest.raises(
+            patch_service.PatchError,
+            match=("unrecognized flash driver" if corrupt_offset == 0x423C
+                   else "PARTIAL/unknown CalGuard startup wait")):
+        patch_service.build_image(image, ["softbsl_loader"])
+
+
 @pytest.mark.parametrize("marker", ["B", "T"])
 def test_loader_build_preserves_valid_existing_bank_metadata(marker):
     base, _log = patch_ms41.build(ref("MS41.2"), [], marker=marker)
@@ -873,6 +1108,20 @@ def test_loader_build_preserves_valid_existing_bank_metadata(marker):
     assert explicit[0x5FFE] == ord(override)
 
 
+def test_current_amd_driver_boot_gate_ignores_a_shared_wait_on_the_live_image():
+    patches = patch_service.definitions()
+    driver, _ = patch_service.build_image(ref("MS41.0"), ["amd_flash"])
+    assert patch_service.boot_write_patches_in(driver) == ["amd_flash"]
+    assert patch_ms41.is_absent(driver, patch_ms41.startup_wait_definition(patches))
+    live, _ = patch_service.build_image(driver, ["softbsl_loader", "cal_guard"])
+    assert patch_ms41.is_applied(live, patch_ms41.startup_wait_definition(patches))
+    assert patch_service.missing_boot_patches(driver, live) == []
+    ranges = patch_service.boot_patch_read_ranges(driver)
+    assert all(not lo <= offset < hi for lo, hi in ranges for offset in (0x4460, 0x4484))
+    assert patch_service.missing_boot_patches_sparse(
+        driver, [(lo, live[lo:hi]) for lo, hi in ranges]) == []
+
+
 def test_loader_build_still_rejects_a_corrupt_bank_marker():
     base = bytearray(ref("MS41.2"))
     base[0x5FFC:0x6000] = b"\xA5\x5A\x54\xAA"
@@ -880,15 +1129,139 @@ def test_loader_build_still_rejects_a_corrupt_bank_marker():
         patch_service.build_image(base, ["softbsl_loader"])
 
 
+@pytest.mark.parametrize("variant", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
+@pytest.mark.parametrize("amd_driver", [False, True])
+def test_calguard_startup_upgrade_gate_conversion_and_removal(variant, amd_driver):
+    patches = patch_service.definitions()
+    stock = bytearray(ref(variant))
+    stock[0x5CD5:0x5F8C] = bytes(
+        (offset * 37 + 11) & 0xFF for offset in range(0x5F8C - 0x5CD5))
+    stock, _ = patch_ms41.checksum.correct_checksums(stock)
+    protected = ((0x5CD5, 0x5F8C), (0x6000, 0x6050), (0x6052, 0x6100),
+                 (0x14000, 0x1A000))
+    driver_ids = ["amd_flash"] if amd_driver else []
+    image, _ = patch_service.build_image(
+        stock, [*driver_ids, "softbsl_loader", "cal_guard"])
+    delay = patch_ms41.startup_wait_definition(patches)
+    assert patch_ms41.is_applied(image, delay)
+    assert "intel_startup_delay" not in patches
+    assert delay["id"] not in {
+        row["id"] for row in patch_service.available_patches(image)}
+    assert all(row["ok"] for row in patch_service.available_patches(image)
+               if row["installed"])
+    assert patch_service.build_image(image, ["softbsl_loader"])[0] == image
+
+    # Simulate an exact previous guard image without its internal wait.
+    previous = patch_ms41.revert(image, delay)
+    assert patch_ms41.is_applied(previous, patches["softbsl_loader"])
+    assert patch_ms41.is_applied(previous, patches["cal_guard"])
+    assert patch_ms41.is_absent(previous, delay)
+    assert patch_service.missing_boot_patches(image, previous) == ["cal_guard"]
+    reads = [(lo, previous[lo:hi])
+             for lo, hi in patch_service.boot_patch_read_ranges(image)]
+    assert patch_service.missing_boot_patches_sparse(image, reads) == ["cal_guard"]
+    assert patch_service.build_image(previous, ["softbsl_loader"])[0] == image
+
+    with pytest.raises(patch_service.PatchError, match="cal_guard"):
+        patch_service.revert_patch(image, "softbsl_loader")
+    without_guard = patch_service.revert_patch(image, "cal_guard")
+    assert patch_ms41.is_absent(without_guard, delay)
+    assert patch_ms41.is_applied(without_guard, patches["softbsl_loader"])
+    assert patch_service.build_image(without_guard, ["cal_guard"])[0] == image
+    restored = patch_service.revert_patch(without_guard, "softbsl_loader")
+    assert patch_ms41.is_absent(restored, delay)
+    assert not patch_ms41.is_applied(restored, patches["softbsl_loader"])
+    # Legacy guard removal also accepts both intact native anchors.
+    legacy_without_guard = patch_service.revert_patch(previous, "cal_guard")
+    assert legacy_without_guard == without_guard
+    # Earlier local builds left this exact wait behind without a guard. Keep
+    # their boot-loss gate until a loader update or removal cleans the residue.
+    leftover_wait = patch_ms41.revert(image, patches["cal_guard"])
+    assert patch_service.missing_boot_patches(
+        leftover_wait, without_guard) == ["softbsl_loader"]
+    reads = [(lo, without_guard[lo:hi])
+             for lo, hi in patch_service.boot_patch_read_ranges(leftover_wait)]
+    assert patch_service.missing_boot_patches_sparse(
+        leftover_wait, reads) == ["softbsl_loader"]
+    assert patch_service.build_image(leftover_wait, ["softbsl_loader"])[0] == without_guard
+    assert patch_service.revert_patch(leftover_wait, "softbsl_loader") == restored
+    assert patch_service.revert_patch(legacy_without_guard, "softbsl_loader") == restored
+
+    # Driver conversion retains CalGuard's shared wait. Guard removal restores
+    # native startup while leaving the AMD driver and TOP protection intact.
+    amd, _ = patch_service.build_image(
+        image, ["amd_flash", "top_ds2_guard"], marker="T")
+    assert patch_ms41.is_applied(amd, patches["amd_flash"])
+    assert patch_ms41.is_applied(amd, patches["top_ds2_guard"])
+    assert patch_ms41.is_applied(amd, delay)
+    amd_without_guard = patch_service.revert_patch(amd, "cal_guard")
+    amd_without_loader = patch_service.revert_patch(amd_without_guard, "softbsl_loader")
+    assert patch_ms41.is_absent(amd_without_guard, delay)
+    assert patch_ms41.is_absent(amd_without_loader, delay)
+    assert patch_ms41.is_applied(amd_without_loader, patches["amd_flash"])
+    assert patch_ms41.is_applied(amd_without_loader, patches["top_ds2_guard"])
+    assert amd_without_loader[0x5FFC:0x6000] == b"\xa5\x5a\x54\xab"
+    assert patch_service.available_patches(amd_without_loader)
+    assert patch_service.build_image(amd_without_guard, ["cal_guard"])[0] == amd
+    assert patch_service.missing_boot_patches(amd, amd_without_guard) == ["cal_guard"]
+    reads = [(lo, amd_without_guard[lo:hi])
+             for lo, hi in patch_service.boot_patch_read_ranges(amd)]
+    assert patch_service.missing_boot_patches_sparse(amd, reads) == ["cal_guard"]
+    # Historical V4 left the same wait behind with only an AMD driver/TOP gate.
+    orphan = bytearray(patch_ms41.revert(
+        patch_ms41.revert(amd, patches["cal_guard"]), patches["softbsl_loader"]))
+    # Raw loader removal restores its FF preimage; the historical TOP fixture
+    # must retain the physical bank marker required by the remaining TOP gate.
+    orphan[0x5FFC:0x6000] = amd[0x5FFC:0x6000]
+    orphan, _ = patch_ms41.checksum.correct_checksums(orphan)
+    assert patch_ms41.is_applied(orphan, delay)
+    assert patch_service.missing_boot_patches(orphan, amd_without_loader) == ["amd_flash"]
+    reads = [(lo, amd_without_loader[lo:hi])
+             for lo, hi in patch_service.boot_patch_read_ranges(orphan)]
+    assert patch_service.missing_boot_patches_sparse(orphan, reads) == ["amd_flash"]
+    assert patch_service.build_image(orphan, ["amd_flash"])[0] == amd_without_loader
+    assert patch_service.build_image(orphan, ["softbsl_loader"])[0] == amd_without_guard
+    for candidate in (image, previous, restored, amd, amd_without_guard,
+                      amd_without_loader, orphan):
+        assert all(candidate[lo:hi] == stock[lo:hi] for lo, hi in protected)
+        assert all(patch_ms41.checksum.checksum_status(candidate)[key]
+                   for key in ("boot", "program", "cal"))
+
+
+@pytest.mark.parametrize("offset,unknown", [
+    (0x4460, False), (0x4460, True), (0x4484, False), (0x4484, True),
+    (0x423C, True),
+])
+@pytest.mark.parametrize("amd_driver", [False, True])
+def test_calguard_removal_rejects_unknown_or_partial_startup(
+        offset, unknown, amd_driver):
+    patches = patch_service.definitions()
+    driver_ids = ["amd_flash"] if amd_driver else []
+    image, _ = patch_service.build_image(
+        ref("MS41.0"), [*driver_ids, "softbsl_loader", "cal_guard"])
+    damaged = bytearray(image)
+    if unknown:
+        damaged[offset] ^= 1
+    else:
+        edit = next(edit for edit in patch_ms41.startup_wait_definition(patches)["edits"]
+                    if edit["off"] == offset)
+        payload = bytes.fromhex(edit["expect"])
+        damaged[offset:offset + len(payload)] = payload
+    before = bytes(damaged)
+    with pytest.raises(patch_service.PatchError, match="unknown"):
+        patch_service.revert_patch(damaged, "cal_guard")
+    assert bytes(damaged) == before
+
+
 def test_available_patches_flags_needs_boot():
     avail = {p["id"]: p for p in patch_service.available_patches(ref("MS41.3"))}
     assert avail["cal_guard"]["needs_boot"] is True          # writes SA1
-    assert avail["ignition_cut_v7"]["needs_boot"] is False   # program region
+    assert avail["ignition_cut_v11"]["needs_boot"] is False   # program region
 
 
 def test_boot_write_patches_detected_in_built_image():
     stock = ref("MS41.3")
-    v9_img, _ = patch_service.build_image(stock, ["ignition_cut_v7"])
+    v9_img, _ = patch_service.build_image(stock, ["ignition_cut_v11"])
     assert patch_service.boot_write_patches_in(v9_img) == []     # program patch, nothing in boot
     cg_img, _ = _calguard_image(stock)
     assert patch_service.boot_write_patches_in(cg_img) == [
@@ -907,7 +1280,7 @@ def test_missing_boot_patches_gate():
     assert patch_service.missing_boot_patches(cg_img, None) == [
         "cal_guard", "softbsl_loader"]
     # a pure program patch is never gated
-    v9_img, _ = patch_service.build_image(stock, ["ignition_cut_v7"])
+    v9_img, _ = patch_service.build_image(stock, ["ignition_cut_v11"])
     assert patch_service.missing_boot_patches(v9_img, None) == []
 
 
@@ -972,16 +1345,8 @@ def test_sparse_boot_gate_reads_only_applied_patch_edit_bytes():
     cg_img, _ = _calguard_image(stock)
     ranges = patch_service.boot_patch_read_ranges(cg_img)
 
-    assert ranges == [
-        (0x4412, 0x442E),
-        (0x4942, 0x4948),
-        (0x55A0, 0x55A4),
-        (0x5C32, 0x5C80),
-        (0x5C8C, 0x5C9A),
-        (0x5CA0, 0x5CB2),
-        (0x5F8C, 0x6000),
-    ]
-    assert sum(hi - lo for lo, hi in ranges) == 264
+    assert ranges == [(17426, 17456), (17504, 17508), (17540, 17548), (17584, 18136), (18208, 18224), (18830, 18880), (18980, 19012), (19024, 19056), (19506, 19752), (19888, 20096), (20112, 20140), (21806, 21872), (21920, 21924), (22548, 22576), (22688, 22716), (22922, 22950), (23372, 23572), (23602, 23680), (23692, 23706), (23712, 23734), (24460, 24576)]
+    assert sum(hi - lo for lo, hi in ranges) == 1790
 
     live_patched = [(lo, cg_img[lo:hi]) for lo, hi in ranges]
     live_stock = [(lo, stock[lo:hi]) for lo, hi in ranges]
@@ -998,44 +1363,3 @@ def test_sparse_boot_gate_fails_safe_on_incomplete_evidence():
 
     assert patch_service.missing_boot_patches_sparse(cg_img, only_first_range) == [
         "cal_guard", "softbsl_loader"]
-
-
-@pytest.mark.parametrize("marker", [b"\xa5\x5a\x42\xbd", b"\xa5\x5a\x54\xab"])
-def test_loader_bank_marker_does_not_break_dependency_detection(marker):
-    patches = patch_service.definitions()
-    image = bytearray(_synthetic_patch_base("1406464", "12", "0912"))
-    for pid in ("softbsl_loader", "cal_guard", "door_magic"):
-        for edit in patches[pid]["edits"]:
-            data = bytes.fromhex(edit["data"])
-            image[edit["off"]:edit["off"] + len(data)] = data
-    image[0x5FFC:0x6000] = marker
-    original = bytes(image)
-    rows = {row["id"]: row for row in patch_service.available_patches(image)}
-    assert rows["softbsl_loader"]["installed"]
-    for pid in ("cal_guard", "door_magic"):
-        assert rows[pid]["installed"]
-        assert "MISSING REQUIRED PATCH" not in rows[pid]["badge"]
-    assert bytes(image) == original
-    reads = [(lo, bytes(image[lo:hi]))
-             for lo, hi in patch_service.boot_patch_read_ranges(image)]
-    assert patch_service.missing_boot_patches(image, image) == []
-    assert patch_service.missing_boot_patches_sparse(image, reads) == []
-    other_bank = bytearray(image)
-    other_bank[0x5FFC:0x6000] = (b"\xa5\x5a\x54\xab" if marker[2] == 0x42
-                               else b"\xa5\x5a\x42\xbd")
-    assert patch_service.missing_boot_patches(image, other_bank) == ["softbsl_loader"]
-    other_reads = [(lo, bytes(other_bank[lo:hi]))
-                   for lo, hi in patch_service.boot_patch_read_ranges(image)]
-    assert patch_service.missing_boot_patches_sparse(image, other_reads) == ["softbsl_loader"]
-
-    loader = patches["softbsl_loader"]
-    for invalid in (b"\xff" * 4, b"\xa5\x5a\x54\x00", b"\xa5\x5a\x58\xa7"):
-        image[0x5FFC:0x6000] = invalid
-        assert not patch_ms41.is_applied(image, loader)
-    image[0x5FFC:0x6000] = marker
-    for edit in loader["edits"]:
-        if edit["off"] == 0x5FFC:
-            continue
-        image[edit["off"]] ^= 1
-        assert not patch_ms41.is_applied(image, loader)
-        image[edit["off"]] ^= 1

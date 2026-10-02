@@ -283,6 +283,25 @@ def is_absent(data, patch):
     )
 
 
+def restore_missing_calguard_v5_body(data, patches):
+    """Normalize only intact V5 boot + V11 with its exactly absent program body."""
+    guard = patches.get("cal_guard_v5")
+    loader = patches.get("softbsl_loader_v11")
+    if not guard or not loader or not is_applied(data, loader):
+        return bytes(data)
+    boot = {**guard, "edits": [e for e in guard["edits"] if 0x4000 <= e["off"] < 0x6000]}
+    program = {**guard, "edits": [e for e in guard["edits"] if e["off"] >= 0x6000]}
+    if not boot["edits"] or not program["edits"]:
+        return bytes(data)
+    if not is_applied(data, boot) or not is_absent(data, program):
+        return bytes(data)
+    restored = bytearray(data)
+    for edit in program["edits"]:
+        payload = bytes.fromhex(edit["data"])
+        restored[edit["off"]:edit["off"] + len(payload)] = payload
+    return bytes(restored)
+
+
 # File range of the SA1 / boot region (== DS2 addr 0x0000-0x1FFF via the XOR-0x4000 block
 # swap; == PARAM1_FILE in the soft-BSL host). DS2 and the default soft-BSL flash leave it
 # intact — it is written only by the hardware BSL or by soft-BSL with bootloader writes armed.
@@ -422,6 +441,46 @@ class PatchError(Exception):
     """A patch selection could not be composed (bad base, collision, expect mismatch, etc.)."""
 
 
+def startup_wait_definition(patches):
+    """Return CalGuard's shared startup component, outside the catalog."""
+    return patches.get("cal_guard", {}).get("startup_wait")
+
+
+def installed_calguard(data, patches):
+    """Return the exact installed guard, preferring the current revision."""
+    ids = ["cal_guard", *(pid for pid in patches if pid.startswith("cal_guard_v"))]
+    return next((pid for pid in ids
+                 if patches.get(pid) and is_applied(data, patches[pid])), None)
+
+
+def startup_driver(data, patches):
+    """Bind startup edits to a known Intel or AMD flash-driver signature."""
+    driver = next(e for e in patches["amd_flash"]["edits"] if e["off"] == 0x423C)
+    signature = bytes(data[0x423C:0x4244])
+    for kind, key in (("Intel", "expect"), ("AMD", "data")):
+        if signature == bytes.fromhex(driver[key])[:8]:
+            return kind
+    raise PatchError("unknown/unrecognized flash driver for CalGuard startup wait")
+
+
+def with_startup_wait(data, patch_ids, patches):
+    """Preserve installed CalGuard and resolve the flash driver on updates."""
+    selected = list(patch_ids)
+    if "cal_guard" not in selected and any(
+            pid in selected for pid in ("softbsl_loader", "amd_flash")):
+        normalized = restore_missing_calguard_v5_body(data, patches)
+        if (is_applied(normalized, patches["cal_guard"])
+                or ("softbsl_loader" in selected and patches.get("cal_guard_v5")
+                    and is_applied(normalized, patches["cal_guard_v5"]))):
+            selected.append("cal_guard")
+    if not any(pid in selected for pid in ("softbsl_loader", "cal_guard", "amd_flash")):
+        return selected
+    if (startup_driver(data, patches) == "AMD" and "amd_flash" not in selected
+            and not is_applied(data, patches["amd_flash"])):
+        selected.append("amd_flash")
+    return selected
+
+
 def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=False):
     """Compose the selected patches onto base_data (bytes); return (out_bytes, log_lines).
 
@@ -457,6 +516,26 @@ def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=F
     if len(matches) != 1:
         raise PatchError("BASE REJECTED: could not identify exactly one supported firmware version")
     target = matches[0]
+    resolved = with_startup_wait(data, patch_ids, patches)
+    for pid in resolved:
+        if pid not in patch_ids:
+            chosen.append(patches[pid])
+            log.append(f"selected recovery dependency: {pid}")
+    patch_ids = resolved
+    delay = startup_wait_definition(patches)
+    if delay and any(pid in patch_ids for pid in ("softbsl_loader", "cal_guard", "amd_flash")):
+        if ("cal_guard" in patch_ids
+                or (installed_calguard(data, patches) and is_applied(data, delay))):
+            chosen.append(delay)
+            log.append("selected CalGuard startup wait component")
+        elif is_applied(data, delay):
+            # Earlier local builds coupled the wait to AMD or standalone Soft-BSL.
+            data[:] = revert(data, delay)
+            log.append("removed startup wait without CalGuard")
+        elif not is_absent(data, delay):
+            raise PatchError(
+                "PARTIAL/unknown CalGuard startup wait; restore both startup anchors "
+                "from a known-good image before migration")
     unsupported = [p["id"] for p in chosen if not supports_target(p, target)]
     if unsupported:
         raise PatchError(
@@ -472,6 +551,14 @@ def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=F
     if err:
         raise PatchError(f"BASE REJECTED: {err}")
     log.append(f"base OK: {target}, {len(data)} B")
+
+    # Supersession may restore a loader's FF marker preimage. Preserve the
+    # verified source bank through that migration unless explicitly overridden.
+    if marker is None and any(p["id"] == "softbsl_loader" for p in chosen):
+        marker = {b"\xa5\x5a\x42\xbd": "B", b"\xa5\x5a\x54\xab": "T"}.get(
+            bytes(data[0x5FFC:0x6000]))
+    if any(p["id"] in ("softbsl_loader", "cal_guard") for p in chosen):
+        data[:] = restore_missing_calguard_v5_body(data, patches)
 
     _all = patches
     # Geometry-changing successors cannot use an in-place upgrade_expect. If
@@ -504,7 +591,14 @@ def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=F
         for req in p.get("requires", []):
             # satisfied if the dependency is in this selection OR already applied on the base
             reqp = _all.get(req)
-            if req not in patch_ids and not (reqp and is_applied(data, reqp)):
+            installed = reqp and is_applied(data, reqp)
+            if req == "amd_flash" and reqp and not installed:
+                # TOP protection also belongs to an exact prior AMD driver;
+                # startup settling is not a requirement of the TOP policy.
+                installed = any(
+                    old_id in _all and is_applied(data, _all[old_id])
+                    for old_id in reqp.get("supersedes", []))
+            if req not in patch_ids and not installed:
                 raise PatchError(f"'{p['id']}' requires '{req}' (add it to the selection, or install it first)")
         for con in p.get("conflicts", []):
             if con in patch_ids:
@@ -543,6 +637,15 @@ def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=F
     # broad bypass: only an exact listed prior payload may be replaced in place.
     recompute = {"program"} if target == "MS41.3" else set()
     for p in chosen:
+        if p is delay:
+            startup = [e for e in p["edits"] if e["off"] in (0x4460, 0x4484)]
+            if startup and not any(
+                    all(bytes(data[e["off"]:e["off"] + len(bytes.fromhex(e[key]))])
+                        == bytes.fromhex(e[key]) for e in startup)
+                    for key in ("expect", "data")):
+                raise PatchError(
+                    "PARTIAL/unknown CalGuard startup wait; restore both startup anchors "
+                    "from a known-good image before migration")
         for e in p["edits"]:
             off = e["off"]
             exp = bytes.fromhex(e["expect"])

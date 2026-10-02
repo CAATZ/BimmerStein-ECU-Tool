@@ -9,6 +9,7 @@ import os
 import json
 import datetime
 import hashlib
+import shutil
 import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass, asdict, replace
@@ -55,7 +56,23 @@ def _move_file(source: str, destination: str):
     if os.name == "nt":
         os.rename(source, destination)  # Windows rename refuses existing destinations.
     else:
-        os.link(source, destination)
+        try:
+            os.link(source, destination)
+        except PermissionError:
+            # Android app policy can forbid hard links even in app-private storage.
+            # Keep the source until the exclusive copy is flushed and closed.
+            # ponytail: crash may leave a partial copy; native no-replace rename
+            # would be needed for atomic publication on Android API 30+.
+            with open(source, "rb") as reader:
+                writer = open(destination, "xb")
+                try:
+                    with writer:
+                        shutil.copyfileobj(reader, writer)
+                        writer.flush()
+                        os.fsync(writer.fileno())
+                except BaseException:
+                    os.unlink(destination)
+                    raise
         os.unlink(source)
 
 

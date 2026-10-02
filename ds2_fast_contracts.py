@@ -1,7 +1,7 @@
 """Offline contracts for native fast DS2 on unmodified MS41 ECUs.
 
 This module deliberately contains no serial-port, D2XX, GUI, or flash-session
-code. It gives the later transport layer strict frame and response contracts
+code. It gives the transport layer strict frame and response contracts
 without weakening the existing low-rate ds2.py execute path.
 """
 
@@ -89,7 +89,7 @@ class LinkRate(Enum):
 
 
 class SessionState(Enum):
-    """Wire-visible states needed by the future native-fast session."""
+    """Wire-visible states used by native-fast sessions."""
 
     UNKNOWN = "unknown"
     CLOSED = "closed"

@@ -238,8 +238,8 @@ def test_release_packaging_requires_explicit_license_gates():
     assert "b[1-9]\\d*" in build_text
 
     building = (ROOT / "BUILDING.md").read_text(encoding="utf-8")
-    assert "-Version 0.1.0b17" in building
-    assert "v0.1.0b17" in building
+    assert "-Version 0.1.0b18" in building
+    assert "v0.1.0b18" in building
     assert "Nuitka" in building and "x86" in building
 
 
@@ -253,10 +253,10 @@ def test_inno_installer_uses_bimmerstein_identity_and_per_user_install():
     assert "SetupShortcutSuffix" not in installer
     assert "ArchitecturesAllowed=x86compatible" in installer
     assert 'Name: "{app}\\plugins\\__pycache__"' in installer
-    assert '#define AppVersion "0.1.0b17"' in installer
-    assert '#define AppDisplayVersion "0.1.0 Beta 17"' in installer
-    assert '#define AppNumericVersion "0.1.0.17"' in installer
-    assert r'#define SourceDir "..\release\BimmerStein-ECU-Tool-0.1.0b17-Windows-x64"' in installer
+    assert '#define AppVersion "0.1.0b18"' in installer
+    assert '#define AppDisplayVersion "0.1.0 Beta 18"' in installer
+    assert '#define AppNumericVersion "0.1.0.18"' in installer
+    assert r'#define SourceDir "..\release\BimmerStein-ECU-Tool-0.1.0b18-Windows-x64"' in installer
     assert 'SetupAppName "BimmerStein ECU Tool (' not in installer
     assert "AppPublisher=CAATZ" in installer
     assert "PrivilegesRequired=lowest" in installer

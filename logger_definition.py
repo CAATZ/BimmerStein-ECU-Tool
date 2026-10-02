@@ -1,4 +1,4 @@
-"""Small, safe reader for the XML DS2 logger-definition subset we use."""
+"""Small, safe reader for the RomRaider DS2 logger-definition subset we use."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ _NOT = re.compile(r"(?<![<>=!])!(?!=)")
 
 
 class LoggerDefinitionError(ValueError):
-    """The selected file is not a supported XML DS2 logger definition."""
+    """The selected file is not a supported RomRaider DS2 logger definition."""
 
 
 def bundled_logger_definition_path() -> Path:
@@ -315,7 +315,7 @@ def _number(value: str | None, name: str) -> float | None:
 
 
 def _hex_number(value: str, name: str) -> int:
-    """Parse hexadecimal values: the ``0x`` prefix is optional."""
+    """Match RomRaider's hex parser: the ``0x`` prefix is optional."""
     try:
         return int(value.replace(" ", ""), 16)
     except ValueError as exc:
@@ -416,7 +416,7 @@ def _parse_content(raw: bytes) -> LoggerDefinition:
         seen_ecus = set()
         for ecu in element.findall("ecu"):
             ids_text = _required(ecu, "id", f"ecu mapping {parameter_id}")
-            ids = tuple(ids_text.split(","))  # Definition membership is exact and does not trim.
+            ids = tuple(ids_text.split(","))  # RomRaider membership is exact and does not trim.
             if any(not item for item in ids):
                 raise LoggerDefinitionError(f"ecuparam {parameter_id!r} has an empty ECU id")
             duplicate = seen_ecus.intersection(ids)

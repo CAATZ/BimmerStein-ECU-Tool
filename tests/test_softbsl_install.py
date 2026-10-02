@@ -641,19 +641,21 @@ def test_session_closes_transport_when_agent_entry_fails_before_return(monkeypat
 
 def test_engine_composes_with_the_vendored_patcher_library(monkeypatch):
     from engines.patcher import patch_ms41
+    from tests.conftest import ref
 
     seen = {}
     expected = b"patched image"
+    base = ref("MS41.3")
     def fake_build(base, patch_ids, patches=None):
         seen["base"] = base
         seen["patch_ids"] = patch_ids
         return expected, ["composed"]
     monkeypatch.setattr(patch_ms41, "build", fake_build)
 
-    result = softbsl_install._sb._compose_image(b"base image", ["softbsl_loader", "door_magic"])
+    result = softbsl_install._sb._compose_image(base, ["softbsl_loader", "door_magic"])
 
     assert result == expected
-    assert seen == {"base": b"base image", "patch_ids": ["softbsl_loader", "door_magic"]}
+    assert seen == {"base": base, "patch_ids": ["softbsl_loader", "door_magic"]}
 
 
 def test_compose_reuses_an_already_applied_patch(monkeypatch):
@@ -746,6 +748,131 @@ def test_persistent_composer_upgrades_exact_legacy_amd(version, marker):
         image, with_calguard=True, marker=marker, chip="29f400")
     assert "amd_flash" not in rebuilt_ids
     assert rebuilt == image
+
+
+@pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
+@pytest.mark.parametrize("marker", [None, "B", "T"])
+def test_persistent_composer_recognizes_amd_v3_core_and_adds_guard_wait(version, marker):
+    import checksum
+    import identity
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+
+    patches = patch_ms41.load_patches()
+    prior, _ = patch_ms41.build(
+        ref(version), ["amd_flash_v3"], allow_deprecated=True, marker=marker)
+    if marker == "T":
+        prior, _ = patch_ms41.build(prior, ["top_ds2_guard"])
+    image, patch_ids, _ = softbsl_install.compose_persistent_target(
+        prior, with_calguard=True, marker=marker, chip="29f400")
+    assert "amd_flash" not in patch_ids
+    assert patch_ms41.is_applied(image, patches["amd_flash"])
+    assert not patch_ms41.is_applied(image, patches["amd_flash_v3"])
+    assert patch_ms41.is_applied(image, patch_ms41.startup_wait_definition(patches))
+    assert patch_ms41.is_applied(image, patches["top_ds2_guard"]) is (marker == "T")
+    for start, end in identity.IDENTITY_GRAFT_RANGES:
+        assert image[start:end] == prior[start:end]
+    assert image[0x14000:0x1A000] == prior[0x14000:0x1A000]
+    assert all(checksum.checksum_status(image)[key] for key in ("boot", "program", "cal"))
+    rebuilt, rebuilt_ids, _ = softbsl_install.compose_persistent_target(
+        image, with_calguard=True, marker=marker, chip="29f400")
+    assert "amd_flash" not in rebuilt_ids
+    assert rebuilt == image
+
+
+@pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
+@pytest.mark.parametrize("chip", ["28f200", "29f200", "29f400"])
+def test_calguard_persistent_startup_uses_single_40ms_wait(version, chip):
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+
+    base = ref(version)
+    image, patch_ids, _ = softbsl_install.compose_persistent_target(
+        base, with_calguard=True, chip=chip)
+    assert ("amd_flash" in patch_ids) is (chip != "28f200")
+    delay = patch_ms41.startup_wait_definition(patch_ms41.load_patches())
+    assert delay["id"] not in patch_ids
+    assert patch_ms41.is_applied(image, delay)
+    assert image[0x4460:0x4464] == bytes.fromhex("e6f060ea")
+    assert image[0x4484:0x448C] == bytes.fromhex("a758a7a728013dfc")
+    rebuilt, rebuilt_ids, _ = softbsl_install.compose_persistent_target(
+        image, with_calguard=False, chip=chip)
+    assert "cal_guard" in rebuilt_ids
+    assert delay["id"] not in rebuilt_ids
+    assert rebuilt == image
+    # Reconcile the wait even when the host's outer-patch shortcut could match.
+    patches = patch_ms41.load_patches()
+    assert softbsl_install._sb._compose_image(
+        patch_ms41.revert(image, delay), ["softbsl_loader"]) == image
+    leftover_wait = patch_ms41.revert(image, patches["cal_guard"])
+    loader_only = patch_ms41.revert(leftover_wait, delay)
+    assert softbsl_install._sb._compose_image(
+        leftover_wait, ["softbsl_loader"]) == loader_only
+    assert softbsl_install.compose_persistent_target(
+        leftover_wait, with_calguard=False, chip=chip)[0] == loader_only
+
+
+@pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
+@pytest.mark.parametrize("marker", ["B", "T"])
+@pytest.mark.parametrize("chip", ["28f200", "29f400"])
+def test_calguard_persistent_reinstall_upgrades_old_wait_and_preserves_conversion(
+        version, marker, chip):
+    import identity
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+
+    patches = patch_ms41.load_patches()
+    historical = {**patches, "cal_guard": {
+        key: value for key, value in patches["cal_guard"].items()
+        if key != "startup_wait"}}
+    old, _ = patch_ms41.build(
+        ref(version), [*(["amd_flash"] if chip != "28f200" else []),
+                       "softbsl_loader", "cal_guard"],
+        patches=historical, marker=marker)
+    current, ids, _ = softbsl_install.compose_persistent_target(
+        old, chip=chip, with_calguard=True, marker=marker)
+    delay = patch_ms41.startup_wait_definition(patches)
+    assert delay["id"] not in ids
+    assert patch_ms41.is_applied(current, delay)
+    assert current[0x5FFC:0x6000] == old[0x5FFC:0x6000]
+    for start, end in identity.IDENTITY_GRAFT_RANGES:
+        assert current[start:end] == old[start:end]
+    assert current[0x14000:0x1A000] == old[0x14000:0x1A000]
+    converted, converted_ids, _ = softbsl_install.compose_persistent_target(
+        current, chip="29f400", with_calguard=True, marker=marker)
+    fresh, _, _ = softbsl_install.compose_persistent_target(
+        ref(version), chip="29f400", with_calguard=True, marker=marker)
+    assert converted == fresh
+    assert delay["id"] not in converted_ids
+    assert patch_ms41.is_applied(converted, patches["amd_flash"])
+    assert patch_ms41.is_applied(converted, delay)
+
+
+@pytest.mark.parametrize("offset", [0x4460, 0x4484])
+@pytest.mark.parametrize("unknown", [False, True])
+@pytest.mark.parametrize("chip", ["28f200", "29f400"])
+@pytest.mark.parametrize("with_guard", [False, True])
+def test_persistent_composer_rejects_unknown_or_partial_calguard_startup(
+        offset, unknown, chip, with_guard):
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+
+    patches = patch_ms41.load_patches()
+    current, _ = patch_ms41.build(
+        ref("MS41.0"), [*(["amd_flash"] if chip != "28f200" else []),
+                        "softbsl_loader", "cal_guard"])
+    if not with_guard:
+        current = patch_ms41.revert(current, patches["cal_guard"])
+    corrupt = bytearray(current)
+    edit = next(edit for edit in patch_ms41.startup_wait_definition(patches)["edits"]
+                if edit["off"] == offset)
+    if unknown:
+        corrupt[offset] ^= 1
+    else:
+        payload = bytes.fromhex(edit["expect"])
+        corrupt[offset:offset + len(payload)] = payload
+    with pytest.raises(softbsl_install.SoftBSLInstallError, match="partial.*CalGuard startup wait"):
+        softbsl_install.compose_persistent_target(corrupt, chip=chip)
 
 
 @pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
@@ -1028,7 +1155,7 @@ def test_ms410_reinstall_still_blocks_an_unknown_calguard_boot_byte():
     base = bytearray(stock)
     lo, hi = softbsl_install._sb.PARAM1_FILE
     base[lo:hi] = installed[lo:hi]
-    base[0x4942] ^= 0x01
+    base[0x44B0] ^= 0x01
     args = softbsl_install._sb.InstallRequest(
         port="COM_TEST", prompt=lambda _message: None, base=bytes(base),
         chip="29f400", with_calguard=True,
@@ -1069,15 +1196,17 @@ def test_valid_bank_marker_without_a_loader_is_repairable():
 
 def test_active_calguard_with_an_unknown_program_body_remains_blocked():
     from tests.conftest import ref
+    from engines.patcher import patch_ms41
 
-    installed, _ids, _log = softbsl_install.compose_persistent_target(
-        ref("MS41.0"), with_calguard=True, marker="B", chip="29f400")
+    installed, _log = patch_ms41.build(
+        ref("MS41.0"), ["softbsl_loader_v11", "cal_guard_v5", "amd_flash"],
+        marker="B", allow_deprecated=True)
     corrupt = bytearray(installed)
     corrupt[0x3BE00] ^= 0x01
 
     with pytest.raises(
             softbsl_install.SoftBSLInstallError,
-            match="active CalGuard boot trampoline has an unknown program body"):
+            match="deprecated CalGuard is partial/corrupt"):
         softbsl_install.compose_persistent_target(
             corrupt, with_calguard=False, marker="B", chip="29f400")
 
@@ -1222,7 +1351,8 @@ def test_fixed_relocated_loader_restores_the_hardware_proven_crc_bytes():
     from tests.conftest import ref
 
     patches = patch_ms41.load_patches()
-    current, _ = patch_ms41.build(ref("MS41.3"), ["softbsl_loader"])
+    current, _ = patch_ms41.build(
+        ref("MS41.3"), ["softbsl_loader_v11"], allow_deprecated=True)
     broken, _ = patch_ms41.build(
         ref("MS41.3"), ["softbsl_loader_relocated_v1"],
         allow_deprecated=True)
@@ -1232,7 +1362,7 @@ def test_fixed_relocated_loader_restores_the_hardware_proven_crc_bytes():
         "e118db00")
 
     assert current[0x5C32:0x5C32 + len(proven)] == proven
-    assert patch_ms41.is_applied(current, patches["softbsl_loader"])
+    assert patch_ms41.is_applied(current, patches["softbsl_loader_v11"])
     assert patch_ms41.is_applied(broken, patches["softbsl_loader_relocated_v1"])
     assert broken[0x5C32:0x5C32 + len(proven)] != proven
 
@@ -1242,14 +1372,16 @@ def test_fixed_relocated_loader_restores_the_hardware_proven_crc_bytes():
     "chip, wants_amd",
     [("28f200", False), ("29f200", True), ("29f400", True)],
 )
+@pytest.mark.parametrize("with_calguard", [False, True])
 def test_installer_composes_relocated_loader_for_both_flash_families(
-        version, chip, wants_amd):
+        version, chip, wants_amd, with_calguard):
     from engines.patcher import patch_ms41
     from tests.conftest import ref
 
     stock = ref(version)
     args = softbsl_install._sb.InstallRequest(
-        port="COM_TEST", prompt=lambda _message: None, base=stock, chip=chip)
+        port="COM_TEST", prompt=lambda _message: None, base=stock, chip=chip,
+        with_calguard=with_calguard)
     try:
         softbsl_install._sb._install_resolve_images(args)
         bootstrap = Path(args.bootstrap).read_bytes()
@@ -1267,6 +1399,9 @@ def test_installer_composes_relocated_loader_for_both_flash_families(
             assert image[0x5C32:0x5C36] == bytes.fromhex("f075e6f5")
             assert image[0x5CA0:0x5CA4] == bytes.fromhex("4ed8f7f8")
             assert image[0x5F8C:0x5F90] == bytes.fromhex("f3f853e6")
+            assert patch_ms41.is_applied(
+                image, patch_ms41.startup_wait_definition(patches)) is (
+                    image is target and with_calguard)
 
         assert patch_ms41.is_applied(bootstrap, patches[bootstrap_door_id])
         assert patch_ms41.is_applied(target, patches[persistent_door_id])
@@ -1278,16 +1413,16 @@ def test_installer_composes_relocated_loader_for_both_flash_families(
         assert ("amd_flash" in patches and
                 patch_ms41.is_applied(bootstrap, patches["amd_flash"])) is wants_amd
 
-        amd_tail = patches["amd_flash"]["edits"][-1]
+        amd_tail = next(edit for edit in patches["amd_flash"]["edits"]
+                        if edit["off"] == 0x5C14)
         amd_end = amd_tail["off"] + len(bytes.fromhex(amd_tail["data"]))
         loader_crc = next(edit for edit in patches["softbsl_loader"]["edits"]
                           if edit["off"] == 0x5C32)
-        from engines.patcher.cal_guard_exact import CAVE_FILE
         guard = patches["cal_guard"]
-        guard_body = next(edit for edit in guard["edits"]
-                          if edit["off"] == CAVE_FILE)
         assert amd_end == loader_crc["off"] == 0x5C32
-        assert guard_body["off"] + len(bytes.fromhex(guard_body["data"])) == 0x3BF80
+        assert len(bytes.fromhex(loader_crc["data"])) == 62
+        assert all(0x4000 <= edit["off"] < edit["off"] + len(bytes.fromhex(edit["data"])) <= 0x6000
+                   for edit in guard["edits"])
     finally:
         if args.target:
             shutil.rmtree(Path(args.target).parent, ignore_errors=True)

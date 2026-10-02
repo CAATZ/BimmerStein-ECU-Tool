@@ -1,11 +1,11 @@
 {
   "id": "amd_flash",
-  "version": "V3",
+  "version": "V4",
   "status": "IMPLEMENTED",
   "tested": false,
   "title": "AMD 29F flash driver",
   "user_description": "Adds in-circuit calibration and program writing support for ECUs converted to AMD 29F200 or 29F400 flash memory.",
-  "description": "V3 stops programming at the first failed word so a later success cannot hide the error. Exact-byte emulator admission covers the Intel-to-AMD replacement across MS41.0 through MS41.3; V3 still requires powered qualification. Driver code lives in SA1/param1.",
+  "description": "V4 retains the V3 first-failed-word programming behavior. CalGuard owns the separate watchdog-serviced 40 ms startup wait on both Intel and AMD. Exact-byte emulator admission covers MS41.0 through MS41.3; flash-driver powered qualification remains separate. Driver code lives in SA1/param1.",
   "target": "MS41.3",
   "targets": [
     "MS41.0",
@@ -18,6 +18,9 @@
     "cal"
   ],
   "requires": [],
+  "supersedes": [
+    "amd_flash_v3"
+  ],
   "conflicts": [],
   "cave": null,
   "edits": [

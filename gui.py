@@ -10,6 +10,7 @@ import datetime
 import time
 import traceback
 import uuid
+from decimal import Decimal
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,13 +18,13 @@ from types import SimpleNamespace
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QComboBox, QTextEdit,
-    QProgressBar, QFileDialog, QGroupBox, QGridLayout,
+    QProgressBar, QFileDialog, QGroupBox, QGridLayout, QFormLayout,
     QMessageBox, QTabWidget, QTableWidget,
     QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QCheckBox, QRadioButton, QSpinBox,
-    QLineEdit, QInputDialog, QDialog, QScrollArea, QMenu, QLayout, QSplitter
+    QCheckBox, QRadioButton, QSpinBox, QDoubleSpinBox,
+    QLineEdit, QInputDialog, QDialog, QScrollArea, QMenu, QLayout, QSplitter, QStackedWidget
 )
-from PyQt5.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer, QUrl, QCoreApplication, QSize, QSettings
+from PyQt5.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer, QUrl, QCoreApplication, QSize, QSettings, QLocale
 from PyQt5.QtGui import (
     QFont, QColor, QTextCursor, QBrush, QDesktopServices, QIcon, QPalette,
     QGuiApplication,
@@ -282,6 +283,119 @@ class _CompactTabs(QTabWidget):
 
 class StockWriteNotStarted(RuntimeError):
     """A stock DS2 write was stopped before any erase/program command."""
+
+
+class _PatchNumberEditor(QWidget):
+    """A native numeric input with an explicit, lossless special mode."""
+
+    def __init__(self, parameter):
+        super().__init__()
+        self.parameter = parameter
+        self.setObjectName(parameter["id"] + "_editor")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        controls = self.controls = QHBoxLayout()
+        controls.setSpacing(12)
+        decimals = int(parameter["decimals"])
+        self.spin = QDoubleSpinBox() if decimals else QSpinBox()
+        self.spin.setObjectName(parameter["id"])
+        self.spin.setLocale(QLocale.c())
+        self.spin.setKeyboardTracking(False)
+        if decimals:
+            self.spin.setDecimals(decimals)
+        number = float if decimals else int
+        self.spin.setRange(number(parameter["minimum"]), number(parameter["maximum"]))
+        self.spin.setSingleStep(number(parameter["step"]))
+        self.spin.setSuffix(" " + parameter["units"] if parameter["units"] else "")
+        self.spin.setToolTip(parameter["description"])
+        current = parameter["current"]
+        self.custom = current if not current.startswith("@") else parameter["minimum"]
+        self.spin.setValue(number(self.custom))
+        self.input_stack = QStackedWidget()
+        self.input_stack.addWidget(self.spin)
+        controls.addWidget(self.input_stack, 1)
+        self.mode_value = QLineEdit()
+        self.mode_value.setReadOnly(True)
+        self.mode_value.setFocusPolicy(Qt.NoFocus)
+        self.mode_value.setStyleSheet("color:#aaa;")
+        self.input_stack.addWidget(self.mode_value)
+        self.mode_buttons = QWidget()
+        mode_layout = QHBoxLayout(self.mode_buttons)
+        mode_layout.setContentsMargins(0, 0, 0, 0)
+        mode_layout.setSpacing(6)
+        controls.addWidget(self.mode_buttons)
+        self.modes = []
+        for option in parameter["specials"]:
+            button = QPushButton("Legacy zero" if option["value"] == "@legacy_zero" else option["label"])
+            button.setObjectName(parameter["id"] + "_mode_" + option["value"].lstrip("@"))
+            button.setCheckable(True)
+            button.setStyleSheet("QPushButton:checked{background:#274563;}")
+            button.setToolTip(option.get("display_text", option["label"]))
+            self.modes.append((option, button))
+            mode_layout.addWidget(button)
+            button.toggled.connect(lambda checked, item=option: self._set_mode(item, checked))
+        layout.addLayout(controls)
+        self.context = QLabel()
+        self.context.setObjectName(parameter["id"] + "_context")
+        self.context.setWordWrap(True)
+        self.context.setStyleSheet("color:#aaa;")
+        layout.addWidget(self.context)
+        self.spin.lineEdit().textChanged.connect(self._refresh_context)
+        for option, button in self.modes:
+            if current == option["value"]:
+                button.setChecked(True)
+        self._refresh_context()
+
+    def _set_mode(self, option, checked):
+        if checked:
+            if self.spin.isEnabled():
+                self.custom = self.spin.cleanText()
+            for other, button in self.modes:
+                if other != option:
+                    button.blockSignals(True)
+                    button.setChecked(False)
+                    button.blockSignals(False)
+            resolved = option.get("display_value")
+            self.input_stack.setCurrentWidget(self.spin if resolved is not None else self.mode_value)
+            mode_text = option.get("display_text", option["label"])
+            self.mode_value.setText("Soft cut + 96 RPM" if option["value"] == "@auto" else mode_text)
+            self.mode_value.setToolTip(mode_text)
+            if resolved is not None:
+                number = float if isinstance(self.spin, QDoubleSpinBox) else int
+                # Native scalar FF can exceed the custom sentinel-reserved range.
+                self.spin.setRange(min(number(self.parameter["minimum"]), number(resolved)),
+                                   max(number(self.parameter["maximum"]), number(resolved)))
+                self.spin.setValue(number(resolved))
+            self.spin.setEnabled(False)
+        else:
+            self.input_stack.setCurrentWidget(self.spin)
+            self.spin.setEnabled(True)
+            number = float if isinstance(self.spin, QDoubleSpinBox) else int
+            self.spin.setRange(number(self.parameter["minimum"]), number(self.parameter["maximum"]))
+            self.spin.setValue(number(self.custom))
+        self._refresh_context()
+
+    def input_value(self):
+        for option, button in self.modes:
+            if button.isChecked():
+                return option["value"]
+        return self.spin.cleanText().strip()
+
+    def _refresh_context(self, *_):
+        for option, button in self.modes:
+            if button.isChecked():
+                self.context.setText(option.get("display_text", option["label"]))
+                self.context.setVisible(False)
+                return
+        try:
+            value = self.input_value()
+            rounded = patch_service.normalize_parameter_value(self.parameter, value)
+            self.context.setText(f"Will use {rounded} {self.parameter['units']}".strip())
+            self.context.setVisible(Decimal(value) != Decimal(rounded))
+        except patch_service.PatchError as error:
+            self.context.setText(str(error))
+            self.context.setVisible(True)
 
 
 def configure_application(app):
@@ -840,7 +954,6 @@ class MS41FlashGUI(QMainWindow):
         self._module_coding_state = None
         self._ecu_variant         = None
         self._ecu_program_variant = None   # confirmed from full ROM read; resolves MS41.2/MS41.3 ambiguity
-        self._softbsl_last_is_ms41_3 = False   # backward-compatible sticky used by older UI tests
         self._softbsl_last_version = None      # consistent MS41 target retained across port handoff
         self._ecu_id              = None
         self._ecu_cal_id          = None
@@ -886,7 +999,6 @@ class MS41FlashGUI(QMainWindow):
         self._identity_sector_data = None # complete live erase sector: BOTTOM SA1 8 KB or TOP SA7 64 KB
         self._identity_sector_off = None  # file offset owning _identity_sector_data
         self._identity_cache_key = None  # connection fingerprint that owns the BOOT cache
-        self._identity_cache_source = ""
         self._identity_cache_time = None
         self._identity_isn   = None   # fresh live 4-digit DME ISN (EWS workflow only)
         self._identity_isn_key = None # connection fingerprint that owns the live ISN
@@ -1299,7 +1411,7 @@ class MS41FlashGUI(QMainWindow):
             "loader directly with staged command 0x5A. Never sends 0x2A or falls back to DS2. "
             "Requires a known flash-driver family; a rejected trigger stops before erase.")
         self.rb_recovery_boot.setToolTip(
-            "Connect with ignition OFF, repeatedly send CalGuard V5's key-on token, then "
+            "Connect with ignition OFF, repeatedly send CalGuard's key-on token, then "
             "retain the acknowledged Soft-BSL RAM-agent session for a full/tune read or "
             "boot-preserving write. The preserved boot driver identifies the flash family "
             "before the RAM agent is selected. Requires D2XX.")
@@ -1706,14 +1818,29 @@ class MS41FlashGUI(QMainWindow):
         self.btn_info = self._op_btn(
             "📋  Read ECU Firmware Info", "#1e5080", self._on_read_info
         )
-        self.btn_info.setMaximumWidth(240)
+        self.btn_info.setToolTip(
+            "Read identification, firmware and calibration information, programming "
+            "records, and DME identity from the connected ECU. This does not write to the ECU."
+        )
         info_actions = QHBoxLayout()
         info_actions.addWidget(self.btn_info)
-        for title, callback in (("Copy ECU Info", self._on_copy_ecu_info),
-                                ("Export ECU Info…", self._on_export_ecu_info)):
-            button = QPushButton(title)
-            button.clicked.connect(callback)
+        info_buttons = [self.btn_info]
+        for title, callback, tooltip in (
+                ("Copy ECU Info", self._on_copy_ecu_info,
+                 "Copy the displayed ECU information and raw identification response "
+                 "to the clipboard. Read ECU information first."),
+                ("Export ECU Info…", self._on_export_ecu_info,
+                 "Save the displayed ECU information and raw identification response "
+                 "as a text report. Read ECU information first.")):
+            button = self._op_btn(title, "#3d3d3d", callback)
+            button.setToolTip(tooltip)
             info_actions.addWidget(button)
+            info_buttons.append(button)
+        button_size = QSize(max(button.sizeHint().width() for button in info_buttons),
+                            max(max(button.sizeHint().height(), button.minimumHeight())
+                                for button in info_buttons))
+        for button in info_buttons:
+            button.setFixedSize(button_size)
         info_actions.addStretch()
         lay.addLayout(info_actions)
 
@@ -2218,7 +2345,7 @@ class MS41FlashGUI(QMainWindow):
         self._connection_echo = True
         self._connection_port = port
         self._log(
-            f"Arming CalGuard V5 boot recovery on {port}; keep ignition OFF "
+            f"Arming CalGuard boot recovery on {port}; keep ignition OFF "
             "until prompted in the log.",
             "warn",
         )
@@ -2325,10 +2452,8 @@ class MS41FlashGUI(QMainWindow):
             self._port_owner.release("softbsl")
         self._port_owner.release("flasher")
         self._connection_port = None
-        # Remember the MS41.3 verdict BEFORE clearing it — a soft-BSL op (install / fast R-W) frees
-        # the DS2 port by disconnecting first, and must not then mis-read this ECU as non-MS41.3.
+        # Preserve the detected firmware version while Soft-BSL releases the DS2 port.
         self._softbsl_last_version = self._ecu_patch_version()
-        self._softbsl_last_is_ms41_3 = self._ecu_is_ms41_3()
         self._ecu_variant         = None
         self._ecu_program_variant = None
         self._ecu_id              = None
@@ -2351,7 +2476,6 @@ class MS41FlashGUI(QMainWindow):
         self._identity_sector_data = None
         self._identity_sector_off = None
         self._identity_cache_key = None
-        self._identity_cache_source = ""
         self._identity_cache_time = None
         self._identity_isn = None
         self._identity_isn_key = None
@@ -2375,20 +2499,6 @@ class MS41FlashGUI(QMainWindow):
         self._update_softbsl_install_options()
         self._log("Disconnected", "warn")
         return True
-
-    @staticmethod
-    def _program_is_ms41_3(ds2) -> bool:
-        """True if the connected ECU's PROGRAM half carries the exact MS41.3 SS1v2 signature
-        (file 0x39A9A, read at DS2 0x3DA9A). It lives in the program region, so it survives a
-        tune/cal reflash — unlike the cal-resident ABHISHEK marker (file 0x11F60, inside the
-        24 KB tune), which a custom tune wipes, making a tuned MS41.3 ECU look like MS41.2.
-        This is the same signature the full-ROM resolver uses. Read-only 4 bytes, safe on a
-        running ECU; any read failure returns False (fail-safe)."""
-        try:
-            sig = ds2.read_mem(SS1V2_PROG_SIG_ADDR ^ 0x4000, len(SS1V2_PROG_SIG))
-        except Exception:
-            return False
-        return bytes(sig) == SS1V2_PROG_SIG
 
     @staticmethod
     def _live_patch_present(ds2, patch_id: str) -> bool:
@@ -2535,7 +2645,7 @@ class MS41FlashGUI(QMainWindow):
             ident, announce=True)
 
     def _set_ds2_buttons_enabled(self):
-        """DS2 mode: reads + partial tune write enabled; full write held off."""
+        """Enable the normal DS2 controls after a successful connection."""
         for b in (self.btn_scan_modules, self.btn_read_dtc, self.btn_clear_dtc,
                   self.btn_export_dtc,
                   self.btn_info, self.btn_read_tune, self.btn_read_full,
@@ -4363,7 +4473,6 @@ class MS41FlashGUI(QMainWindow):
         self.lbl_live_status.setWordWrap(True)
         lay.addWidget(self.lbl_live_status)
         self.live_view = LiveDataView(tab)
-        self.live_table = self.live_view.table
         lay.addWidget(self.live_view, 1)
         self.tabs.addTab(tab, "  Live Data  ")
         self._refresh_logger_definition()
@@ -4382,7 +4491,6 @@ class MS41FlashGUI(QMainWindow):
             self._live_definition_path = None
             self.lbl_logger_definition.setText(f"Unavailable: {error}")
             self.live_view.clear([])
-        self._live_rows = self.live_view.table_rows
         self._set_live_buttons_enabled(self._ds2 is not None)
         self._update_telegram_checkbox_state()
 
@@ -4390,7 +4498,7 @@ class MS41FlashGUI(QMainWindow):
         if self._poller or getattr(self, "_task_busy", False):
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, "Import Logger Definition", "", "XML Files (*.xml)")
+            self, "Import RomRaider Logger Definition", "", "XML Files (*.xml)")
         if not path:
             return
         try:
@@ -4458,7 +4566,6 @@ class MS41FlashGUI(QMainWindow):
             self._live_sample_sequence)
         self._live_sample_sequence = sequence
         self.live_view.append_samples(channels, samples, dropped)
-        self._live_rows = self.live_view.table_rows
         if dropped:
             self._log(f"Live Data display missed {dropped} samples; the CSV is unaffected.", "warn")
 
@@ -4466,8 +4573,10 @@ class MS41FlashGUI(QMainWindow):
         was_polling = self._poller is not None
         self._live_timer.stop()
         rows = self._poller.csv_rows if self._poller else 0
+        error = None
         if self._poller:
             self._poller.stop()
+            error = self._poller.terminal_error
             self._append_live_samples()
             rows = self._poller.csv_rows
             self._poller = None
@@ -4476,8 +4585,10 @@ class MS41FlashGUI(QMainWindow):
         stop_msg = (f"Stopped — {rows:,} rows logged to {self._live_log_basename}"
                     if self._live_log_basename and rows else "Stopped")
         self._live_log_basename = ""
-        self.lbl_live_status.setText(stop_msg)
-        if was_polling:
+        self.lbl_live_status.setText(f"Stopped — {error}" if error else stop_msg)
+        if error:
+            self._log(f"Live Data: {error}", "warn")
+        elif was_polling:
             self._log("Live data polling stopped", "info")
 
     def _refresh_live_display(self):
@@ -4492,9 +4603,7 @@ class MS41FlashGUI(QMainWindow):
         self.lbl_live_status.setText(
             f"{mode} · {self._poller.sample_rate:.1f} samples/s" + file_info)
         if self._poller.terminal_error:
-            error = self._poller.terminal_error
             self._on_live_stop()
-            self.lbl_live_status.setText(f"Stopped — {error}")
 
     def _update_telegram_checkbox_state(self):
         """Refresh live acquisition controls after connect, stop, or mode changes."""
@@ -7360,7 +7469,7 @@ class MS41FlashGUI(QMainWindow):
                 f"Expected a 256 KB full ROM, got {len(data):,} bytes.")
             return
         # CPU/DS2-order descramble (NOT a file slice) — matches ds2.read_partial and
-        # The definition format; a plain data[0x14000:0x1A000] drops the extended AlphaN + SS1v2 high-cal.
+        # RomRaider; a plain data[0x14000:0x1A000] drops the extended AlphaN + SS1v2 high-cal.
         partial = MS41ECU.tune_from_full(data)
         variant = MS41ECU.detect_variant(data) or "Unknown"
         calid   = MS41ECU.read_calid(data) or "????"
@@ -7669,7 +7778,6 @@ class MS41FlashGUI(QMainWindow):
         self._identity_sector_data = sector_data
         self._identity_sector_off = int(sector_off)
         self._identity_cache_key = self._identity_connection_key(info.serial)
-        self._identity_cache_source = str(source)
         self._identity_cache_time = datetime.datetime.now()
         self._id_labels["source"].setText(source)
         self._id_labels["part"].setText(info.part or "—")
@@ -8484,7 +8592,10 @@ class MS41FlashGUI(QMainWindow):
 
         def task(log_fn, progress_fn):
             progress = self._crossbank_progress(log_fn, progress_fn)
-            detail_log = lambda message: log_fn(message, "debug")
+
+            def detail_log(message):
+                log_fn(message, "debug")
+
             return self._run_via_softbsl(
                 lambda port, pf, lf: softbsl_service.read_cross_bank_image(
                     port, prompt, detail_log, baud=baud, progress_cb=progress),
@@ -10346,6 +10457,7 @@ class MS41FlashGUI(QMainWindow):
             "QGroupBox{color:#aaa;font-weight:bold;border:1px solid #444;border-radius:4px;"
             "margin-top:6px;padding-top:8px;} QGroupBox::title{subcontrol-origin:margin;left:10px;padding:0 4px;}")
         self._patch_group_lay = QVBoxLayout(self._patch_group)
+        self._patch_header = None
         self._patch_placeholder = QLabel("Load a base image to see the patches that apply to it.")
         self._patch_placeholder.setStyleSheet("color:#888;")
         self._patch_group_lay.addWidget(self._patch_placeholder)
@@ -10428,16 +10540,15 @@ class MS41FlashGUI(QMainWindow):
             reset_changes=False,
         )
 
-    @staticmethod
-    def _badge(text, bg, fg):
-        b = QLabel(text)
-        b.setStyleSheet(f"background:{bg}; color:{fg}; border-radius:8px; "
-                        f"padding:1px 5px; font-size:9px; font-weight:bold;")
-        return b
-
     def _refresh_patch_list(self, selected=()):
+        if self._patch_header is not None:
+            self._patch_header.setParent(None)
+            self._patch_header.deleteLater()
+            self._patch_header = None
         for row in self._patch_rows.values():
+            row.close()
             row.setParent(None)
+            row.deleteLater()
         self._patch_rows = {}
         self._patch_checkboxes = {}
         self._patch_installed_ids = set()
@@ -10470,12 +10581,88 @@ class MS41FlashGUI(QMainWindow):
             "softbsl_loader": "Soft-BSL",
             "cal_guard": "CalGuard",
         }
+        header = QWidget()
+        header.setObjectName("patch_table_header")
+        header.setAttribute(Qt.WA_StyledBackground, True)
+        header.setStyleSheet("QWidget#patch_table_header{background:#303030;border-bottom:1px solid #444;}")
+        header_font = self._patch_group.font()
+        header_font.setBold(True)
+        header.setFont(header_font)
+        metrics = header.fontMetrics()
+        column_widths = {
+            1: max(metrics.horizontalAdvance(text) for text in
+                   ["Version"] + [p.get("version", "") for p in avail]) + 8,
+            2: max(metrics.horizontalAdvance(text) for text in ("Installed", "Status")) + 8,
+            3: max(metrics.horizontalAdvance(text) for text in ("UNTESTED", "Validation")) + 8,
+        }
+        probe_button = QPushButton("Configure *")
+        probe_button.setFont(self._patch_group.font())
+        action_width = probe_button.sizeHint().width()
+        probe_button.deleteLater()
+        column_widths.update({column: action_width for column in (4, 5, 6)})
+        header_layout = QGridLayout(header)
+        header_layout.setContentsMargins(0, 5, 0, 5)
+        header_layout.setHorizontalSpacing(8)
+        header_layout.setColumnStretch(0, 1)
+        for column, name, title in (
+                (0, "patch", "Patch"), (1, "version", "Version"),
+                (2, "state", "Status"), (3, "validation", "Validation"),
+                (4, "actions", "Actions")):
+            label = QLabel(title)
+            label.setObjectName(f"patch_header_{name}")
+            label.setStyleSheet("color:#aaa;")
+            if column == 0:
+                label.setIndent(18)
+            else:
+                label.setFixedWidth(column_widths[column] if column < 4 else action_width * 3 + 16)
+            header_layout.addWidget(label, 0, column, 1, 3 if column == 4 else 1)
+        self._patch_group_lay.addWidget(header)
+        self._patch_header = header
         for p in avail:
             row = QWidget()
-            rlay = QHBoxLayout(row)
-            rlay.setContentsMargins(0, 2, 0, 2)
+            row_layout = QVBoxLayout(row)
+            row_layout.setContentsMargins(0, 4, 0, 4)
+            row_layout.setSpacing(4)
+            rlay = QGridLayout()
+            rlay.setContentsMargins(0, 0, 0, 0)
+            rlay.setHorizontalSpacing(8)
+            rlay.setColumnStretch(0, 1)
+            cells = {}
+            for column, width in column_widths.items():
+                cell = QLabel()
+                cell.setFixedWidth(width)
+                column_name = {1: "version", 2: "state", 3: "validation"}.get(column, "empty")
+                cell.setObjectName(f"patch_{column_name}_{p['id']}")
+                rlay.addWidget(cell, 0, column)
+                cells[column] = cell
+            row_layout.addLayout(rlay)
+            details = QDialog(row, Qt.Popup)
+            details.setObjectName(f"patch_details_{p['id']}")
+            details.setStyleSheet("QDialog{border:1px solid #555;}")
+            details.setWindowTitle(f"{p['title']} {p.get('version', '')}".strip())
+            popup_layout = QVBoxLayout(details)
+            popup_layout.setContentsMargins(1, 1, 1, 1)
+            details_scroll = QScrollArea()
+            details_scroll.setWidgetResizable(True)
+            details_scroll.setFrameShape(QScrollArea.NoFrame)
+            details_body = QWidget()
+            details_layout = QVBoxLayout(details_body)
+            details_layout.setContentsMargins(12, 12, 12, 12)
+            details_layout.setSpacing(8)
+            details_layout.setAlignment(Qt.AlignTop)
+            details_scroll.setWidget(details_body)
+            popup_layout.addWidget(details_scroll)
+            details_button = QPushButton("Details")
+            details_button.setObjectName(f"patch_details_toggle_{p['id']}")
+            details_button.setToolTip("Show description and requirements. Close with Escape or click outside.")
+            details_button.clicked.connect(
+                lambda _=False, popup=details, button=details_button:
+                self._show_patch_details(popup, button))
+            details_button.setFixedWidth(action_width)
+            cells[6].setParent(None)
+            rlay.addWidget(details_button, 0, 6)
 
-            cb = QCheckBox(f"{p['id']}  —  {p['title']}")
+            cb = QCheckBox(p['title'])
             cb.setProperty("blocked_by_legacy", bool(p.get("legacy")))
             cb.setStyleSheet("QCheckBox{font-weight:normal;color:#d4d4d4;}")
             user_tip = p.get("user_description") or p["description"]
@@ -10492,21 +10679,35 @@ class MS41FlashGUI(QMainWindow):
                 )
             cb.setToolTip(user_tip)
             cb.setChecked(p["installed"] or p["id"] in selected)
-            rlay.addWidget(cb)
+            rlay.addWidget(cb, 0, 0)
+            heading = QLabel(details.windowTitle())
+            heading.setStyleSheet("font-weight:bold;")
+            heading.setWordWrap(True)
+            details_layout.addWidget(heading)
+            summary = QLabel(p.get('user_description') or p['description'])
+            summary.setWordWrap(True)
+            summary.setStyleSheet("color:#aaa;")
+            summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            details_layout.addWidget(summary)
+            identifier = QLabel(p['id'])
+            identifier.setStyleSheet("color:#888;")
+            identifier.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            identifier.setWordWrap(True)
+            details_layout.addWidget(identifier)
 
             if p.get("version"):
-                rlay.addWidget(self._badge(p["version"], "#2a2a2a", "#aaa"))
+                cells[1].setText(p["version"])
             if p.get("tested") is False:
-                untested_badge = self._badge(
-                    "UNTESTED", "#5a4a1a", "#e8c46a")
+                untested_badge = cells[3]
+                untested_badge.setText("UNTESTED")
+                untested_badge.setStyleSheet("color:#e8c46a;")
                 untested_badge.setToolTip(
                     p["status"] or "This patch has not been validated on a vehicle.")
-                rlay.addWidget(untested_badge)
             elif p["status"]:
-                status_badge = self._badge(
-                    p["status"].split(" · ", 1)[0], "#2a2a2a", "#aaa")
+                status_badge = QLabel(p["status"])
+                status_badge.setWordWrap(True)
                 status_badge.setToolTip(p["status"])
-                rlay.addWidget(status_badge)
+                details_layout.addWidget(status_badge)
             for required_id, required_name in zip(
                     p.get("requires", []), required_names):
                 required_short = required_name
@@ -10515,21 +10716,21 @@ class MS41FlashGUI(QMainWindow):
                         f"{short_names[required_id]} "
                         f"{definitions.get(required_id, {}).get('version', '')}"
                     ).strip()
-                requirement = self._badge(
-                    f"REQUIRES {required_short.upper()}",
-                    "#24384d", "#8fc7ff")
+                requirement = QLabel(f"Requires: {required_short}")
+                requirement.setWordWrap(True)
                 requirement.setToolTip(
                     f"{p['title']} requires {required_name}. Selecting this patch also "
                     "selects that requirement when it is available. Conflicting selections "
                     "are never removed automatically."
                 )
-                rlay.addWidget(requirement)
+                details_layout.addWidget(requirement)
             if p.get("needs_boot"):
-                bb = self._badge("BOOT · SOFT-BSL", "#3a2a55", "#c9a6ff")
+                bb = QLabel("Boot-region write: Soft-BSL or hardware BSL required")
+                bb.setWordWrap(True)
                 bb.setToolTip("Writes the boot/parameter region (file 0x4000–0x5FFF). Enable "
                               "boot-region writes on the Flash tab, or use hardware BSL recovery; "
                               "plain DS2 cannot deliver these bytes.")
-                rlay.addWidget(bb)
+                details_layout.addWidget(bb)
             parameter_group = self._patch_parameter_groups.get(p["id"])
             if parameter_group is not None:
                 btn_configure = QPushButton("Configure")
@@ -10538,38 +10739,33 @@ class MS41FlashGUI(QMainWindow):
                     lambda _=False, pid=p["id"]: self._on_patch_configure(pid)
                 )
                 self._patch_configure_buttons[p["id"]] = btn_configure
-                rlay.addWidget(btn_configure)
+                btn_configure.setFixedWidth(action_width)
+                cells[4].setParent(None)
+                rlay.addWidget(btn_configure, 0, 4)
             if p["installed"]:
-                rlay.addWidget(self._badge("✓ INSTALLED", "#1e4d2b", "#9ece6a"))
+                installed = cells[2]
+                installed.setText("Installed")
+                installed.setStyleSheet("color:#9ece6a;")
                 btn_rm = QPushButton("✕ Remove")
                 btn_rm.setStyleSheet(
-                    "QPushButton{background:#3d2020;color:#f0a0a0;border:1px solid #5a1a1a;"
-                    "border-radius:3px;padding:1px 8px;font-size:9px;} "
-                    "QPushButton:hover{background:#5a1a1a;}")
+                    "QPushButton{color:#f0a0a0;}")
                 btn_rm.clicked.connect(lambda _=False, pid=p["id"]: self._on_patch_remove(pid))
                 required_by = p.get("required_by", [])
                 if required_by:
-                    dependent_titles = []
                     dependent_names = []
                     for pid in required_by:
                         dependent = definitions.get(pid, {})
                         dependent_title = short_names.get(
                             pid, dependent.get("title", pid).split(
                                 " - ", 1)[0].split(" / ", 1)[0])
-                        dependent_titles.append(dependent_title)
                         dependent_names.append(
                             f"{dependent_title} {dependent.get('version', '')}".strip())
                     joined = ", ".join(dependent_names)
-                    used_by = (
-                        dependent_titles[0]
-                        if len(dependent_titles) == 1
-                        else f"{len(dependent_titles)} PATCHES"
-                    )
-                    dependency_badge = self._badge(
-                        f"USED BY {used_by.upper()}", "#4d3524", "#ffc07a")
+                    dependency_badge = QLabel(f"Used by: {joined}")
+                    dependency_badge.setWordWrap(True)
                     dependency_badge.setToolTip(
                         f"{p['title']} is required by installed patch(es): {joined}.")
-                    rlay.addWidget(dependency_badge)
+                    details_layout.addWidget(dependency_badge)
                     btn_rm.setEnabled(False)
                     btn_rm.setToolTip(
                         "TOP-bank protection requires the AMD driver; "
@@ -10578,14 +10774,16 @@ class MS41FlashGUI(QMainWindow):
                         f"Cannot remove {p['title']} while installed patch(es) {joined} "
                         "still require it. Remove the dependent patch first."
                     )
-                rlay.addWidget(btn_rm)
+                btn_rm.setFixedWidth(action_width)
+                cells[5].setParent(None)
+                rlay.addWidget(btn_rm, 0, 5)
             for leg in p.get("legacy", []):
-                rlay.addWidget(self._badge(f"⚠ {leg['id'].upper()} ({leg['label']}) INSTALLED", "#5a1a1a", "#f47171"))
+                warning = QLabel(f"⚠ {leg['id'].upper()} ({leg['label']}) INSTALLED")
+                warning.setWordWrap(True)
+                warning.setStyleSheet("color:#f47171;")
+                row_layout.addWidget(warning)
                 btn_rm_legacy = QPushButton(f"✕ Remove {leg['id']} ({leg['label']})")
-                btn_rm_legacy.setStyleSheet(
-                    "QPushButton{background:#3d2020;color:#f0a0a0;border:1px solid #5a1a1a;"
-                    "border-radius:3px;padding:1px 8px;font-size:9px;} "
-                    "QPushButton:hover{background:#5a1a1a;}")
+                btn_rm_legacy.setStyleSheet("QPushButton{color:#f0a0a0;}")
                 btn_rm_legacy.clicked.connect(lambda _=False, pid=leg["id"]: self._on_patch_remove(pid))
                 if leg.get("required_by"):
                     dependent_names = [
@@ -10601,11 +10799,12 @@ class MS41FlashGUI(QMainWindow):
                         f"{', '.join(dependent_names)} still require it. "
                         "Remove the dependent patch first."
                     )
-                rlay.addWidget(btn_rm_legacy)
+                row_layout.addWidget(btn_rm_legacy)
             if not p["ok"]:
-                rlay.addWidget(self._badge(f"⚠ {p['badge']}", "#5a1a1a", "#f47171"))
-            rlay.addStretch()
-
+                warning = QLabel(f"⚠ {p['badge']}")
+                warning.setWordWrap(True)
+                warning.setStyleSheet("color:#f47171;")
+                row_layout.addWidget(warning)
             if p["installed"]:
                 self._patch_installed_ids.add(p["id"])
                 cb.setEnabled(False)
@@ -10621,6 +10820,22 @@ class MS41FlashGUI(QMainWindow):
             self._patch_rows[p["id"]] = row
             self._patch_checkboxes[p["id"]] = cb
         self._on_patch_selection_changed()
+
+    def _show_patch_details(self, popup, button):
+        available = button.screen().availableGeometry().adjusted(8, 8, -8, -8)
+        width = min(560, available.width())
+        scroll = popup.findChild(QScrollArea)
+        body = scroll.widget()
+        body_width = width - 2 - scroll.verticalScrollBar().sizeHint().width()
+        height = body.layout().heightForWidth(body_width) + 2
+        popup.resize(width, min(height, available.height()))
+        anchor = button.mapToGlobal(button.rect().bottomRight())
+        popup.move(
+            max(available.left(), min(anchor.x() - width, available.right() - width + 1)),
+            max(available.top(), min(anchor.y() + 4, available.bottom() - popup.height() + 1)),
+        )
+        popup.show()
+        popup.setFocus()
 
     def _build_patch_image(self, selected, *, skip_parameters_for=None):
         if selected:
@@ -10680,11 +10895,11 @@ class MS41FlashGUI(QMainWindow):
 
         dialog = QDialog(self)
         dialog.setWindowTitle(f"Configure {group['title']} {group['version']}".strip())
-        dialog.resize(680, 620)
+        available = dialog.screen().availableGeometry()
+        width = min(720, available.width() - 32)
         layout = QVBoxLayout(dialog)
         intro = QLabel(
-            "Configure this patch for the next build. Values include any pending settings. "
-            "Build Patched Image saves the selected patches and settings together."
+            "Settings apply to the next patched image. Review Changes shows any rounding."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -10692,15 +10907,41 @@ class MS41FlashGUI(QMainWindow):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         body = QWidget()
-        grid = QGridLayout(body)
+        grid = QFormLayout(body)
+        grid.setAlignment(Qt.AlignTop)
+        grid.setLabelAlignment(Qt.AlignLeft | Qt.AlignTop)
+        grid.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        grid.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(16)
+        label_width = max(body.fontMetrics().horizontalAdvance(p["label"])
+                          for p in group["parameters"])
+        probe_button = QPushButton()
+        probe_button.setFont(body.font())
+        mode_width = 0
+        for parameter in group["parameters"]:
+            for option in parameter["specials"]:
+                probe_button.setText("Legacy zero" if option["value"] == "@legacy_zero" else option["label"])
+                mode_width = max(mode_width, probe_button.sizeHint().width())
+        height_probes = (QComboBox(), QSpinBox(), probe_button)
+        for probe in height_probes:
+            probe.setFont(body.font())
+        control_height = max(probe.sizeHint().height() for probe in height_probes) + 4
+        probe_button.deleteLater()
         editors = {}
-        for row, parameter in enumerate(group["parameters"]):
+        fields = []
+        for parameter in group["parameters"]:
             label = QLabel(parameter["label"])
+            label.setObjectName(parameter["id"] + "_label")
+            label.setFixedHeight(control_height)
+            label.setFixedWidth(label_width)
             label.setToolTip(parameter["description"])
-            editor = QComboBox()
-            editor.setObjectName(parameter["id"])
-            editor.setToolTip(parameter["description"])
             if parameter["kind"] == "choice":
+                editor = QComboBox()
+                editor.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+                editor.setMinimumContentsLength(12)
+                editor.setObjectName(parameter["id"])
+                editor.setToolTip(parameter["description"])
                 for option in parameter["choices"]:
                     editor.addItem(option["label"], option["value"])
                 current_index = editor.findData(parameter["current"])
@@ -10708,32 +10949,46 @@ class MS41FlashGUI(QMainWindow):
                     editor.insertItem(0, parameter["current_display"], parameter["current"])
                     current_index = 0
                 editor.setCurrentIndex(current_index)
+                editor.setFixedHeight(control_height)
+                modes = QLabel()
+                controls = QWidget()
+                control_layout = QHBoxLayout(controls)
+                control_layout.setContentsMargins(0, 0, 0, 0)
+                control_layout.setSpacing(12)
+                control_layout.addWidget(editor, 1)
+                control_layout.addWidget(modes)
             else:
-                editor.setEditable(True)
-                current_text = (
-                    parameter["current_display"]
-                    if parameter["current"].startswith("@")
-                    else parameter["current"]
-                )
-                editor.addItem(current_text, parameter["current"])
-                for option in parameter["specials"]:
-                    if option["value"] != parameter["current"]:
-                        editor.addItem(option["label"], option["value"])
-                editor.setCurrentIndex(0)
-            details = parameter["current_display"] + f"  ·  raw {parameter['raw_hex']}"
-            if parameter.get("minimum") is not None:
-                details += (
-                    f"  ·  storage range {parameter['minimum']}–{parameter['maximum']}"
-                    f" {parameter.get('units', '')}  ·  step {parameter['step']}"
-                )
-            current = QLabel(details)
-            current.setStyleSheet("color:#888;font-size:9px;")
-            current.setWordWrap(True)
-            grid.addWidget(label, row * 2, 0)
-            grid.addWidget(editor, row * 2, 1)
-            grid.addWidget(current, row * 2 + 1, 0, 1, 2)
+                editor = _PatchNumberEditor(parameter)
+                controls = editor
+                editor.spin.setFixedHeight(control_height)
+                editor.mode_value.setFixedHeight(control_height)
+                modes = editor.mode_buttons
+                for _option, button in editor.modes:
+                    button.setFixedHeight(control_height)
+            modes.setFixedWidth(mode_width)
+            modes.setFixedHeight(control_height)
+            field = QWidget()
+            field_layout = QVBoxLayout(field)
+            field_layout.setContentsMargins(0, 0, 0, 0)
+            field_layout.setSpacing(5)
+            field_layout.addWidget(controls)
+            details = (f"Step: {parameter['step']} {parameter.get('units', '')}"
+                       if parameter.get("step") is not None else "")
+            if parameter["id"] in ("CUT_IPW", "LC_IPW"):
+                details += "\n0 ms sets a zero base pulse. ECU injector corrections still apply."
+            if details:
+                current = QLabel(details)
+                current.setObjectName(parameter["id"] + "_help")
+                current.setStyleSheet("color:#aaa;")
+                current.setWordWrap(True)
+                field_layout.addWidget(current)
+            editor.setToolTip(f"Loaded: {parameter['current_display']}\n" + parameter["description"])
+            grid.addRow(label, field)
+            fields.append(field)
             editors[parameter["id"]] = (parameter, editor)
-        grid.setColumnStretch(1, 1)
+        field_minimum = max(field.minimumSizeHint().width() for field in fields)
+        for field in fields:
+            field.setMinimumWidth(field_minimum)
         scroll.setWidget(body)
         layout.addWidget(scroll)
 
@@ -10746,6 +11001,13 @@ class MS41FlashGUI(QMainWindow):
         buttons.addWidget(cancel)
         buttons.addWidget(apply_button)
         layout.addLayout(buttons)
+        margins = layout.contentsMargins()
+        body_width = width - margins.left() - margins.right() - scroll.frameWidth() * 2
+        body_height = grid.heightForWidth(body_width) if grid.hasHeightForWidth() else body.sizeHint().height()
+        content_height = (body_height + intro.heightForWidth(width - 32)
+                          + buttons.sizeHint().height() + margins.top() + margins.bottom()
+                          + layout.spacing() * 2 + scroll.frameWidth() * 2)
+        dialog.resize(width, min(content_height, 680, available.height() - 48))
         if dialog.exec_() != QDialog.Accepted:
             return
 
@@ -10754,13 +11016,7 @@ class MS41FlashGUI(QMainWindow):
             if parameter["kind"] == "choice":
                 value = str(editor.currentData())
             else:
-                index = editor.currentIndex()
-                selected_label = editor.itemText(index) if index >= 0 else ""
-                value = (
-                    str(editor.currentData())
-                    if index >= 0 and editor.currentText() == selected_label
-                    else editor.currentText().strip()
-                )
+                value = editor.input_value()
             if value != parameter["current"]:
                 changes[parameter_id] = value
         if not changes:
@@ -10770,6 +11026,17 @@ class MS41FlashGUI(QMainWindow):
         try:
             if self._patch_base != loaded_base:
                 raise patch_service.PatchError("The loaded base changed; reopen Configure.")
+            changes = {
+                parameter_id: patch_service.normalize_parameter_value(
+                    editors[parameter_id][0], value)
+                for parameter_id, value in changes.items()
+            }
+            changes = {parameter_id: value for parameter_id, value in changes.items()
+                       if value != editors[parameter_id][0]["current"]}
+            if not changes:
+                QMessageBox.information(
+                    self, "No Changes", "The rounded values already match the current settings.")
+                return
             output, report = patch_service.apply_parameter_changes(
                 source,
                 patch_id,
@@ -10999,7 +11266,7 @@ class MS41FlashGUI(QMainWindow):
                     for pid in untested):
                 ignition_cut_warning = (
                     "\n\nIgnition Cut is experimental. It may suppress spark while "
-                    "injection continues. "
+                    "injection continues at the stock or configured fixed pulse width. "
                     "Unburned fuel can damage catalytic converters and exhaust components. "
                     "Its fuel-adaptation and diagnostic guards are offline exact-byte verified but "
                     "not vehicle-validated. Never use it on a car with catalytic converters."
@@ -13830,7 +14097,6 @@ class MS41FlashGUI(QMainWindow):
             "ok":    "#6adf6a",
             "warn":  "#e8c46a",
             "error": "#f47171",
-            "debug": "#888888",
         }
         colour  = colours.get(level, "#d4d4d4")
         escaped = text.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
@@ -13840,10 +14106,10 @@ class MS41FlashGUI(QMainWindow):
     def _start_session_log(self):
         if self._log_file:
             self._end_session_log()
-        os.makedirs(LOG_DIR, exist_ok=True)
         ts       = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         path     = os.path.join(LOG_DIR, f"session_{ts}.txt")
         try:
+            os.makedirs(LOG_DIR, exist_ok=True)
             self._log_file = open(path, "w", encoding="utf-8")
             header = (
                 f"BimmerStein ECU Tool — Session log\n"

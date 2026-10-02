@@ -1,15 +1,22 @@
 {
   "id": "softbsl_loader",
-  "label": "V11 AIF-safe loader",
-  "version": "V11",
+  "label": "V12 compact-CRC recovery loader",
+  "version": "V12",
   "title": "Soft-BSL 0x5A loader",
-  "status": "TESTED",
-  "tested": true,
-  "user_description": "Persistent Soft-BSL recovery loader relocated outside the complete BMW AIF programming-history area.",
-  "description": "Soft-BSL V11 keeps every executable byte outside file 0x5D07-0x5F8A, retains the bounded 1-2048 byte RAM-agent upload and full hook anchor, and preserves all 14 MS41.2 AIF slots.",
+  "status": "EXPERIMENTAL",
+  "tested": false,
+  "user_description": "Persistent recovery loader for boot-resident CalGuard; offline-qualified candidate.",
+  "description": "V11 wire protocol and bounded upload, with the 62-byte audited CRC routine.",
   "target": "MS41.3",
-  "targets": ["MS41.0", "MS41.1", "MS41.2", "MS41.3"],
-  "recompute": ["boot_crc"],
+  "targets": [
+    "MS41.0",
+    "MS41.1",
+    "MS41.2",
+    "MS41.3"
+  ],
+  "recompute": [
+    "boot_crc"
+  ],
   "requires": [],
   "conflicts": [],
   "revert_superseded": true,
@@ -19,7 +26,8 @@
     "softbsl_loader_v2",
     "softbsl_loader_v3_bench_failed",
     "softbsl_loader_v9",
-    "softbsl_loader_v10"
+    "softbsl_loader_v10",
+    "softbsl_loader_v11"
   ],
   "cave": null,
   "edits": [
@@ -35,8 +43,8 @@
     },
     {
       "off": 23602,
-      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-      "data": "f075e6f500d8e6f6ffff40572d0fa985c0845064e08df04668417c1648402d0256f601a028d13df708510defc2f427e45c84c2f528e4704540643d02e108db00e118db00"
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "f075e6f500d8e6f6ffff40572d0ca985c0845064e08d7c169d0256f601a028d13dfa08510df2c2f427e45c84c2f528e4704540643d02e108db00e118db00"
     },
     {
       "off": 23712,
