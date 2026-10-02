@@ -100,6 +100,7 @@ _DEPRECATED_LOADER_IDS = (
     "softbsl_loader_v3_bench_failed",
     "softbsl_loader_v9",
     "softbsl_loader_v10",
+    "softbsl_loader_v11",
 )
 _DEPRECATED_CAL_GUARD_IDS = (
     "cal_guard_v1",
@@ -107,6 +108,7 @@ _DEPRECATED_CAL_GUARD_IDS = (
     "cal_guard_v3_compatibility",
     "cal_guard_v4_bench_failed",
     "cal_guard_v4",
+    "cal_guard_v5",
 )
 _DOOR_PATCH_IDS = {
     "MS41.0": ("door_0x43_ms410", "door_magic_ms410"),
@@ -651,9 +653,6 @@ class SoftBSL:
             except Exception as error:
                 raise SoftBSLError(
                     f"serial write failed at byte {offset}: {error}") from error
-            if not echo_enabled:
-                continue
-
             echo = bytearray()
             try:
                 echo_deadline = min(deadline, chunk_deadline)
@@ -697,30 +696,50 @@ class SoftBSL:
         return b[0]
 
     def prearm_calguard_boot(self, timeout=8.0):
-        """Transmit CalGuard V5's raw token until a key-on boot poll ACKs it."""
+        """Transmit the raw recovery token until a key-on boot poll ACKs it."""
         token = bytes((0x5A, MAGIC_HI, MAGIC_LO))
+        expected = (token if self.ds2.echo else b"") + bytes((ACK,))
+        ser = self._ser()
+        previous_timeout = ser.timeout
+        received = b""
         deadline = time.perf_counter() + timeout
         attempts = 0
         self.log(
             "CalGuard boot recovery armed: turn ignition ON now "
             f"(waiting up to {timeout:.1f}s).")
-        while time.perf_counter() < deadline:
-            attempts += 1
-            ser = self._ser()
-            ser.reset_input_buffer()
-            ser.write(token)
-            ser.flush()
-            echoed = self.ds2._discard_echo(token)
-            if self.ds2.echo and echoed != token:
-                continue
-            ack = self.ds2._read_exact(1, 0.01)
-            if ack == bytes((ACK,)):
-                self.log(
-                    f"CalGuard boot recovery caught after {attempts} token attempts.")
-                time.sleep(0.05)  # let the stock listener initialize before its first DS2 frame
-                return
+        try:
+            self.ds2._checked_io(ser.reset_input_buffer)
+            self.ds2._checked_io(setattr, ser, "timeout", 0.005)
+            while time.perf_counter() < deadline:
+                attempts += 1
+                if self.ds2._checked_io(ser.write, token) != len(token):
+                    raise SoftBSLError("short serial write during CalGuard boot recovery")
+                self.ds2._checked_io(ser.flush)
+                time.sleep(len(token) * 12 / self.ds2.baud)
+                # Empty D2XX reads can take >10 ms even with a 1 ms timeout.
+                # Poll queued bytes where supported; Android uses one bounded read.
+                # Leave room for the 1.25 ms ACK character and USB receive latency.
+                receive_deadline = time.perf_counter() + 0.003
+                while True:
+                    available = self.ds2._checked_io(getattr, ser, "in_waiting", None)
+                    if available is None or available:
+                        count = len(expected) if available is None else min(available, len(expected))
+                        received += self.ds2._checked_io(ser.read, count)
+                        if expected in received:
+                            self.log(
+                                f"CalGuard boot recovery caught after {attempts} token attempts.")
+                            time.sleep(0.05)  # quiet time before the first stock DS2 frame
+                            return
+                        # Retain partial echo/late ACKs; do not purge between tokens.
+                        received = received[-len(token):]
+                    remaining = receive_deadline - time.perf_counter()
+                    if available is None or remaining <= 0:
+                        break
+                    time.sleep(min(0.001, remaining))
+        finally:
+            ser.timeout = previous_timeout
         raise SoftBSLError(
-            "CalGuard boot recovery was not acknowledged. Confirm CalGuard V5 and "
+            "CalGuard boot recovery was not acknowledged. Confirm CalGuard and "
             "Soft-BSL are installed, then retry from ignition OFF.")
 
     @staticmethod
@@ -1348,21 +1367,29 @@ class SoftBSL:
         return True
 
     def calguard_direct_entry_ready(self):
-        """True when the installed CalGuard gate is holding a mismatch in flash-listen."""
+        """Recognize current boot recovery and the prior V5 mismatch listener."""
         try:
             if self.ds2.read_mem(0xE740, 1) == b"\x01":
-                return False
-            if not _live_patch_applied(self.ds2, "cal_guard"):
+                if (self.ds2.read_mem(0xE743, 1) == b"\x02"
+                        and _live_patch_applied(self.ds2, "cal_guard")
+                        and _live_patch_applied(self.ds2, "softbsl_loader")):
+                    self.log("Boot-resident CalGuard recovery detected; entering Soft-BSL directly.")
+                    return True
                 return False
             cal_v, prog_v, broad_consistent = _detect_ecu_variant(
                 self.ds2, accept_credit=False)
             cal_id, program_id, _family, exact_consistent = (
                 _detect_firmware_compatibility(self.ds2)
             )
+            # Matching firmware uses normal 0x2A entry; only a mismatch needs
+            # the complete CalGuard byte proof for the legacy recovery route.
+            if broad_consistent and exact_consistent:
+                return False
+            if not (_live_patch_applied(self.ds2, "cal_guard")
+                    or _live_patch_applied(self.ds2, "cal_guard_v5")):
+                return False
         except Exception as error:
             self.log(f"CalGuard direct-entry preflight unavailable ({error}); using normal entry.")
-            return False
-        if broad_consistent and exact_consistent:
             return False
         self.log(
             "CalGuard mismatch listener detected "
@@ -1935,7 +1962,7 @@ def _select_agent_for_chip(args, chip):
     if fam["cmdset"] != "amd":
         if not os.path.exists(agent_path):
             raise SoftBSLError(f"--chip {chip}: {fam['agent']} not assembled yet. The source exists "
-                     f"(agent_28f_build.asm); assemble the C166 source -> {fam['agent']} "
+                     f"(agent_28f_build.asm); assemble it via Ghidra AssembleC166 -> {fam['agent']} "
                      f"(flat hex @0xD800), or use BSL-Unbricker --chip {chip} (HW BSL, 12 V).")
     args.agent = agent_path   # amd -> agent.hex ; intel -> agent_28f.hex (gated above)
 
@@ -2838,12 +2865,13 @@ def _detect_firmware_compatibility(d):
 
 def _live_patch_applied(d, patch_id):
     """Read every post-patch descriptor byte from the live ECU."""
-    from engines.patcher.patch_ms41 import load_patches
+    from engines.patcher.patch_ms41 import load_patches, _matches_loader_bank_marker
     patch = load_patches()[patch_id]
     for edit in patch["edits"]:
         expected = bytes.fromhex(edit["data"])
         actual = d.read_memory_range(int(edit["off"]) ^ DESCR, len(expected))
-        if actual != expected:
+        if actual != expected and not _matches_loader_bank_marker(
+                patch, int(edit["off"]), expected, actual):
             return False
     return True
 
@@ -2964,18 +2992,30 @@ def _compose_image(base_bytes, patch_ids, *, marker=None, return_log=False):
     """
     try:
         from engines.patcher.patch_ms41 import (
-            PatchError, build, is_applied, load_patches,
+            PatchError, build, installed_calguard, is_absent, is_applied,
+            load_patches, startup_wait_definition,
+            with_startup_wait,
         )
     except ImportError as e:
         raise SoftBSLError(f"patch module could not be loaded: {e}") from e
     try:
         patches = load_patches()
+        patch_ids = with_startup_wait(base_bytes, patch_ids, patches)
         def applied_for_target(patch):
             return is_applied(
                 _normalize_patch_marker_for_match(base_bytes, patch, marker), patch)
 
         missing = [patch_id for patch_id in patch_ids
                    if not applied_for_target(patches[patch_id])]
+        delay = startup_wait_definition(patches)
+        if delay and any(pid in patch_ids for pid in ("softbsl_loader", "cal_guard", "amd_flash")):
+            keep_wait = ("cal_guard" in patch_ids
+                         or (installed_calguard(base_bytes, patches) and applied_for_target(delay)))
+            wait_matches = (applied_for_target(delay) if keep_wait
+                            else is_absent(base_bytes, delay))
+            if not wait_matches:
+                # Reconcile the wait even when the outer patch bytes already match.
+                missing = list(patch_ids)
         if not missing and marker is None:
             result = bytes(base_bytes)
             return (result, []) if return_log else result
@@ -3338,11 +3378,27 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
         is_applied,
         load_patches,
         restore_exact_deprecated_aif_payloads,
+        restore_missing_calguard_v5_body,
         revert,
+        startup_wait_definition,
     )
     patch_defs = load_patches()
     bootstrap_door_id, persistent_door_id = _door_patch_ids(version)
-    clean_base = base
+    clean_base = restore_missing_calguard_v5_body(base, patch_defs)
+    delay = startup_wait_definition(patch_defs)
+    if delay:
+        wait_state = _patch_state(clean_base, delay, PARAM1_FILE)
+        if wait_state == "partial":
+            raise SoftBSLError(
+                "partial/inconsistent boot patch state detected for CalGuard startup wait; "
+                "restore both startup anchors from a known-good image before migration")
+        if wait_state == "applied":
+            # Reapply only with CalGuard; the flash driver is independent.
+            clean_base = bytes(revert(clean_base, delay))
+    # An unchecked install option does not remove an already-installed guard.
+    if any(is_applied(clean_base, patch_defs[pid])
+           for pid in ("cal_guard", "cal_guard_v5")):
+        with_calguard = True
     top_guard = patch_defs["top_ds2_guard"]
     top_guard_state = _patch_state(clean_base, top_guard)
     if top_guard_state == "partial":
@@ -3420,11 +3476,11 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
                           and int(edit["off"]) + len(bytes.fromhex(edit["data"]))
                           <= PARAM1_FILE[1])],
     }
+    amd_state = _patch_state(clean_base, patch_defs["amd_flash"], PARAM1_FILE)
     current_boot_states = {
         "softbsl_loader": loader_boot_state,
         "cal_guard": _patch_state(clean_base, current_guard, PARAM1_FILE),
-        "amd_flash": _patch_state(
-            clean_base, patch_defs["amd_flash"], PARAM1_FILE),
+        "amd_flash": amd_state,
     }
     bad_boot = [patch_id for patch_id, state in current_boot_states.items()
                 if state == "partial"]
@@ -3435,7 +3491,7 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
             + "; restore the boot region from a known-good backup before migration")
     if is_amd_target and current_boot_states["amd_flash"] == "legacy":
         driver_patches = ["amd_flash"]
-    if (current_boot_states["cal_guard"] == "applied"
+    if (guard_program["edits"] and current_boot_states["cal_guard"] == "applied"
             and _patch_state(clean_base, guard_program) not in ("absent", "applied")):
         raise SoftBSLError(
             "the active CalGuard boot trampoline has an unknown program body; "
@@ -3465,7 +3521,7 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
                     if is_amd_target and effective_marker == "T" else []))
     # Reinstall composition is idempotent: normalize any selected persistent patch that is
     # already present before asking the patch builder to apply it again. Unselected feature
-    # current feature patches (for example AlphaN or CalGuard V5 when unselected)
+    # current feature patches (for example AlphaN or CalGuard when unselected)
     # remain byte-for-byte; deprecated CalGuard revisions were normalized above.
     for patch_id in patch_ids:
         patch = patch_defs.get(patch_id)
@@ -3641,14 +3697,14 @@ def _install_resolve_images(args):
         if "softbsl_loader_relocated_v1" in old_loaders_installed:
             _emit("  non-triggering relocated loader v1 detected: migrating to the current CRC implementation")
         if "softbsl_loader_legacy" in old_loaders_installed:
-            _emit("  legacy loader @0x5D36 detected: migrating to AIF-safe V11")
+            _emit("  legacy loader @0x5D36 detected: migrating to the current AIF-safe loader")
         if "softbsl_loader_v2" in old_loaders_installed:
-            _emit("  Soft-BSL V2 detected: migrating to AIF-safe V11")
+            _emit("  Soft-BSL V2 detected: migrating to the current AIF-safe loader")
         if "softbsl_loader_v10" in old_loaders_installed:
             _emit("  Soft-BSL V10 detected: relocating its AIF-overlapping main body")
     if old_guards_installed:
         confirm_patches.extend(old_guards_installed)
-        _emit("  AIF-overlapping CalGuard detected: relocating to the V5 layout")
+        _emit("  AIF-overlapping CalGuard detected: migrating to the boot-resident guard")
     _confirm_reinstall(
         args, base, patch_defs, confirm_patches,
         bootstrap_door_id=bootstrap_door_id)
@@ -4294,7 +4350,7 @@ def main():
                          "5a=SA1 bootloader (flash-mode), 9c=legacy param1 stub")
     ap.add_argument(
         "--boot-recovery", action="store_true",
-        help="CalGuard V5 boot recovery: start with ignition OFF, pre-arm raw 5A/9C/9C, "
+        help="CalGuard boot recovery: start with ignition OFF, pre-arm raw 5A/9C/9C, "
              "then turn ignition ON; requires --trigger 5a")
     ap.add_argument("--no-echo", action="store_true", help="adapter suppresses the half-duplex echo")
     ap.add_argument("-v", "--verbose", action="store_true")

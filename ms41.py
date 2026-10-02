@@ -15,9 +15,9 @@ programmer.
 
 ROM layout:
   Full ROM    : 0x000000–0x03FFFF  (256 KB)
-  Tune region : 0x014000–0x019FFF  (24 KB calibration/tune area)
+  Tune region : DS2 0x010000-0x015FFF; file 0x014000-0x017FFF then 0x010000-0x011FFF
 
-Identification (verified against real dumps + MS41 XML definitions):
+Identification (verified against real dumps + RomRaider MS41 definitions):
   CAL ID  — ASCII at 0x1400E (full ROM) / 0x0000E (24 KB tune file); first two
             chars identify the family (60=MS41.1, 12=MS41.2, 41/42/59/85=MS41.0).
   MS41.3  — shares the "12" CAL ID prefix with MS41.2. Calibration-side evidence is
@@ -32,7 +32,7 @@ Identification (verified against real dumps + MS41 XML definitions):
 
 import identity
 
-# CAL ID location and variant mapping (MS41 XML definitions, verified).
+# CAL ID location and variant mapping (RomRaider MS41 definitions, verified).
 CALID_ADDR_256K = 0x1400E   # full 256 KB ROM
 CALID_ADDR_24K  = 0x0000E   # 24 KB tune-region file
 CALID_VARIANT = {
@@ -206,7 +206,7 @@ class MS41ECU:
         """Carve the 24 KB tune partition out of a FILE-order full ROM.
 
         The ECU tune partition is CPU/DS2-order (DS2 0x10000-0x15FFF) — the same layout
-        ds2.read_partial returns and the XML cal-relative storageaddress expects.
+        ds2.read_partial returns and RomRaider's cal-relative storageaddress expects.
         Because file = CPU XOR 0x4000 per 16 KB block, it is NOT a contiguous file slice:
         the two 16 KB halves are block-swapped.  A plain full[0x14000:0x1A000] slice
         silently drops the last 8 KB (extended AlphaN 16x20 @0x4048/0x4188/0x42C8 +
@@ -317,8 +317,8 @@ class MS41ECU:
     def detect_program_variant(data: bytes):
         """Identify the PROGRAM half of a 256 KB full ROM (variant) — program-region only.
 
-        MS41.3 is detected by the genuine program-region SS1v2 marker (has_ss1v2_program:
-        SS1v2 code in the program tail that stock MS41.2 leaves 0xFF); every other variant
+        MS41.3 is detected by the exact program-region signature (has_ss1v2_program_sig:
+        the first four SS1v2 program-tail bytes); every other variant
         maps the ECU ID (file 0x6025, boot/param).  Both are true program-region reads,
         unaffected by a calibration reflash, so unlike the calibration-resident marker this
         identifies the program half.

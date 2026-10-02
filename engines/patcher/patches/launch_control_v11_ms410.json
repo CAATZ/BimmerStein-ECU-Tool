@@ -1,0 +1,150 @@
+{
+  "id": "launch_control_v11_ms410",
+  "family_id": "launch_control_v11",
+  "version": "V11",
+  "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
+  "tested": false,
+  "verification": "Exact installed V11 bytes passed full private emulator admission on MS41.0/.1/.2/.3, paired original-native staged-limiter comparisons, separate A/B scalar ABI checks, stock-hysteresis priority and disarm/rearm/fault transitions, unchanged activation/spark regressions, and configured predecessor migration/removal. No on-car V11 proof is claimed.",
+  "title": "Launch Control / 2-step",
+  "user_description": "Adds launch control using the native staged fuel limiter or shared ignition cut. Fuel soft and hard RPM remain independent. Separate fuel recovery thresholds can follow stock or use launch settings; native limits and hysteresis take priority.",
+  "description": "MS41.0 Launch Control V11. E847.1 is the launch-only spark-cut request, E847.2 records actual native launch fuel cut, and the launch-arm latch uses IRAM FD80.6, certified free on the canonical 1429861 image. Pins 80/81 read FD51.1/.0, pin 82 reads FD50.7, and vehicle speed reads EDF4. LC_HYST is RPM/32 (FF means zero hysteresis), and LC_IPW is uint16 x0.00534 ms (FFFF preserves stock injection); both apply only to launch ignition mode. Ignition mode never clears standalone E847.0, and LC_IPW wins while both spark requests are active. Fuel mode retains the native staged limiter and caps the independent explicit or automatic launch hard threshold at native hard RPM. Soft remains min(native soft, launch soft), independently of hard, including crossed thresholds. LC_FUEL_HYST_B/A select native taper/clear hysteresis in RPM/32; FF independently follows stock. E847.3 selects stock hysteresis for the rest of an active native episode when a native bound governs or is reached, or launch fuel disarms. Native stages, countdowns, saturating subtraction, and downstream inhibits remain unchanged. Always mode acts as an asserted input only after the shared speed and throttle gates; it cannot rearm at or above LC_ARMSPEED.",
+  "target": "MS41.0",
+  "recompute": [
+    "program"
+  ],
+  "requires": [
+    "ignition_cut_v10_ms410"
+  ],
+  "conflicts": [
+    "launch_control_v4_ms410",
+    "launch_control_v6_ms410",
+    "launch_control_v7_ms410",
+    "launch_control_v8_ms410",
+    "launch_control_v9_ms410",
+    "launch_control_v10_ms410"
+  ],
+  "supersedes": [
+    "launch_control_v4_ms410",
+    "launch_control_v6_ms410",
+    "launch_control_v7_ms410",
+    "launch_control_v8_ms410",
+    "launch_control_v9_ms410",
+    "launch_control_v10_ms410"
+  ],
+  "cave": {
+    "region": "proghigh-tail",
+    "base": 224000,
+    "splice_off": 149286,
+    "splice_op": "jmps",
+    "relocatable": false,
+    "splices": [
+      {
+        "off": 149286,
+        "base": 224000,
+        "op": "jmps"
+      },
+      {
+        "off": 149448,
+        "base": 224448,
+        "op": "calls"
+      },
+      {
+        "off": 149608,
+        "base": 224448,
+        "op": "calls"
+      },
+      {
+        "off": 149298,
+        "base": 223648,
+        "op": "calls"
+      },
+      {
+        "off": 149332,
+        "base": 223584,
+        "op": "calls"
+      },
+      {
+        "off": 224384,
+        "base": 223392,
+        "op": "jmps"
+      }
+    ],
+    "cals": {
+      "LC_SW": 94240,
+      "LC_CUTTYPE": 94241,
+      "LC_CLUTCHPOL": 94242,
+      "LC_MAXRPM": 94243,
+      "LC_ARMSPEED": 94244,
+      "LC_MAXSPEED": 94245,
+      "LC_MINTPS": 94246,
+      "LC_HARDRPM": 94247,
+      "LC_HYST": 94248,
+      "LC_IPW": 94249,
+      "LC_FUEL_HYST_B": 94251,
+      "LC_FUEL_HYST_A": 94252
+    }
+  },
+  "edits": [
+    {
+      "off": 149264,
+      "expect": "9a180940",
+      "data": "9a180940"
+    },
+    {
+      "off": 149286,
+      "expect": "8a0902f0",
+      "data": "fa03002b"
+    },
+    {
+      "off": 149298,
+      "expect": "c2fdd201",
+      "data": "da03a029"
+    },
+    {
+      "off": 149332,
+      "expect": "c2fdd101",
+      "data": "da036029"
+    },
+    {
+      "off": 149448,
+      "expect": "43f8d301",
+      "data": "da03c02c"
+    },
+    {
+      "off": 149608,
+      "expect": "43f8d301",
+      "data": "da03c02c"
+    },
+    {
+      "off": 223392,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4ecf5e6000400f3f847e867f8f00047f8a0003d288a0904f0e7f8f70065f847e89a401b60f3f8213049803d17f3f852ed43f82330fd08f3fae6fa41a89d0443fad3019d010d03e18a75fa47e8f3fa233041a89d08f7fa52ed0d059a0903f0e18a75fa47e8fcf5fcf4fc008a0902f0fa026408fa022e07ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 223584,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ec00ecf4e6000400c2fdd1019a401160f3f8213049803d0df3f847e867f8f80047f8a0003d06c2f42b3046f4ff002d01f0d4fcf4fc00fc88f0dddb00ffff"
+    },
+    {
+      "off": 223648,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ec00ecf4e6000400c2fdd2019a401160f3f8213049803d0df3f847e867f8f80047f8a0003d06c2f42c3046f4ff002d01f0d4fcf4fc00fc88f0dddb00ffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 224000,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4ecf5ecf6e6000400f3fa47e867faf00047faa0002d04e7faa000f7fa47e8f3f8203047f8ff002d31f3f8f4ed43f825309d2cf3f8d0e843f826308d27f3f8f4ed43f824309d23f3f8203049802d1c49813d04f3f851fd69820d0c49823d04f3f851fd69810d0649843d10f3f850fd67f88000f3fa223049a02d0349802d040d0649803d010d036f400d016e40f3f880fd67f840002d42f3f8213049802d2c49813d3ce7f8fb0065f847e8f3f847e869822d14f3f8283047f8ff002d07f3fa233041a88d032d0221a80d03f3fa23300d00f3f8e6fa418a8d0a0d05f3f8e6fa43f823308d04e12875f847e80d1be7f8fd0065f847e80d16e7f8fd0065f847e8f3f813fd67f880002d04e14875f847e80d09e7f8fb0065f847e80d04e7f8f90065f847e8fcf6fcf5fcf4fc00fa03802c"
+    },
+    {
+      "off": 224384,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "fa03a028ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 224448,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf5e6000400f3fa80fd67fa40002d18f3fa213049a03d14f3fa273047faff003d0af3fa233047fafd008d03e7faff000d0209a30d0043fad3019d02418a0d0243f8d301fcf5fc00db00ffffffffffffffffffff"
+    }
+  ],
+  "revert_superseded": true
+}

@@ -1,7 +1,7 @@
 # Third-Party Notices
 
 This file records the licenses, copyright attribution, and redistribution
-conditions for the components used by BimmerStein ECU Tool 0.1.0b17. Runtime
+conditions for the components used by BimmerStein ECU Tool 0.1.0b18. Runtime
 and license names are retained here to identify the corresponding components
 and their terms. The release owner must confirm the applicable redistribution
 conditions before publication.

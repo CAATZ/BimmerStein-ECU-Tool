@@ -1,51 +1,69 @@
+"""Exercise MS41.3 signature detection through the actual desktop connection route."""
+
 import os
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")   # headless, in case PyQt is imported
-import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 import pytest
 
 gui = pytest.importorskip("gui", reason="PyQt5 not available")
-import ms41
-
-# _program_is_ms41_3 is a staticmethod — call it directly, with NO QApplication/widget
-# construction (constructing MS41FlashGUI repeatedly under the offscreen platform is flaky).
-_detect = gui.MS41FlashGUI._program_is_ms41_3
-
-# file 0x39A9A (program-region SS1v2 sig) is read at DS2 0x3DA9A; the cal-resident ABHISHEK
-# marker (file 0x11F60) is read at DS2 0x15F60 — inside the 24 KB tune, so a tune wipes it.
-_PROG_DS2_ADDR = ms41.SS1V2_PROG_SIG_ADDR ^ 0x4000
-_CAL_ABHISHEK_ADDR = 0x15F60
 
 
-class _FakeDS2:
-    def __init__(self, mem):
-        self.mem = mem
-        self.reads = []
+@pytest.mark.parametrize("signature, expected", [
+    (gui.SS1V2_PROG_SIG, "MS41.3"),
+    (b"\xff" * len(gui.SS1V2_PROG_SIG), "MS41.2"),
+    (None, None),
+])
+def test_connect_detects_program_family_without_calibration_markers(monkeypatch, signature, expected):
+    from PyQt5.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(gui.MS41FlashGUI, "_refresh_ports", lambda self: None)
+    window = gui.MS41FlashGUI()
+    reads = []
+    connected = []
+    program_address = gui.SS1V2_PROG_SIG_ADDR ^ 0x4000
 
-    def read_mem(self, addr, n):
-        self.reads.append(addr)
-        return self.mem.get(addr, b"\xff" * n)[:n]
+    class FakeDS2:
+        def __init__(self, **kwargs):
+            pass
 
+        def open(self):
+            pass
 
-def test_ms41_3_detected_from_program_sig_when_cal_marker_is_wiped():
-    # A tuned MS41.3 ECU: the ABHISHEK cal marker is gone (overwritten by the custom tune),
-    # but the program-region SS1v2 signature is intact. Detection must key off the program
-    # signature, so this ECU is still MS41.3.
-    ds2 = _FakeDS2({
-        _CAL_ABHISHEK_ADDR: b"\xff" * 8,            # cal marker wiped by the tune
-        _PROG_DS2_ADDR: ms41.SS1V2_PROG_SIG,        # program signature present
-    })
-    assert _detect(ds2) is True
-    assert _PROG_DS2_ADDR in ds2.reads              # it reads the PROGRAM region, not the cal
+        def close(self):
+            pass
 
+        def identify(self):
+            return b"1406464" + b"\x00" * 20
 
-def test_program_sig_absent_is_not_ms41_3():
-    assert _detect(_FakeDS2({})) is False           # all 0xFF (factory MS41.2)
+        def read_vin(self):
+            return ""
 
+        def read_mem(self, address, length):
+            reads.append((address, length))
+            if address == program_address:
+                if signature is None:
+                    raise RuntimeError("program signature unavailable")
+                return signature
+            if address == gui.ecu_info.CAL_ID_ADDR:
+                return b"12000000"
+            return b"\xff" * length
 
-def test_program_sig_read_failure_is_not_ms41_3():
-    class Boom:
-        def read_mem(self, a, n):
-            raise RuntimeError("no response")
-
-    assert _detect(Boom()) is False                 # fail-safe
+    monkeypatch.setattr(gui, "DS2Interface", FakeDS2)
+    monkeypatch.setattr(window, "_start_session_log", lambda: None)
+    monkeypatch.setattr(window, "_read_new_info_fields", lambda *args: {})
+    monkeypatch.setattr(window, "_read_live_identity_source", lambda *args: None)
+    monkeypatch.setattr(gui.softbsl_service, "calguard_recovery_ready", lambda *args: False)
+    monkeypatch.setattr(window, "_on_connected", lambda *args: connected.append(args))
+    monkeypatch.setattr(window, "_run_task", lambda task, on_success, on_failure:
+                        on_success(task(lambda *args: None, lambda *args: None)))
+    try:
+        window.cb_port.clear()
+        window.cb_port.addItem("OFFLINE_TEST")
+        window._connect()
+        assert connected[0][-1][1] == expected
+        assert (program_address, len(gui.SS1V2_PROG_SIG)) in reads
+        assert all(address != 0x15F60 for address, _ in reads)
+    finally:
+        window.close()
+        app.processEvents()

@@ -4,7 +4,7 @@
   "deprecated": true,
   "version": "V10",
   "title": "Soft-BSL 0x5A loader",
-  "status": "DEPRECATED - MIGRATE TO V11",
+  "status": "DEPRECATED - MIGRATE TO V12",
   "tested": true,
   "user_description": "Prior Soft-BSL loader retained only for exact installed-state detection and safe migration. Its main body occupies BMW AIF records 4-6.",
   "description": "Soft-BSL V10 bounded the RAM-agent upload but placed its main body at file 0x5D92-0x5E05 inside the complete AIF array.",

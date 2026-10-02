@@ -12,6 +12,7 @@ __pycache__/
 /.tmp/
 /output/ms41_definition_audit_*/
 /output/ms41_txt_id41_*/
+/output/recovery-tests-*/
 # Virtual environments
 .venv/
 venv/
@@ -32,6 +33,8 @@ definitions/
 
 # Internal engineering material is maintained in a separate local-only repo
 /_private/
+/android/
+/esp32-s3-ads-obd-logger/
 /docs/evidence/
 *.private.md
 

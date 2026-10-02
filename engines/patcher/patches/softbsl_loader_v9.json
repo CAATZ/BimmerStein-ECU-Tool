@@ -3,9 +3,9 @@
   "label": "V9 shared-CRC loader",
   "version": "V9",
   "title": "Soft-BSL 0x5A loader",
-  "user_description": "Hardware-proven Soft-BSL V9 retained only for exact installed-state detection and safe migration to the AIF-safe V11 loader.",
+  "user_description": "Hardware-proven Soft-BSL V9 retained only for exact installed-state detection and safe migration to the AIF-safe V12 loader.",
   "description": "Prior shared-CRC V9 loader retained for exact detection and removal. Its main body overlaps BMW AIF programming history.",
-  "status": "DEPRECATED - MIGRATE TO V11",
+  "status": "DEPRECATED - MIGRATE TO V12",
   "tested": true,
   "target": "MS41.3",
   "targets": [

@@ -41,7 +41,7 @@
     <market>All</market>
     <make>BMW</make>
     <model>E36/E39/Z3</model>
-    <submodel>MS41.0 1429861 + VANOSRT3 (24KB)</submodel>
+    <submodel>MS41.0 1429861 + VANOS V2 / VANOSRT3 (24KB)</submodel>
     <transmission>MT/AT</transmission>
     <memmodel>80C166W-M-T3</memmodel>
     <filesize>24kb</filesize>
@@ -49,10 +49,10 @@
 <table type="Switch" name="Ignition Cut - Switch Input" category="Ignition Cut" sizey="1" storageaddress="0x3010">
   <state name="Off" data="FF" />
   <state name="Always On (RPM limiter)" data="00" />
-  <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
-  <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
-  <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
+  <state name="Switch - Pin 80 (MS41.0 FD51.1)" data="01" />
+  <state name="Switch - Pin 81 (MS41.0 FD51.0)" data="02" />
+  <state name="Switch - Pin 82 (MS41.0 FD50.7)" data="04" />
+  <description>Arms the standalone Ignition Cut V10 limiter at the proven six-channel P1L final-stage charge gate. Launch Control V11 owns a separate request to the same installed cut engine and does not depend on this switch.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x3011">
@@ -61,61 +61,97 @@
   <description>Spark-cut threshold stored as RPM/32. Example: 6880 RPM = raw 0xD7.</description>
 </table>
 
+<table type="2D" name="Ignition Cut - RPM Hysteresis" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x3012">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Cut By" sizey="1"><data>RPM</data></table>
+  <description>Standalone limiter only. Once cutting starts, spark resumes below Cut RPM minus this value. Raw 0xFF preserves the legacy zero-hysteresis behavior and displays as 0 RPM; raw 0x00 also selects zero hysteresis.</description>
+</table>
+
+<table type="2D" name="Ignition Cut - Fixed Injector Pulse Width" category="Ignition Cut" storagetype="uint16" endian="little" sizey="1" storageaddress="0x3013">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width While Spark Is Cut" sizey="1"><data>ms</data></table>
+  <description>Standalone limiter only. Overrides injector pulse width while its spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. Launch ignition mode has its own fixed-IPW setting.</description>
+</table>
+
 <table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x3020">
   <state name="Off" data="FF" />
-  <state name="Always On (flat limiter)" data="00" />
-  <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
-  <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
-  <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
+  <state name="Always (no switch)" data="00" />
+  <state name="Clutch - Pin 80 (MS41.0 FD51.1)" data="01" />
+  <state name="Clutch - Pin 81 (MS41.0 FD51.0)" data="02" />
+  <state name="Clutch - Pin 82 (MS41.0 FD50.7)" data="04" />
+  <description>Arms Launch Control V11. Always acts as an asserted input and uses the same speed and throttle gates as clutch modes: arm below Arm Speed with TPS at or above Min TPS, retain the latch during rollout, and release at Max Speed or below Min TPS. After release, Always can rearm only below Arm Speed.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x3021">
   <state name="Fuel cut (stock injector limiter)" data="00" />
-  <state name="Ignition cut (Ignition Cut V7)" data="01" />
-  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode raises fd5a.7 at the soft threshold and requires Ignition Cut V7.</description>
+  <state name="Ignition cut (shared V10 engine)" data="01" />
+  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode owns a separate request to the installed Ignition Cut V10 engine; the standalone Ignition Cut switch may remain off.</description>
 </table>
 
 <table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x3022">
   <state name="Active-high (depressed = 5V)" data="00" />
   <state name="Active-low (depressed = 0V)" data="01" />
-  <description>Electrical sense of the clutch or toggle input.</description>
+  <description>Electrical sense of the clutch or toggle input. Always mode ignores this setting. Releasing the input retains an armed latch until the speed or throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3023">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Begin Staged Fuel Cut" sizey="1"><data>RPM</data></table>
-  <description>Lower launch threshold stored as RPM/32. Fuel mode begins the stock staged injector cut here; ignition mode requests spark cut here. Example: 4000 RPM = raw 0x7D.</description>
+  <description>Launch soft threshold stored as RPM/32. Fuel mode uses the lower of this value and the native soft limit, independently of Hard Cut RPM. Fuel-return thresholds use this effective soft RPM, retaining native staging. Ignition mode requests spark cut at this setting and ignores Hard Cut RPM. Example: 4000 RPM = raw 0x7D.</description>
 </table>
 
 <table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3027">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
-  <table type="Static Y Axis" name="Full Fuel Cut Above" sizey="1"><data>RPM</data></table>
-  <description>Upper fuel-mode threshold stored as RPM/32. It must be at or above Soft Cut RPM; firmware clamps a lower value to the soft threshold. Raw 0xFF is the unconfigured sentinel and safely uses Soft Cut RPM + 96 RPM, saturating instead of wrapping.</description>
+  <table type="Static Y Axis" name="Hard Fuel Cut Boundary" sizey="1"><data>RPM</data></table>
+  <description>Independent fuel-mode hard threshold stored as RPM/32. It may be below Soft Cut RPM; fuel-return thresholds still derive from effective soft RPM. Native staged-cut and hysteresis logic remains in control. The effective hard threshold never exceeds the native hard limit. Raw 0xFF selects Soft Cut RPM + 96 RPM with saturation and the same native ceiling. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis B (Gradual Recovery)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x302B">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Gradual Recovery Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. Gradual recovery begins below effective soft RPM minus B, floored at zero, unless Hysteresis A already clears the limiter. Values 0 through 8128 RPM override B only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis B. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis A (Immediate Clear)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x302C">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Immediate Clear Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. The limiter clears immediately below effective soft RPM minus A, floored at zero. This check takes priority over gradual recovery. Values 0 through 8128 RPM override A only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis A. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition RPM Hysteresis" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3028">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Soft Cut By" sizey="1"><data>RPM</data></table>
+  <description>Launch ignition mode only. Once spark cut starts, it resumes below Soft Cut RPM minus this value. Raw 0xFF and 0x00 both select and display as zero hysteresis. A hysteresis value at or above Soft Cut RPM also uses zero hysteresis at runtime. Fuel mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition Fixed Injector Pulse Width" category="Launch Control" storagetype="uint16" endian="little" sizey="1" storageaddress="0x3029">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width During Launch Spark Cut" sizey="1"><data>ms</data></table>
+  <description>Launch ignition mode only. Overrides injector pulse width while the launch spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. This value wins if both spark-cut requests are active. Fuel mode ignores it.</description>
 </table>
 
 <table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3024">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
   <table type="Static Y Axis" name="Arm Below" sizey="1"><data>km/h</data></table>
-  <description>Near-standstill arming guard. A clutch press at or above this speed does not arm a cleared latch.</description>
+  <description>Near-standstill arming guard for Always and clutch modes. Set at least 1 km/h; 1 km/h permits arming only at a reported integer speed of 0 km/h. Raw zero cannot arm a cleared latch. At or above Arm Speed, an existing latch is retained until Max Speed or the throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3025">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
-  <table type="Static Y Axis" name="Release Above" sizey="1"><data>km/h</data></table>
+  <table type="Static Y Axis" name="Release At Or Above" sizey="1"><data>km/h</data></table>
   <description>Releases the launch latch once vehicle speed reaches this value. Must be greater than Arm Speed.</description>
 </table>
 
 <table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3026">
   <scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0" fineincrement="1" coarseincrement="10" />
-  <table type="Static Y Axis" name="Throttle Above" sizey="1"><data>TPS%</data></table>
+  <table type="Static Y Axis" name="Throttle At Or Above" sizey="1"><data>TPS%</data></table>
   <description>Continuous throttle gate. Dropping below this value immediately clears the launch latch.</description>
 </table>
 
 <table type="2D" name="VANOS Retrofit - Minimum RPM (Closed Throttle)" category="VANOS Retrofit" storagetype="uint8" sizey="1" storageaddress="0x3000">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Engage Above" sizey="1"><data>RPM</data></table>
-  <description>Minimum RPM for closed-throttle VANOS engagement added by the tested, checksum-correct MS41.0 VANOSRT3 retrofit. Raw 0xFF preserves stock behavior; use only after that patch is installed.</description>
+  <description>Minimum RPM for closed-throttle VANOS engagement added by the tested MS41.0 V2 retrofit. Marker VANOSRT3 identifies the checksum-correct revision; raw 0xFF preserves stock behavior.</description>
 </table>
 </rom>
 
@@ -129,7 +165,7 @@
     <market>All</market>
     <make>BMW</make>
     <model>E36/E39/Z3</model>
-    <submodel>MS41.0 1429861 + VANOSRT3 (256KB)</submodel>
+    <submodel>MS41.0 1429861 + VANOS V2 / VANOSRT3 (256KB)</submodel>
     <transmission>MT/AT</transmission>
     <memmodel>80C166W-M-T3</memmodel>
     <filesize>256kb</filesize>
@@ -137,10 +173,10 @@
 <table type="Switch" name="Ignition Cut - Switch Input" category="Ignition Cut" sizey="1" storageaddress="0x17010">
   <state name="Off" data="FF" />
   <state name="Always On (RPM limiter)" data="00" />
-  <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
-  <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
-  <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
+  <state name="Switch - Pin 80 (MS41.0 FD51.1)" data="01" />
+  <state name="Switch - Pin 81 (MS41.0 FD51.0)" data="02" />
+  <state name="Switch - Pin 82 (MS41.0 FD50.7)" data="04" />
+  <description>Arms the standalone Ignition Cut V10 limiter at the proven six-channel P1L final-stage charge gate. Launch Control V11 owns a separate request to the same installed cut engine and does not depend on this switch.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x17011">
@@ -149,61 +185,97 @@
   <description>Spark-cut threshold stored as RPM/32. Example: 6880 RPM = raw 0xD7.</description>
 </table>
 
+<table type="2D" name="Ignition Cut - RPM Hysteresis" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x17012">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Cut By" sizey="1"><data>RPM</data></table>
+  <description>Standalone limiter only. Once cutting starts, spark resumes below Cut RPM minus this value. Raw 0xFF preserves the legacy zero-hysteresis behavior and displays as 0 RPM; raw 0x00 also selects zero hysteresis.</description>
+</table>
+
+<table type="2D" name="Ignition Cut - Fixed Injector Pulse Width" category="Ignition Cut" storagetype="uint16" endian="little" sizey="1" storageaddress="0x17013">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width While Spark Is Cut" sizey="1"><data>ms</data></table>
+  <description>Standalone limiter only. Overrides injector pulse width while its spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. Launch ignition mode has its own fixed-IPW setting.</description>
+</table>
+
 <table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x17020">
   <state name="Off" data="FF" />
-  <state name="Always On (flat limiter)" data="00" />
-  <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
-  <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
-  <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
+  <state name="Always (no switch)" data="00" />
+  <state name="Clutch - Pin 80 (MS41.0 FD51.1)" data="01" />
+  <state name="Clutch - Pin 81 (MS41.0 FD51.0)" data="02" />
+  <state name="Clutch - Pin 82 (MS41.0 FD50.7)" data="04" />
+  <description>Arms Launch Control V11. Always acts as an asserted input and uses the same speed and throttle gates as clutch modes: arm below Arm Speed with TPS at or above Min TPS, retain the latch during rollout, and release at Max Speed or below Min TPS. After release, Always can rearm only below Arm Speed.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x17021">
   <state name="Fuel cut (stock injector limiter)" data="00" />
-  <state name="Ignition cut (Ignition Cut V7)" data="01" />
-  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode raises fd5a.7 at the soft threshold and requires Ignition Cut V7.</description>
+  <state name="Ignition cut (shared V10 engine)" data="01" />
+  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode owns a separate request to the installed Ignition Cut V10 engine; the standalone Ignition Cut switch may remain off.</description>
 </table>
 
 <table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x17022">
   <state name="Active-high (depressed = 5V)" data="00" />
   <state name="Active-low (depressed = 0V)" data="01" />
-  <description>Electrical sense of the clutch or toggle input.</description>
+  <description>Electrical sense of the clutch or toggle input. Always mode ignores this setting. Releasing the input retains an armed latch until the speed or throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17023">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Begin Staged Fuel Cut" sizey="1"><data>RPM</data></table>
-  <description>Lower launch threshold stored as RPM/32. Fuel mode begins the stock staged injector cut here; ignition mode requests spark cut here. Example: 4000 RPM = raw 0x7D.</description>
+  <description>Launch soft threshold stored as RPM/32. Fuel mode uses the lower of this value and the native soft limit, independently of Hard Cut RPM. Fuel-return thresholds use this effective soft RPM, retaining native staging. Ignition mode requests spark cut at this setting and ignores Hard Cut RPM. Example: 4000 RPM = raw 0x7D.</description>
 </table>
 
 <table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17027">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
-  <table type="Static Y Axis" name="Full Fuel Cut Above" sizey="1"><data>RPM</data></table>
-  <description>Upper fuel-mode threshold stored as RPM/32. It must be at or above Soft Cut RPM; firmware clamps a lower value to the soft threshold. Raw 0xFF is the unconfigured sentinel and safely uses Soft Cut RPM + 96 RPM, saturating instead of wrapping.</description>
+  <table type="Static Y Axis" name="Hard Fuel Cut Boundary" sizey="1"><data>RPM</data></table>
+  <description>Independent fuel-mode hard threshold stored as RPM/32. It may be below Soft Cut RPM; fuel-return thresholds still derive from effective soft RPM. Native staged-cut and hysteresis logic remains in control. The effective hard threshold never exceeds the native hard limit. Raw 0xFF selects Soft Cut RPM + 96 RPM with saturation and the same native ceiling. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis B (Gradual Recovery)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x1702B">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Gradual Recovery Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. Gradual recovery begins below effective soft RPM minus B, floored at zero, unless Hysteresis A already clears the limiter. Values 0 through 8128 RPM override B only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis B. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis A (Immediate Clear)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x1702C">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Immediate Clear Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. The limiter clears immediately below effective soft RPM minus A, floored at zero. This check takes priority over gradual recovery. Values 0 through 8128 RPM override A only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis A. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition RPM Hysteresis" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17028">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Soft Cut By" sizey="1"><data>RPM</data></table>
+  <description>Launch ignition mode only. Once spark cut starts, it resumes below Soft Cut RPM minus this value. Raw 0xFF and 0x00 both select and display as zero hysteresis. A hysteresis value at or above Soft Cut RPM also uses zero hysteresis at runtime. Fuel mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition Fixed Injector Pulse Width" category="Launch Control" storagetype="uint16" endian="little" sizey="1" storageaddress="0x17029">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width During Launch Spark Cut" sizey="1"><data>ms</data></table>
+  <description>Launch ignition mode only. Overrides injector pulse width while the launch spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. This value wins if both spark-cut requests are active. Fuel mode ignores it.</description>
 </table>
 
 <table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17024">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
   <table type="Static Y Axis" name="Arm Below" sizey="1"><data>km/h</data></table>
-  <description>Near-standstill arming guard. A clutch press at or above this speed does not arm a cleared latch.</description>
+  <description>Near-standstill arming guard for Always and clutch modes. Set at least 1 km/h; 1 km/h permits arming only at a reported integer speed of 0 km/h. Raw zero cannot arm a cleared latch. At or above Arm Speed, an existing latch is retained until Max Speed or the throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17025">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
-  <table type="Static Y Axis" name="Release Above" sizey="1"><data>km/h</data></table>
+  <table type="Static Y Axis" name="Release At Or Above" sizey="1"><data>km/h</data></table>
   <description>Releases the launch latch once vehicle speed reaches this value. Must be greater than Arm Speed.</description>
 </table>
 
 <table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17026">
   <scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0" fineincrement="1" coarseincrement="10" />
-  <table type="Static Y Axis" name="Throttle Above" sizey="1"><data>TPS%</data></table>
+  <table type="Static Y Axis" name="Throttle At Or Above" sizey="1"><data>TPS%</data></table>
   <description>Continuous throttle gate. Dropping below this value immediately clears the launch latch.</description>
 </table>
 
 <table type="2D" name="VANOS Retrofit - Minimum RPM (Closed Throttle)" category="VANOS Retrofit" storagetype="uint8" sizey="1" storageaddress="0x17000">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Engage Above" sizey="1"><data>RPM</data></table>
-  <description>Minimum RPM for closed-throttle VANOS engagement added by the tested, checksum-correct MS41.0 VANOSRT3 retrofit. Raw 0xFF preserves stock behavior; use only after that patch is installed.</description>
+  <description>Minimum RPM for closed-throttle VANOS engagement added by the tested MS41.0 V2 retrofit. Marker VANOSRT3 identifies the checksum-correct revision; raw 0xFF preserves stock behavior.</description>
 </table>
 </rom>
 
@@ -228,7 +300,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
+  <description>Arms the standalone Ignition Cut V10 limiter at the proven six-channel P1L final-stage charge gate. Launch Control V11 owns a separate request to the same installed cut engine and does not depend on this switch.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x3701">
@@ -237,54 +309,90 @@
   <description>Spark-cut threshold stored as RPM/32. Example: 6880 RPM = raw 0xD7.</description>
 </table>
 
+<table type="2D" name="Ignition Cut - RPM Hysteresis" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x3702">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Cut By" sizey="1"><data>RPM</data></table>
+  <description>Standalone limiter only. Once cutting starts, spark resumes below Cut RPM minus this value. Raw 0xFF preserves the legacy zero-hysteresis behavior and displays as 0 RPM; raw 0x00 also selects zero hysteresis.</description>
+</table>
+
+<table type="2D" name="Ignition Cut - Fixed Injector Pulse Width" category="Ignition Cut" storagetype="uint16" endian="little" sizey="1" storageaddress="0x3703">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width While Spark Is Cut" sizey="1"><data>ms</data></table>
+  <description>Standalone limiter only. Overrides injector pulse width while its spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. Launch ignition mode has its own fixed-IPW setting.</description>
+</table>
+
 <table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x3710">
   <state name="Off" data="FF" />
-  <state name="Always On (flat limiter)" data="00" />
+  <state name="Always (no switch)" data="00" />
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms Launch Control V11. Always acts as an asserted input and uses the same speed and throttle gates as clutch modes: arm below Arm Speed with TPS at or above Min TPS, retain the latch during rollout, and release at Max Speed or below Min TPS. After release, Always can rearm only below Arm Speed.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x3711">
   <state name="Fuel cut (stock injector limiter)" data="00" />
-  <state name="Ignition cut (Ignition Cut V7)" data="01" />
-  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode raises fd5a.7 at the soft threshold and requires Ignition Cut V7.</description>
+  <state name="Ignition cut (shared V10 engine)" data="01" />
+  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode owns a separate request to the installed Ignition Cut V10 engine; the standalone Ignition Cut switch may remain off.</description>
 </table>
 
 <table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x3712">
   <state name="Active-high (depressed = 5V)" data="00" />
   <state name="Active-low (depressed = 0V)" data="01" />
-  <description>Electrical sense of the clutch or toggle input.</description>
+  <description>Electrical sense of the clutch or toggle input. Always mode ignores this setting. Releasing the input retains an armed latch until the speed or throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3713">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Begin Staged Fuel Cut" sizey="1"><data>RPM</data></table>
-  <description>Lower launch threshold stored as RPM/32. Fuel mode begins the stock staged injector cut here; ignition mode requests spark cut here. Example: 4000 RPM = raw 0x7D.</description>
+  <description>Launch soft threshold stored as RPM/32. Fuel mode uses the lower of this value and the native soft limit, independently of Hard Cut RPM. Fuel-return thresholds use this effective soft RPM, retaining native staging. Ignition mode requests spark cut at this setting and ignores Hard Cut RPM. Example: 4000 RPM = raw 0x7D.</description>
 </table>
 
 <table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3717">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
-  <table type="Static Y Axis" name="Full Fuel Cut Above" sizey="1"><data>RPM</data></table>
-  <description>Upper fuel-mode threshold stored as RPM/32. It must be at or above Soft Cut RPM; firmware clamps a lower value to the soft threshold. Raw 0xFF is the unconfigured sentinel and safely uses Soft Cut RPM + 96 RPM, saturating instead of wrapping.</description>
+  <table type="Static Y Axis" name="Hard Fuel Cut Boundary" sizey="1"><data>RPM</data></table>
+  <description>Independent fuel-mode hard threshold stored as RPM/32. It may be below Soft Cut RPM; fuel-return thresholds still derive from effective soft RPM. Native staged-cut and hysteresis logic remains in control. The effective hard threshold never exceeds the native hard limit. Raw 0xFF selects Soft Cut RPM + 96 RPM with saturation and the same native ceiling. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis B (Gradual Recovery)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x371B">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Gradual Recovery Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. Gradual recovery begins below effective soft RPM minus B, floored at zero, unless Hysteresis A already clears the limiter. Values 0 through 8128 RPM override B only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis B. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis A (Immediate Clear)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x371C">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Immediate Clear Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. The limiter clears immediately below effective soft RPM minus A, floored at zero. This check takes priority over gradual recovery. Values 0 through 8128 RPM override A only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis A. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition RPM Hysteresis" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3718">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Soft Cut By" sizey="1"><data>RPM</data></table>
+  <description>Launch ignition mode only. Once spark cut starts, it resumes below Soft Cut RPM minus this value. Raw 0xFF and 0x00 both select and display as zero hysteresis. A hysteresis value at or above Soft Cut RPM also uses zero hysteresis at runtime. Fuel mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition Fixed Injector Pulse Width" category="Launch Control" storagetype="uint16" endian="little" sizey="1" storageaddress="0x3719">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width During Launch Spark Cut" sizey="1"><data>ms</data></table>
+  <description>Launch ignition mode only. Overrides injector pulse width while the launch spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. This value wins if both spark-cut requests are active. Fuel mode ignores it.</description>
 </table>
 
 <table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3714">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
   <table type="Static Y Axis" name="Arm Below" sizey="1"><data>km/h</data></table>
-  <description>Near-standstill arming guard. A clutch press at or above this speed does not arm a cleared latch.</description>
+  <description>Near-standstill arming guard for Always and clutch modes. Set at least 1 km/h; 1 km/h permits arming only at a reported integer speed of 0 km/h. Raw zero cannot arm a cleared latch. At or above Arm Speed, an existing latch is retained until Max Speed or the throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3715">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
-  <table type="Static Y Axis" name="Release Above" sizey="1"><data>km/h</data></table>
+  <table type="Static Y Axis" name="Release At Or Above" sizey="1"><data>km/h</data></table>
   <description>Releases the launch latch once vehicle speed reaches this value. Must be greater than Arm Speed.</description>
 </table>
 
 <table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3716">
   <scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0" fineincrement="1" coarseincrement="10" />
-  <table type="Static Y Axis" name="Throttle Above" sizey="1"><data>TPS%</data></table>
+  <table type="Static Y Axis" name="Throttle At Or Above" sizey="1"><data>TPS%</data></table>
   <description>Continuous throttle gate. Dropping below this value immediately clears the launch latch.</description>
 </table>
 
@@ -316,7 +424,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
+  <description>Arms the standalone Ignition Cut V10 limiter at the proven six-channel P1L final-stage charge gate. Launch Control V11 owns a separate request to the same installed cut engine and does not depend on this switch.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x17701">
@@ -325,54 +433,90 @@
   <description>Spark-cut threshold stored as RPM/32. Example: 6880 RPM = raw 0xD7.</description>
 </table>
 
+<table type="2D" name="Ignition Cut - RPM Hysteresis" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x17702">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Cut By" sizey="1"><data>RPM</data></table>
+  <description>Standalone limiter only. Once cutting starts, spark resumes below Cut RPM minus this value. Raw 0xFF preserves the legacy zero-hysteresis behavior and displays as 0 RPM; raw 0x00 also selects zero hysteresis.</description>
+</table>
+
+<table type="2D" name="Ignition Cut - Fixed Injector Pulse Width" category="Ignition Cut" storagetype="uint16" endian="little" sizey="1" storageaddress="0x17703">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width While Spark Is Cut" sizey="1"><data>ms</data></table>
+  <description>Standalone limiter only. Overrides injector pulse width while its spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. Launch ignition mode has its own fixed-IPW setting.</description>
+</table>
+
 <table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x17710">
   <state name="Off" data="FF" />
-  <state name="Always On (flat limiter)" data="00" />
+  <state name="Always (no switch)" data="00" />
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms Launch Control V11. Always acts as an asserted input and uses the same speed and throttle gates as clutch modes: arm below Arm Speed with TPS at or above Min TPS, retain the latch during rollout, and release at Max Speed or below Min TPS. After release, Always can rearm only below Arm Speed.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x17711">
   <state name="Fuel cut (stock injector limiter)" data="00" />
-  <state name="Ignition cut (Ignition Cut V7)" data="01" />
-  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode raises fd5a.7 at the soft threshold and requires Ignition Cut V7.</description>
+  <state name="Ignition cut (shared V10 engine)" data="01" />
+  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode owns a separate request to the installed Ignition Cut V10 engine; the standalone Ignition Cut switch may remain off.</description>
 </table>
 
 <table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x17712">
   <state name="Active-high (depressed = 5V)" data="00" />
   <state name="Active-low (depressed = 0V)" data="01" />
-  <description>Electrical sense of the clutch or toggle input.</description>
+  <description>Electrical sense of the clutch or toggle input. Always mode ignores this setting. Releasing the input retains an armed latch until the speed or throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17713">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Begin Staged Fuel Cut" sizey="1"><data>RPM</data></table>
-  <description>Lower launch threshold stored as RPM/32. Fuel mode begins the stock staged injector cut here; ignition mode requests spark cut here. Example: 4000 RPM = raw 0x7D.</description>
+  <description>Launch soft threshold stored as RPM/32. Fuel mode uses the lower of this value and the native soft limit, independently of Hard Cut RPM. Fuel-return thresholds use this effective soft RPM, retaining native staging. Ignition mode requests spark cut at this setting and ignores Hard Cut RPM. Example: 4000 RPM = raw 0x7D.</description>
 </table>
 
 <table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17717">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
-  <table type="Static Y Axis" name="Full Fuel Cut Above" sizey="1"><data>RPM</data></table>
-  <description>Upper fuel-mode threshold stored as RPM/32. It must be at or above Soft Cut RPM; firmware clamps a lower value to the soft threshold. Raw 0xFF is the unconfigured sentinel and safely uses Soft Cut RPM + 96 RPM, saturating instead of wrapping.</description>
+  <table type="Static Y Axis" name="Hard Fuel Cut Boundary" sizey="1"><data>RPM</data></table>
+  <description>Independent fuel-mode hard threshold stored as RPM/32. It may be below Soft Cut RPM; fuel-return thresholds still derive from effective soft RPM. Native staged-cut and hysteresis logic remains in control. The effective hard threshold never exceeds the native hard limit. Raw 0xFF selects Soft Cut RPM + 96 RPM with saturation and the same native ceiling. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis B (Gradual Recovery)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x1771B">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Gradual Recovery Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. Gradual recovery begins below effective soft RPM minus B, floored at zero, unless Hysteresis A already clears the limiter. Values 0 through 8128 RPM override B only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis B. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis A (Immediate Clear)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x1771C">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Immediate Clear Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. The limiter clears immediately below effective soft RPM minus A, floored at zero. This check takes priority over gradual recovery. Values 0 through 8128 RPM override A only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis A. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition RPM Hysteresis" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17718">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Soft Cut By" sizey="1"><data>RPM</data></table>
+  <description>Launch ignition mode only. Once spark cut starts, it resumes below Soft Cut RPM minus this value. Raw 0xFF and 0x00 both select and display as zero hysteresis. A hysteresis value at or above Soft Cut RPM also uses zero hysteresis at runtime. Fuel mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition Fixed Injector Pulse Width" category="Launch Control" storagetype="uint16" endian="little" sizey="1" storageaddress="0x17719">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width During Launch Spark Cut" sizey="1"><data>ms</data></table>
+  <description>Launch ignition mode only. Overrides injector pulse width while the launch spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. This value wins if both spark-cut requests are active. Fuel mode ignores it.</description>
 </table>
 
 <table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17714">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
   <table type="Static Y Axis" name="Arm Below" sizey="1"><data>km/h</data></table>
-  <description>Near-standstill arming guard. A clutch press at or above this speed does not arm a cleared latch.</description>
+  <description>Near-standstill arming guard for Always and clutch modes. Set at least 1 km/h; 1 km/h permits arming only at a reported integer speed of 0 km/h. Raw zero cannot arm a cleared latch. At or above Arm Speed, an existing latch is retained until Max Speed or the throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17715">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
-  <table type="Static Y Axis" name="Release Above" sizey="1"><data>km/h</data></table>
+  <table type="Static Y Axis" name="Release At Or Above" sizey="1"><data>km/h</data></table>
   <description>Releases the launch latch once vehicle speed reaches this value. Must be greater than Arm Speed.</description>
 </table>
 
 <table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17716">
   <scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0" fineincrement="1" coarseincrement="10" />
-  <table type="Static Y Axis" name="Throttle Above" sizey="1"><data>TPS%</data></table>
+  <table type="Static Y Axis" name="Throttle At Or Above" sizey="1"><data>TPS%</data></table>
   <description>Continuous throttle gate. Dropping below this value immediately clears the launch latch.</description>
 </table>
 
@@ -404,7 +548,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
+  <description>Arms the standalone Ignition Cut V11 limiter at the proven six-channel P1L final-stage charge gate. Launch Control V11 owns a separate request to the same installed cut engine and does not depend on this switch.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x2A66">
@@ -413,54 +557,90 @@
   <description>Spark-cut threshold stored as RPM/32. Example: 6880 RPM = raw 0xD7.</description>
 </table>
 
+<table type="2D" name="Ignition Cut - RPM Hysteresis" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x2A67">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Cut By" sizey="1"><data>RPM</data></table>
+  <description>Standalone limiter only. Once cutting starts, spark resumes below Cut RPM minus this value. Raw 0xFF preserves the legacy zero-hysteresis behavior and displays as 0 RPM; raw 0x00 also selects zero hysteresis.</description>
+</table>
+
+<table type="2D" name="Ignition Cut - Fixed Injector Pulse Width" category="Ignition Cut" storagetype="uint16" endian="little" sizey="1" storageaddress="0x2A68">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width While Spark Is Cut" sizey="1"><data>ms</data></table>
+  <description>Standalone limiter only. Overrides injector pulse width while its spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. Launch ignition mode has its own fixed-IPW setting.</description>
+</table>
+
 <table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x47E0">
   <state name="Off" data="FF" />
-  <state name="Always On (flat limiter)" data="00" />
+  <state name="Always (no switch)" data="00" />
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms Launch Control V11. Always acts as an asserted input and uses the same speed and throttle gates as clutch modes: arm below Arm Speed with TPS at or above Min TPS, retain the latch during rollout, and release at Max Speed or below Min TPS. After release, Always can rearm only below Arm Speed.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x47E1">
   <state name="Fuel cut (stock injector limiter)" data="00" />
-  <state name="Ignition cut (Ignition Cut V7)" data="01" />
-  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode raises fd5a.7 at the soft threshold and requires Ignition Cut V7.</description>
+  <state name="Ignition cut (shared V11 engine)" data="01" />
+  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode owns a separate request to the installed Ignition Cut V11 engine; the standalone Ignition Cut switch may remain off.</description>
 </table>
 
 <table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x47E2">
   <state name="Active-high (depressed = 5V)" data="00" />
   <state name="Active-low (depressed = 0V)" data="01" />
-  <description>Electrical sense of the clutch or toggle input.</description>
+  <description>Electrical sense of the clutch or toggle input. Always mode ignores this setting. Releasing the input retains an armed latch until the speed or throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x47E3">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Begin Staged Fuel Cut" sizey="1"><data>RPM</data></table>
-  <description>Lower launch threshold stored as RPM/32. Fuel mode begins the stock staged injector cut here; ignition mode requests spark cut here. Example: 4000 RPM = raw 0x7D.</description>
+  <description>Launch soft threshold stored as RPM/32. Fuel mode uses the lower of this value and the native soft limit, independently of Hard Cut RPM. Fuel-return thresholds use this effective soft RPM, retaining native staging. Ignition mode requests spark cut at this setting and ignores Hard Cut RPM. Example: 4000 RPM = raw 0x7D.</description>
 </table>
 
 <table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x47E7">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
-  <table type="Static Y Axis" name="Full Fuel Cut Above" sizey="1"><data>RPM</data></table>
-  <description>Upper fuel-mode threshold stored as RPM/32. It must be at or above Soft Cut RPM; firmware clamps a lower value to the soft threshold. Raw 0xFF is the unconfigured sentinel and safely uses Soft Cut RPM + 96 RPM, saturating instead of wrapping.</description>
+  <table type="Static Y Axis" name="Hard Fuel Cut Boundary" sizey="1"><data>RPM</data></table>
+  <description>Independent fuel-mode hard threshold stored as RPM/32. It may be below Soft Cut RPM; fuel-return thresholds still derive from effective soft RPM. Native staged-cut and hysteresis logic remains in control. The effective hard threshold never exceeds the native hard limit. Raw 0xFF selects Soft Cut RPM + 96 RPM with saturation and the same native ceiling. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis B (Gradual Recovery)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x47EB">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Gradual Recovery Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. Gradual recovery begins below effective soft RPM minus B, floored at zero, unless Hysteresis A already clears the limiter. Values 0 through 8128 RPM override B only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis B. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis A (Immediate Clear)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x47EC">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Immediate Clear Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. The limiter clears immediately below effective soft RPM minus A, floored at zero. This check takes priority over gradual recovery. Values 0 through 8128 RPM override A only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis A. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition RPM Hysteresis" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x47E8">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Soft Cut By" sizey="1"><data>RPM</data></table>
+  <description>Launch ignition mode only. Once spark cut starts, it resumes below Soft Cut RPM minus this value. Raw 0xFF and 0x00 both select and display as zero hysteresis. A hysteresis value at or above Soft Cut RPM also uses zero hysteresis at runtime. Fuel mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition Fixed Injector Pulse Width" category="Launch Control" storagetype="uint16" endian="little" sizey="1" storageaddress="0x47E9">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width During Launch Spark Cut" sizey="1"><data>ms</data></table>
+  <description>Launch ignition mode only. Overrides injector pulse width while the launch spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. This value wins if both spark-cut requests are active. Fuel mode ignores it.</description>
 </table>
 
 <table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x47E4">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
   <table type="Static Y Axis" name="Arm Below" sizey="1"><data>km/h</data></table>
-  <description>Near-standstill arming guard. A clutch press at or above this speed does not arm a cleared latch.</description>
+  <description>Near-standstill arming guard for Always and clutch modes. Set at least 1 km/h; 1 km/h permits arming only at a reported integer speed of 0 km/h. Raw zero cannot arm a cleared latch. At or above Arm Speed, an existing latch is retained until Max Speed or the throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x47E5">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
-  <table type="Static Y Axis" name="Release Above" sizey="1"><data>km/h</data></table>
+  <table type="Static Y Axis" name="Release At Or Above" sizey="1"><data>km/h</data></table>
   <description>Releases the launch latch once vehicle speed reaches this value. Must be greater than Arm Speed.</description>
 </table>
 
 <table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x47E6">
   <scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0" fineincrement="1" coarseincrement="10" />
-  <table type="Static Y Axis" name="Throttle Above" sizey="1"><data>TPS%</data></table>
+  <table type="Static Y Axis" name="Throttle At Or Above" sizey="1"><data>TPS%</data></table>
   <description>Continuous throttle gate. Dropping below this value immediately clears the launch latch.</description>
 </table>
 </rom>
@@ -486,7 +666,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
+  <description>Arms the standalone Ignition Cut V11 limiter at the proven six-channel P1L final-stage charge gate. Launch Control V11 owns a separate request to the same installed cut engine and does not depend on this switch.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x16A66">
@@ -495,54 +675,90 @@
   <description>Spark-cut threshold stored as RPM/32. Example: 6880 RPM = raw 0xD7.</description>
 </table>
 
+<table type="2D" name="Ignition Cut - RPM Hysteresis" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x16A67">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Cut By" sizey="1"><data>RPM</data></table>
+  <description>Standalone limiter only. Once cutting starts, spark resumes below Cut RPM minus this value. Raw 0xFF preserves the legacy zero-hysteresis behavior and displays as 0 RPM; raw 0x00 also selects zero hysteresis.</description>
+</table>
+
+<table type="2D" name="Ignition Cut - Fixed Injector Pulse Width" category="Ignition Cut" storagetype="uint16" endian="little" sizey="1" storageaddress="0x16A68">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width While Spark Is Cut" sizey="1"><data>ms</data></table>
+  <description>Standalone limiter only. Overrides injector pulse width while its spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. Launch ignition mode has its own fixed-IPW setting.</description>
+</table>
+
 <table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x107E0">
   <state name="Off" data="FF" />
-  <state name="Always On (flat limiter)" data="00" />
+  <state name="Always (no switch)" data="00" />
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms Launch Control V11. Always acts as an asserted input and uses the same speed and throttle gates as clutch modes: arm below Arm Speed with TPS at or above Min TPS, retain the latch during rollout, and release at Max Speed or below Min TPS. After release, Always can rearm only below Arm Speed.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x107E1">
   <state name="Fuel cut (stock injector limiter)" data="00" />
-  <state name="Ignition cut (Ignition Cut V7)" data="01" />
-  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode raises fd5a.7 at the soft threshold and requires Ignition Cut V7.</description>
+  <state name="Ignition cut (shared V11 engine)" data="01" />
+  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode owns a separate request to the installed Ignition Cut V11 engine; the standalone Ignition Cut switch may remain off.</description>
 </table>
 
 <table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x107E2">
   <state name="Active-high (depressed = 5V)" data="00" />
   <state name="Active-low (depressed = 0V)" data="01" />
-  <description>Electrical sense of the clutch or toggle input.</description>
+  <description>Electrical sense of the clutch or toggle input. Always mode ignores this setting. Releasing the input retains an armed latch until the speed or throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x107E3">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Begin Staged Fuel Cut" sizey="1"><data>RPM</data></table>
-  <description>Lower launch threshold stored as RPM/32. Fuel mode begins the stock staged injector cut here; ignition mode requests spark cut here. Example: 4000 RPM = raw 0x7D.</description>
+  <description>Launch soft threshold stored as RPM/32. Fuel mode uses the lower of this value and the native soft limit, independently of Hard Cut RPM. Fuel-return thresholds use this effective soft RPM, retaining native staging. Ignition mode requests spark cut at this setting and ignores Hard Cut RPM. Example: 4000 RPM = raw 0x7D.</description>
 </table>
 
 <table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x107E7">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
-  <table type="Static Y Axis" name="Full Fuel Cut Above" sizey="1"><data>RPM</data></table>
-  <description>Upper fuel-mode threshold stored as RPM/32. It must be at or above Soft Cut RPM; firmware clamps a lower value to the soft threshold. Raw 0xFF is the unconfigured sentinel and safely uses Soft Cut RPM + 96 RPM, saturating instead of wrapping.</description>
+  <table type="Static Y Axis" name="Hard Fuel Cut Boundary" sizey="1"><data>RPM</data></table>
+  <description>Independent fuel-mode hard threshold stored as RPM/32. It may be below Soft Cut RPM; fuel-return thresholds still derive from effective soft RPM. Native staged-cut and hysteresis logic remains in control. The effective hard threshold never exceeds the native hard limit. Raw 0xFF selects Soft Cut RPM + 96 RPM with saturation and the same native ceiling. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis B (Gradual Recovery)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x107EB">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Gradual Recovery Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. Gradual recovery begins below effective soft RPM minus B, floored at zero, unless Hysteresis A already clears the limiter. Values 0 through 8128 RPM override B only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis B. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis A (Immediate Clear)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x107EC">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Immediate Clear Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. The limiter clears immediately below effective soft RPM minus A, floored at zero. This check takes priority over gradual recovery. Values 0 through 8128 RPM override A only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis A. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition RPM Hysteresis" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x107E8">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Soft Cut By" sizey="1"><data>RPM</data></table>
+  <description>Launch ignition mode only. Once spark cut starts, it resumes below Soft Cut RPM minus this value. Raw 0xFF and 0x00 both select and display as zero hysteresis. A hysteresis value at or above Soft Cut RPM also uses zero hysteresis at runtime. Fuel mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition Fixed Injector Pulse Width" category="Launch Control" storagetype="uint16" endian="little" sizey="1" storageaddress="0x107E9">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width During Launch Spark Cut" sizey="1"><data>ms</data></table>
+  <description>Launch ignition mode only. Overrides injector pulse width while the launch spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. This value wins if both spark-cut requests are active. Fuel mode ignores it.</description>
 </table>
 
 <table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x107E4">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
   <table type="Static Y Axis" name="Arm Below" sizey="1"><data>km/h</data></table>
-  <description>Near-standstill arming guard. A clutch press at or above this speed does not arm a cleared latch.</description>
+  <description>Near-standstill arming guard for Always and clutch modes. Set at least 1 km/h; 1 km/h permits arming only at a reported integer speed of 0 km/h. Raw zero cannot arm a cleared latch. At or above Arm Speed, an existing latch is retained until Max Speed or the throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x107E5">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
-  <table type="Static Y Axis" name="Release Above" sizey="1"><data>km/h</data></table>
+  <table type="Static Y Axis" name="Release At Or Above" sizey="1"><data>km/h</data></table>
   <description>Releases the launch latch once vehicle speed reaches this value. Must be greater than Arm Speed.</description>
 </table>
 
 <table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x107E6">
   <scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0" fineincrement="1" coarseincrement="10" />
-  <table type="Static Y Axis" name="Throttle Above" sizey="1"><data>TPS%</data></table>
+  <table type="Static Y Axis" name="Throttle At Or Above" sizey="1"><data>TPS%</data></table>
   <description>Continuous throttle gate. Dropping below this value immediately clears the launch latch.</description>
 </table>
 </rom>
@@ -568,7 +784,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
+  <description>Arms the standalone Ignition Cut V10 limiter at the proven six-channel P1L final-stage charge gate. Launch Control V11 owns a separate request to the same installed cut engine and does not depend on this switch.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x2A66">
@@ -577,54 +793,90 @@
   <description>Spark-cut threshold stored as RPM/32. Example: 6880 RPM = raw 0xD7.</description>
 </table>
 
+<table type="2D" name="Ignition Cut - RPM Hysteresis" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x2A67">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Cut By" sizey="1"><data>RPM</data></table>
+  <description>Standalone limiter only. Once cutting starts, spark resumes below Cut RPM minus this value. Raw 0xFF preserves the legacy zero-hysteresis behavior and displays as 0 RPM; raw 0x00 also selects zero hysteresis.</description>
+</table>
+
+<table type="2D" name="Ignition Cut - Fixed Injector Pulse Width" category="Ignition Cut" storagetype="uint16" endian="little" sizey="1" storageaddress="0x2A68">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width While Spark Is Cut" sizey="1"><data>ms</data></table>
+  <description>Standalone limiter only. Overrides injector pulse width while its spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. Launch ignition mode has its own fixed-IPW setting.</description>
+</table>
+
 <table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x352C">
   <state name="Off" data="FF" />
-  <state name="Always On (flat limiter)" data="00" />
+  <state name="Always (no switch)" data="00" />
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms Launch Control V11. Always acts as an asserted input and uses the same speed and throttle gates as clutch modes: arm below Arm Speed with TPS at or above Min TPS, retain the latch during rollout, and release at Max Speed or below Min TPS. After release, Always can rearm only below Arm Speed.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x352D">
   <state name="Fuel cut (stock injector limiter)" data="00" />
-  <state name="Ignition cut (Ignition Cut V7)" data="01" />
-  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode raises fd5a.7 at the soft threshold and requires Ignition Cut V7.</description>
+  <state name="Ignition cut (shared V10 engine)" data="01" />
+  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode owns a separate request to the installed Ignition Cut V10 engine; the standalone Ignition Cut switch may remain off.</description>
 </table>
 
 <table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x352E">
   <state name="Active-high (depressed = 5V)" data="00" />
   <state name="Active-low (depressed = 0V)" data="01" />
-  <description>Electrical sense of the clutch or toggle input.</description>
+  <description>Electrical sense of the clutch or toggle input. Always mode ignores this setting. Releasing the input retains an armed latch until the speed or throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x352F">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Begin Staged Fuel Cut" sizey="1"><data>RPM</data></table>
-  <description>Lower launch threshold stored as RPM/32. Fuel mode begins the stock staged injector cut here; ignition mode requests spark cut here. Example: 4000 RPM = raw 0x7D.</description>
+  <description>Launch soft threshold stored as RPM/32. Fuel mode uses the lower of this value and the native soft limit, independently of Hard Cut RPM. Fuel-return thresholds use this effective soft RPM, retaining native staging. Ignition mode requests spark cut at this setting and ignores Hard Cut RPM. Example: 4000 RPM = raw 0x7D.</description>
 </table>
 
 <table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3533">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
-  <table type="Static Y Axis" name="Full Fuel Cut Above" sizey="1"><data>RPM</data></table>
-  <description>Upper fuel-mode threshold stored as RPM/32. It must be at or above Soft Cut RPM; firmware clamps a lower value to the soft threshold. Raw 0xFF is the unconfigured sentinel and safely uses Soft Cut RPM + 96 RPM, saturating instead of wrapping.</description>
+  <table type="Static Y Axis" name="Hard Fuel Cut Boundary" sizey="1"><data>RPM</data></table>
+  <description>Independent fuel-mode hard threshold stored as RPM/32. It may be below Soft Cut RPM; fuel-return thresholds still derive from effective soft RPM. Native staged-cut and hysteresis logic remains in control. The effective hard threshold never exceeds the native hard limit. Raw 0xFF selects Soft Cut RPM + 96 RPM with saturation and the same native ceiling. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis B (Gradual Recovery)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3537">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Gradual Recovery Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. Gradual recovery begins below effective soft RPM minus B, floored at zero, unless Hysteresis A already clears the limiter. Values 0 through 8128 RPM override B only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis B. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis A (Immediate Clear)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3538">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Immediate Clear Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. The limiter clears immediately below effective soft RPM minus A, floored at zero. This check takes priority over gradual recovery. Values 0 through 8128 RPM override A only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis A. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition RPM Hysteresis" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3534">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Soft Cut By" sizey="1"><data>RPM</data></table>
+  <description>Launch ignition mode only. Once spark cut starts, it resumes below Soft Cut RPM minus this value. Raw 0xFF and 0x00 both select and display as zero hysteresis. A hysteresis value at or above Soft Cut RPM also uses zero hysteresis at runtime. Fuel mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition Fixed Injector Pulse Width" category="Launch Control" storagetype="uint16" endian="little" sizey="1" storageaddress="0x3535">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width During Launch Spark Cut" sizey="1"><data>ms</data></table>
+  <description>Launch ignition mode only. Overrides injector pulse width while the launch spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. This value wins if both spark-cut requests are active. Fuel mode ignores it.</description>
 </table>
 
 <table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3530">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
   <table type="Static Y Axis" name="Arm Below" sizey="1"><data>km/h</data></table>
-  <description>Near-standstill arming guard. A clutch press at or above this speed does not arm a cleared latch.</description>
+  <description>Near-standstill arming guard for Always and clutch modes. Set at least 1 km/h; 1 km/h permits arming only at a reported integer speed of 0 km/h. Raw zero cannot arm a cleared latch. At or above Arm Speed, an existing latch is retained until Max Speed or the throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3531">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
-  <table type="Static Y Axis" name="Release Above" sizey="1"><data>km/h</data></table>
+  <table type="Static Y Axis" name="Release At Or Above" sizey="1"><data>km/h</data></table>
   <description>Releases the launch latch once vehicle speed reaches this value. Must be greater than Arm Speed.</description>
 </table>
 
 <table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3532">
   <scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0" fineincrement="1" coarseincrement="10" />
-  <table type="Static Y Axis" name="Throttle Above" sizey="1"><data>TPS%</data></table>
+  <table type="Static Y Axis" name="Throttle At Or Above" sizey="1"><data>TPS%</data></table>
   <description>Continuous throttle gate. Dropping below this value immediately clears the launch latch.</description>
 </table>
 </rom>
@@ -650,7 +902,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
+  <description>Arms the standalone Ignition Cut V10 limiter at the proven six-channel P1L final-stage charge gate. Launch Control V11 owns a separate request to the same installed cut engine and does not depend on this switch.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x16A66">
@@ -659,54 +911,90 @@
   <description>Spark-cut threshold stored as RPM/32. Example: 6880 RPM = raw 0xD7.</description>
 </table>
 
+<table type="2D" name="Ignition Cut - RPM Hysteresis" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x16A67">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Cut By" sizey="1"><data>RPM</data></table>
+  <description>Standalone limiter only. Once cutting starts, spark resumes below Cut RPM minus this value. Raw 0xFF preserves the legacy zero-hysteresis behavior and displays as 0 RPM; raw 0x00 also selects zero hysteresis.</description>
+</table>
+
+<table type="2D" name="Ignition Cut - Fixed Injector Pulse Width" category="Ignition Cut" storagetype="uint16" endian="little" sizey="1" storageaddress="0x16A68">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width While Spark Is Cut" sizey="1"><data>ms</data></table>
+  <description>Standalone limiter only. Overrides injector pulse width while its spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. Launch ignition mode has its own fixed-IPW setting.</description>
+</table>
+
 <table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x1752C">
   <state name="Off" data="FF" />
-  <state name="Always On (flat limiter)" data="00" />
+  <state name="Always (no switch)" data="00" />
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms Launch Control V11. Always acts as an asserted input and uses the same speed and throttle gates as clutch modes: arm below Arm Speed with TPS at or above Min TPS, retain the latch during rollout, and release at Max Speed or below Min TPS. After release, Always can rearm only below Arm Speed.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x1752D">
   <state name="Fuel cut (stock injector limiter)" data="00" />
-  <state name="Ignition cut (Ignition Cut V7)" data="01" />
-  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode raises fd5a.7 at the soft threshold and requires Ignition Cut V7.</description>
+  <state name="Ignition cut (shared V10 engine)" data="01" />
+  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode owns a separate request to the installed Ignition Cut V10 engine; the standalone Ignition Cut switch may remain off.</description>
 </table>
 
 <table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x1752E">
   <state name="Active-high (depressed = 5V)" data="00" />
   <state name="Active-low (depressed = 0V)" data="01" />
-  <description>Electrical sense of the clutch or toggle input.</description>
+  <description>Electrical sense of the clutch or toggle input. Always mode ignores this setting. Releasing the input retains an armed latch until the speed or throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x1752F">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Begin Staged Fuel Cut" sizey="1"><data>RPM</data></table>
-  <description>Lower launch threshold stored as RPM/32. Fuel mode begins the stock staged injector cut here; ignition mode requests spark cut here. Example: 4000 RPM = raw 0x7D.</description>
+  <description>Launch soft threshold stored as RPM/32. Fuel mode uses the lower of this value and the native soft limit, independently of Hard Cut RPM. Fuel-return thresholds use this effective soft RPM, retaining native staging. Ignition mode requests spark cut at this setting and ignores Hard Cut RPM. Example: 4000 RPM = raw 0x7D.</description>
 </table>
 
 <table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17533">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
-  <table type="Static Y Axis" name="Full Fuel Cut Above" sizey="1"><data>RPM</data></table>
-  <description>Upper fuel-mode threshold stored as RPM/32. It must be at or above Soft Cut RPM; firmware clamps a lower value to the soft threshold. Raw 0xFF is the unconfigured sentinel and safely uses Soft Cut RPM + 96 RPM, saturating instead of wrapping.</description>
+  <table type="Static Y Axis" name="Hard Fuel Cut Boundary" sizey="1"><data>RPM</data></table>
+  <description>Independent fuel-mode hard threshold stored as RPM/32. It may be below Soft Cut RPM; fuel-return thresholds still derive from effective soft RPM. Native staged-cut and hysteresis logic remains in control. The effective hard threshold never exceeds the native hard limit. Raw 0xFF selects Soft Cut RPM + 96 RPM with saturation and the same native ceiling. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis B (Gradual Recovery)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17537">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Gradual Recovery Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. Gradual recovery begins below effective soft RPM minus B, floored at zero, unless Hysteresis A already clears the limiter. Values 0 through 8128 RPM override B only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis B. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis A (Immediate Clear)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17538">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Immediate Clear Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. The limiter clears immediately below effective soft RPM minus A, floored at zero. This check takes priority over gradual recovery. Values 0 through 8128 RPM override A only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis A. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition RPM Hysteresis" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17534">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Soft Cut By" sizey="1"><data>RPM</data></table>
+  <description>Launch ignition mode only. Once spark cut starts, it resumes below Soft Cut RPM minus this value. Raw 0xFF and 0x00 both select and display as zero hysteresis. A hysteresis value at or above Soft Cut RPM also uses zero hysteresis at runtime. Fuel mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition Fixed Injector Pulse Width" category="Launch Control" storagetype="uint16" endian="little" sizey="1" storageaddress="0x17535">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width During Launch Spark Cut" sizey="1"><data>ms</data></table>
+  <description>Launch ignition mode only. Overrides injector pulse width while the launch spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. This value wins if both spark-cut requests are active. Fuel mode ignores it.</description>
 </table>
 
 <table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17530">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
   <table type="Static Y Axis" name="Arm Below" sizey="1"><data>km/h</data></table>
-  <description>Near-standstill arming guard. A clutch press at or above this speed does not arm a cleared latch.</description>
+  <description>Near-standstill arming guard for Always and clutch modes. Set at least 1 km/h; 1 km/h permits arming only at a reported integer speed of 0 km/h. Raw zero cannot arm a cleared latch. At or above Arm Speed, an existing latch is retained until Max Speed or the throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17531">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
-  <table type="Static Y Axis" name="Release Above" sizey="1"><data>km/h</data></table>
+  <table type="Static Y Axis" name="Release At Or Above" sizey="1"><data>km/h</data></table>
   <description>Releases the launch latch once vehicle speed reaches this value. Must be greater than Arm Speed.</description>
 </table>
 
 <table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17532">
   <scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0" fineincrement="1" coarseincrement="10" />
-  <table type="Static Y Axis" name="Throttle Above" sizey="1"><data>TPS%</data></table>
+  <table type="Static Y Axis" name="Throttle At Or Above" sizey="1"><data>TPS%</data></table>
   <description>Continuous throttle gate. Dropping below this value immediately clears the launch latch.</description>
 </table>
 </rom>
@@ -729,10 +1017,10 @@
 <table type="Switch" name="Ignition Cut - Switch Input" category="Ignition Cut" sizey="1" storageaddress="0x3010">
   <state name="Off" data="FF" />
   <state name="Always On (RPM limiter)" data="00" />
-  <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
-  <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
-  <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
+  <state name="Switch - Pin 80 (MS41.0 FD51.1)" data="01" />
+  <state name="Switch - Pin 81 (MS41.0 FD51.0)" data="02" />
+  <state name="Switch - Pin 82 (MS41.0 FD50.7)" data="04" />
+  <description>Arms the standalone Ignition Cut V10 limiter at the proven six-channel P1L final-stage charge gate. Launch Control V11 owns a separate request to the same installed cut engine and does not depend on this switch.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x3011">
@@ -741,54 +1029,90 @@
   <description>Spark-cut threshold stored as RPM/32. Example: 6880 RPM = raw 0xD7.</description>
 </table>
 
+<table type="2D" name="Ignition Cut - RPM Hysteresis" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x3012">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Cut By" sizey="1"><data>RPM</data></table>
+  <description>Standalone limiter only. Once cutting starts, spark resumes below Cut RPM minus this value. Raw 0xFF preserves the legacy zero-hysteresis behavior and displays as 0 RPM; raw 0x00 also selects zero hysteresis.</description>
+</table>
+
+<table type="2D" name="Ignition Cut - Fixed Injector Pulse Width" category="Ignition Cut" storagetype="uint16" endian="little" sizey="1" storageaddress="0x3013">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width While Spark Is Cut" sizey="1"><data>ms</data></table>
+  <description>Standalone limiter only. Overrides injector pulse width while its spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. Launch ignition mode has its own fixed-IPW setting.</description>
+</table>
+
 <table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x3020">
   <state name="Off" data="FF" />
-  <state name="Always On (flat limiter)" data="00" />
-  <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
-  <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
-  <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
+  <state name="Always (no switch)" data="00" />
+  <state name="Clutch - Pin 80 (MS41.0 FD51.1)" data="01" />
+  <state name="Clutch - Pin 81 (MS41.0 FD51.0)" data="02" />
+  <state name="Clutch - Pin 82 (MS41.0 FD50.7)" data="04" />
+  <description>Arms Launch Control V11. Always acts as an asserted input and uses the same speed and throttle gates as clutch modes: arm below Arm Speed with TPS at or above Min TPS, retain the latch during rollout, and release at Max Speed or below Min TPS. After release, Always can rearm only below Arm Speed.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x3021">
   <state name="Fuel cut (stock injector limiter)" data="00" />
-  <state name="Ignition cut (Ignition Cut V7)" data="01" />
-  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode raises fd5a.7 at the soft threshold and requires Ignition Cut V7.</description>
+  <state name="Ignition cut (shared V10 engine)" data="01" />
+  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode owns a separate request to the installed Ignition Cut V10 engine; the standalone Ignition Cut switch may remain off.</description>
 </table>
 
 <table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x3022">
   <state name="Active-high (depressed = 5V)" data="00" />
   <state name="Active-low (depressed = 0V)" data="01" />
-  <description>Electrical sense of the clutch or toggle input.</description>
+  <description>Electrical sense of the clutch or toggle input. Always mode ignores this setting. Releasing the input retains an armed latch until the speed or throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3023">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Begin Staged Fuel Cut" sizey="1"><data>RPM</data></table>
-  <description>Lower launch threshold stored as RPM/32. Fuel mode begins the stock staged injector cut here; ignition mode requests spark cut here. Example: 4000 RPM = raw 0x7D.</description>
+  <description>Launch soft threshold stored as RPM/32. Fuel mode uses the lower of this value and the native soft limit, independently of Hard Cut RPM. Fuel-return thresholds use this effective soft RPM, retaining native staging. Ignition mode requests spark cut at this setting and ignores Hard Cut RPM. Example: 4000 RPM = raw 0x7D.</description>
 </table>
 
 <table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3027">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
-  <table type="Static Y Axis" name="Full Fuel Cut Above" sizey="1"><data>RPM</data></table>
-  <description>Upper fuel-mode threshold stored as RPM/32. It must be at or above Soft Cut RPM; firmware clamps a lower value to the soft threshold. Raw 0xFF is the unconfigured sentinel and safely uses Soft Cut RPM + 96 RPM, saturating instead of wrapping.</description>
+  <table type="Static Y Axis" name="Hard Fuel Cut Boundary" sizey="1"><data>RPM</data></table>
+  <description>Independent fuel-mode hard threshold stored as RPM/32. It may be below Soft Cut RPM; fuel-return thresholds still derive from effective soft RPM. Native staged-cut and hysteresis logic remains in control. The effective hard threshold never exceeds the native hard limit. Raw 0xFF selects Soft Cut RPM + 96 RPM with saturation and the same native ceiling. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis B (Gradual Recovery)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x302B">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Gradual Recovery Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. Gradual recovery begins below effective soft RPM minus B, floored at zero, unless Hysteresis A already clears the limiter. Values 0 through 8128 RPM override B only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis B. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis A (Immediate Clear)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x302C">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Immediate Clear Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. The limiter clears immediately below effective soft RPM minus A, floored at zero. This check takes priority over gradual recovery. Values 0 through 8128 RPM override A only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis A. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition RPM Hysteresis" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3028">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Soft Cut By" sizey="1"><data>RPM</data></table>
+  <description>Launch ignition mode only. Once spark cut starts, it resumes below Soft Cut RPM minus this value. Raw 0xFF and 0x00 both select and display as zero hysteresis. A hysteresis value at or above Soft Cut RPM also uses zero hysteresis at runtime. Fuel mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition Fixed Injector Pulse Width" category="Launch Control" storagetype="uint16" endian="little" sizey="1" storageaddress="0x3029">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width During Launch Spark Cut" sizey="1"><data>ms</data></table>
+  <description>Launch ignition mode only. Overrides injector pulse width while the launch spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. This value wins if both spark-cut requests are active. Fuel mode ignores it.</description>
 </table>
 
 <table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3024">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
   <table type="Static Y Axis" name="Arm Below" sizey="1"><data>km/h</data></table>
-  <description>Near-standstill arming guard. A clutch press at or above this speed does not arm a cleared latch.</description>
+  <description>Near-standstill arming guard for Always and clutch modes. Set at least 1 km/h; 1 km/h permits arming only at a reported integer speed of 0 km/h. Raw zero cannot arm a cleared latch. At or above Arm Speed, an existing latch is retained until Max Speed or the throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3025">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
-  <table type="Static Y Axis" name="Release Above" sizey="1"><data>km/h</data></table>
+  <table type="Static Y Axis" name="Release At Or Above" sizey="1"><data>km/h</data></table>
   <description>Releases the launch latch once vehicle speed reaches this value. Must be greater than Arm Speed.</description>
 </table>
 
 <table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3026">
   <scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0" fineincrement="1" coarseincrement="10" />
-  <table type="Static Y Axis" name="Throttle Above" sizey="1"><data>TPS%</data></table>
+  <table type="Static Y Axis" name="Throttle At Or Above" sizey="1"><data>TPS%</data></table>
   <description>Continuous throttle gate. Dropping below this value immediately clears the launch latch.</description>
 </table>
 </rom>
@@ -811,10 +1135,10 @@
 <table type="Switch" name="Ignition Cut - Switch Input" category="Ignition Cut" sizey="1" storageaddress="0x17010">
   <state name="Off" data="FF" />
   <state name="Always On (RPM limiter)" data="00" />
-  <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
-  <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
-  <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
+  <state name="Switch - Pin 80 (MS41.0 FD51.1)" data="01" />
+  <state name="Switch - Pin 81 (MS41.0 FD51.0)" data="02" />
+  <state name="Switch - Pin 82 (MS41.0 FD50.7)" data="04" />
+  <description>Arms the standalone Ignition Cut V10 limiter at the proven six-channel P1L final-stage charge gate. Launch Control V11 owns a separate request to the same installed cut engine and does not depend on this switch.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x17011">
@@ -823,54 +1147,90 @@
   <description>Spark-cut threshold stored as RPM/32. Example: 6880 RPM = raw 0xD7.</description>
 </table>
 
+<table type="2D" name="Ignition Cut - RPM Hysteresis" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x17012">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Cut By" sizey="1"><data>RPM</data></table>
+  <description>Standalone limiter only. Once cutting starts, spark resumes below Cut RPM minus this value. Raw 0xFF preserves the legacy zero-hysteresis behavior and displays as 0 RPM; raw 0x00 also selects zero hysteresis.</description>
+</table>
+
+<table type="2D" name="Ignition Cut - Fixed Injector Pulse Width" category="Ignition Cut" storagetype="uint16" endian="little" sizey="1" storageaddress="0x17013">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width While Spark Is Cut" sizey="1"><data>ms</data></table>
+  <description>Standalone limiter only. Overrides injector pulse width while its spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. Launch ignition mode has its own fixed-IPW setting.</description>
+</table>
+
 <table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x17020">
   <state name="Off" data="FF" />
-  <state name="Always On (flat limiter)" data="00" />
-  <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
-  <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
-  <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
+  <state name="Always (no switch)" data="00" />
+  <state name="Clutch - Pin 80 (MS41.0 FD51.1)" data="01" />
+  <state name="Clutch - Pin 81 (MS41.0 FD51.0)" data="02" />
+  <state name="Clutch - Pin 82 (MS41.0 FD50.7)" data="04" />
+  <description>Arms Launch Control V11. Always acts as an asserted input and uses the same speed and throttle gates as clutch modes: arm below Arm Speed with TPS at or above Min TPS, retain the latch during rollout, and release at Max Speed or below Min TPS. After release, Always can rearm only below Arm Speed.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x17021">
   <state name="Fuel cut (stock injector limiter)" data="00" />
-  <state name="Ignition cut (Ignition Cut V7)" data="01" />
-  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode raises fd5a.7 at the soft threshold and requires Ignition Cut V7.</description>
+  <state name="Ignition cut (shared V10 engine)" data="01" />
+  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode owns a separate request to the installed Ignition Cut V10 engine; the standalone Ignition Cut switch may remain off.</description>
 </table>
 
 <table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x17022">
   <state name="Active-high (depressed = 5V)" data="00" />
   <state name="Active-low (depressed = 0V)" data="01" />
-  <description>Electrical sense of the clutch or toggle input.</description>
+  <description>Electrical sense of the clutch or toggle input. Always mode ignores this setting. Releasing the input retains an armed latch until the speed or throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17023">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Begin Staged Fuel Cut" sizey="1"><data>RPM</data></table>
-  <description>Lower launch threshold stored as RPM/32. Fuel mode begins the stock staged injector cut here; ignition mode requests spark cut here. Example: 4000 RPM = raw 0x7D.</description>
+  <description>Launch soft threshold stored as RPM/32. Fuel mode uses the lower of this value and the native soft limit, independently of Hard Cut RPM. Fuel-return thresholds use this effective soft RPM, retaining native staging. Ignition mode requests spark cut at this setting and ignores Hard Cut RPM. Example: 4000 RPM = raw 0x7D.</description>
 </table>
 
 <table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17027">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
-  <table type="Static Y Axis" name="Full Fuel Cut Above" sizey="1"><data>RPM</data></table>
-  <description>Upper fuel-mode threshold stored as RPM/32. It must be at or above Soft Cut RPM; firmware clamps a lower value to the soft threshold. Raw 0xFF is the unconfigured sentinel and safely uses Soft Cut RPM + 96 RPM, saturating instead of wrapping.</description>
+  <table type="Static Y Axis" name="Hard Fuel Cut Boundary" sizey="1"><data>RPM</data></table>
+  <description>Independent fuel-mode hard threshold stored as RPM/32. It may be below Soft Cut RPM; fuel-return thresholds still derive from effective soft RPM. Native staged-cut and hysteresis logic remains in control. The effective hard threshold never exceeds the native hard limit. Raw 0xFF selects Soft Cut RPM + 96 RPM with saturation and the same native ceiling. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis B (Gradual Recovery)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x1702B">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Gradual Recovery Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. Gradual recovery begins below effective soft RPM minus B, floored at zero, unless Hysteresis A already clears the limiter. Values 0 through 8128 RPM override B only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis B. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis A (Immediate Clear)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x1702C">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Immediate Clear Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. The limiter clears immediately below effective soft RPM minus A, floored at zero. This check takes priority over gradual recovery. Values 0 through 8128 RPM override A only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis A. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition RPM Hysteresis" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17028">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Soft Cut By" sizey="1"><data>RPM</data></table>
+  <description>Launch ignition mode only. Once spark cut starts, it resumes below Soft Cut RPM minus this value. Raw 0xFF and 0x00 both select and display as zero hysteresis. A hysteresis value at or above Soft Cut RPM also uses zero hysteresis at runtime. Fuel mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition Fixed Injector Pulse Width" category="Launch Control" storagetype="uint16" endian="little" sizey="1" storageaddress="0x17029">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width During Launch Spark Cut" sizey="1"><data>ms</data></table>
+  <description>Launch ignition mode only. Overrides injector pulse width while the launch spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. This value wins if both spark-cut requests are active. Fuel mode ignores it.</description>
 </table>
 
 <table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17024">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
   <table type="Static Y Axis" name="Arm Below" sizey="1"><data>km/h</data></table>
-  <description>Near-standstill arming guard. A clutch press at or above this speed does not arm a cleared latch.</description>
+  <description>Near-standstill arming guard for Always and clutch modes. Set at least 1 km/h; 1 km/h permits arming only at a reported integer speed of 0 km/h. Raw zero cannot arm a cleared latch. At or above Arm Speed, an existing latch is retained until Max Speed or the throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17025">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
-  <table type="Static Y Axis" name="Release Above" sizey="1"><data>km/h</data></table>
+  <table type="Static Y Axis" name="Release At Or Above" sizey="1"><data>km/h</data></table>
   <description>Releases the launch latch once vehicle speed reaches this value. Must be greater than Arm Speed.</description>
 </table>
 
 <table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17026">
   <scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0" fineincrement="1" coarseincrement="10" />
-  <table type="Static Y Axis" name="Throttle Above" sizey="1"><data>TPS%</data></table>
+  <table type="Static Y Axis" name="Throttle At Or Above" sizey="1"><data>TPS%</data></table>
   <description>Continuous throttle gate. Dropping below this value immediately clears the launch latch.</description>
 </table>
 </rom>
@@ -896,7 +1256,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
+  <description>Arms the standalone Ignition Cut V10 limiter at the proven six-channel P1L final-stage charge gate. Launch Control V11 owns a separate request to the same installed cut engine and does not depend on this switch.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x3701">
@@ -905,54 +1265,90 @@
   <description>Spark-cut threshold stored as RPM/32. Example: 6880 RPM = raw 0xD7.</description>
 </table>
 
+<table type="2D" name="Ignition Cut - RPM Hysteresis" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x3702">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Cut By" sizey="1"><data>RPM</data></table>
+  <description>Standalone limiter only. Once cutting starts, spark resumes below Cut RPM minus this value. Raw 0xFF preserves the legacy zero-hysteresis behavior and displays as 0 RPM; raw 0x00 also selects zero hysteresis.</description>
+</table>
+
+<table type="2D" name="Ignition Cut - Fixed Injector Pulse Width" category="Ignition Cut" storagetype="uint16" endian="little" sizey="1" storageaddress="0x3703">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width While Spark Is Cut" sizey="1"><data>ms</data></table>
+  <description>Standalone limiter only. Overrides injector pulse width while its spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. Launch ignition mode has its own fixed-IPW setting.</description>
+</table>
+
 <table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x3710">
   <state name="Off" data="FF" />
-  <state name="Always On (flat limiter)" data="00" />
+  <state name="Always (no switch)" data="00" />
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms Launch Control V11. Always acts as an asserted input and uses the same speed and throttle gates as clutch modes: arm below Arm Speed with TPS at or above Min TPS, retain the latch during rollout, and release at Max Speed or below Min TPS. After release, Always can rearm only below Arm Speed.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x3711">
   <state name="Fuel cut (stock injector limiter)" data="00" />
-  <state name="Ignition cut (Ignition Cut V7)" data="01" />
-  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode raises fd5a.7 at the soft threshold and requires Ignition Cut V7.</description>
+  <state name="Ignition cut (shared V10 engine)" data="01" />
+  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode owns a separate request to the installed Ignition Cut V10 engine; the standalone Ignition Cut switch may remain off.</description>
 </table>
 
 <table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x3712">
   <state name="Active-high (depressed = 5V)" data="00" />
   <state name="Active-low (depressed = 0V)" data="01" />
-  <description>Electrical sense of the clutch or toggle input.</description>
+  <description>Electrical sense of the clutch or toggle input. Always mode ignores this setting. Releasing the input retains an armed latch until the speed or throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3713">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Begin Staged Fuel Cut" sizey="1"><data>RPM</data></table>
-  <description>Lower launch threshold stored as RPM/32. Fuel mode begins the stock staged injector cut here; ignition mode requests spark cut here. Example: 4000 RPM = raw 0x7D.</description>
+  <description>Launch soft threshold stored as RPM/32. Fuel mode uses the lower of this value and the native soft limit, independently of Hard Cut RPM. Fuel-return thresholds use this effective soft RPM, retaining native staging. Ignition mode requests spark cut at this setting and ignores Hard Cut RPM. Example: 4000 RPM = raw 0x7D.</description>
 </table>
 
 <table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3717">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
-  <table type="Static Y Axis" name="Full Fuel Cut Above" sizey="1"><data>RPM</data></table>
-  <description>Upper fuel-mode threshold stored as RPM/32. It must be at or above Soft Cut RPM; firmware clamps a lower value to the soft threshold. Raw 0xFF is the unconfigured sentinel and safely uses Soft Cut RPM + 96 RPM, saturating instead of wrapping.</description>
+  <table type="Static Y Axis" name="Hard Fuel Cut Boundary" sizey="1"><data>RPM</data></table>
+  <description>Independent fuel-mode hard threshold stored as RPM/32. It may be below Soft Cut RPM; fuel-return thresholds still derive from effective soft RPM. Native staged-cut and hysteresis logic remains in control. The effective hard threshold never exceeds the native hard limit. Raw 0xFF selects Soft Cut RPM + 96 RPM with saturation and the same native ceiling. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis B (Gradual Recovery)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x371B">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Gradual Recovery Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. Gradual recovery begins below effective soft RPM minus B, floored at zero, unless Hysteresis A already clears the limiter. Values 0 through 8128 RPM override B only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis B. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis A (Immediate Clear)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x371C">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Immediate Clear Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. The limiter clears immediately below effective soft RPM minus A, floored at zero. This check takes priority over gradual recovery. Values 0 through 8128 RPM override A only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis A. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition RPM Hysteresis" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3718">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Soft Cut By" sizey="1"><data>RPM</data></table>
+  <description>Launch ignition mode only. Once spark cut starts, it resumes below Soft Cut RPM minus this value. Raw 0xFF and 0x00 both select and display as zero hysteresis. A hysteresis value at or above Soft Cut RPM also uses zero hysteresis at runtime. Fuel mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition Fixed Injector Pulse Width" category="Launch Control" storagetype="uint16" endian="little" sizey="1" storageaddress="0x3719">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width During Launch Spark Cut" sizey="1"><data>ms</data></table>
+  <description>Launch ignition mode only. Overrides injector pulse width while the launch spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. This value wins if both spark-cut requests are active. Fuel mode ignores it.</description>
 </table>
 
 <table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3714">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
   <table type="Static Y Axis" name="Arm Below" sizey="1"><data>km/h</data></table>
-  <description>Near-standstill arming guard. A clutch press at or above this speed does not arm a cleared latch.</description>
+  <description>Near-standstill arming guard for Always and clutch modes. Set at least 1 km/h; 1 km/h permits arming only at a reported integer speed of 0 km/h. Raw zero cannot arm a cleared latch. At or above Arm Speed, an existing latch is retained until Max Speed or the throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3715">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
-  <table type="Static Y Axis" name="Release Above" sizey="1"><data>km/h</data></table>
+  <table type="Static Y Axis" name="Release At Or Above" sizey="1"><data>km/h</data></table>
   <description>Releases the launch latch once vehicle speed reaches this value. Must be greater than Arm Speed.</description>
 </table>
 
 <table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x3716">
   <scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0" fineincrement="1" coarseincrement="10" />
-  <table type="Static Y Axis" name="Throttle Above" sizey="1"><data>TPS%</data></table>
+  <table type="Static Y Axis" name="Throttle At Or Above" sizey="1"><data>TPS%</data></table>
   <description>Continuous throttle gate. Dropping below this value immediately clears the launch latch.</description>
 </table>
 </rom>
@@ -978,7 +1374,7 @@
   <state name="Switch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Switch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Switch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms Ignition Cut V7 at the proven six-channel P1L final-stage charge gate. Spark is cut only at or above the configured RPM, except that Launch Control may independently request spark cut through fd5a.7.</description>
+  <description>Arms the standalone Ignition Cut V10 limiter at the proven six-channel P1L final-stage charge gate. Launch Control V11 owns a separate request to the same installed cut engine and does not depend on this switch.</description>
 </table>
 
 <table type="2D" name="Ignition Cut - RPM Limit" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x17701">
@@ -987,54 +1383,90 @@
   <description>Spark-cut threshold stored as RPM/32. Example: 6880 RPM = raw 0xD7.</description>
 </table>
 
+<table type="2D" name="Ignition Cut - RPM Hysteresis" category="Ignition Cut" storagetype="uint8" sizey="1" storageaddress="0x17702">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Cut By" sizey="1"><data>RPM</data></table>
+  <description>Standalone limiter only. Once cutting starts, spark resumes below Cut RPM minus this value. Raw 0xFF preserves the legacy zero-hysteresis behavior and displays as 0 RPM; raw 0x00 also selects zero hysteresis.</description>
+</table>
+
+<table type="2D" name="Ignition Cut - Fixed Injector Pulse Width" category="Ignition Cut" storagetype="uint16" endian="little" sizey="1" storageaddress="0x17703">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width While Spark Is Cut" sizey="1"><data>ms</data></table>
+  <description>Standalone limiter only. Overrides injector pulse width while its spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. Launch ignition mode has its own fixed-IPW setting.</description>
+</table>
+
 <table type="Switch" name="LC - Switch / Mode" category="Launch Control" sizey="1" storageaddress="0x17710">
   <state name="Off" data="FF" />
-  <state name="Always On (flat limiter)" data="00" />
+  <state name="Always (no switch)" data="00" />
   <state name="Clutch - Pin 80 (SIR fd60.9)" data="01" />
   <state name="Clutch - Pin 81 (SIR fd60.8)" data="02" />
   <state name="Clutch - Pin 82 (SIR fd60.7)" data="04" />
-  <description>Arms the current Launch Control patch. The clutch input arms the latch; speed and throttle release it.</description>
+  <description>Arms Launch Control V11. Always acts as an asserted input and uses the same speed and throttle gates as clutch modes: arm below Arm Speed with TPS at or above Min TPS, retain the latch during rollout, and release at Max Speed or below Min TPS. After release, Always can rearm only below Arm Speed.</description>
 </table>
 
 <table type="Switch" name="LC - Cut Type" category="Launch Control" sizey="1" storageaddress="0x17711">
   <state name="Fuel cut (stock injector limiter)" data="00" />
-  <state name="Ignition cut (Ignition Cut V7)" data="01" />
-  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode raises fd5a.7 at the soft threshold and requires Ignition Cut V7.</description>
+  <state name="Ignition cut (shared V10 engine)" data="01" />
+  <description>Fuel mode uses the native staged limiter with independent soft and hard RPM thresholds. Ignition mode owns a separate request to the installed Ignition Cut V10 engine; the standalone Ignition Cut switch may remain off.</description>
 </table>
 
 <table type="Switch" name="LC - Clutch Polarity" category="Launch Control" sizey="1" storageaddress="0x17712">
   <state name="Active-high (depressed = 5V)" data="00" />
   <state name="Active-low (depressed = 0V)" data="01" />
-  <description>Electrical sense of the clutch or toggle input.</description>
+  <description>Electrical sense of the clutch or toggle input. Always mode ignores this setting. Releasing the input retains an armed latch until the speed or throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Soft Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17713">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Begin Staged Fuel Cut" sizey="1"><data>RPM</data></table>
-  <description>Lower launch threshold stored as RPM/32. Fuel mode begins the stock staged injector cut here; ignition mode requests spark cut here. Example: 4000 RPM = raw 0x7D.</description>
+  <description>Launch soft threshold stored as RPM/32. Fuel mode uses the lower of this value and the native soft limit, independently of Hard Cut RPM. Fuel-return thresholds use this effective soft RPM, retaining native staging. Ignition mode requests spark cut at this setting and ignores Hard Cut RPM. Example: 4000 RPM = raw 0x7D.</description>
 </table>
 
 <table type="2D" name="LC - Hard Cut RPM" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17717">
   <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
-  <table type="Static Y Axis" name="Full Fuel Cut Above" sizey="1"><data>RPM</data></table>
-  <description>Upper fuel-mode threshold stored as RPM/32. It must be at or above Soft Cut RPM; firmware clamps a lower value to the soft threshold. Raw 0xFF is the unconfigured sentinel and safely uses Soft Cut RPM + 96 RPM, saturating instead of wrapping.</description>
+  <table type="Static Y Axis" name="Hard Fuel Cut Boundary" sizey="1"><data>RPM</data></table>
+  <description>Independent fuel-mode hard threshold stored as RPM/32. It may be below Soft Cut RPM; fuel-return thresholds still derive from effective soft RPM. Native staged-cut and hysteresis logic remains in control. The effective hard threshold never exceeds the native hard limit. Raw 0xFF selects Soft Cut RPM + 96 RPM with saturation and the same native ceiling. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis B (Gradual Recovery)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x1771B">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Gradual Recovery Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. Gradual recovery begins below effective soft RPM minus B, floored at zero, unless Hysteresis A already clears the limiter. Values 0 through 8128 RPM override B only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis B. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Fuel Hysteresis A (Immediate Clear)" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x1771C">
+  <scaling units="RPM (8160 = Follow stock)" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Immediate Clear Below Fuel Threshold By" sizey="1"><data>RPM</data></table>
+  <description>Launch fuel mode only. The limiter clears immediately below effective soft RPM minus A, floored at zero. This check takes priority over gradual recovery. Values 0 through 8128 RPM override A only. Raw 0xFF displays as 8160 RPM and means Follow stock: use the tune's native Hysteresis A. A and B are independent; no ordering is enforced. Native limiter protection takes priority. Ignition mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition RPM Hysteresis" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17718">
+  <scaling units="RPM" expression="(x*32)%8160" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+  <table type="Static Y Axis" name="Release Below Soft Cut By" sizey="1"><data>RPM</data></table>
+  <description>Launch ignition mode only. Once spark cut starts, it resumes below Soft Cut RPM minus this value. Raw 0xFF and 0x00 both select and display as zero hysteresis. A hysteresis value at or above Soft Cut RPM also uses zero hysteresis at runtime. Fuel mode ignores this setting.</description>
+</table>
+
+<table type="2D" name="LC - Ignition Fixed Injector Pulse Width" category="Launch Control" storagetype="uint16" endian="little" sizey="1" storageaddress="0x17719">
+  <scaling units="ms (-0.00534 = stock)" expression="((x+1)%65536)*.00534-.00534" to_byte="if(x==-0.00534,65535,x/.00534)" format="0.00000" fineincrement="0.00534" coarseincrement="0.1" />
+  <table type="Static Y Axis" name="Pulse Width During Launch Spark Cut" sizey="1"><data>ms</data></table>
+  <description>Launch ignition mode only. Overrides injector pulse width while the launch spark-cut request is active. Raw 0xFFFF preserves stock injection and displays as -0.00534 ms; entering -0.00534 writes the stock sentinel. Raw 0x0000 remains a valid zero-pulse setting. This value wins if both spark-cut requests are active. Fuel mode ignores it.</description>
 </table>
 
 <table type="2D" name="LC - Arm Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17714">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
   <table type="Static Y Axis" name="Arm Below" sizey="1"><data>km/h</data></table>
-  <description>Near-standstill arming guard. A clutch press at or above this speed does not arm a cleared latch.</description>
+  <description>Near-standstill arming guard for Always and clutch modes. Set at least 1 km/h; 1 km/h permits arming only at a reported integer speed of 0 km/h. Raw zero cannot arm a cleared latch. At or above Arm Speed, an existing latch is retained until Max Speed or the throttle release condition.</description>
 </table>
 
 <table type="2D" name="LC - Max Speed" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17715">
   <scaling units="km/h" expression="x" to_byte="x" format="0" fineincrement="1" coarseincrement="5" />
-  <table type="Static Y Axis" name="Release Above" sizey="1"><data>km/h</data></table>
+  <table type="Static Y Axis" name="Release At Or Above" sizey="1"><data>km/h</data></table>
   <description>Releases the launch latch once vehicle speed reaches this value. Must be greater than Arm Speed.</description>
 </table>
 
 <table type="2D" name="LC - Min TPS" category="Launch Control" storagetype="uint8" sizey="1" storageaddress="0x17716">
   <scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0" fineincrement="1" coarseincrement="10" />
-  <table type="Static Y Axis" name="Throttle Above" sizey="1"><data>TPS%</data></table>
+  <table type="Static Y Axis" name="Throttle At Or Above" sizey="1"><data>TPS%</data></table>
   <description>Continuous throttle gate. Dropping below this value immediately clears the launch latch.</description>
 </table>
 </rom>

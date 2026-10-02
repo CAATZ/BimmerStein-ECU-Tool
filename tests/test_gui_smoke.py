@@ -2769,6 +2769,15 @@ def test_ecu_info_tab_has_new_field_set():
         assert w.btn_show_technical_info.text() == "Hide Technical Details"
         assert w._info_scroll.verticalScrollBar().maximum() > 0
         assert w._last_ident_raw == b""
+        info_buttons = [w.btn_info] + [
+            button for button in w._info_body.findChildren(QPushButton)
+            if button.text() in ("Copy ECU Info", "Export ECU Info…")]
+        assert len(info_buttons) == 3
+        assert len({(button.width(), button.height(), button.y())
+                    for button in info_buttons}) == 1
+        assert "does not write" in w.btn_info.toolTip()
+        assert "clipboard" in info_buttons[1].toolTip()
+        assert "text report" in info_buttons[2].toolTip()
     finally:
         w.close()
 
@@ -2972,8 +2981,9 @@ def test_direct_tap_disables_echo_and_locks_connection_controls(monkeypatch):
         w.close()
 
 
+@pytest.mark.parametrize("log_directory_failure", [False, True])
 def test_connect_failure_closes_provisional_transport_before_releasing_owner(
-    monkeypatch,
+    monkeypatch, log_directory_failure,
 ):
     app, w = _gui()
     events = []
@@ -3012,6 +3022,16 @@ def test_connect_failure_closes_provisional_transport_before_releasing_owner(
             if on_failure:
                 on_failure(error)
 
+    original_log_start = w._start_session_log
+
+    def start_log():
+        events.append("log-start")
+        if log_directory_failure:
+            original_log_start()
+
+    def fail_log_directory(*args, **kwargs):
+        raise PermissionError("log directory unavailable")
+
     original_release = w._port_owner.release
 
     def release(name):
@@ -3021,8 +3041,9 @@ def test_connect_failure_closes_provisional_transport_before_releasing_owner(
     try:
         monkeypatch.setattr(gui, "DS2Interface", FakeDS2)
         monkeypatch.setattr(w, "_run_task", run_now)
-        monkeypatch.setattr(
-            w, "_start_session_log", lambda: events.append("log-start"))
+        monkeypatch.setattr(w, "_start_session_log", start_log)
+        if log_directory_failure:
+            monkeypatch.setattr(gui.os, "makedirs", fail_log_directory)
         monkeypatch.setattr(
             w, "_end_session_log", lambda: events.append("log-end"))
         monkeypatch.setattr(w._port_owner, "release", release)
@@ -3044,6 +3065,7 @@ def test_connect_failure_closes_provisional_transport_before_releasing_owner(
         assert w._connect_attempt is None
         assert w._port_owner.is_free()
         assert w._connection_port is None
+        assert w._log_file is None
         assert [label for _done, _total, label in progress] == [
             "Opening COM_TEST", "Identifying ECU", "Closing connection",
         ]
@@ -3200,6 +3222,43 @@ def test_low_or_unavailable_voltage_does_not_block_confirmed_tune_write(monkeypa
         w.close()
 
 
+
+@pytest.mark.parametrize("failure", [None, "CSV close failed: disk full"])
+def test_live_stop_reports_final_csv_error_instead_of_saved_rows(monkeypatch, failure):
+    app, w = _gui()
+    logs = []
+
+    class Poller:
+        csv_rows = 3
+        terminal_error = None
+
+        def stop(self):
+            self.terminal_error = failure
+
+        def completed_samples_since(self, _after):
+            return 0, 0, 3, (), ()
+
+    try:
+        monkeypatch.setattr(
+            w, "_log", lambda message, level="info": logs.append((message, level)))
+        w._poller = Poller()
+        w._live_log_basename = "sample.csv"
+
+        w._on_live_stop()
+
+        assert w._poller is None
+        assert w._live_log_basename == ""
+        assert not w.btn_live_stop.isEnabled()
+        if failure:
+            assert w.lbl_live_status.text() == f"Stopped — {failure}"
+            assert logs == [(f"Live Data: {failure}", "warn")]
+        else:
+            assert w.lbl_live_status.text() == "Stopped — 3 rows logged to sample.csv"
+            assert logs == [("Live data polling stopped", "info")]
+    finally:
+        w.close()
+
+
 def test_stopping_inactive_live_data_does_not_log_false_polling_message(monkeypatch):
     app, w = _gui()
     try:
@@ -3228,28 +3287,28 @@ def test_patches_tab_lists_the_ms41_3_patches():
         assert len(w._patch_checkboxes) == 7   # 7 user-facing MS41.3 patches
         pending_badges = {
             label.text()
-            for label in w._patch_rows["ignition_cut_v7"].findChildren(gui.QLabel)
+            for label in w._patch_rows["ignition_cut_v11"].findChildren(gui.QLabel)
         }
-        assert "V7" in pending_badges
+        assert "V11" in pending_badges
         assert "UNTESTED" in pending_badges
         calguard_badges = {
             label.text()
             for label in w._patch_rows["cal_guard"].findChildren(gui.QLabel)
         }
-        assert "BOOT · SOFT-BSL" in calguard_badges
-        assert "V5" in calguard_badges
-        assert "TESTED" in calguard_badges
-        assert "REQUIRES SOFT-BSL V11" in calguard_badges
+        assert "Boot-region write: Soft-BSL or hardware BSL required" in calguard_badges
+        assert "V6" in calguard_badges
+        assert "UNTESTED" in calguard_badges
+        assert "Requires: Soft-BSL V12" in calguard_badges
         assert all("BOOT REGION" not in badge for badge in calguard_badges)
-        assert "Exact compatibility guard" in (
+        assert "Boot-resident compatibility and recovery guard" in (
             w._patch_checkboxes["cal_guard"].toolTip()
         )
         assert not w._patch_checkboxes["softbsl_loader"].isChecked()
         w._patch_checkboxes["cal_guard"].setChecked(True)
         assert w._patch_checkboxes["softbsl_loader"].isChecked()
-        assert "0x3992A" not in w._patch_checkboxes["ignition_cut_v7"].toolTip()
-        assert "configurable ignition-cut rev limiter" in (
-            w._patch_checkboxes["ignition_cut_v7"].toolTip())
+        assert "0x3992A" not in w._patch_checkboxes["ignition_cut_v11"].toolTip()
+        assert "independent ignition-cut limiter" in (
+            w._patch_checkboxes["ignition_cut_v11"].toolTip())
     finally:
         w.close()
 
@@ -3258,7 +3317,7 @@ def test_patches_tab_warns_for_every_explicitly_untested_patch(monkeypatch):
     app, w = _gui()
     try:
         w._set_patch_base(ref("MS41.3"), "test")
-        w._patch_checkboxes["ignition_cut_v7"].setChecked(True)
+        w._patch_checkboxes["ignition_cut_v11"].setChecked(True)
         shown = {}
 
         def warning(_parent, title, message, *_args):
@@ -3272,7 +3331,7 @@ def test_patches_tab_warns_for_every_explicitly_untested_patch(monkeypatch):
         assert "marked untested" in shown["message"]
         assert "Ignition Cut" in shown["message"]
         assert "experimental" in shown["message"]
-        assert "injection continues" in shown["message"]
+        assert "configured fixed pulse width" in shown["message"]
         assert "fuel-adaptation and diagnostic guards" in shown["message"]
         assert "offline exact-byte verified" in shown["message"]
         assert "not vehicle-validated" in shown["message"]
@@ -3285,17 +3344,17 @@ def test_patch_dependency_is_labeled_and_selected_automatically():
     app, w = _gui()
     try:
         w._set_patch_base(ref("MS41.3"), "test")
-        launch = w._patch_checkboxes["launch_control_v5"]
-        ignition = w._patch_checkboxes["ignition_cut_v7"]
+        launch = w._patch_checkboxes["launch_control_v11"]
+        ignition = w._patch_checkboxes["ignition_cut_v11"]
 
         labels = {
             label.text()
-            for label in w._patch_rows["launch_control_v5"].findChildren(gui.QLabel)
+            for label in w._patch_rows["launch_control_v11"].findChildren(gui.QLabel)
         }
-        assert "V5" in labels
+        assert "V11" in labels
         assert "UNTESTED" in labels
-        assert "REQUIRES IGNITION CUT V7" in labels
-        assert "Required patch: Ignition Cut V7" in launch.toolTip()
+        assert "Requires: Ignition Cut V11" in labels
+        assert "Required patch: Ignition Cut V11" in launch.toolTip()
 
         launch.setChecked(True)
         assert launch.isChecked()
@@ -3315,15 +3374,15 @@ def test_patch_dependency_never_removes_a_conflicting_selection(monkeypatch):
         monkeypatch.setattr(
             gui.patch_service,
             "collisions",
-            lambda selected: {"ignition_cut_v7"}
-            if "launch_control_v5" in selected else set(),
+            lambda selected: {"ignition_cut_v11"}
+            if "launch_control_v11" in selected else set(),
         )
 
-        launch = w._patch_checkboxes["launch_control_v5"]
+        launch = w._patch_checkboxes["launch_control_v11"]
         launch.setChecked(True)
 
         assert launch.isChecked()
-        assert not w._patch_checkboxes["ignition_cut_v7"].isChecked()
+        assert not w._patch_checkboxes["ignition_cut_v11"].isChecked()
         assert not w.btn_patches_build.isEnabled()
         assert "Required patch unavailable" in w.btn_patches_build.toolTip()
     finally:
@@ -3336,25 +3395,25 @@ def test_installed_dependency_remove_button_is_blocked_by_launch_control():
     app, w = _gui()
     try:
         combined, _ = patch_service.build_image(
-            ref("MS41.3"), ["ignition_cut_v7", "launch_control_v5"]
+            ref("MS41.3"), ["ignition_cut_v11", "launch_control_v11"]
         )
         w._set_patch_base(combined, "dependency-removal-test")
 
-        buttons = w._patch_rows["ignition_cut_v7"].findChildren(QPushButton)
+        buttons = w._patch_rows["ignition_cut_v11"].findChildren(QPushButton)
         remove = next(button for button in buttons if button.text() == "✕ Remove")
         labels = {
             label.text()
-            for label in w._patch_rows["ignition_cut_v7"].findChildren(gui.QLabel)
+            for label in w._patch_rows["ignition_cut_v11"].findChildren(gui.QLabel)
         }
         assert remove.isEnabled() is False
-        assert "Launch Control V5" in remove.toolTip()
-        assert "USED BY LAUNCH CONTROL" in labels
+        assert "Launch Control V11" in remove.toolTip()
+        assert "Used by: Launch Control V11" in labels
         used_by = next(
             label
-            for label in w._patch_rows["ignition_cut_v7"].findChildren(gui.QLabel)
-            if label.text() == "USED BY LAUNCH CONTROL"
+            for label in w._patch_rows["ignition_cut_v11"].findChildren(gui.QLabel)
+            if label.text() == "Used by: Launch Control V11"
         )
-        assert "Launch Control V5" in used_by.toolTip()
+        assert "Launch Control V11" in used_by.toolTip()
     finally:
         w.close()
 
@@ -3372,16 +3431,16 @@ def test_installed_dependency_badge_collapses_multiple_patch_names():
         used_by = next(
             label
             for label in w._patch_rows["softbsl_loader"].findChildren(gui.QLabel)
-            if label.text().startswith("USED BY ")
+            if label.text().startswith("Used by: ")
         )
-        assert used_by.text() == "USED BY 2 PATCHES"
-        assert "CalGuard V5" in used_by.toolTip()
+        assert used_by.text() == "Used by: CalGuard V6, DS2 0x2A Soft-BSL entry V2"
+        assert "CalGuard V6" in used_by.toolTip()
         assert "DS2 0x2A Soft-BSL entry V2" in used_by.toolTip()
     finally:
         w.close()
 
 
-def test_patches_tab_removes_field_failed_v6_and_enables_v7(monkeypatch):
+def test_patches_tab_removes_field_failed_v6_and_enables_v9(monkeypatch):
     import patch_service
 
     app, w = _gui()
@@ -3392,7 +3451,7 @@ def test_patches_tab_removes_field_failed_v6_and_enables_v7(monkeypatch):
 
         assert w._patch_checkboxes["ignition_cut_v6"].isChecked()
         assert not w._patch_checkboxes["ignition_cut_v6"].isEnabled()
-        assert not w._patch_checkboxes["ignition_cut_v7"].isEnabled()
+        assert not w._patch_checkboxes["ignition_cut_v11"].isEnabled()
         badges = {
             label.text()
             for label in w._patch_rows["ignition_cut_v6"].findChildren(gui.QLabel)
@@ -3409,7 +3468,7 @@ def test_patches_tab_removes_field_failed_v6_and_enables_v7(monkeypatch):
         w._on_patch_remove("ignition_cut_v6")
 
         assert "ignition_cut_v6" not in w._patch_checkboxes
-        assert w._patch_checkboxes["ignition_cut_v7"].isEnabled()
+        assert w._patch_checkboxes["ignition_cut_v11"].isEnabled()
         assert w.btn_patches_build.isEnabled()
         assert "Removed ignition_cut_v6" in w.patches_log.toPlainText()
     finally:
@@ -4104,6 +4163,7 @@ def test_run_task_stops_active_live_poller_before_worker_starts(monkeypatch):
 
         class Poller:
             csv_rows = 0
+            terminal_error = None
 
             def stop(self):
                 events.append("poller_stop")

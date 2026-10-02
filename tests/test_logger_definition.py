@@ -31,7 +31,7 @@ def _minimal_xml(expression="x", ecu_ids="1429861", address="0xE8D0", address_at
 </protocols></logger>'''
 
 
-def test_bundled_definition_owns_corrected_core_and_wideband_profiles():
+def test_bundled_definition_owns_corrected_core_profile_and_cut_maps():
     path = bundled_logger_definition_path()
     assert path.name == BUNDLED_LOGGER_DEFINITION_NAME
     definition = parse_logger_definition(path)
@@ -39,9 +39,10 @@ def test_bundled_definition_owns_corrected_core_and_wideband_profiles():
     assert definition.protocol_id == "DS2"
     assert definition.baud == 9600
     assert definition.module_address == 0x12
-    assert len(definition.parameters) == 30
+    assert len(definition.parameters) == 70
     assert sum(parameter.id.startswith("BS_STD_") for parameter in definition.parameters) == 3
     assert sum(parameter.id.startswith("BS_WB_") for parameter in definition.parameters) == 3
+    assert sum(parameter.id.startswith("BS_CUT_") for parameter in definition.parameters) == 40
 
     old = _by_id(definition, "1429861")
     ms411 = _by_id(definition, "1437806")
@@ -50,6 +51,10 @@ def test_bundled_definition_owns_corrected_core_and_wideband_profiles():
     assert old["P13"].address == ms411["P13"].address == ms412["P13"].address == 0xE8D0
     assert old["P17"].address == 0xFB47
     assert ms411["P17"].address == ms412["P17"].address == ms413["P17"].address == 0xFC9D
+    assert old["BS_CUT_LAUNCH_SWITCH"].address == 0x13020
+    assert ms411["BS_CUT_LAUNCH_SWITCH"].address == 0x13710
+    assert ms412["BS_CUT_LAUNCH_SWITCH"].address == 0x1352C
+    assert ms413["BS_CUT_LAUNCH_SWITCH"].address == 0x147E0
     assert "BS_WB_AFR" not in old and ms413["BS_WB_AFR"].address == 0xE800
     assert definition.parameters_for("1438137") == ()
 
@@ -66,6 +71,10 @@ def test_bundled_conversion_parse_format_replace_and_runtime_address_override():
     closed = params["BS_STATE_CLOSED_THROTTLE"]
     assert closed.display(closed.parse(b"\x00", closed.address)) == "Active"
     assert closed.display(closed.parse(b"\x01", closed.address)) == "Inactive"
+
+    fixed_ipw = params["BS_CUT_FIXED_IPW"]
+    assert fixed_ipw.display(fixed_ipw.parse(b"\xff\xff", fixed_ipw.address)) == "Stock"
+    assert fixed_ipw.display(fixed_ipw.parse(b"\x34\x12", fixed_ipw.address)) == "24.88"
 
     selected = params["BS_WB_INPUT"].with_address(0xFA98)
     assert selected.address == 0xFA98

@@ -1,4 +1,4 @@
-"""Shared, bounded Live Data CSV reader for the desktop viewers."""
+"""Shared, bounded Live Data CSV reader for the desktop and Android viewers."""
 
 import csv
 import io

@@ -972,7 +972,11 @@ class DS2Interface:
         if not (0 < length <= 0xF7):
             raise ValueError("DS2 read length must be 1..247")
         args = address.to_bytes(4, "big") + bytes([length])
-        return self.execute(DS2Commands.READ_MEM, args)
+        payload = self.execute(DS2Commands.READ_MEM, args)
+        if len(payload) != length:
+            raise DS2Error(
+                f"memory read at 0x{address:06X}: expected {length} bytes, got {len(payload)}")
+        return payload
 
     def read_memory_range(self, start: int, total: int, chunk: int = 0xF7,
                           progress_cb=None, log_fn=None) -> bytes:

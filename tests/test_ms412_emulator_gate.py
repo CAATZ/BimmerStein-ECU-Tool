@@ -65,5 +65,27 @@ def test_admission_list_needs_no_private_inputs():
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == [
         "cal-guard", "loader-doors", "intel-flash", "amd-flash", "top-ds2",
+        "st9030-proxy",
         "features-ms410", "features-ms411", "features-ms412", "features-ms413",
     ]
+
+
+@pytest.mark.parametrize("version", ("MS41.0", "MS41.1", "MS41.2", "MS41.3"))
+def test_native_cut_contracts_reject_historical_v9(version):
+    if EMU_ROOT is None or None in (REF_410, REF_411, REF, REF_413):
+        pytest.skip("canonical emulator and private references required")
+    sys.path.insert(0, str(ROOT))
+    from engines.patcher import verify_ms412_emulator as gate
+
+    # Exact retired bytes must fail complete-return and coherent-learning
+    # invariants. Merely reaching the old splice continuation passed V9.
+    gate.verify_cut_v9_negative_controls(version)
+
+
+def test_ms413_v11_preserves_native_wbo_port_and_rejects_v10():
+    if EMU_ROOT is None or None in (REF_410, REF_411, REF, REF_413):
+        pytest.skip("canonical emulator and private references required")
+    sys.path.insert(0, str(ROOT))
+    from engines.patcher import verify_ms412_emulator as gate
+
+    gate.verify_ms413_wbo_scheduler()

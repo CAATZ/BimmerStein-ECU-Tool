@@ -1,12 +1,12 @@
 {
   "id": "cal_guard",
-  "label": "V5 AIF-safe boot guard",
-  "version": "V5",
+  "label": "V6 boot-resident compatibility and recovery guard",
+  "version": "V6",
   "title": "CalGuard compatibility + recovery guard",
-  "user_description": "Exact compatibility guard with a short K-Line boot-recovery window, relocated outside BMW AIF programming history.",
-  "description": "The untouched stock E740 branch runs first. A boot-local marker trampoline bypasses a missing program-side guard after ordinary program replacement; the exact-ID gate and bounded recovery poll live in a common program-high cave.",
-  "status": "TESTED",
-  "tested": true,
+  "user_description": "Boot-resident compatibility and recovery guard with a nominal 40 ms startup settling wait; offline-qualified candidate.",
+  "description": "Exact calibration compatibility and the existing recovery token window run entirely in preserved boot, with boot-owned emergency initialization, callback suppression and a nominal 40 ms watchdog-serviced startup settling wait. Intel and AMD CalGuard installations use the same included startup component.",
+  "status": "EXPERIMENTAL",
+  "tested": false,
   "target": "MS41.3",
   "targets": [
     "MS41.0",
@@ -22,46 +22,137 @@
     "softbsl_loader"
   ],
   "conflicts": [],
+  "startup_wait": {
+    "id": "cal_guard_startup_wait",
+    "title": "CalGuard startup settling wait",
+    "description": "Internal component installed and removed with CalGuard on Intel and AMD; preserves the existing watchdog-serviced pre-EINIT 40 ms wait instructions.",
+    "target": "MS41.3",
+    "targets": ["MS41.0", "MS41.1", "MS41.2", "MS41.3"],
+    "recompute": ["boot_crc"],
+    "requires": [],
+    "conflicts": [],
+    "cave": null,
+    "edits": [
+      {"off": 17504, "expect": "cc00cc00", "data": "e6f060ea"},
+      {"off": 17540, "expect": "e0802801ea308604", "data": "a758a7a728013dfc"}
+    ]
+  },
   "revert_superseded": true,
   "supersedes": [
     "cal_guard_v1",
     "cal_guard_v2",
     "cal_guard_v3_compatibility",
     "cal_guard_v4_bench_failed",
-    "cal_guard_v4"
+    "cal_guard_v4",
+    "cal_guard_v5"
   ],
   "cave": {
     "region": "sa1",
-    "base": 23670,
-    "splice_off": 18754,
+    "base": 18130,
+    "splice_off": 17584,
     "splice_op": "jmps",
-    "relocatable": false
+    "relocatable": false,
+    "splices": [
+      {
+        "off": 17584,
+        "base": 18130
+      },
+      {
+        "off": 21806,
+        "base": 20118
+      }
+    ]
   },
   "edits": [
     {
-      "off": 18754,
-      "expect": "e00cda002007",
-      "data": "fa00761ccc00"
+      "off": 17446,
+      "expect": "ffffffffffffffffffff",
+      "data": "f01ff2f014a3fa00b404"
     },
     {
-      "off": 23670,
-      "expect": "ffffffffffffffffffff",
-      "data": "e6020f00f2f47ebf0d06"
+      "off": 17584,
+      "expect": "f2f014a346f0ffffea20be0606f01600f6f010fecc00e00af2f014a3f01006f11400",
+      "data": "fa00d20646f0ffffea20540606f01600f6f010fecc00e00af2f014a3f01006f11400"
+    },
+    {
+      "off": 17618,
+      "expect": "e003e014e025e6f65555f021002588624020edfdf020a8720076b87200254021fdfaf020a8720076b872a87242f71eff3d0d00254021fdf6f020a8720074b872a8723d0400254021fdf80d0972fa16a3f2f31cfff021002588324020edfd74fa32e7f20814a3cc00f2fa32e7f2f014a306f01600f2f100a3e003e014e025e6f65555f021002588624020edfdf020a8720076b87200254021fdfaf020a8720076b872a87242f71eff3d0d00254021fdf6f020a8720074b872a8723d0400254021fdf80d0972fa16a3f2f31cfff021002588324020edfdf2fe1cff42fe1cff2d3448e12d3748e22d3a0d43e003e014e025e6f65555e6f75655e6f8aaaaf024b82048283d174c2440233dfaf021002588624020edfdf021a8920096b89240983d09a8920097b89240933d04202540209df30d0972fa18a3f2f31cfff021002588324020edfd08e10dc9f2f002a3f2f104a30dccf2f006a3f2f112a30dc7c2ff00a046ffa8002d05f2f00aa3f2f10ca30dbdf2f00ea3f2f110a3f3f81cffe119e7fa5500e013f149b940f4c0070049483d27014441483df8f021002389a24020edfdf021a9c201cab9c2202340209dfaf021a9c201cab9c2202340209dfaf021a9c243fc1eff3d0c01c9b9c2202340209df7f021a9c23d04202340209dfb0d0772fa1ca3f021002389824020edfdf6fa00fce60800fccc00f6f032e7e6000400e6010500e6020000",
+      "data": "e014e025e6f65555f021002588624020edfdf020a8720076b87200254021fdfaf020a8720076b872a87242f71eff3d0d00254021fdf6f020a8720074b872a8723d0400254021fdf80d0872fa16a3e003f021002588324020edfd420814a32d0e74fa32e7f20814a3cc00f2fa32e7f2f014a306f01600f2f100a30dc2e00e48e02d3348e12d3648e22d390d42e003e014e025e6f65555e6f75655e6f8aaaaf024b82048283d174c2440233dfaf021002588624020edfdf021a8920096b89240983d09a8920097b89240933d04202540209df30d0872fa18a3e003f021002588324020edfd08e10dcbf2f002a3f2f104a30dcdf2f006a3f2f112a30dc8c2ff00a046ffa8002d05f2f00aa3f2f10ca30dbef2f00ea3f2f110a3e108e119e7fa5500e013f149b940f4c0070049483d23014441483df8f021002389a24020edfde128f021a9c201cab9c2202340209dfa29813df7f021a9c243fc1eff3d0c01c9b9c2202340209df7f021a9c23d04202340209dfb0d0772fa1ca3f021002389824020edfdf6fa00fce60800fccc00f6f032e70d3afffffffff2f7b4fef2f8b0fff2f96effe65a2600e6d8f7807eb7e10ce6fc0030a758a7a728c12d038ab709700df9f6f8b0fff6f7b4fef6f96efffa00a409f3f8b2fe7eb749c02d0749c12d0a47f89c00ea202a0a0d0a47f85a003de2e11c0de047f89c003d02e12c0ddbe10c0dd9afe2afe30dc8"
+    },
+    {
+      "off": 18208,
+      "expect": "d44c3aa308c2d45c3aa3ecf5ecf4db00",
+      "data": "ec88f3f843e74982ea305e15fc88db00"
+    },
+    {
+      "off": 18830,
+      "expect": "f4800100c08466f4c000bc642d0748412d0848422d0948432d0a0d0bf60034e70d08f60134e70d05f60234e70d02f60334e7",
+      "data": "f4800100c0847c54684606f400fea844f6f434e70d0ef0f1e6fcbb33e6f18c9ce05e998c498dea30fa0c28e13dfafa00fa0c"
+    },
+    {
+      "off": 18980,
+      "expect": "e148f7f821e5e7faa200f7fa22e5db00e148f7f821e5e7fab000f7fa22e5db00",
+      "data": "e7faa2000d15e168da00a01cfa00701ce7fab0000d0df7f840e7e1280d12ffff"
+    },
+    {
+      "off": 19024,
+      "expect": "e148f7f821e5e7faa000f7fa22e5db00e148f7f821e5e7faa100f7fa22e5db00",
+      "data": "e7faa000e148f7f821e5f7fa22e5db00e7faa1000df7f7f843e7fa004a09ffff"
+    },
+    {
+      "off": 19506,
+      "expect": "e7f81200f7f820e5e7fa2e00f7fa21e5e7f6a000f7f622e5e00ce7f8ff00f05cc0a5e48523e5f04c0981f0c4f04cc08446f42a00cdf2e00cf04cc084f4a460e7f04cc084e4a423e5f04c0981f0c4f04c49878df2f3f868a0f7f82ae5f3fa69a0f7fa2be5f3f6d99cf7f62ce5f3f4da9cf7f42de5f3f2d59cf7f232e5f3f8d69cf7f833e5f3f8d79cf7f834e5f3f8d89cf7f835e5e00cf04cc084f4a4db9cf04cc084e4a436e5f04c0981f0c4f04c47f80a008df1f3f85ce7f7f840e5f3fa5de7f7fa41e5f3f65ee7f7f642e5f3f45fe7f7f443e5e00cf04cc084f4a4e59cf04cc084e4a444e5f04c0981f0c4f04c47f80a008df1db00",
+      "data": "e7f81200f7f820e5e7fa2e00f7fa21e5e7f6a000f7f622e5e00ce7f8ff00f05ce48523e508c146fc2a00cdf7e00cf4ac60e7e4ac23e508c1f04c49878df8f3f868a0f7f82ae5f3fa69a0f7fa2be5f3f6d99cf7f62ce5f3f4da9cf7f42de5f3f2d59cf7f232e5f3f8d69cf7f833e5f3f8d79cf7f834e5f3f8d89cf7f835e5e00cf4acdb9ce4ac36e508c1f04c47f80a008df7f3f85ce7f7f840e5f3fa5de7f7fa41e5f3f65ee7f7f642e5f3f45fe7f7f443e5e00cf4ace59ce4ac44e508c1f04c47f80a008df7db00e6020f00cc00f2f49a9af2f59c9ae602000046f49a11ea30a61846f56390ea30a61848e0ea30b818fa001a18ffff"
+    },
+    {
+      "off": 19888,
+      "expect": "8860887088808890f3f823e43d5af3f826e4f7f836e7f3fa25e4f7fa37e7f3f624e4f7f638e7f78e39e7f2f436e7f2f538e748533d0246f4ffffed40f3f827e44980fd3c47f8fd009d39f2f800fec2f424e468435c24c2f225e466f2c000bc627042f6f400fee6f923e5f2f736e766f7ff3ff3fc27e40d139987f0590891b985e6f4ff3f4074fd0ae007f2f400fe46f40f003d0229c10d050600010029c149c0edebf6f800fef3f827e4218c0984f7f821e5e7faa000f7fa22e50d05da00340a0d02da00340a9890988098709860db00",
+      "data": "8860887088808890f3f823e43d4bda00620ef2f436e7f2f538e748533d0246f4ffffed40f3f827e44980fd3c47f8fd009d39f2f800fec2f424e468435c24c2f225e466f2c000bc627042f6f400fee6f923e5f2f736e766f7ff3ff3fc27e40d139987f0590891b985e6f4ff3f4074fd0ae007f2f400fe46f40f003d0229c10d050600010029c149c0edebf6f800fef3f827e4218c0984f7f821e5e7faa000f7fa22e50d02da00340a9890988098709860db00f3f826e4f7f836e7f3fa25e4f7fa37e7f3f624e4f7f638e7f78e39e7db00"
+    },
+    {
+      "off": 20112,
+      "expect": "f3f826e4f7f836e7f3fa25e4f7fa37e7f3f624e4f7f638e7f78e39e7",
+      "data": "da00620e0d0bf3f843e74982ea309e19f3f853e649862d84fa00a015"
+    },
+    {
+      "off": 21806,
+      "expect": "f3f853e649872d0e49862d0f49802d1047f80a002d1047f80d002d1047f890002d100d27da00860edb00da00b00ddb00da00320cdb00da003814db00da00280ddb00",
+      "data": "fa00960e4987ea20860e4986ea20b00d4980ea20320c47f80a00ea20381447f80d00ea20280d47f890002d0bea00a015fc88d44c3aa308c2d45c3aa3ecf5ecf4db00"
+    },
+    {
+      "off": 22548,
+      "expect": "da00fa16cee2cfe3da00fa163fe2da000017cfe2cfe3da00fa16cee3",
+      "data": "da00aa1b0d0be0cce6f107a0e04e998c498d3d4828e13dfbfa002604"
+    },
+    {
+      "off": 22688,
+      "expect": "da00fa16cee2cfe3da00fa163fe2da000017cfe2cfe3da00fa16cee3",
+      "data": "da00aa1b0d0b48e02d07f2f40e00e6f1089ce06e0d6dfffffa00701c"
+    },
+    {
+      "off": 22922,
+      "expect": "da00fa16cee2cfe3da00fa163fe2da000017cfe2cfe3da00fa16cee3",
+      "data": "da00aa1b0d0b484dea201a1828e13dfb0d8efffff3f853e6fa003215"
+    },
+    {
+      "off": 23372,
+      "expect": "e00ef04ec084f02d0024f04ec084f05c0054a985498a2d02e118db00f04e0981f0e4f04e49858dedf48c050047f836002d05f48c050047f839003d0af48d050047f836002d07f48d050047f839002d02e118db00f3f800a047f8a8003d02e108db00f3f800a03d0af4ad0500f46c0500416a2d02e118db00e108db00e118db0088808890f08df09cf0c9f0d8da004c1b49802d02e1180d15f4880500f4a9050041a83d0ef4880800f4a9080041a83d08f4880900f4a9090041a83d02e1080d01e11898909880db00",
+      "data": "e00ee004f02df05ca985498a3d2408e148e59d03082108510df7f48c050047f836002d0347f839003d16f48d050047f836002d0347f839003d0ef3f800a047f8a8002d0bf3f800a03d06f4ad0500f46c0500416a2d02e118db00e108db00da00fa16cee2cfe3da00fa163fe2da000017cfe2cfe3da00fa16cee3db00ffffffff88808890da004c1b49803d15f48d0500f4ac050041a83d0ef48d0800f4ac080041a83d08f48d0900f4ac090041a83d02e1080d01e11898909880db00313236303431343235393835"
+    },
+    {
+      "off": 23664,
+      "expect": "ffffffffffffffffffffffffffffffff",
+      "data": "e6f920e4b809089246f91ee8fdfb0d09"
     },
     {
       "off": 23692,
       "expect": "ffffffffffffffffffffffffffff",
-      "data": "e60200004841ea302604fa0300fe"
+      "data": "535331763200e6f046fae1180d0c"
     },
     {
-      "off": 17446,
-      "expect": "ffffffffffffffff",
-      "data": "e00cda002007db00"
-    },
-    {
-      "off": 245248,
-      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-      "data": "e6000400f3fabb3347fa53003d23f3fabc3347fa53003d1ef3fabd3347fa31003d19f3fabe3347fa76003d14f3fabf3347fa32003d0fe6020f00f2f49a9af2f59c9ae602000046f49a113d2646f563903d230d24e6020f00f2f49a9af2f59c9ae602000046f49a113d0346f563902d14f2f40e0046f431322d1146f436302d0e46f434312d0b46f434322d0846f435392d0546f438352d02fa004a09f3f80c00f3fa07a0418a3d13f3f80d00f3fa08a0418a3d0df3f80e00f3fa09a0418a3d07f3f80f00f3fa0aa0418a3d010d02fa004a09f2f7b4fef2f8b0fff2f96effe65a2600e6d8f7807eb7e10ce6fc0030a758a7a728c12d038ab709700df9f6f8b0fff6f7b4fef6f96efffa002604f3f8b2fe7eb747fc00002d0747fc01002d0947f89c002d0d0d0a47f85a003de1e11c0ddf47f89c003d02e12c0ddae10c0dd8e168da00a01cfa004a09ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0100"
+      "off": 23730,
+      "expect": "ffffffff",
+      "data": "fa003a0a"
     }
   ]
 }

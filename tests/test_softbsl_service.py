@@ -1017,34 +1017,145 @@ def test_retained_boot_write_keeps_same_agent_after_erase_failure(monkeypatch):
     assert caught.value.recovery.is_open
 
 
-def test_calguard_boot_prearm_repeats_raw_token_until_ack(monkeypatch):
+@pytest.mark.parametrize("echo,replies", [
+    (True, [b"", b"\x5a\x9c\x9c\x06"]),
+    (True, [b"\x1a\xfa", b"\x5a\x9c\x9c\x06"]),
+    (True, [b"\x5a\x9c\x9c", b"\x06"]),
+    (True, [b"\x5a", b"\x9c", b"\x9c\x06"]),
+    (True, [b"\x1a\xfa\x06", b"\x5a\x9c\x9c\x06"]),
+    (False, [b"", b"\x06"]),
+])
+def test_calguard_boot_prearm_retains_partial_and_late_replies(monkeypatch, echo, replies):
     sleeps = []
     monkeypatch.setattr(softbsl_host.time, "sleep", sleeps.append)
 
     class FakeSerial:
+        timeout = 1.5
         def __init__(self):
             self.writes = []
-        def reset_input_buffer(self): pass
+            self.reads = iter(replies)
+            self.purges = 0
+        def reset_input_buffer(self):
+            self.purges += 1
+            assert self.purges == 1, "a later purge would discard the late ACK"
         def write(self, data):
             self.writes.append(bytes(data))
+            return len(data)
         def flush(self): pass
-
-    class FakeDS2:
-        baud = 9600
-        echo = True
-        def __init__(self):
-            self._ser = FakeSerial()
-            self.reads = iter((b"", b"\x06"))
-        def _discard_echo(self, frame):
-            return bytes(frame)
-        def _read_exact(self, _length, _timeout):
+        def read(self, size):
+            assert self.timeout == 0.005
+            assert size == (4 if echo else 1)
             return next(self.reads)
 
-    ds2 = FakeDS2()
+    ds2 = app_ds2.DS2Interface("FAKE", baud=9600, echo=echo)
+    ds2._ser = FakeSerial()
     softbsl_host.SoftBSL(ds2, log=lambda *_args: None).prearm_calguard_boot()
 
-    assert ds2._ser.writes == [b"\x5A\x9C\x9C", b"\x5A\x9C\x9C"]
-    assert sleeps == [0.05]
+    assert ds2._ser.writes == [b"\x5a\x9c\x9c"] * len(replies)
+    assert sleeps == [0.00375] * len(replies) + [0.05]
+    assert ds2._ser.timeout == 1.5
+
+
+@pytest.mark.parametrize("failure", ["no_ack", "short_write", "read_error", "cancel"])
+def test_calguard_boot_prearm_failures_restore_timeout(monkeypatch, failure):
+    clock = [0.0]
+    monkeypatch.setattr(softbsl_host.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(softbsl_host.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay))
+
+    class FakeSerial:
+        timeout = 1.5
+        pending = b"\x5a\x9c\x9c\x06"  # stale input must never satisfy entry
+        def reset_input_buffer(self): self.pending = b""
+        def write(self, data): return 2 if failure == "short_write" else len(data)
+        def flush(self): pass
+        def read(self, size):
+            if failure == "read_error": raise OSError("read failed")
+            if failure == "cancel": ds2.operation_check = lambda: (_ for _ in ()).throw(RuntimeError("cancelled"))
+            clock[0] += self.timeout
+            return self.pending or b"\x5a\x9c\x9c"
+
+    ds2 = app_ds2.DS2Interface("FAKE", baud=9600, echo=True)
+    ds2._ser = FakeSerial()
+    with pytest.raises((softbsl_host.SoftBSLError, OSError, RuntimeError)):
+        softbsl_host.SoftBSL(ds2, log=lambda *_args: None).prearm_calguard_boot(timeout=0.03)
+    assert ds2._ser.timeout == 1.5
+
+
+def test_calguard_boot_prearm_retries_partial_echo_within_same_window(monkeypatch):
+    # Replay the captured partial-read stall against a FIXED synthetic window;
+    # this is not a measurement of the ECU's physical polling duration.
+    clock = [0.0]
+    monkeypatch.setattr(softbsl_host.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(softbsl_host.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay))
+
+    class PowerUpSerial:
+        timeout = 1.5
+        writes = 0
+        reads = 0
+        caught = False
+        def reset_input_buffer(self): pass
+        def flush(self): pass
+        def write(self, data):
+            self.writes += 1
+            self.caught = self.writes > 1 and clock[0] + 0.00375 <= 0.024
+            return len(data)
+        def read(self, size):
+            self.reads += 1
+            if self.reads == 1:
+                clock[0] += 0.013
+                return b"\x1a\xfa"
+            if self.writes == 1:  # old exact-echo completion read loses the window
+                clock[0] += 0.015
+                return b""
+            clock[0] += 0.005
+            return b"\x5a\x9c\x9c" + (b"\x06" if self.caught else b"")
+
+    ds2 = app_ds2.DS2Interface("FAKE", baud=9600, echo=True)
+    ds2._ser = PowerUpSerial()
+    softbsl_host.SoftBSL(ds2, log=lambda *_args: None).prearm_calguard_boot(timeout=0.1)
+    assert ds2._ser.writes == 2 and ds2._ser.reads == 2
+    assert ds2._ser.caught and ds2._ser.timeout == 1.5
+
+
+@pytest.mark.parametrize("echo", [True, False])
+def test_calguard_boot_prearm_polls_queued_bytes_without_empty_reads(monkeypatch, echo):
+    clock = [0.0]
+    sleeps = []
+    def sleep(delay):
+        clock[0] += delay
+        sleeps.append(delay)
+    monkeypatch.setattr(softbsl_host.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(softbsl_host.time, "sleep", sleep)
+
+    class QueuedSerial:
+        timeout = 1.5
+        purges = 0
+        ready = float("inf")
+        pending = b"\x06"
+        starts = []
+        def reset_input_buffer(self):
+            self.purges += 1
+            assert self.purges == 1
+            self.pending = b""
+        def flush(self): pass
+        def write(self, data):
+            self.starts.append(clock[0])
+            self.ready = clock[0] + 0.006  # token, ACK serialization and USB delivery
+            self.pending = (data if echo else b"") + b"\x06" if len(self.starts) == 2 else b""
+            return len(data)
+        @property
+        def in_waiting(self): return len(self.pending) if clock[0] >= self.ready else 0
+        def read(self, size):
+            assert 0 < size <= self.in_waiting, "empty reads have a coarse driver timeout"
+            reply, self.pending = self.pending[:size], self.pending[size:]
+            return reply
+
+    ds2 = app_ds2.DS2Interface("FAKE", baud=9600, echo=echo)
+    ds2._ser = QueuedSerial()
+    softbsl_host.SoftBSL(ds2, log=lambda *_args: None).prearm_calguard_boot(timeout=0.1)
+    assert len(ds2._ser.starts) == 2
+    assert 0.006 <= ds2._ser.starts[1] - ds2._ser.starts[0] <= 0.008
+    assert ds2._ser.timeout == 1.5 and sleeps[-1] == 0.05
 
 
 def test_forced_direct_requires_a_known_flash_family(monkeypatch):
