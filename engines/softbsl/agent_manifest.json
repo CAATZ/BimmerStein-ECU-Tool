@@ -2,21 +2,21 @@
   "format_version": 1,
   "assembler": {
     "path": "tools/AssembleC166.java",
-    "text_sha256": "fc6d1bb2e1d68ede25e266d7310acdf493578bb8c72ed48192aebb484ba32fb2"
+    "text_sha256": "68cd289f63e27ec0908215190a0f5b570bb3bfa9174f36f3bf8795564ec06d81"
   },
   "agents": {
     "amd": {
       "source": "agent_build.asm",
-      "source_text_sha256": "4d806542c57e91cd01084c347179e4e78f74d62df46ef10fbb09dcf1149b8c44",
-      "preprocessed_sha256": "84950126015ef57d4b61fed11cc8ad5488164fc10887b71075a633f6bac4b003",
+      "source_text_sha256": "c72f4bbac3bf04eabf1ddefb6456baeb789a214d297417584c6f4a017b7d2bd2",
+      "preprocessed_sha256": "83e20da36b71a859050037e0ca02d15c1460a925dfa5374a7708f66479bae549",
       "payload": "agent.hex",
-      "payload_size": 1416,
-      "payload_sha256": "59543efcda316e670e3290444e9acd8bf99e48dbc85946aa17129ddcb89f72b9"
+      "payload_size": 1444,
+      "payload_sha256": "e242b68cdf69c35ac27978a8a13dc4430ccab4d6d3c0a1c7dd9708595f79866a"
     },
     "intel_28f200": {
       "source": "agent_28f_build.asm",
-      "source_text_sha256": "01e55054c4c693ab96176a84efec08082a7335492089c1a9a5f55175b83c53cb",
-      "preprocessed_sha256": "4a8caacef5aca56b66efa5a2661c2c7c8af25886562fbda887849aa70a7b45a1",
+      "source_text_sha256": "7d6ee55d954377618e56f3e852400c95787f8f26c7ece8c2c905bdf35aa7e685",
+      "preprocessed_sha256": "5181232d0d05b566ae7846282389fd81ffa90dc312034ea7332a12f778e37fb8",
       "payload": "agent_28f.hex",
       "payload_size": 1382,
       "payload_sha256": "8096c69eac3d26ccb1daa1d81e3fab7be6b073c2cb6f1b1f7491abee19f4a668"

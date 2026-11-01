@@ -9,7 +9,7 @@ The soft-BSL rides the SAME K-line/OBD interface as DS2 (no bench harness):
      line, KEEPING the firmware's DS2 framing (8E2, S0CON=0x80E7) - so the host never
      changes parity (no mid-session switch, no banner race). 8E2 also gives per-byte
      parity error detection and matches the firmware's own DS2 framing.
-  4. The agent can escalate baud (9600 -> 187500) for bulk transfer (still 8E2).
+  4. The agent can escalate to the selected high baud for bulk transfer (still 8E2).
 
 Bank model: Flash A17 is a COCKPIT SWITCH. The same agent runs from RAM on either
 visible half. The bank-ID marker @CPU 0x1FFC selects the host's fine BOTTOM or coarse
@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import ecu_info
+from transfer_rates import get_high_baud
 
 try:
     import serial
@@ -83,13 +84,11 @@ CRD          = ord("K")                 # 0x4B agent CRC-checked READ opcode: n 
 MARKER_OFF   = 0x5FFC                   # file offset of the bank-ID marker (A5 5A <half> <~half>)
 PARAM1_FILE  = (0x4000, 0x6000)         # file range of param1 = SA1 = bootloader (preserved)
 IMAGE_SIZE   = 0x40000                  # 256 KB (one half)
-# tier -> (S0BG reload byte the 'B' opcode writes, host baud). Async baud = fOSC/(64*(S0BG+1)) at BRS=0
-# (C166 manual). fOSC = 24.000 MHz (12 MHz crystal x2 PLL; edge-measured, see [[reference_ms41_cpu_clock]]).
-# Ladder @24.0 MHz: 9375=S0BG39, 93750=S0BG3, 187500=S0BG1, 375000=S0BG0. Host mid/high match the ECU
+# tier -> (S0BG reload byte, host baud). BRS=0: baud = 12 MHz / (32*(S0BG+1)).
+# Divisors: 93750=S0BG3, 125000=S0BG2, 187500=S0BG1. Host mid/high match the ECU
 # exactly. 'low' is a sentinel (set_baud is SKIPPED -> the agent keeps the inherited 9600, in-tolerance vs
 # the stock DS2's S0BG=38/9615). The 'B' opcode acks at the old baud, writes S0BG, then both ends switch.
 BG = {"low": (38, 9600), "mid": (3, 93750), "high": (1, 187500)}
-HI_BAUD = BG["high"][1]                  # 187500: high-tier host baud (referenced by the stuck-high recovery)
 MAGIC_HI, MAGIC_LO = 0x9C, 0x9C         # 0x43 clear-adapts magic selector (collision-proof: real sel_lo in {00,FF})
 I, S, B, W, E, P, V, R = (ord(c) for c in "ISBWEPVR")
 HALF_NAME = {"T": "top/golden", "B": "bottom/working"}
@@ -591,6 +590,9 @@ class SoftBSL:
     def __init__(self, ds2, log=_emit):
         self.ds2 = ds2
         self.log = log
+        high_baud = get_high_baud()
+        # Retained recovery must use the rate chosen when this session opened.
+        self.baud_rates = {**BG, "high": (375000 // high_baud - 1, high_baud)}
 
     # -- raw comms: write + discard our own half-duplex echo, then read the reply --
     def _ser(self):
@@ -804,11 +806,10 @@ class SoftBSL:
             raise SoftBSLError(f"bad agent banner 0x{b[0]:02X} (expected 0xA5)")
         self.log("agent running (8E2); banner 0xA5 received.")
 
-    @staticmethod
-    def _stage_header(tier, agent):
+    def _stage_header(self, tier, agent):
         """Build the isolated stage-one header (sent at inherited 9600 baud)."""
         try:
-            s0bg, _rate = BG[tier]
+            s0bg, _rate = self.baud_rates[tier]
         except KeyError as exc:
             raise SoftBSLError(f"unknown staged baud tier {tier!r}") from exc
         crc = checksum._crc(agent, 0xFFFF)
@@ -818,7 +819,7 @@ class SoftBSL:
 
     def _retune_staged_host(self, tier):
         """Retune only the host after stage one changes the ECU's ASC0 divisor."""
-        _s0bg, rate = BG[tier]
+        _s0bg, rate = self.baud_rates[tier]
         self._ser().baudrate = rate
         self.ds2.baud = rate
         self._ser().reset_input_buffer()
@@ -877,7 +878,7 @@ class SoftBSL:
             except Exception as error:
                 raise SoftBSLError(f"production-agent handoff: {error}") from error
             self.staged_entry = True
-            self.log(f"staged entry complete at {BG[tier][1]} baud")
+            self.log(f"staged entry complete at {self.baud_rates[tier][1]} baud")
         except Exception:
             # Stage failure is pre-erase, but a missing trigger ACK is ambiguous: the loader
             # may already be receiving the payload. Restore only the host baud so the owner can
@@ -919,7 +920,7 @@ class SoftBSL:
         return chr(self._rx())                      # re-identify after a cockpit-switch flip
 
     def set_baud(self, tier):
-        s0bg, rate = BG[tier]
+        s0bg, rate = self.baud_rates[tier]
         time.sleep(_SETTLE)
         self._txs(bytes([B, s0bg]))                 # single-frame (see program())
         if self._rx() != ACK:                       # agent ACKs at the OLD baud, then switches
@@ -1962,7 +1963,7 @@ def _select_agent_for_chip(args, chip):
     if fam["cmdset"] != "amd":
         if not os.path.exists(agent_path):
             raise SoftBSLError(f"--chip {chip}: {fam['agent']} not assembled yet. The source exists "
-                     f"(agent_28f_build.asm); assemble it via Ghidra AssembleC166 -> {fam['agent']} "
+                     f"(agent_28f_build.asm); assemble it with AssembleC166 -> {fam['agent']} "
                      f"(flat hex @0xD800), or use BSL-Unbricker --chip {chip} (HW BSL, 12 V).")
     args.agent = agent_path   # amd -> agent.hex ; intel -> agent_28f.hex (gated above)
 
@@ -2076,14 +2077,11 @@ def cmd_flash(args):
                     "the live RAM agent. DO NOT TURN IGNITION OFF."
                 )
                 raise _RetainedInstallFlashRequired(recovery) from flash_err
-            # A flash or verify failure can leave the agent running and stuck at high
-            # baud -- the crc_read read-back verify runs at the HIGH baud (187500) EVEN under --baud low, so a mid-verify
-            # glitch (e.g. a noisy K-line: 'crc_read ... link too noisy') strands the agent there. A 9600
-            # reset is garbage to it -> DS2 goes silent. Reset at BOTH bauds (hammered) so the ECU reboots
-            # to a known state, then confirm it's responsive -- instead of leaving it stranded-high.
+            # A lost baud ACK can leave either end at the old or requested rate.
             _emit(f"\n** FLASH FAILED: {flash_err}")
-            _emit("   resetting the agent across bauds (187500/192000 then 9600) so the ECU isn't stranded-high ...")
-            for b in (HI_BAUD, 192000, 9600):   # reset at the new high (187500) AND old (192000) AND low
+            reset_rates = tuple(dict.fromkeys((sb.ds2.baud, sb.baud_rates[transfer_baud][1], 9600)))
+            _emit("   resetting the agent at " + "/".join(map(str, reset_rates)) + " baud ...")
+            for b in reset_rates:
                 try:
                     sb._ser().baudrate = b; sb.ds2.baud = b
                     time.sleep(0.2); sb._ser().reset_input_buffer()
@@ -2106,7 +2104,7 @@ def cmd_flash(args):
                       "Re-check E740/markers + re-flash if the write was incomplete.")
             else:
                 _emit("   ECU still silent -- KEY-CYCLE + re-probe; if truly dead, use BSL-Unbricker (HW BSL backstop).")
-            raise SoftBSLError(f"flash aborted (agent reset at both bauds): {flash_err}")
+            raise SoftBSLError(f"flash aborted (agent reset at session bauds): {flash_err}")
         _emit("FLASH COMPLETE.")
         # The verified flash path already sent R; verify-off needs R here. Either way the SAME
         # running RAM agent commits marker 0 before reboot — no 0x2A/0x5A re-entry is required.
@@ -2200,7 +2198,7 @@ def cmd_id(args):
         try:
             det_fam, det_sig = _detect_flash_chip(d)       # driver family (stock DS2 has no silicon read-ID)
             _emit(f"  flash-IC (SA1 driver sig @DS2 0x023C = {det_sig.hex() or 'unreadable'}): "
-                  f"{_DRV_FAMILY_LABEL.get(det_fam, 'UNKNOWN -- matched neither AMD (e00e0d58) nor Intel (e6f45000)')}")
+                  f"{_DRV_FAMILY_LABEL.get(det_fam, 'UNKNOWN -- no recognized AMD or Intel driver signature')}")
             cal_v, prog_v, consistent = _detect_ecu_variant(d)
             _emit(f"  firmware markers: cal={cal_v}  program={prog_v}  consistent={consistent}")
             _emit("  (bank-ID marker 'T'/'B' needs the agent running -> use the `identify` command for that)")
@@ -2242,7 +2240,7 @@ def _parse_range(s, default=None):
 def cmd_read(args):
     """Read bytes from a RAW DS2/CPU address via the AGENT at --baud (range = START:END or START+LEN,
     hex ok). The address is a raw CPU/linear address -- NO file descramble, unlike `dump`. The agent's
-    clean single baud-set is the point - `--baud high` reads at 187500."""
+    clean single baud-set is the point - `--baud high` uses the session's selected high rate."""
     addr, n = _parse_range(args.range)              # (start, length); the parser guarantees length > 0
     d, sb = _session(args)
     rchunk = CHUNK_SIZE                          # full 1 KB per 'K' at every baud
@@ -2455,7 +2453,7 @@ def cmd_deploy_splice(args):
             "This ERASES + REWRITES the program region (cal/tune untouched). Type 'yes': ").strip() != "yes":
         raise SoftBSLError("aborted (nothing written).")
 
-    # Stock DS2 already supports the capture-qualified direct 187500-baud
+    # Stock DS2 supports direct entry at the selected high baud for a native
     # write. Prefer that native D2XX path for the bootstrap deployment; only
     # fall back to the legacy 9600 writer when the fast session proves the ECU
     # is still low-rate and untouched before its erase boundary. ``--no-finalize``
@@ -2506,7 +2504,7 @@ def cmd_deploy_splice(args):
                         f"image={target_family or 'unknown'} live={live_family}"
                     )
                 _emit(
-                    f"-- native fast DS2 bootstrap ({live_family.upper()}, exact 187500 baud; tune untouched) --"
+                    f"-- native fast DS2 bootstrap ({live_family.upper()}, exact {get_high_baud()} baud; tune untouched) --"
                 )
 
                 fast_kwargs = {
@@ -2791,17 +2789,16 @@ _PROG_SIG_3 = bytes.fromhex("9a116390")          # cal_guard .3 program code sig
 # read-identifier -- the only genuine read-ID code (read_id*.asm) is a STREAMED agent, and the stock
 # captures contain zero read-ID frames. So we detect the INSTALLED FLASH DRIVER instead: the SA1 driver
 # entry @ file 0x423C (= DS2 0x023C, block 0, provably readable over stock DS2) is the AMD flash driver
-# on a 29F re-chip vs the stock Intel driver on a 28F. The first 8 bytes are byte-identical across
-# MS41.0/.1/.2/.3 and every softbsl/door patch (nearest edit 1786 B away); all 4 leading bytes differ
-# AMD-vs-Intel (Hamming 16) so no K-line bit-flip can cross them.
+# on a 29F re-chip vs the stock Intel driver on a 28F. Each exact 8-byte revision signature is
+# shared across MS41.0/.1/.2/.3; ecu_info recognizes the current and prior AMD revisions.
 _DRV_SIG_ADDR  = 0x023C                                    # DS2 addr = file 0x423C ^ 0x4000 (SA1 driver entry)
-_DRV_SIG_AMD   = bytes.fromhex("e00e0d58f04ec084")         # AMD driver (amd_flash) -> AMD cmd set / agent.hex
+_DRV_SIG_AMD   = bytes.fromhex("e00e0d5ff04ec084")         # AMD V5 driver -> AMD cmd set / agent.hex
 _DRV_SIG_INTEL = bytes.fromhex("e6f45000b84c6fe0")         # stock Intel driver     -> Intel cmd set / agent_28f.hex
-# The signature identifies the DRIVER FAMILY, NOT the exact silicon: the same AMD driver serves BOTH the
-# 29F200 and the 29F400 (bottom half), so an AMD hit means "29F200 / 29F400 bottom half" -- both use the
-# AMD command set + agent.hex, so the family is all the flow needs. (Pass --chip 29f200 explicitly only if
+# The signature identifies the DRIVER FAMILY, not the exact silicon or selected bank: the same AMD
+# driver serves 29F200 and either 29F400 half, using the AMD command set + agent.hex.
+# (Pass --chip 29f200 explicitly only if
 # you need that part's specific region map.) Intel hit = 28F200.
-_DRV_FAMILY_LABEL = {"amd":   "29F200 / 29F400 bottom-half (AMD driver)",
+_DRV_FAMILY_LABEL = {"amd":   "29F200 / 29F400 (AMD driver)",
                      "intel": "28F200 (Intel driver)"}
 _COMPAT_CAL_ADDR = 0x1000C
 _COMPAT_PROGRAM_ADDR = 0x2007
@@ -2879,7 +2876,7 @@ def _live_patch_applied(d, patch_id):
 def _detect_flash_chip(d):
     """Read the SA1 flash-driver signature over stock DS2 (READ-ONLY, brick-safe) and infer the DRIVER
     FAMILY. Stock DS2 has NO silicon read-ID (see _DRV_SIG_* notes), so this reports which flash driver is
-    installed -- NOT the exact part: "amd" (= 29F200 OR 29F400 bottom half; both share the driver + agent.hex),
+    installed -- NOT the exact part: "amd" (= 29F200 OR 29F400; both share the driver + agent.hex),
     "intel" (= 28F200), or None when the signature matches neither (caller MUST fail safe -- never guess a
     command set). Returns (family_or_None, raw_bytes) so callers can log the actual bytes on a miss."""
     sig = b""
@@ -2888,11 +2885,7 @@ def _detect_flash_chip(d):
             sig = d.read_mem(_DRV_SIG_ADDR, len(_DRV_SIG_AMD)); break
         except Exception:
             time.sleep(0.3)
-    if sig == _DRV_SIG_AMD:
-        return "amd", sig
-    if sig == _DRV_SIG_INTEL:
-        return "intel", sig
-    return None, sig
+    return ecu_info.chip_family(sig), sig
 
 
 def _store_live_preflight(args, d, flash_family, flash_signature):
@@ -3072,7 +3065,7 @@ def _read_ecu_base_fast(args, log=_emit, progress_cb=None):
     """
     from ds2_fast_read import read_full_d2xx
 
-    log("  reading the ECU as the base via native fast stock DS2 (exact 187500 baud) ...")
+    log(f"  reading the ECU as the base via native fast stock DS2 (exact {get_high_baud()} baud) ...")
     bar = (_progress_adapter(progress_cb, "base read")
            if progress_cb else _progress_bar("base read"))
     read_kwargs = {
@@ -3357,13 +3350,13 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
     driver_off = _DRV_SIG_ADDR ^ DESCR
     base_driver = base[driver_off:driver_off + len(_DRV_SIG_INTEL)]
     base_is_intel = base_driver == _DRV_SIG_INTEL
-    base_is_amd = base_driver == _DRV_SIG_AMD
+    base_is_amd = ecu_info.chip_family(base_driver) == "amd"
     is_amd_target = str(chip).startswith("29")
     if is_amd_target:
         if not (base_is_intel or base_is_amd):
             raise SoftBSLError(
                 f"base flash-driver @0x423C = {base_driver.hex()} is neither Intel "
-                f"({_DRV_SIG_INTEL.hex()}) nor AMD ({_DRV_SIG_AMD.hex()}); cannot build a valid 29F image")
+                f"({_DRV_SIG_INTEL.hex()}) nor a recognized AMD revision; cannot build a valid 29F image")
         driver_patches = ["amd_flash"] if base_is_intel else []
     else:
         if not base_is_intel:
@@ -4064,7 +4057,7 @@ def cmd_install(args):
               "a program/cal hybrid is refused.")
         _emit("  [flash-IC gate] a LIVE run auto-detects the driver FAMILY from the boot/param1")
         _emit("    driver signature @DS2 0x023C")
-        _emit("    (AMD e00e0d58 = 29F200/29F400-bottom / Intel e6f45000 = 28F200); --chip auto adopts it")
+        _emit("    (recognized AMD revisions = 29F200/29F400 / Intel = 28F200); --chip auto adopts it")
         _emit("    (28F uses the proven Intel agent + 12 V VPP); an explicit --chip is cross-checked and")
         _emit("    REFUSED on a family mismatch.")
     else:
@@ -4093,7 +4086,7 @@ def cmd_install(args):
         if raw_chip == "auto":
             if det_fam is None:
                 raise SoftBSLError(f"  X flash-IC auto-detect FAILED: boot/param1 driver sig @DS2 0x023C = "
-                         f"{det_sig.hex() or '<unreadable>'} matched neither AMD ({_DRV_SIG_AMD.hex()}) nor "
+                         f"{det_sig.hex() or '<unreadable>'} matched neither a recognized AMD revision nor "
                          f"Intel ({_DRV_SIG_INTEL.hex()}). Re-run with an explicit --chip once you confirm the silicon.")
             _emit(f"\n  flash-IC: auto-detected {det_label} (boot/param1 driver sig @DS2 0x023C).")
             if det_fam == "intel":
@@ -4339,7 +4332,7 @@ def main():
     ap.add_argument("--agent", default=_agent_default(), help="agent hex (default: agent.hex)")
     ap.add_argument("--chip", choices=["auto", "28f200", "29f200", "29f400"], default="auto",
                     help="flash IC. auto (default) = install/id auto-detect the DRIVER FAMILY from the boot/param1 "
-                         "sig @DS2 0x023C (AMD e00e0d58 = 29F200/29F400-bottom / Intel e6f45000 = 28F200; stock "
+                         "sig @DS2 0x023C (recognized AMD revisions = 29F200/29F400 / Intel = 28F200; stock "
                          "DS2 has no silicon read-ID); an explicit value is cross-checked vs that sig and refused "
                          "on a family mismatch. 28f200 needs the Intel agent_28f.hex + Intel-driver images")
     ap.add_argument("--half", choices=["upper", "lower"], default="lower",
@@ -4370,7 +4363,7 @@ def main():
     pr = sub.add_parser("read", help="read a range via the agent at --baud (START:END or START+LEN; raw CPU addr)")
     pr.add_argument("range", help="START:END (END is EXCLUSIVE) or START+LEN, hex ok, e.g. 0x23354:0x23394 "
                                   "or 0x23354+0x40. (positional here; on `dump` the same grammar is the --range flag)")
-    pr.add_argument("--baud", choices=list(BG), default="low", help="agent baud tier (high=187500)")
+    pr.add_argument("--baud", choices=list(BG), default="low", help="agent baud tier (high uses the selected transfer rate)")
     pr.set_defaults(func=cmd_read)
 
     pdmp = sub.add_parser("dump", help="dump flash to FILE via the agent at --baud (file order)")
@@ -4380,7 +4373,7 @@ def main():
                                       "Default = the whole bottom half 0:0x40000. (file offsets, descrambled per "
                                       "16 KB -- not raw CPU addrs like `read`)")
     pdmp.add_argument("--baud", choices=list(BG), default="low",
-                      help="agent baud tier (high=187500 = real S0BG=1 @fOSC 24.0; mid=93750)")
+                      help="agent baud tier (high uses the selected transfer rate; mid=93750)")
     pdmp.add_argument("--raw-hole", action="store_true",
                       help="keep the raw floating-bus read of the unmapped hole (file 0x8000-0xBFFF); "
                            "default 0xFF-fills it (the true blank content)")
@@ -4430,8 +4423,8 @@ def main():
     pin.add_argument("--yes", action="store_true", help="skip the top-level confirm (NOT the key-cycle prompts)")
     pin.add_argument("--baud", choices=list(BG), default="low",
                      help="Phase-2 agent flash baud tier (default low=9600, the conservative brick-class "
-                          "default; high=187500 is ~2-3x faster and PROVEN clean under the D2XX transport, "
-                          "incl. the SA1 boot-sector write). Phase-1 prefers native-fast exact 187500 "
+                          "default; high uses the selected transfer rate). "
+                          "Phase-1 prefers native-fast at the selected transfer rate "
                           "with a pre-erase fallback to 9600 when D2XX is unavailable or unstable.")
     # NOTE: --chip is GLOBAL (defined on the top-level parser, like --port) and must
     # precede the subcommand: `softbsl_host.py --chip 28f200 install <target> ...`.
@@ -4449,7 +4442,7 @@ def main():
     pf.add_argument("--write-bootloader", action="store_true",
                     help="ALSO write SA1/param1 (opt-in; implied by --scope sa1)")
     pf.add_argument("--baud", choices=list(BG), default="low",
-                    help="agent bulk-transfer baud tier (default low=9600; high=187500 = real S0BG=1 @fOSC 24.0)")
+                    help="agent bulk-transfer baud tier (default low=9600; high uses the selected transfer rate)")
     pf.add_argument("--no-verify", action="store_true", help="skip the read-back verify")
     pf.add_argument("--stay-flash", action="store_true",
                     help="leave E740=1 (flash mode) after flashing for chained agent ops; default sets "

@@ -1,6 +1,6 @@
 ; agent_build.asm — AUTO-GENERATED combined buildable agent.
 ; = agent_softbsl.asm (CALL/RET->calls/rets) + the v5 cores inlined.
-; Loads/runs at 0xD800. Assemble with Ghidra AssembleC166.
+; Loads/runs at 0xD800. Assemble with the supplied AssembleC166 helper.
 base 0d800h
 
 ; ============================================================================
@@ -616,7 +616,7 @@ identify:
         movb  MARKER,RL5
         movb  RL4,MARKER
         rets
-; ===== v5 program core (program_amd.asm body, verbatim) =====
+; ===== AMD program core (V7 polling, with RAM-agent watchdog servicing) =====
 program_amd_core:
   mov [-r0],r9          ; push r9
   sub r0,#0x2           ; alloc 2-byte local (the data word) at [r0]
@@ -688,16 +688,20 @@ FPOLL:
   andb RL4,#0x40       ; DQ6
   jmpr cc_EQ,FPOK      ; stable -> programmed
   andb RL5,#0x20       ; DQ5
-  jmpr cc_NE,FPERR     ; device error
+  jmpr cc_EQ,FWAIT
+  ; Completion can turn read2 into array data with bit5 set. Recheck DQ6.
+  movb RL4,[r12]
+  movb RL5,[r12]
+  xorb RL4,RL5
+  andb RL4,#0x40
+  jmpr cc_EQ,FPOK
+  jmpr cc_UC,FPERR     ; still toggling after DQ5 -> device error
+FWAIT:
   sub r13,#0x1
   jmpr cc_NE,FPOLL     ; guard not exhausted -> keep polling
 FPERR:
-  ; A DQ5 program-fail leaves the AMD chip OUT of read-mode; without a reset the
-  ; NEXT word's command is swallowed (= the odd-block word1 FF-hole). The unavoidable
-  ; case: an odd block's prepended-FF word0 writes FF over a byte the previous block
-  ; already programmed (FF=1s over 0-bits is an impossible 0->1) -> spurious DQ5. The
-  ; real data (high byte) already programmed before the verify tripped; just reset so
-  ; word1 can program. Also makes GENUINE program failures recover instead of cascade.
+  ; Leave read-array mode restored after a genuine failure or timeout.
+  ; Stop the block immediately so the host can retry the incomplete write.
   mov r5,#0x00f0
   mov [r12],r5         ; F0 -> AMD reset (clear program-fail state) before advancing
   movb RL4,#0x2
@@ -734,7 +738,7 @@ FEXIT:
   mov r9,[r0+]         ; pop r9
   rets
 
-; ===== v5 erase core (erase_amd.asm body, verbatim) =====
+; ===== AMD erase core (erase_amd_v2.asm body) =====
 erase_amd_core:
   mov r12,0xfe52        ; r12 = T1 snapshot (coarse timeout timing)
   mov r14,#0x0          ; r14 = coarse timeout counter
@@ -779,7 +783,15 @@ RDQ6:
   andb RL5,#0x40        ; isolate DQ6
   jmpr cc_EQ,EOK        ; DQ6 stable -> erase complete
   andb RH5,#0x20        ; DQ5 of read2 (timing-limit exceeded)
-  jmpr cc_NE,EFAIL      ; DQ5=1 -> genuine erase error
+  jmpr cc_EQ,EWAIT
+  ; Completion can turn read2 into array data with bit5 set. Recheck DQ6.
+  movb RL5,[r4]
+  movb RH5,[r4]
+  xorb RL5,RH5
+  andb RL5,#0x40
+  jmpr cc_EQ,EOK
+  jmpr cc_UC,EFAIL      ; still toggling after DQ5 -> device error
+EWAIT:
   cmp r14,0xe744        ; coarse timeout reached?
   jmpr cc_C,POLL        ; r14 < [0xE744] -> keep polling
 EFAIL:

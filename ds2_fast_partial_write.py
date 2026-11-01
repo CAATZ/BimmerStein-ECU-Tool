@@ -46,6 +46,11 @@ from ds2_fast_read import (
     BITS_PER_CHARACTER_8E2,
     IDENTITY_LENGTH,
     PRODUCTION_RATE_PROFILE,
+    SELECTOR_COMPATIBILITY,
+    SELECTOR_HIGH,
+    SELECTOR_LOW,
+    SELECTOR_MID,
+    SELECTORS,
 )
 from ds2_write_authorization import (
     AUTHORIZATION_STATE_ADDRESS,
@@ -70,9 +75,6 @@ STATUS_COMMAND = 0x0D
 SEED_KEY_COMMAND = 0x90
 PREPARE_COMMAND = 0xA2
 
-SELECTOR_MID = 0x12
-SELECTOR_HIGH = 0x01
-SELECTOR_LOW = 0x26
 TOKEN_ADDRESS = 0x205E
 TOKEN_LENGTH = 10
 TOKEN_READ_A_ADDRESS = 0x2040
@@ -343,7 +345,7 @@ class NativeFastPartialWriteTransport:
                 or (len(args) == 4 and args[:3] != b"BMW")
                 or (
                     len(args) == TOKEN_LENGTH + 1
-                    and args[0] in (SELECTOR_LOW, SELECTOR_MID, SELECTOR_HIGH)
+                    and args[0] in SELECTORS
                 )
             )
             if not valid:
@@ -355,6 +357,9 @@ class NativeFastPartialWriteTransport:
                 allowed_states = {
                     SELECTOR_MID: frozenset((SessionState.ARMED_LOW,)),
                     SELECTOR_HIGH: frozenset((SessionState.ARMED_LOW, SessionState.MID)),
+                    SELECTOR_COMPATIBILITY: frozenset(
+                        (SessionState.ARMED_LOW, SessionState.MID)
+                    ),
                     SELECTOR_LOW: frozenset(
                         (SessionState.HIGH_PARTIAL_WRITE, SessionState.WRITE_FINALIZE_HIGH)
                     ),
@@ -1157,7 +1162,7 @@ class NativeFastPartialWriteSession:
         if not self.rates.direct_low_to_high:
             self._switch_up(SELECTOR_MID, LinkRate.MID, SessionState.MID)
         self._switch_up(
-            SELECTOR_HIGH,
+            self.rates.high_selector,
             LinkRate.HIGH,
             SessionState.HIGH_PARTIAL_WRITE,
         )
@@ -1187,8 +1192,8 @@ class NativeFastPartialWriteSession:
     ) -> None:
         allowed = {
             (LinkRate.LOW, SELECTOR_MID, LinkRate.MID),
-            (LinkRate.LOW, SELECTOR_HIGH, LinkRate.HIGH),
-            (LinkRate.MID, SELECTOR_HIGH, LinkRate.HIGH),
+            (LinkRate.LOW, self.rates.high_selector, LinkRate.HIGH),
+            (LinkRate.MID, self.rates.high_selector, LinkRate.HIGH),
         }
         old = self.link
         if (old, selector, target) not in allowed:

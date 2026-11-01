@@ -6,9 +6,11 @@
   "relocation_window": "0xF600-0xF7FF",
   "bootstrap_size": 52,
   "body_source": "0xD834",
-  "body_size": 412,
-  "payload_size": 464,
-  "payload_sha256": "f17baa23c34c4de31cf61df19369992a0ccc3f8cf4748a94582807ffd0e421fb",
+  "body_size": 416,
+  "payload_size": 468,
+  "payload_sha256": "17fb0252db9f0b4edd2b6bfb2b1ac15dea1abb95f1d40361824bd6d69583c1b1",
+  "bootstrap_source_sha256": "291a83d9f7afa33a82db934e9138060f112acdcf3d028e6d51fb35324d84139d",
+  "body_source_sha256": "8eeb8fd8946a8dd4813a09df7372c1d809782ed8d079d9faf9f875b849b92ddc",
   "wire_protocol": "5B; S2+S0BG+len+crc+xor; 06; switch; A6/06; agent; 06/A5",
   "failure_boundary": "pre-erase stage failure commits E740=0 and hybrid-SRSTs"
 }

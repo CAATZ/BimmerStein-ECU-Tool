@@ -84,9 +84,9 @@ def _folder_index_file():
 @dataclass
 class BackupEntry:
     filename:  str    # path relative to backups/, using forward slashes
-    file_type: str    # "Full ROM" | "Tune" | "EEPROM" | "Unknown"
+    file_type: str    # "Full ROM" | "Tune" | "EEPROM" | "Retained Data" | "Unknown"
     variant:   str    # "MS41.1" | "MS41.2" | "Unknown" | "N/A"  (cal-side; kept for display)
-    cs_ok:     bool
+    cs_ok:     bool | None
     size:      int
     date:      str    # ISO-8601
     notes:     str = ""
@@ -100,6 +100,22 @@ class BackupEntry:
     hybrid:          str = ""    # human-readable program/cal mismatch description, or ""
     sha256:          str = ""    # immutable catalogue identity; migrated on load for legacy entries
     folder:          str = ""    # relative parent directory; empty means backups/ itself
+    checksum_context: str = ""   # MS43 monitor bytes, bound to this entry's immutable SHA-256
+
+    @property
+    def checksum_label(self) -> str:
+        return "UNKNOWN" if self.cs_ok is None else "OK" if self.cs_ok else "INVALID"
+
+    def read_checksum_context(self, data):
+        """A saved MS43 context belongs only to these exact calibration bytes."""
+        if (self.variant != "MS43" or self.size != 0x10000 or len(data) != self.size
+                or hashlib.sha256(data).hexdigest() != self.sha256):
+            return None
+        try:
+            context = bytes.fromhex(self.checksum_context)
+            return context if len(context) == 40 else None
+        except (ValueError, TypeError):
+            return None
 
     @property
     def path(self) -> str:
@@ -143,6 +159,31 @@ class BackupManager:
     def folders(self) -> List[str]:
         return list(self._folders)
 
+    def checksum_context(self, data):
+        """Reuse saved context or an identical calibration in a verified full image."""
+        import ms42_ms43_image as images
+
+        profile = images.image_profile(data)
+        if profile is None or profile.name != "MS43" or len(data) != profile.partial_size:
+            return None
+        digest = hashlib.sha256(data).hexdigest()
+        contexts = set()
+        for entry in self._entries:
+            if entry.variant != "MS43":
+                continue
+            if entry.size == len(data) and entry.sha256 == digest:
+                context = entry.read_checksum_context(data)
+                if context is not None:
+                    contexts.add(context)
+            elif entry.size == images.FULL_SIZE and entry.cs_ok is True:
+                try:
+                    full = self.read_data(entry.filename, entry.sha256)
+                    if images.extract_calibration(full) == data:
+                        contexts.add(bytes(images._monitor_context(data, full)))
+                except (OSError, ValueError):
+                    continue
+        return contexts.pop() if len(contexts) == 1 else None
+
     def create_folder(self, folder: str) -> str:
         folder = self.normalize_folder(folder)
         if not folder:
@@ -165,18 +206,44 @@ class BackupManager:
 
     def _describe(self, data, filename: str, notes: str = "",
                   source: str = "imported", ecu_id: str = "",
-                  vin: str = "", variant: str = "", folder: str = "") -> BackupEntry:
+                  vin: str = "", variant: str = "", folder: str = "", *,
+                  checksum_context=None) -> BackupEntry:
         """Derive image metadata without copying or registering the file."""
         from ms41 import MS41ECU
         from checksum import verify_checksum
+        import ms42_ms43_image as images
 
         data = bytearray(data)
         size = len(data)
         file_type, detected_variant = self._classify(data, size)
+        if size == 0x4000 and variant in ("MS42", "MS43"):
+            file_type = "Retained Data"
         variant = variant or detected_variant
         cal_id = ""
-        if file_type == "EEPROM":
-            if variant in ("MS41.0", "MS41.1", "MS41.2", "MS41.3"):
+        saved_context = ""
+        profile = images.image_profile(data)
+        if profile:
+            from ms42_ms43_offline import decode_identity
+            info = images.image_identity(data)
+            ecu_id = ecu_id or info["hardware_id"]
+            cal_id = info["software_id"]
+            if not vin:
+                vin = decode_identity(data)["vin"] or ""
+            if profile.name == "MS43" and size == profile.partial_size and checksum_context is not None:
+                try:
+                    saved_context = bytes(images._monitor_context(data, checksum_context)).hex()
+                except (ValueError, TypeError):
+                    pass
+            status = images.checksum_status(data, context=checksum_context)
+            required = ("boot", "program", "cal") if size == images.FULL_SIZE else ("cal",)
+            values = [status[key] for key in required]
+            cs_ok = False if False in values else None if None in values else True
+        elif file_type == "Retained Data":
+            cs_ok = None  # Native slot checks are separate from a complete-image verdict.
+        elif file_type == "EEPROM":
+            if size == 2048:
+                cs_ok = None  # Raw MS43 storage has no single MS41-style record verdict.
+            elif variant in ("MS41.0", "MS41.1", "MS41.2", "MS41.3"):
                 from engines.softbsl import eeprom_ram
                 rows = eeprom_ram.field_report(data, variant)
                 cs_ok = all(not row["checked"] or row["check_ok"] for row in rows)
@@ -192,6 +259,9 @@ class BackupManager:
         date     = datetime.datetime.now().isoformat(timespec="seconds")
 
         program_variant = cal_variant = hybrid = ""
+        if profile:
+            cal_variant = profile.name
+            program_variant = profile.name if size == images.FULL_SIZE else ""
         if size == MS41ECU.FULL_ROM_SIZE:
             resolved = MS41ECU.resolve_version(bytes(data))
             program_variant = resolved["program"] or ""
@@ -205,17 +275,20 @@ class BackupManager:
             program_variant=program_variant, cal_variant=cal_variant, hybrid=hybrid,
             sha256=hashlib.sha256(data).hexdigest(),
             folder=folder,
+            checksum_context=saved_context,
         )
 
     def add_data(self, data, filename: str, notes: str = "",
                  source: str = "imported", ecu_id: str = "",
-                 vin: str = "", variant: str = "", folder: str = "") -> BackupEntry:
+                 vin: str = "", variant: str = "", folder: str = "", *,
+                 checksum_context=None) -> BackupEntry:
         """Archive bytes under a unique name in a real catalogue folder."""
         folder = folder if folder in self._folders else self.normalize_folder(folder)
         os.makedirs(self.folder_path(folder), exist_ok=True)
         base = self._unique_name(filename, folder)
         destination = self._entry_path(base)
-        entry = self._describe(data, base, notes, source, ecu_id, vin, variant, folder)
+        entry = self._describe(data, base, notes, source, ecu_id, vin, variant, folder,
+                               checksum_context=checksum_context)
         # Persist provenance before publishing an image that may outlive its index save.
         pending_dir = os.path.join(BACKUP_DIR, ".pending")
         os.makedirs(pending_dir, exist_ok=True)
@@ -258,11 +331,15 @@ class BackupManager:
     @staticmethod
     def _classify(data, size):
         from ms41 import MS41ECU
+        from ms42_ms43_image import FULL_SIZE, image_profile
+        profile = image_profile(data)
+        if profile:
+            return ("Full ROM" if size == FULL_SIZE else "Tune"), profile.name
         if size == 256 * 1024:
             return "Full ROM", (MS41ECU.detect_variant(data) or "Unknown")
         if size == 24 * 1024:
             return "Tune", (MS41ECU.detect_variant(data) or "N/A")
-        if size == 512:
+        if size in (512, 2048):
             return "EEPROM", "Unknown"
         return "Unknown", "Unknown"
 
@@ -312,6 +389,7 @@ class BackupManager:
 
     def remove_exact(self, filename: str, sha256: str):
         entry = self.exact_entry(filename, sha256)
+        self.read_data(entry.filename, entry.sha256)
         path = self._entry_path(entry.filename)
         os.remove(path)
         self._entries = [e for e in self._entries if e.filename != entry.filename]
@@ -502,6 +580,19 @@ class BackupManager:
         old_ids = {id(entry) for entry in old}
         entries = [entry for entry in old if id(entry) in present_ids]
         entries.extend(entry for entry in matched.values() if id(entry) not in old_ids)
+        # Older MS43 reads lost their context. An identical calibration inside a
+        # checksum-valid full image supplies that context without ECU communication.
+        unknown_partials = [entry for entry in entries if entry.variant == "MS43"
+                            and entry.size == 0x10000 and entry.cs_ok is None]
+        if unknown_partials:
+            verified_calibrations = {
+                hashlib.sha256(files[entry.filename][0][0x70000:0x80000]).hexdigest()
+                for entry in entries if entry.variant == "MS43"
+                and entry.size == 0x80000 and entry.cs_ok is True
+            }
+            for entry in unknown_partials:
+                if entry.sha256 in verified_calibrations:
+                    entry.cs_ok = True
         self._entries, self._missing = entries, missing
         self._folders = sorted(folders, key=str.casefold)
         if self._index_dirty or before != [asdict(entry) for entry in [*entries, *missing]]:

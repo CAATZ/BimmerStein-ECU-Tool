@@ -106,7 +106,7 @@ class MemoryJournal:
 class PartialWriteStockSerial:
     native_fast_capable = True
 
-    ECU_RATES = {0x26: 9615.4, 0x12: 19736.8, 0x01: 187500.0}
+    ECU_RATES = {0x26: 9615.4, 0x12: 19736.8, 0x01: 187500.0, 0x02: 125000.0}
 
     def __init__(
         self,
@@ -259,7 +259,7 @@ class PartialWriteStockSerial:
                 data = bytearray((int(reentry["e659"]),))
                 self.native_reentry_index += 1
             elif address >> 24 == 0x03:
-                assert self.selector == 0x01
+                assert self.selector in (0x01, 0x02)
                 assert self.armed
                 offset = address & 0xFFFFFF
                 data = bytearray(self.eeprom[offset : offset + count])
@@ -267,7 +267,7 @@ class PartialWriteStockSerial:
                 data = bytearray(self.memory[address : address + count])
             if (
                 self.readback_corrupt_address is not None
-                and self.selector == 0x01
+                and self.selector in (0x01, 0x02)
                 and address <= self.readback_corrupt_address < address + count
                 and not self._readback_corruption_used
             ):
@@ -275,7 +275,7 @@ class PartialWriteStockSerial:
                 self._readback_corruption_used = True
             self._response(ResponseStatus.ACK, data)
         elif frame.command == 0xA2:
-            self.prepared_high = self.selector == 0x01
+            self.prepared_high = self.selector in (0x01, 0x02)
             self._response(ResponseStatus.READY_FF)
         elif frame.command == 0x0D:
             if getattr(self, "full_status_payload", False):
@@ -296,7 +296,7 @@ class PartialWriteStockSerial:
         if len(args) == TOKEN_LENGTH + 1 and args[1:] == self.token:
             selector = args[0]
             assert selector in self.ECU_RATES
-            if selector == 0x01 and self.high_selector_a2:
+            if selector in (0x01, 0x02) and self.high_selector_a2:
                 self._response(ResponseStatus.READINESS_A2)
                 return
             self._response(ResponseStatus.ACK)
@@ -380,7 +380,7 @@ class PartialWriteStockSerial:
             response_operation = FlashOperation.PARTIAL_PROGRAM
             cursor = address + count
         elif operation == FlashOperation.EEPROM_WRITE:
-            assert self.selector == 0x01
+            assert self.selector in (0x01, 0x02)
             assert self.armed
             assert address in (0x196, 0x1CC, 0x1CA)
             assert count == 4

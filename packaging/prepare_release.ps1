@@ -148,6 +148,10 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Private MS41 patch-admission verification failed."
     }
+    if (-not $SkipTests) {
+        & $python "packaging\check_offline.py" --full --skip-admission
+        if ($LASTEXITCODE -ne 0) { throw "Full offline qualification failed." }
+    }
 
     New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
     $packages = @()
@@ -156,7 +160,7 @@ try {
         if (-not $packagePython -or -not (Test-Path -LiteralPath $packagePython -PathType Leaf)) {
             throw "A matching Python runtime is required for $architecture. Use -PythonX86Path for x86."
         }
-        & $nuitkaBuildScript -Version $Version -Architecture $architecture -PythonPath $packagePython -SkipTests:$SkipTests -SkipDocumentation:($packages.Count -gt 0)
+        & $nuitkaBuildScript -Version $Version -Architecture $architecture -PythonPath $packagePython -SkipTests -SkipDocumentation:($packages.Count -gt 0)
         if ($LASTEXITCODE -ne 0) { throw "Nuitka $architecture package build failed." }
         $packages += Stage-ReleasePackage `
             -SourceApp (Join-Path $root "dist\$architecture\BimmerStein ECU Tool") `

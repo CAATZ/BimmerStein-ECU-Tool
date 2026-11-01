@@ -1,0 +1,367 @@
+{
+  "id": "ignition_cut_v14_ms411",
+  "family_id": "ignition_cut_v14",
+  "version": "V14",
+  "status": "DEPRECATED - native RAM collision; detection/removal only",
+  "tested": false,
+  "maturity": "Deprecated",
+  "validation": "Known RAM collision",
+  "verification": "Exact installed-byte emulator evidence reproduces the native RAM collision. This revision is preserved for exact detection, removal and migration. Do not install it.",
+  "title": "Ignition Cut",
+  "user_description": "Independent ignition-cut limiter with RPM hysteresis, optional fixed injector pulse width and an optional fixed ignition angle in a configurable RPM region below the cut limit. Provides shared timing and combustion-observation recovery for Launch Control V14.",
+  "description": "This retained revision uses E847-E84A, which overlaps native roughness/reference arrays on its exact supported image. Detection/removal only; use ignition_cut_v16_ms411. MS41.1 Ignition Cut V14 retains its predecessor's cut request and release owners and adds a separate RPM-band timing owner. Standalone and launch ignition retard are active within their configured regions on rising and falling RPM, independent of cut hysteresis. Spark cut retains priority. No hold timer is added. E849 retains the qualified observation-state ABI; E84A distinguishes fuel-launch, ignition-launch and standalone timing sources. Only final timing publishes these states. Guards use read-only eligibility and native accepted-sample/misfire recovery. Genuine native fault and knock protections remain effective; DTC100 and electrical diagnostics are not suppressed. Final timing hooks and qualification are owned by this shared engine, so standalone retard does not require Launch Control. Launch eligibility requires its exact native hook to be installed. New retard angles default Off; an erased RPM range initializes to 192 RPM. Existing tuned bytes are preserved.",
+  "target": "MS41.1",
+  "recompute": [
+    "program",
+    "cal"
+  ],
+  "requires": [],
+  "conflicts": [
+    "ignition_cut_v7_ms411",
+    "ignition_cut_v8_ms411",
+    "ignition_cut_v9_ms411",
+    "ignition_cut_v10_ms411",
+    "ignition_cut_v11_ms411"
+  ],
+  "supersedes": [
+    "ignition_cut_v7_ms411",
+    "ignition_cut_v8_ms411",
+    "ignition_cut_v9_ms411",
+    "ignition_cut_v10_ms411",
+    "ignition_cut_v11_ms411"
+  ],
+  "cave": {
+    "region": "proghigh-gap",
+    "base": 243328,
+    "splice_off": 242790,
+    "splice_op": "calls",
+    "relocatable": false,
+    "splices": [
+      {
+        "off": 242790,
+        "base": 243328,
+        "op": "calls"
+      },
+      {
+        "off": 242890,
+        "base": 243328,
+        "op": "calls"
+      },
+      {
+        "off": 146010,
+        "base": 243904,
+        "op": "calls"
+      },
+      {
+        "off": 166490,
+        "base": 244816,
+        "op": "jmps"
+      },
+      {
+        "off": 168040,
+        "base": 244846,
+        "op": "jmps"
+      },
+      {
+        "off": 166012,
+        "base": 244880,
+        "op": "jmps"
+      },
+      {
+        "off": 166910,
+        "base": 244910,
+        "op": "jmps"
+      },
+      {
+        "off": 167482,
+        "base": 244940,
+        "op": "jmps"
+      },
+      {
+        "off": 208822,
+        "base": 244970,
+        "op": "jmps"
+      },
+      {
+        "off": 163888,
+        "base": 244994,
+        "op": "jmps"
+      },
+      {
+        "off": 193580,
+        "base": 245030,
+        "op": "jmps"
+      },
+      {
+        "off": 193774,
+        "base": 245054,
+        "op": "jmps"
+      },
+      {
+        "off": 217022,
+        "base": 245078,
+        "op": "jmps"
+      },
+      {
+        "off": 216218,
+        "base": 245102,
+        "op": "jmps"
+      },
+      {
+        "off": 216804,
+        "base": 245150,
+        "op": "jmps"
+      },
+      {
+        "off": 194088,
+        "base": 245186,
+        "op": "jmps"
+      },
+      {
+        "off": 193572,
+        "base": 243456,
+        "op": "calls"
+      },
+      {
+        "off": 193682,
+        "base": 243456,
+        "op": "calls"
+      },
+      {
+        "off": 193766,
+        "base": 243502,
+        "op": "calls"
+      },
+      {
+        "off": 193880,
+        "base": 243502,
+        "op": "calls"
+      },
+      {
+        "off": 185542,
+        "base": 243548,
+        "op": "jmps"
+      },
+      {
+        "off": 7512,
+        "base": 243648,
+        "op": "calls"
+      },
+      {
+        "off": 7724,
+        "base": 243648,
+        "op": "calls"
+      }
+    ],
+    "cals": {
+      "CUTSW": 96000,
+      "CUTRPM": 96001,
+      "CUT_HYST": 96002,
+      "CUT_IPW": 96003,
+      "CUT_RETARD_RANGE": 96005,
+      "CUT_IGN_ANGLE": 96006
+    },
+    "retard_entries": {
+      "state": 245312,
+      "timing": 243648,
+      "qualification": 243712,
+      "ram": 59465,
+      "check": 245322,
+      "state_body": 8192,
+      "source_ram": 59466
+    }
+  },
+  "edits": [
+    {
+      "off": 242790,
+      "expect": "65f204ff",
+      "data": "da0380f6"
+    },
+    {
+      "off": 242890,
+      "expect": "65f204ff",
+      "data": "da0380f6"
+    },
+    {
+      "off": 146010,
+      "expect": "f2f494ef",
+      "data": "da03c0f8"
+    },
+    {
+      "off": 243328,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ecf4f3f847e867f8f00047f8a0003d04f3f847e869833d04fcf465f204ffdb00fcf4db00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 166490,
+      "expect": "88d08880",
+      "data": "fa0350fc"
+    },
+    {
+      "off": 168834,
+      "expect": "c4861800",
+      "data": "c4861800"
+    },
+    {
+      "off": 168880,
+      "expect": "c4471000",
+      "data": "c4471000"
+    },
+    {
+      "off": 208822,
+      "expect": "f3fa34fc",
+      "data": "fa03eafc"
+    },
+    {
+      "off": 163888,
+      "expect": "f4893300",
+      "data": "fa0302fd"
+    },
+    {
+      "off": 193580,
+      "expect": "e6f4ecf0",
+      "data": "fa0326fd"
+    },
+    {
+      "off": 193774,
+      "expect": "e6f430f0",
+      "data": "fa033efd"
+    },
+    {
+      "off": 217022,
+      "expect": "f3f83cfc",
+      "data": "fa0356fd"
+    },
+    {
+      "off": 212304,
+      "expect": "e6fc46ee",
+      "data": "e6fc46ee"
+    },
+    {
+      "off": 212348,
+      "expect": "e6fc52ee",
+      "data": "e6fc52ee"
+    },
+    {
+      "off": 244704,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "f3f847e867f8f00047f8a0003d08f3f847e869872d03e1f875f848e8db00e004db00da03fafd3d0ff3f847e867f8f00047f8a0003df4f3f848e846f530f03d0269810d016982db00da03fafd3d10f3f847e867f8f00047f8a0003de1f3f848e846f530f03d0269850d0267f80a00db00ecf4ecf5f05eda0302fc2d03fcf5fcf4db00fcf5fcf488d08880fa025eca8a180b10ecf4ecf5f05cda0302fc2d03fcf5fcf4db00fcf5fcf488608880fa026cd0ecf4ecf5f05cda0302fc2d03fcf5fcf4db00fcf5fcf488608890fa0280c8ecf4ecf5f05cda0302fc2d03fcf5fcf4db00fcf5fcf488608890fa0202ccecf4ecf5f05cda0302fc2d03fcf5fcf4db00fcf5fcf488808890fa023eceecf4da03e0fb2d03fcf4fa03a672fcf4f3fa34fcfa03ba6f8a180c10ecf4ecf5f059da0302fc2d04fcf5fcf4fa0232c1fcf5fcf4f4893300fa0234c0ecf4da03fafd2d03fcf4fa028cb4fcf4e6f4ecf0fa0230b4ecf4da03fafd2d03fcf4fa024eb5fcf4e6f430f0fa02f2b4ecf4da03fafd2d03fcf4fa034a11fcf4f3f83cfcfa03c20fecf4da039ef82d0fe6f40202f6f460f5f6f462f5f6f464f5e7f8ef0065f848e8fcf4fa03ec0dfcf4f489e8abfa039e0cecf4da039ef83d0bf48906acc084f48460f53d05fcf4c2f480f5fa03e80efcf4fa03560f8a181410ecf4ecf5f059da0302fc2d0cd4490200f6f40efdd4490400f6f410fdfcf5fcf4fa0284bafcf5fcf48a0a0200fa022cb6fa026ab6da03e0fb3d14f3f847e867f8f00047f8a0003d0ef3f849e847f8c3003d09da034afe47f8c3003d04e1f875f848e8db00e004db00"
+    },
+    {
+      "off": 168040,
+      "expect": "88608880",
+      "data": "fa036efc"
+    },
+    {
+      "off": 166012,
+      "expect": "88608890",
+      "data": "fa0390fc"
+    },
+    {
+      "off": 166910,
+      "expect": "88608890",
+      "data": "fa03aefc"
+    },
+    {
+      "off": 167482,
+      "expect": "88808890",
+      "data": "fa03ccfc"
+    },
+    {
+      "off": 216218,
+      "expect": "f489e8ab",
+      "data": "fa036efd"
+    },
+    {
+      "off": 216804,
+      "expect": "c2f480f5",
+      "data": "fa039efd"
+    },
+    {
+      "off": 194088,
+      "expect": "8a0a1f00",
+      "data": "fa03c2fd"
+    },
+    {
+      "off": 193572,
+      "expect": "e4c92b00",
+      "data": "da0300f7"
+    },
+    {
+      "off": 193682,
+      "expect": "e4c92b00",
+      "data": "da0300f7"
+    },
+    {
+      "off": 193766,
+      "expect": "e4894200",
+      "data": "da032ef7"
+    },
+    {
+      "off": 193880,
+      "expect": "e4894200",
+      "data": "da032ef7"
+    },
+    {
+      "off": 185542,
+      "expect": "8a080220",
+      "data": "fa035cf7"
+    },
+    {
+      "off": 243456,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88be88ecf4da0350f83d0ee7f8fe0046f930f02d02e7f8fd0065f848e8fcf4fc88e4c92b00db00fcf4fc88db00ec88be88ecf4da0350f83d0ee7f8fb0046f930f02d02e7f8f70065f848e8fcf4fc88e4894200db00fcf4fc88db00ecf4ecf5f059da0328fc2d23e004e4894000c4495e00c4496000c4496200c4496400d4496e0042f46a00ed0fe004c4496600c4496800c4496a00c4496c00c4496e00fcf5fcf4fa020a97fcf5fcf4fa027496fcf5fcf48a080220fa024c96fa02ce94"
+    },
+    {
+      "off": 243792,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "da03e0fb3d0ff3f847e867f8f00047f8a0003d09f3f849e847f8c3003d04e1f875f848e8db00e004db00"
+    },
+    {
+      "off": 243870,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "da03fafd3d0bf3f847e867f8f00047f8a0003de2f3f848e867f81000db00"
+    },
+    {
+      "off": 7512,
+      "expect": "f00267f00f00",
+      "data": "da03c0f7cc00"
+    },
+    {
+      "off": 7724,
+      "expect": "f00267f00f00",
+      "data": "da03c0f7cc00"
+    },
+    {
+      "off": 243904,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf5ecf6e6000400f3fa47e867faf00047faa0002d0ae6f500c0f6f548e8f7fa4ae8e7faa000f7fa47e8f3fa003747faff002d3849a02d1549a13d05f3fa61fd69a22d300d0e49a23d05f3fa61fd69a12d290d0749a43d26f3fa60fd67fa80002d21f3fa47e869a12d14f3fa023747faff002d07f3fc013741ca8d032d0221ca0d03f3fc01370d00f3fa3cfc41ac8d0a0d05f3fa3cfc43fa01378d04e11a75fa47e80d04e7fafe0065fa47e8f3fa47e869a72d03e1fa75fa48e8f3fa47e869a22d05f3fa1937f3fb1a370d08f3fa47e869a12d0bf3fa0337f3fb043746f5ffff2d04f6f596eff6f598effcf6fcf5fc00f2f494efdb00"
+    },
+    {
+      "off": 243648,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ecf4da0340fe47f83f00ed07e6f2ff002148e7f81f0075f848e8fcf4f00267f00f00db00"
+    },
+    {
+      "off": 243712,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ecf4ecf5ecf747fdc1003d1af2f430fd66f47f003d15f2f432fd66f400c03d10f3f8d9e947f880008d0be6f4cce9e06799a447fa80008d0428713dfae7fdc300fcf7fcf5fcf4fc88db00"
+    },
+    {
+      "off": 245312,
+      "expect": "ffffffffffffffffffffffffffff",
+      "data": "fa000060cc00cc00cc00fa000a60"
+    },
+    {
+      "off": 8192,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ecf7e0070d04cc00ec88ecf7e017ec00ecf4ecf5ecf6ecf3e6000400f3fc49e8e7fdc000e6f3ff00f3f847e867f8f80047f8a000ea303862f3fa3cfc43fadb02ea903862e6000800f2f4ec0746f4fa03ea309c61f2f4ee0746f4c0f9ea309c61e6000400f3f8b6fd67f84000ea20a061f3f8bef143f81537ea90a061f3f8d0e843f81637ea80a061f3f810374980ea20e2604981ea30a460f3f861fd6982ea00c2604982ea30b460f3f861fd6981ea00c2604984ea30a061f3f860fd67f88000f3fa123749a0ea20dc6049a1ea30a0614980ea30a061ea00e2604980ea20a061f3f811374980ea200c614981ea30a061f3f61f3747f63f00eae0a061f3f81337f3fa1e37e127ea00fe61f3f61d3747f63f00eae0a061f3fa3cfcf3f8133743f82cf0eae0a061ea20346143fa2cf0ea90a061f3fa173747faff00ea305661f3fa133747fafd00ea805461e7faff00ea00566109a343fadb02ea806261f3fadb0241a8ea906a61f18af3fa3cfc41a8ea90966167fcfd0047fcc100ea30a061f3f84ae84981ea30a061f3f813fd67f88000ea20a061e117ea002662e6000400e6f3ff00f3f800374980ea20e8614981ea30c261f3f861fd6982ea203862ea00e8614982ea30d661f3f861fd6981ea203862ea00e8614984ea303862f3f860fd67f88000ea203862f3f6063747f63f00eae03862f3f80137f3fa0537e13749a0ea202e6241a8ea902e6243f83cfceaf02e62218af3fa3cfc41a8ea802e6243fa2cf0ea902e62e7fdc100ea0038624972ea20a061e6f3ff00da0300f849e1ea205e62e7ffff0047fdc300ea305062f1f6be88f7f74ae8f7fd49e8ea008462e7ffc00047fdc300ea308462f3f849e847f8c300ea308462f3f84ae84187ea308462e7ffc300fcf3fcf6fcf5fcf4fc00f18ffcf7fc88db00"
+    }
+  ],
+  "revert_superseded": true,
+  "cal_defaults": {
+    "CUT_RETARD_RANGE": 6
+  },
+  "deprecated": true,
+  "superseded_by": "ignition_cut_v16_ms411"
+}

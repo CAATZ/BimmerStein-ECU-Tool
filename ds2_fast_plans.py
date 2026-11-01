@@ -448,7 +448,7 @@ def build_fast_full_write_plan(
                 f"verified backup tune erase tail contains {non_ff_tail} non-0xFF bytes"
             )
 
-    # The decompiled stock full/program erase path targets 0x2200, 0x4000,
+    # The stock full/program erase path targets 0x2200, 0x4000,
     # and 0x20000.  On the Intel 28F200 geometry the 0x4000 target erases
     # through 0x7FFF, while the capture only rewrites through 0x5FFF.
     # Refuse any source whose erased-but-unwritten 0x6000..0x7FFF tail is

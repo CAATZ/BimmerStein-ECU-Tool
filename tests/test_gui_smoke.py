@@ -104,8 +104,8 @@ def test_release_build_info_uses_packaged_metadata(tmp_path, monkeypatch):
     (tmp_path / "RELEASE-METADATA.json").write_bytes(b"\xff")
     monkeypatch.delenv("BIMMERSTEIN_VERSION", raising=False)
     label, summary, details = gui._release_build_info()
-    assert label == "Development  ⓘ"
-    assert summary == "Development / source"
+    assert label == "Version unavailable  ⓘ"
+    assert summary == "Version unavailable / source"
     assert "Release metadata: not available" in details
 
     monkeypatch.setenv("BIMMERSTEIN_VERSION", "0.1.0b13")
@@ -350,7 +350,10 @@ def test_shared_progress_status_has_its_own_row_below_full_width_bar():
         assert progress_index >= 0
         status_row = root.itemAt(progress_index + 1).layout()
         assert status_row.indexOf(window.progress_label) == 0
-        assert status_row.indexOf(window.btn_about) == 1
+        assert status_row.indexOf(window.lbl_patch_base) == 1
+        assert status_row.indexOf(window.lbl_high_speed_mode) == 2
+        assert status_row.indexOf(window.btn_transfer_settings) == 3
+        assert status_row.indexOf(window.btn_about) == 4
         assert window.btn_about.text().endswith("ⓘ")
         assert window.btn_about.focusPolicy() != Qt.NoFocus
     finally:
@@ -427,22 +430,6 @@ def test_show_fitted_keeps_a_normal_window_inside_the_work_area():
         assert calls == ["normal"]
     finally:
         window.close()
-
-
-@pytest.fixture(autouse=True)
-def _dispose_gui_objects():
-    """Release deferred Qt objects after every complete-window smoke test."""
-    yield
-    if not _HAS_QT:
-        return
-    app = QApplication.instance()
-    if app is None:
-        return
-    for widget in list(app.topLevelWidgets()):
-        widget.close()
-        widget.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
-    app.processEvents()
 
 
 def test_softbsl_installer_post_erase_failure_keeps_port_and_recovery(monkeypatch):
@@ -814,7 +801,9 @@ def test_eeprom_tab_starts_safely_gated_without_connection():
         titles = {w.tabs.tabText(i).strip() for i in range(w.tabs.count())}
         assert "EEPROM" in titles
         tab = w.tabs.widget(w._eeprom_tab_index)
-        groups = tab.findChildren(QGroupBox)
+        groups = w._ms41_eeprom_body.findChildren(QGroupBox)
+        assert w._ms42_ms43_data_body.isHidden()
+        assert not w._ms42_ms43_storage_write.isEnabled()
         assert [group.title() for group in groups] == [
             "Loaded EEPROM Image", "ECU Agent", "CH341A Programmer",
         ]
@@ -2745,14 +2734,21 @@ def test_ecu_info_tab_has_new_field_set():
         expected_fields = {
             "ECU Family", "Reported ECU Identifier", "BMW Program Part Number",
             "Calibration ID", "Program / Calibration Match", "Recorded ZB / ZUSB",
-            "Programming Date", "Recorded Software Number", "Programming Count",
+            "Current AIF Record", "AIF Record Date", "Recorded Software Number",
+            "Recording Authority Number", "Programming Count", "First AIF Record",
             "BMW DATEN Lineage", "VIN", "DME Production Serial", "EWS2 ISN",
+            "ECU Number", "ISN Data",
             "Transmission Mode", "BMW Hardware Number", "Coding Index",
             "Diagnostic Index", "Bus Index", "Software Index", "Change Index",
             "Manufacturing Week / Year", "Supplier Number",
             "Flash Command-Set Driver",
+            "Battery Voltage", "Ignition Supply Voltage",
+            "Reported BMW Part Number",
         }
         assert set(w._info_labels.keys()) == expected_fields
+        for field in ("ECU Number", "ISN Data", "Reported BMW Part Number"):
+            assert w._info_field_names[field].isHidden()
+            assert w._info_labels[field].isHidden()
         assert not any(stale in w._info_labels for stale in
                        ("Part Number", "Hardware Version", "Software Version",
                         "Coding / Variant", "ROM Header (hex)"))
@@ -3231,6 +3227,7 @@ def test_live_stop_reports_final_csv_error_instead_of_saved_rows(monkeypatch, fa
     class Poller:
         csv_rows = 3
         terminal_error = None
+        profile_ready = False
 
         def stop(self):
             self.terminal_error = failure
@@ -3250,7 +3247,7 @@ def test_live_stop_reports_final_csv_error_instead_of_saved_rows(monkeypatch, fa
         assert w._live_log_basename == ""
         assert not w.btn_live_stop.isEnabled()
         if failure:
-            assert w.lbl_live_status.text() == f"Stopped — {failure}"
+            assert w.lbl_live_status.text() == f"Stopped — Error: {failure}"
             assert logs == [(f"Live Data: {failure}", "warn")]
         else:
             assert w.lbl_live_status.text() == "Stopped — 3 rows logged to sample.csv"
@@ -3287,17 +3284,18 @@ def test_patches_tab_lists_the_ms41_3_patches():
         assert len(w._patch_checkboxes) == 7   # 7 user-facing MS41.3 patches
         pending_badges = {
             label.text()
-            for label in w._patch_rows["ignition_cut_v11"].findChildren(gui.QLabel)
+            for label in w._patch_rows["ignition_cut_v18"].findChildren(gui.QLabel)
         }
-        assert "V11" in pending_badges
-        assert "UNTESTED" in pending_badges
+        assert "V18" in pending_badges
+        assert "Needs testing" in pending_badges
+        assert "HIGHLY EXPERIMENTAL" in pending_badges
         calguard_badges = {
             label.text()
             for label in w._patch_rows["cal_guard"].findChildren(gui.QLabel)
         }
         assert "Boot-region write: Soft-BSL or hardware BSL required" in calguard_badges
         assert "V6" in calguard_badges
-        assert "UNTESTED" in calguard_badges
+        assert "Tested" in calguard_badges
         assert "Requires: Soft-BSL V12" in calguard_badges
         assert all("BOOT REGION" not in badge for badge in calguard_badges)
         assert "Boot-resident compatibility and recovery guard" in (
@@ -3306,9 +3304,9 @@ def test_patches_tab_lists_the_ms41_3_patches():
         assert not w._patch_checkboxes["softbsl_loader"].isChecked()
         w._patch_checkboxes["cal_guard"].setChecked(True)
         assert w._patch_checkboxes["softbsl_loader"].isChecked()
-        assert "0x3992A" not in w._patch_checkboxes["ignition_cut_v11"].toolTip()
-        assert "independent ignition-cut limiter" in (
-            w._patch_checkboxes["ignition_cut_v11"].toolTip())
+        assert "0x3992A" not in w._patch_checkboxes["ignition_cut_v18"].toolTip()
+        assert "Independent ignition-cut limiter" in (
+            w._patch_checkboxes["ignition_cut_v18"].toolTip())
     finally:
         w.close()
 
@@ -3317,7 +3315,7 @@ def test_patches_tab_warns_for_every_explicitly_untested_patch(monkeypatch):
     app, w = _gui()
     try:
         w._set_patch_base(ref("MS41.3"), "test")
-        w._patch_checkboxes["ignition_cut_v11"].setChecked(True)
+        w._patch_checkboxes["ignition_cut_v18"].setChecked(True)
         shown = {}
 
         def warning(_parent, title, message, *_args):
@@ -3330,7 +3328,7 @@ def test_patches_tab_warns_for_every_explicitly_untested_patch(monkeypatch):
         assert shown["title"] == "Untested Patch"
         assert "marked untested" in shown["message"]
         assert "Ignition Cut" in shown["message"]
-        assert "experimental" in shown["message"]
+        assert "HIGHLY EXPERIMENTAL" in shown["message"]
         assert "configured fixed pulse width" in shown["message"]
         assert "fuel-adaptation and diagnostic guards" in shown["message"]
         assert "offline exact-byte verified" in shown["message"]
@@ -3344,17 +3342,17 @@ def test_patch_dependency_is_labeled_and_selected_automatically():
     app, w = _gui()
     try:
         w._set_patch_base(ref("MS41.3"), "test")
-        launch = w._patch_checkboxes["launch_control_v11"]
-        ignition = w._patch_checkboxes["ignition_cut_v11"]
+        launch = w._patch_checkboxes["launch_control_v18"]
+        ignition = w._patch_checkboxes["ignition_cut_v18"]
 
         labels = {
             label.text()
-            for label in w._patch_rows["launch_control_v11"].findChildren(gui.QLabel)
+            for label in w._patch_rows["launch_control_v18"].findChildren(gui.QLabel)
         }
-        assert "V11" in labels
-        assert "UNTESTED" in labels
-        assert "Requires: Ignition Cut V11" in labels
-        assert "Required patch: Ignition Cut V11" in launch.toolTip()
+        assert "V18" in labels
+        assert "Needs testing" in labels
+        assert "Requires: Ignition Cut V18" in labels
+        assert "Required patch: Ignition Cut V18" in launch.toolTip()
 
         launch.setChecked(True)
         assert launch.isChecked()
@@ -3374,15 +3372,15 @@ def test_patch_dependency_never_removes_a_conflicting_selection(monkeypatch):
         monkeypatch.setattr(
             gui.patch_service,
             "collisions",
-            lambda selected: {"ignition_cut_v11"}
-            if "launch_control_v11" in selected else set(),
+            lambda selected: {"ignition_cut_v18"}
+            if "launch_control_v18" in selected else set(),
         )
 
-        launch = w._patch_checkboxes["launch_control_v11"]
+        launch = w._patch_checkboxes["launch_control_v18"]
         launch.setChecked(True)
 
         assert launch.isChecked()
-        assert not w._patch_checkboxes["ignition_cut_v11"].isChecked()
+        assert not w._patch_checkboxes["ignition_cut_v18"].isChecked()
         assert not w.btn_patches_build.isEnabled()
         assert "Required patch unavailable" in w.btn_patches_build.toolTip()
     finally:
@@ -3395,25 +3393,25 @@ def test_installed_dependency_remove_button_is_blocked_by_launch_control():
     app, w = _gui()
     try:
         combined, _ = patch_service.build_image(
-            ref("MS41.3"), ["ignition_cut_v11", "launch_control_v11"]
+            ref("MS41.3"), ["ignition_cut_v18", "launch_control_v18"]
         )
         w._set_patch_base(combined, "dependency-removal-test")
 
-        buttons = w._patch_rows["ignition_cut_v11"].findChildren(QPushButton)
+        buttons = w._patch_rows["ignition_cut_v18"].findChildren(QPushButton)
         remove = next(button for button in buttons if button.text() == "✕ Remove")
         labels = {
             label.text()
-            for label in w._patch_rows["ignition_cut_v11"].findChildren(gui.QLabel)
+            for label in w._patch_rows["ignition_cut_v18"].findChildren(gui.QLabel)
         }
         assert remove.isEnabled() is False
-        assert "Launch Control V11" in remove.toolTip()
-        assert "Used by: Launch Control V11" in labels
+        assert "Launch Control V18" in remove.toolTip()
+        assert "Used by: Launch Control V18" in labels
         used_by = next(
             label
-            for label in w._patch_rows["ignition_cut_v11"].findChildren(gui.QLabel)
-            if label.text() == "Used by: Launch Control V11"
+            for label in w._patch_rows["ignition_cut_v18"].findChildren(gui.QLabel)
+            if label.text() == "Used by: Launch Control V18"
         )
-        assert "Launch Control V11" in used_by.toolTip()
+        assert "Launch Control V18" in used_by.toolTip()
     finally:
         w.close()
 
@@ -3451,7 +3449,7 @@ def test_patches_tab_removes_field_failed_v6_and_enables_v9(monkeypatch):
 
         assert w._patch_checkboxes["ignition_cut_v6"].isChecked()
         assert not w._patch_checkboxes["ignition_cut_v6"].isEnabled()
-        assert not w._patch_checkboxes["ignition_cut_v11"].isEnabled()
+        assert not w._patch_checkboxes["ignition_cut_v18"].isEnabled()
         badges = {
             label.text()
             for label in w._patch_rows["ignition_cut_v6"].findChildren(gui.QLabel)
@@ -3468,7 +3466,7 @@ def test_patches_tab_removes_field_failed_v6_and_enables_v9(monkeypatch):
         w._on_patch_remove("ignition_cut_v6")
 
         assert "ignition_cut_v6" not in w._patch_checkboxes
-        assert w._patch_checkboxes["ignition_cut_v11"].isEnabled()
+        assert w._patch_checkboxes["ignition_cut_v18"].isEnabled()
         assert w.btn_patches_build.isEnabled()
         assert "Removed ignition_cut_v6" in w.patches_log.toPlainText()
     finally:
@@ -4164,6 +4162,7 @@ def test_run_task_stops_active_live_poller_before_worker_starts(monkeypatch):
         class Poller:
             csv_rows = 0
             terminal_error = None
+            profile_ready = False
 
             def stop(self):
                 events.append("poller_stop")
@@ -4203,6 +4202,313 @@ def test_run_task_stops_active_live_poller_before_worker_starts(monkeypatch):
     finally:
         w._live_timer.stop()
         w._poller = None
+        w.close()
+
+
+def test_disconnect_keeps_ds2_open_while_roughness_worker_is_stopping(monkeypatch):
+    app, w = _gui()
+    closed = []
+
+    class DS2:
+        def close(self):
+            closed.append(True)
+
+        def read_battery_voltage(self):
+            pytest.fail("Battery preflight must not race an active roughness read")
+
+        def read_mem(self, *_args):
+            pytest.fail("Coding-family preflight must not race an active roughness read")
+
+    class Poller:
+        is_running = True
+
+        def stop(self, timeout=0):
+            return False
+
+    try:
+        monkeypatch.setattr(QMessageBox, "warning", lambda *_args: QMessageBox.Ok)
+        w._ds2 = DS2()
+        w._roughness_poller = Poller()
+        with pytest.raises(RuntimeError, match="Stop roughness"):
+            w._live_coding_family()
+        assert "unavailable" in w._prewrite_battery_notice()
+        assert w._disconnect() is False
+        assert closed == []
+        assert w._ds2 is not None
+    finally:
+        w._roughness_timer.stop()
+        w._roughness_poller = None
+        w._ds2 = None
+        w.close()
+
+
+def test_confirmed_roughness_cleanup_releases_connection(monkeypatch):
+    app, w = _gui()
+    closed = []
+
+    class DS2:
+        def close(self):
+            closed.append(True)
+
+    class Poller:
+        is_running = False
+
+        def stop(self, timeout=0):
+            return True
+
+        def pop_errors(self):
+            return []
+
+        def drain_readings(self):
+            return []
+
+    try:
+        w._ds2 = DS2()
+        w._roughness_poller = Poller()
+        monkeypatch.setattr(QMessageBox, "warning", lambda *_a, **_kw: pytest.fail(
+            "Confirmed worker cleanup must release the connection without another prompt"))
+        assert w._disconnect() is True
+        assert w._roughness_poller is None
+        assert closed == [True]
+    finally:
+        w._roughness_poller = None
+        w._ds2 = None
+        w.close()
+
+
+def test_softbsl_handoff_waits_for_roughness_before_closing_ds2(monkeypatch):
+    app, w = _gui()
+    closed = []
+
+    class DS2:
+        def close(self):
+            closed.append(True)
+
+    class Poller:
+        is_running = True
+
+        def stop(self, timeout=0):
+            return not self.is_running
+
+        def pop_errors(self):
+            return []
+
+        def drain_readings(self):
+            return []
+
+    try:
+        monkeypatch.setattr(QMessageBox, "warning", lambda *_args: QMessageBox.Ok)
+        w.cb_port.clear()
+        w.cb_port.addItem("COM_TEST")
+        w._port_owner.acquire("flasher")
+        w._ds2 = DS2()
+        w._roughness_poller = poller = Poller()
+        assert w._acquire_softbsl_port(allow_handoff=True) is None
+        assert closed == [] and w._ds2 is not None
+        assert w._port_owner.owner == "flasher"
+        assert getattr(w, "_softbsl_handoff_port", None) is None
+        poller.is_running = False
+        assert w._acquire_softbsl_port(allow_handoff=True) == "COM_TEST"
+        assert closed == [True] and w._ds2 is None
+        assert w._port_owner.owner == "softbsl"
+        assert w._roughness_poller is None
+    finally:
+        w._roughness_timer.stop()
+        w._roughness_poller = None
+        w._softbsl_handoff_port = None
+        w._port_owner.release("softbsl")
+        w._port_owner.release("flasher")
+        w._ds2 = None
+        w.close()
+
+
+def test_connect_toggle_restores_connected_state_when_disconnect_is_refused(monkeypatch):
+    app, w = _gui()
+    try:
+        blocked = w.btn_connect.blockSignals(True)
+        w.btn_connect.setChecked(False)
+        w.btn_connect.blockSignals(blocked)
+        monkeypatch.setattr(w, "_disconnect", lambda: False)
+
+        w._on_connect_toggle(False)
+
+        assert w.btn_connect.isChecked()
+        assert w.btn_connect.text() == "Disconnect"
+    finally:
+        w.close()
+
+
+def test_roughness_terminal_error_remains_visible_after_stop():
+    app, w = _gui()
+
+    class Poller:
+        is_running = False
+
+        def pop_errors(self):
+            return ["Roughness command read failed"]
+
+        def latest_reading(self):
+            return None
+
+        def stop(self, timeout=0):
+            return True
+
+        def drain_readings(self):
+            return []
+
+    try:
+        w._roughness_poller = Poller()
+        w._roughness_values[0].setText("17")
+        w._refresh_roughness_display()
+        assert w._roughness_poller is None
+        assert "Roughness command read failed" in w.lbl_roughness_status.text()
+        assert w._roughness_values[0].text() == "—"
+    finally:
+        w._roughness_poller = None
+        w.close()
+
+
+def test_roughness_views_consume_samples_once_and_exclude_live_polling(monkeypatch):
+    from live_data import RoughnessReading
+
+    app, w = _gui()
+    calls = []
+
+    class Poller:
+        is_running = True
+
+        def __init__(self, ds2, variant):
+            self.readings = []
+            self.latest = None
+
+        def start(self):
+            calls.append("start")
+
+        def stop(self, timeout=0):
+            calls.append("stop")
+            self.is_running = False
+            return True
+
+        def drain_readings(self):
+            readings, self.readings = self.readings, []
+            return readings
+
+        def latest_reading(self):
+            return self.latest
+
+        def pop_errors(self):
+            return []
+
+    try:
+        monkeypatch.setattr(gui, "RoughnessPoller", Poller)
+        w._ds2 = object()
+        w._ecu_variant = "MS41.0"
+        w._on_roughness_start()
+        poller = w._roughness_poller
+        assert poller is not None and not w.btn_live_start.isEnabled()
+        w._roughness_timer.stop()
+        w._on_live_start()
+        assert w._poller is None and calls == ["start"]
+        poller.latest = RoughnessReading(
+            0, (-1, -2, 0, 4, 5, 6), w._roughness_started_at + .5, 800, 63, "available")
+        poller.readings.append(poller.latest)
+        w._refresh_roughness_display()
+        for mode in (1, 0, 1):
+            w.roughness_modes.setCurrentIndex(mode)
+            w.diag_tabs.setCurrentIndex(0)
+            w.diag_tabs.setCurrentIndex(2)
+            w._refresh_roughness_display()
+        assert w.roughness_view.times == [.5]
+        assert w.roughness_view.current_values == (-1, -2, 0, 4, 5, 6)
+        assert "800 rpm" in w.lbl_roughness_status.text()
+        assert calls == ["start"]
+        poller.latest = RoughnessReading(
+            63, (None,) * 6, w._roughness_started_at + 1., 0, 63, "engine_stopped")
+        poller.readings.append(poller.latest)
+        w._refresh_roughness_display()
+        assert "Engine stopped" in w.lbl_roughness_status.text()
+        assert w.roughness_view.current_values == (None,) * 6
+        assert w._on_roughness_stop()
+        assert calls == ["start", "stop"] and w.btn_roughness_start.isEnabled()
+        w._poller = object()
+        w._set_roughness_buttons_enabled()
+        assert not w.btn_roughness_start.isEnabled()
+        w._on_roughness_start()
+        assert w._roughness_poller is None and calls == ["start", "stop"]
+    finally:
+        w._poller = None
+        w._roughness_poller = None
+        w._roughness_timer.stop()
+        w._ds2 = None
+        w.close()
+
+
+def test_roughness_unconfirmed_stop_requires_explicit_retry(monkeypatch):
+    app, w = _gui()
+    calls = []
+
+    class Poller:
+        is_running = False
+        stop_confirmed = False
+
+        def stop(self, timeout=0):
+            return self.stop_confirmed
+
+        def retry_stop(self):
+            calls.append("retry")
+            self.is_running = True
+
+        def pop_errors(self):
+            return []
+
+        def drain_readings(self):
+            return []
+
+    try:
+        w._ds2 = object()
+        w._ecu_variant = "MS41.0"
+        w._roughness_poller = poller = Poller()
+        monkeypatch.setattr(QMessageBox, "warning", lambda *_args: QMessageBox.No)
+        for _ in range(3):
+            w._refresh_roughness_display()
+        assert calls == []
+        assert not w._roughness_timer.isActive()
+        assert w.btn_roughness_stop.text() == "Retry Stop"
+        assert not w.btn_roughness_start.isEnabled()
+        assert not w._run_task(lambda: pytest.fail("Cleanup still owns the connection"),
+                               "Unexpected task", lambda *_args: None)
+        assert not w._disconnect()
+        assert w._roughness_poller is poller
+        w.btn_roughness_stop.click()
+        assert calls == ["retry"] and w._roughness_timer.isActive()
+        assert w._roughness_poller is poller
+        poller.is_running = False
+        poller.stop_confirmed = True
+        w._refresh_roughness_display()
+        assert w._roughness_poller is None
+        assert w.btn_roughness_start.isEnabled()
+    finally:
+        w._roughness_poller = None
+        w._roughness_timer.stop()
+        w._ds2 = None
+        w.close()
+
+
+def test_roughness_start_is_blocked_during_transmission_recovery(monkeypatch):
+    app, w = _gui()
+    try:
+        w._ds2 = object()
+        w._ecu_variant = "MS41.0"
+        w._transmission_recovery_quarantine_id = "pending-test"
+        monkeypatch.setattr(w, "_refresh_transmission_recovery_quarantine", lambda **_kw: None)
+        w._set_roughness_buttons_enabled()
+        assert not w.btn_roughness_start.isEnabled()
+
+        w._on_roughness_start()
+        assert w._roughness_poller is None
+    finally:
+        w._transmission_recovery_quarantine_id = None
+        w._ds2 = None
         w.close()
 
 
@@ -5010,7 +5316,9 @@ def test_bins_patches_button_loads_selected_full_rom_offline(
         w.act_backup_patches.trigger()
 
         assert w._patch_base == data
-        assert w._patch_base_source == path.name
+        assert w._patch_base_source == str(path)
+        assert path.name in w.lbl_patch_base.text()
+        assert str(path) in w.lbl_patch_base.toolTip()
         assert w.tabs.currentIndex() == w._patch_tab_index
 
         tune_path = tmp_path / "catalogued-tune.bin"
@@ -5030,7 +5338,7 @@ def test_bins_patches_button_loads_selected_full_rom_offline(
         w.act_backup_patches.trigger()
 
         assert w._patch_base == data
-        assert w._patch_base_source == path.name
+        assert w._patch_base_source == str(path)
         assert w.tabs.currentIndex() == 0
         assert warnings and warnings[0][0] == "Not a Full ROM"
     finally:
@@ -5610,6 +5918,8 @@ def test_run_via_softbsl_hands_off_port_and_restores_connection(monkeypatch):
         def op_fn(port, progress_fn, log_fn):
             seen.append(port)
             assert w._port_owner.owner == "softbsl"
+            log_fn("staged entry complete at 187500 baud", "debug")
+            log_fn("staged entry complete at 93750 baud", "debug")
             return b"result"
 
         result = w._run_via_softbsl(op_fn, log_fn=lambda *a: None, progress_fn=lambda *a: None)
@@ -5619,6 +5929,7 @@ def test_run_via_softbsl_hands_off_port_and_restores_connection(monkeypatch):
         assert closed == [True]              # the original _ds2 was closed before the handoff
         assert w._port_owner.owner == "flasher"   # restored afterward
         assert w._ds2 is not None            # reconnected
+        assert "93,750 baud (Soft-BSL)" in w.lbl_observed_rate.text()
     finally:
         w.cb_port = original_port_widget
         w.close()
@@ -6885,6 +7196,8 @@ def test_coding_tab_reads_generic_module_and_preserves_custom_values(monkeypatch
         )
         assert written[0][4] == {"comfort_open": True}
         assert "11.70 V — LOW" in questions[0]
+        assert "HIGHLY EXPERIMENTAL" in questions[0]
+        assert "not recommended until further testing" in questions[0]
     finally:
         w._ds2 = None
         w.close()
@@ -7314,7 +7627,7 @@ def test_matching_journal_is_rechecked_before_write_and_guided_recovery_runs(
         monkeypatch.setattr(
             QMessageBox, "warning", staticmethod(lambda *_args: None))
         monkeypatch.setattr(
-            w, "_run_task", lambda task, **_kwargs: ran.append(task))
+            w, "_run_task", lambda task, **_kwargs: ran.append(task) or True)
 
         task = lambda *_args: None
         assert w._run_state_changing_task(task) is False
@@ -7617,6 +7930,7 @@ def test_diagnostics_scan_populates_exact_fault_profiles(monkeypatch):
         ModuleScanResult(gui.MODULE_PROFILES[3], bytes.fromhex("56 04 A0 F2")),
         ModuleScanResult(gui.MODULE_PROFILES[4], bytes.fromhex("5B 04 A0 FF")),
         ModuleScanResult(gui.MODULE_PROFILES[5], error="No response"),
+        ModuleScanResult(gui.MODULE_PROFILES[6], bytes.fromhex("B8 F1 29 02 5A 80 B8")),
     ]
     try:
         w._ds2 = connection
@@ -7634,7 +7948,7 @@ def test_diagnostics_scan_populates_exact_fault_profiles(monkeypatch):
         assert [w.cb_diag_module.itemText(i)
                 for i in range(w.cb_diag_module.count())] == [
                     "Engine ECU", "Automatic Transmission",
-                    "ABS / Traction Control", "Climate Control"]
+                    "ABS / Traction Control", "Climate Control", "DSC MK60"]
         assert "No response: Immobilizer" in w.lbl_diag_scan.text()
         assert "module-specific support" in w.lbl_diag_scan.text()
 
@@ -7642,10 +7956,12 @@ def test_diagnostics_scan_populates_exact_fault_profiles(monkeypatch):
         assert w.cb_diag_profile.currentData() is None
         assert not w.btn_read_dtc.isEnabled()
         assert "exact fitted transmission" in w.lbl_diag_module.text()
-        w.cb_diag_profile.setCurrentIndex(
-            w.cb_diag_profile.findData("egs_gs832"))
-        assert w.btn_read_dtc.isEnabled()
-        assert w.btn_clear_dtc.isEnabled()
+        for profile_key in ("egs_gs832", "egs_gs855", "egs_gs8600", "egs_gs8604", "egs_gs20"):
+            profile_index = w.cb_diag_profile.findData(profile_key)
+            assert profile_index >= 0
+            w.cb_diag_profile.setCurrentIndex(profile_index)
+            assert w.btn_read_dtc.isEnabled()
+            assert w.btn_clear_dtc.isEnabled()
 
         w.cb_diag_module.setCurrentIndex(w.cb_diag_module.findData("ihka"))
         assert w.cb_diag_profile.currentData() == "ihka"
@@ -7659,9 +7975,18 @@ def test_diagnostics_scan_populates_exact_fault_profiles(monkeypatch):
         assert not w.btn_read_dtc.isEnabled()
         assert not w.btn_clear_dtc.isEnabled()
         assert "exact fitted brake system" in w.lbl_diag_module.text()
-        w.cb_diag_profile.setCurrentIndex(w.cb_diag_profile.findData("asc5"))
+        for profile_key in ("asc5", "dsc57"):
+            profile_index = w.cb_diag_profile.findData(profile_key)
+            assert profile_index >= 0
+            w.cb_diag_profile.setCurrentIndex(profile_index)
+            assert w.btn_read_dtc.isEnabled()
+            assert w.btn_clear_dtc.isEnabled()
+
+        w.cb_diag_module.setCurrentIndex(w.cb_diag_module.findData("dsc_mk60"))
+        assert w.cb_diag_profile.currentData() == "dsc_mk60"
         assert w.btn_read_dtc.isEnabled()
         assert w.btn_clear_dtc.isEnabled()
+        assert "Address 0x29" in w.cb_diag_module.currentData(Qt.ToolTipRole)
 
         w.cb_diag_module.setCurrentIndex(w.cb_diag_module.findData("dme"))
         assert w.btn_read_dtc.isEnabled()
@@ -7805,7 +8130,55 @@ def test_transfer_indicator_lives_on_the_flash_tab_top():
         # relocated out of the option checkboxes; still the same attribute driven by _update_transfer_mode
         assert hasattr(w, "lbl_transfer_mode")
         assert "Transfer" in w.lbl_transfer_mode.text()
+        assert "Observed link" in w.lbl_observed_rate.text()
     finally:
+        w.close()
+
+
+def test_actuator_choices_require_a_live_identified_family():
+    app, w = _gui()
+    try:
+        assert not w.actuator_buttons
+        assert not w.btn_stop_actuator.isEnabled()
+        w._ecu_variant = "MS41.0"
+        w._refresh_actuator_tests()
+        assert "purge_valve" in w.actuator_buttons
+        assert "secondary_air_pump_relay" not in w.actuator_buttons
+        assert not any(button.isEnabled() for button in w.actuator_buttons.values())
+        w.tabs.setCurrentIndex(next(i for i in range(w.tabs.count())
+                                    if w.tabs.tabText(i).strip() == "Diagnostics"))
+        w.diag_tabs.setCurrentIndex(1)
+        w.show()
+        app.processEvents()
+        for variant in ("MS41.2", "MS41.0", "MS41.3"):
+            previous = list(w.actuator_buttons.values())
+            assert all(button.isVisible() for button in previous)
+            w._ecu_variant = variant
+            w._refresh_actuator_tests()
+            # Pending DeferredDelete widgets must stop painting immediately.
+            assert all(button.isHidden() for button in previous)
+            app.processEvents()
+            assert all(button.isVisible() for button in w.actuator_buttons.values())
+            assert set(w.actuator_buttons) == set(dict(gui.actuator_tests.available_actuator_tests(variant)))
+    finally:
+        w.close()
+
+
+def test_actuator_status_reports_when_task_did_not_start(monkeypatch):
+    app, w = _gui()
+    try:
+        w._ds2 = object()
+        w._ecu_variant = "MS41.0"
+        w._refresh_actuator_tests()
+        monkeypatch.setattr(w, "_run_state_changing_task", lambda *_a, **_kw: False)
+
+        w._on_run_actuator("injector_1")
+
+        assert w.lbl_actuator_result.text() == "Test not started."
+        assert w._actuator_stop_event is None
+        assert w._active_actuator_id is None
+    finally:
+        w._ds2 = None
         w.close()
 
 
@@ -8467,6 +8840,7 @@ def test_patches_build_archives_to_bins_and_offers_flash(monkeypatch):
         archived = {}
         class FakeEntry:
             filename = "ms41_patched_test.bin"
+            path = os.path.join(gui.BACKUP_DIR, filename)
         monkeypatch.setattr(w._backup_mgr, "add_data",
                             lambda data, name, **k: (archived.update(source=k.get("source"),
                                                                      n=len(data)), FakeEntry())[1])
@@ -8491,6 +8865,7 @@ def test_patches_build_archives_to_bins_and_offers_flash(monkeypatch):
         assert flashed["name"] == "ms41_patched_test.bin"   # flashed the freshly-built image
         assert flashed["n"] == 262144
         assert flashed["kwargs"] == {"disconnect_after_success": True}
+        assert FakeEntry.path in w.lbl_patch_base.toolTip()
     finally:
         w.close()
 
@@ -8510,6 +8885,7 @@ def test_patches_build_boot_change_offers_guarded_boot_write(monkeypatch):
 
         class FakeEntry:
             filename = "ms41_patched_cal_guard.bin"
+            path = os.path.join(gui.BACKUP_DIR, filename)
 
         monkeypatch.setattr(w._backup_mgr, "add_data", lambda *a, **k: FakeEntry())
         monkeypatch.setattr(w, "_refresh_backup_table", lambda: None)
@@ -8580,6 +8956,7 @@ def test_patches_builds_and_flashes_boot_patch_removal_only(monkeypatch):
 
         class FakeEntry:
             filename = "ms41_patched_removed_cal_guard.bin"
+            path = os.path.join(gui.BACKUP_DIR, filename)
 
         def archive(data, name, **kwargs):
             archived.update(data=bytes(data), name=name, kwargs=kwargs)
@@ -8634,6 +9011,7 @@ def test_patches_build_archives_and_skips_flash_when_disconnected(monkeypatch):
         monkeypatch.setattr(patch_service, "build_image", lambda base, sel: (b"\xFF" * 262144, []))
         class FakeEntry:
             filename = "x.bin"
+            path = os.path.join(gui.BACKUP_DIR, filename)
         monkeypatch.setattr(w._backup_mgr, "add_data", lambda data, name, **k: FakeEntry())
         monkeypatch.setattr(w, "_refresh_backup_table", lambda: None)
         monkeypatch.setattr(w, "_offer_additional_read_copy", lambda *a, **k: None)
@@ -8650,6 +9028,8 @@ def test_patches_build_archives_and_skips_flash_when_disconnected(monkeypatch):
 
 
 def test_identity_ews_bin_flash_forces_file_identity_boot_write(monkeypatch, tmp_path):
+    import hashlib
+
     app, w = _gui()
     try:
         path = tmp_path / "identity.bin"
@@ -8659,8 +9039,15 @@ def test_identity_ews_bin_flash_forces_file_identity_boot_write(monkeypatch, tmp
             "file_type": "Full ROM",
             "source": gui.IDENTITY_BACKUP_SOURCE,
             "path": str(path),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         })()
         monkeypatch.setattr(w, "_selected_backup", lambda: entry)
+
+        def read_catalog(filename, sha256):
+            assert (filename, sha256) == (entry.filename, entry.sha256)
+            return path.read_bytes()
+
+        monkeypatch.setattr(w._backup_mgr, "read_data", read_catalog)
         w._ds2 = object()
         flashed = {}
         monkeypatch.setattr(
@@ -9617,7 +10004,7 @@ def test_top_patch_build_uses_common_confirmation_and_respects_boot_option(
         window._patch_checkboxes = {"test": window.chk_correct_cksum}
         monkeypatch.setattr(patch_service, "build_image", lambda *_args: (bytes(built), ["ok"]))
         monkeypatch.setattr(window._backup_mgr, "add_data", lambda *_args, **_kwargs:
-                            SimpleNamespace(filename="patched.bin"))
+                            SimpleNamespace(filename="patched.bin", path=os.path.join(gui.BACKUP_DIR, "patched.bin")))
         monkeypatch.setattr(window, "_refresh_backup_table", lambda: None)
         monkeypatch.setattr(window, "_offer_additional_read_copy", lambda *_args, **_kwargs: None)
         window._on_patches_build()

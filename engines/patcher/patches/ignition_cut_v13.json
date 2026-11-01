@@ -1,0 +1,312 @@
+{
+  "id": "ignition_cut_v13",
+  "version": "V13",
+  "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
+  "tested": false,
+  "verification": "Exact installed-byte software checks cover canonical firmware composition, native CC6 entry and full return ABI, event-time standalone threshold and hysteresis decisions, current input selection, independent launch requests, serialized initialization and paired fixed IPW, brief-cut observation recovery, unchanged native fuel and diagnostic protection, configured predecessor upgrade/removal, and checksums. The native FIFO crossing regression reproduces the V12 delay and verifies V13 decisions against V7. Bench and vehicle validation remain required; no physical timing, aggressiveness, or DTC result is claimed.",
+  "title": "Ignition Cut",
+  "user_description": "Independent ignition-cut limiter with RPM hysteresis and optional injector pulse width. Evaluates standalone cut at each coil-charge event and provides the shared cut engine and combustion-observation recovery used by Launch Control V13.",
+  "description": "MS41.3 Ignition Cut V13 restores standalone request evaluation at both native CC6 coil-charge events, eliminating V12 late-IPW request latency while retaining its corrected wideband splice and observation guards. It provides independent standalone and launch requests, hysteresis and fixed IPW. E847.0/.1/.2 are real cut requests; E848.0/.1 track fresh front samples and .2/.3 fresh rear samples where fitted. Active cuts freeze complete trim, mixture and observation transactions. Learning resumes after a native accepted front sample; catalyst observation also requires a fresh rear sample. Native FD30.1 fallback, electrical monitoring, previous misfire/shutdown evidence and completed catalyst results remain effective. No invented recovery timer is used. New compatible revision initializes E849=C0 once with E847/E848. Electrical coil-monitor eligibility remains native. The Ignition Cut-owned sample publication guard uses a short serialized check and keeps samples pending until the timing owner publishes release. Combustion observation uses a separately qualified Launch V12 timing episode (E849=C3); initialized held episodes refresh launch input and protection gates before suppressing observations. Genuine fallback, fault history and completed monitor results remain native. E848.4 records actual timing overrides until the native misfire owner seeds all six recovery counters; low-bank freshness updates preserve it. The delayed counter also blocks while this marker is pending. The CC6 gate is the sole standalone request writer. The late IPW hook initializes state with the valid marker published last, then consumes independent cut requests with a short serialized fixed-IPW transaction. Every suppressed coil-charge event retains E848.0-.4 so a brief cut and release between foreground tasks still reaches the existing native misfire recovery owner. No new RAM, calibration, or code-cave region is allocated.",
+  "target": "MS41.3",
+  "recompute": [],
+  "requires": [],
+  "conflicts": [
+    "ignition_cut",
+    "ignition_cut_v2",
+    "ignition_cut_v3",
+    "ignition_cut_v4",
+    "ignition_cut_v5",
+    "ignition_cut_v6",
+    "ignition_cut_v7",
+    "ignition_cut_v8",
+    "ignition_cut_v9",
+    "ignition_cut_v10",
+    "ignition_cut_v11",
+    "ignition_cut_v12"
+  ],
+  "supersedes": [
+    "ignition_cut",
+    "ignition_cut_v2",
+    "ignition_cut_v3",
+    "ignition_cut_v4",
+    "ignition_cut_v5",
+    "ignition_cut_v6",
+    "ignition_cut_v7",
+    "ignition_cut_v8",
+    "ignition_cut_v9",
+    "ignition_cut_v10",
+    "ignition_cut_v11",
+    "ignition_cut_v12"
+  ],
+  "cave": {
+    "region": "proghigh",
+    "base": 236656,
+    "splice_off": 235818,
+    "splice_op": "calls",
+    "relocatable": false,
+    "splices": [
+      {
+        "off": 235818,
+        "base": 236656,
+        "op": "calls"
+      },
+      {
+        "off": 235918,
+        "base": 236656,
+        "op": "calls"
+      },
+      {
+        "off": 144730,
+        "base": 239104,
+        "op": "calls"
+      },
+      {
+        "off": 196368,
+        "base": 238096,
+        "op": "jmps"
+      },
+      {
+        "off": 165180,
+        "base": 238126,
+        "op": "jmps"
+      },
+      {
+        "off": 195890,
+        "base": 238160,
+        "op": "jmps"
+      },
+      {
+        "off": 164020,
+        "base": 238190,
+        "op": "jmps"
+      },
+      {
+        "off": 164618,
+        "base": 238220,
+        "op": "jmps"
+      },
+      {
+        "off": 202046,
+        "base": 238250,
+        "op": "jmps"
+      },
+      {
+        "off": 192604,
+        "base": 238310,
+        "op": "jmps"
+      },
+      {
+        "off": 192798,
+        "base": 238334,
+        "op": "jmps"
+      },
+      {
+        "off": 213534,
+        "base": 238358,
+        "op": "jmps"
+      },
+      {
+        "off": 214120,
+        "base": 238406,
+        "op": "jmps"
+      },
+      {
+        "off": 193112,
+        "base": 238442,
+        "op": "jmps"
+      },
+      {
+        "off": 192596,
+        "base": 238848,
+        "op": "calls"
+      },
+      {
+        "off": 192706,
+        "base": 238848,
+        "op": "calls"
+      },
+      {
+        "off": 192790,
+        "base": 238894,
+        "op": "calls"
+      },
+      {
+        "off": 192904,
+        "base": 238894,
+        "op": "calls"
+      },
+      {
+        "off": 184802,
+        "base": 238940,
+        "op": "jmps"
+      }
+    ],
+    "cals": {
+      "CUTSW": 92773,
+      "CUTRPM": 92774,
+      "CUT_HYST": 92775,
+      "CUT_IPW": 92776
+    }
+  },
+  "edits": [
+    {
+      "off": 235818,
+      "expect": "65f204ff",
+      "data": "da0370dc"
+    },
+    {
+      "off": 235918,
+      "expect": "65f204ff",
+      "data": "da0370dc"
+    },
+    {
+      "off": 144730,
+      "expect": "f2f47cef",
+      "data": "da0300e6"
+    },
+    {
+      "off": 236656,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ecf4f3f847e867f8f00047f8a0003d06da0360e6f3f847e869833d04fcf465f204ffdb00e7f81f0075f848e8fcf4db00cc00cc00cc00cc00cc00cc00cc00cc00f3fa47e867faf00047faa0002d0be10af7fa48e8e7fac000f7fa49e8e7faa000f7fa47e8db00ffffffffffffffffffff"
+    },
+    {
+      "off": 237216,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 239104,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88be88ec00ecf5e6000400da03b0dcf3fa47e869a72d03e1fa75fa48e8f3fa47e869a22d05f3fae947f3fbea470d06f3fa47e869a12d09f2f5682a46f5ffff2d04f6f57eeff6f580effcf5fc00fc88f2f47cefdb00cc00cc00cc00cc00cc00ec00ecf5ecf6e6000400f3fa652a47faff002d3849a02d1549a13d05f3fa61fd69a22d300d0e49a23d05f3fa61fd69a12d290d0749a43d26f3fa60fd67fa80002d21f3fa47e869a12d14f3fa672a47faff002d07f3fc662a41ca8d032d0221ca0d03f3fc662a0d00f3fa3cfc41ac8d0a0d05f3fa3cfc43fa662a8d04e11a75fa47e80d04e7fafe0065fa47e8fcf6fcf5fc00db00ffff"
+    },
+    {
+      "off": 196368,
+      "expect": "88d08880",
+      "data": "fa0310e2"
+    },
+    {
+      "off": 165998,
+      "expect": "c4861800",
+      "data": "c4861800"
+    },
+    {
+      "off": 166044,
+      "expect": "c4471000",
+      "data": "c4471000"
+    },
+    {
+      "off": 202046,
+      "expect": "f3fa34fc",
+      "data": "fa03aae2"
+    },
+    {
+      "off": 192604,
+      "expect": "e6f4c4f0",
+      "data": "fa03e6e2"
+    },
+    {
+      "off": 192798,
+      "expect": "e6f418f0",
+      "data": "fa03fee2"
+    },
+    {
+      "off": 205384,
+      "expect": "e6fc46ee",
+      "data": "e6fc46ee"
+    },
+    {
+      "off": 205428,
+      "expect": "e6fc52ee",
+      "data": "e6fc52ee"
+    },
+    {
+      "off": 213596,
+      "expect": "f3f83cfc",
+      "data": "f3f83cfc"
+    },
+    {
+      "off": 237984,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "f3f847e867f8f00047f8a0003d08f3f847e869872d03e1f875f848e8db00e004db00da03a2e33d0ff3f847e867f8f00047f8a0003df4f3f848e846f518f03d0269810d016982db00da03a2e33d10f3f847e867f8f00047f8a0003de1f3f848e846f518f03d0269850d0267f80a00db00ecf4ecf5f05eda03c2e12d03fcf5fcf4db00fcf5fcf488d08880fa0214bf8a180b10ecf4ecf5f05cda03c2e12d03fcf5fcf4db00fcf5fcf488608880fa0240c5ecf4ecf5f05cda03c2e12d03fcf5fcf4db00fcf5fcf488608890fa0236bdecf4ecf5f05cda03c2e12d03fcf5fcf4db00fcf5fcf488608890fa02b8c0ecf4ecf5f05cda03c2e12d03fcf5fcf4db00fcf5fcf488808890fa020ec3ecf4da03a0e12d03fcf4fa032e58fcf4f3fa34fcfa0342558a180c10ecf4ecf5f059da03c2e12d04fcf5fcf4fa02a8b6fcf5fcf4f4893300fa02aab5ecf4da03a2e32d03fcf4fa02bcb0fcf4e6f4c4f0fa0260b0ecf4da03a2e32d03fcf4fa027eb1fcf4e6f418f0fa0222b1ecf4da03bae72d0fe6f40202f6f43af5f6f43cf5f6f43ef5e7f8ef0065f848e8fcf4fa037003fcf4f489d4abfa032202ecf4da03bae73d0bf489f2abc084f4843af53d05fcf4c2f45af5fa036c04fcf4fa03da048a181410ecf4ecf5f059da03c2e12d0cd4490200f6f40efdd4490400f6f410fdfcf5fcf4fa0222b4fcf5fcf48a0a0200fa025cb2fa029ab2da03a0e13d14f3f847e867f8f00047f8a0003d0ef3f849e847f8c3003d09da030ae847f8c3003d04e1f875f848e8db00e004db00"
+    },
+    {
+      "off": 165180,
+      "expect": "88608880",
+      "data": "fa032ee2"
+    },
+    {
+      "off": 195890,
+      "expect": "88608890",
+      "data": "fa0350e2"
+    },
+    {
+      "off": 164020,
+      "expect": "88608890",
+      "data": "fa036ee2"
+    },
+    {
+      "off": 164618,
+      "expect": "88808890",
+      "data": "fa038ce2"
+    },
+    {
+      "off": 193958,
+      "expect": "d633c2fd",
+      "data": "d633c2fd"
+    },
+    {
+      "off": 213534,
+      "expect": "f489d4ab",
+      "data": "fa0316e3"
+    },
+    {
+      "off": 214120,
+      "expect": "c2f45af5",
+      "data": "fa0346e3"
+    },
+    {
+      "off": 193112,
+      "expect": "8a0a1f00",
+      "data": "fa036ae3"
+    },
+    {
+      "off": 192596,
+      "expect": "e4c92b00",
+      "data": "da0300e5"
+    },
+    {
+      "off": 192706,
+      "expect": "e4c92b00",
+      "data": "da0300e5"
+    },
+    {
+      "off": 192790,
+      "expect": "e4894200",
+      "data": "da032ee5"
+    },
+    {
+      "off": 192904,
+      "expect": "e4894200",
+      "data": "da032ee5"
+    },
+    {
+      "off": 184802,
+      "expect": "8a080220",
+      "data": "fa035ce5"
+    },
+    {
+      "off": 238848,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88be88ecf4da0390e73d0ee7f8fe0046f918f02d02e7f8fd0065f848e8fcf4fc88e4c92b00db00fcf4fc88db00ec88be88ecf4da0390e73d0ee7f8fb0046f918f02d02e7f8f70065f848e8fcf4fc88e4894200db00fcf4fc88db00ecf4ecf5f059da03e8e12d23e004e4894000c4495e00c4496000c4496200c4496400d4496e0042f46800ed0fe004c4496600c4496800c4496a00c4496c00c4496e00fcf5fcf4fa027694fcf5fcf4fa02e093fcf5fcf48a080220fa02da93fa02ea91"
+    },
+    {
+      "off": 239504,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "da03a0e13d0ff3f847e867f8f00047f8a0003d09f3f849e847f8c3003d04e1f875f848e8db00e004db00da03a2e33d0bf3f847e867f8f00047f8a0003df4f3f848e867f81000db00"
+    }
+  ],
+  "family_id": "ignition_cut_v10",
+  "revert_superseded": true,
+  "deprecated": true,
+  "superseded_by": "ignition_cut_v14"
+}

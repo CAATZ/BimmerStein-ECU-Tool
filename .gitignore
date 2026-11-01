@@ -22,6 +22,8 @@ env/
 *.bin
 backups/
 flash_backup_*.bin
+/ms43_retained.json
+/ms42_retained.json
 
 # Runtime logs and user exports
 logs/
@@ -29,7 +31,7 @@ logs/
 dtc_report.txt
 
 # User-imported calibration definitions are stored outside the source tree.
-definitions/
+/definitions/
 
 # Internal engineering material is maintained in a separate local-only repo
 /_private/

@@ -509,8 +509,8 @@ def write_full_d2xx(
             ),
         ) from error
     else:
-        # A successful full write intentionally leaves the ECU at 187500, but
-        # retaining the host handle is unnecessary; the UI instructs a cycle.
+        # A successful full write leaves the ECU at its selected high rate;
+        # retaining the host handle is unnecessary because the UI instructs a cycle.
         transport.close()
         return result
 

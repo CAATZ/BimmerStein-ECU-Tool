@@ -1,0 +1,184 @@
+{
+  "id": "launch_control_v18",
+  "version": "V18",
+  "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
+  "tested": false,
+  "maturity": "Experimental",
+  "validation": "Needs testing",
+  "verification": "Exact installed-byte emulator verification covers native caller returns, actual timing episodes, corrected fixed-IPW envelope, interrupt publication, migration and native protections. Bench and on-car validation remain required.",
+  "title": "Launch Control / 2-step",
+  "user_description": "Launch control with independent fuel thresholds and hysteresis, or shared ignition cut. Optional fixed fuel-cut ignition angle and independent ignition-cut RPM-region timing; native protection takes priority.",
+  "description": "MS41.3 Launch Control V18 uses Ignition Cut V18 timing arbitration and observation guards. Launch thresholds, input gates, native fuel staging and calibrations are retained. An unreachable NOP after the hysteresis helper RETS distinguishes the exact V18 pair from V16.",
+  "target": "MS41.3",
+  "recompute": [
+    "program",
+    "cal"
+  ],
+  "requires": [
+    "ignition_cut_v18"
+  ],
+  "conflicts": [
+    "launch_control",
+    "launch_control_v2",
+    "launch_control_v3",
+    "launch_control_v4",
+    "launch_control_v5",
+    "launch_control_v6",
+    "launch_control_v7",
+    "launch_control_v8",
+    "launch_control_v9",
+    "launch_control_v10",
+    "launch_control_v11",
+    "launch_control_v12",
+    "launch_control_v13",
+    "launch_control_v14",
+    "launch_control_v16",
+    "launch_control_v17"
+  ],
+  "supersedes": [
+    "launch_control",
+    "launch_control_v2",
+    "launch_control_v3",
+    "launch_control_v4",
+    "launch_control_v5",
+    "launch_control_v6",
+    "launch_control_v7",
+    "launch_control_v8",
+    "launch_control_v9",
+    "launch_control_v10",
+    "launch_control_v11",
+    "launch_control_v12",
+    "launch_control_v13",
+    "launch_control_v14",
+    "launch_control_v16",
+    "launch_control_v17"
+  ],
+  "cave": {
+    "region": "proghigh",
+    "base": 237440,
+    "splice_off": 252200,
+    "splice_op": "jmps",
+    "relocatable": false,
+    "splices": [
+      {
+        "off": 252200,
+        "base": 237440,
+        "op": "jmps"
+      },
+      {
+        "off": 149480,
+        "base": 236800,
+        "op": "jmps"
+      },
+      {
+        "off": 149642,
+        "base": 237888,
+        "op": "calls"
+      },
+      {
+        "off": 149802,
+        "base": 237888,
+        "op": "calls"
+      },
+      {
+        "off": 149492,
+        "base": 237088,
+        "op": "calls"
+      },
+      {
+        "off": 149526,
+        "base": 236988,
+        "op": "calls"
+      }
+    ],
+    "cals": {
+      "LC_SW": 67552,
+      "LC_CUTTYPE": 67553,
+      "LC_CLUTCHPOL": 67554,
+      "LC_MAXRPM": 67555,
+      "LC_ARMSPEED": 67556,
+      "LC_MAXSPEED": 67557,
+      "LC_MINTPS": 67558,
+      "LC_HARDRPM": 67559,
+      "LC_HYST": 67560,
+      "LC_IPW": 67561,
+      "LC_FUEL_HYST_B": 67563,
+      "LC_FUEL_HYST_A": 67564,
+      "LC_IGN_ANGLE": 67565,
+      "LC_RETARD_RANGE": 67566,
+      "LC_CUT_IGN_ANGLE": 67567
+    }
+  },
+  "edits": [
+    {
+      "off": 149458,
+      "expect": "fe2dfe11",
+      "data": "fe2dfe11"
+    },
+    {
+      "off": 149480,
+      "expect": "8a0902f0",
+      "data": "fa0300dd"
+    },
+    {
+      "off": 149492,
+      "expect": "c2fdba02",
+      "data": "da0320de"
+    },
+    {
+      "off": 149526,
+      "expect": "c2fdb902",
+      "data": "da03bcdd"
+    },
+    {
+      "off": 149642,
+      "expect": "43f887db",
+      "data": "da0340e1"
+    },
+    {
+      "off": 149802,
+      "expect": "43f887db",
+      "data": "da0340e1"
+    },
+    {
+      "off": 236800,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4ecf5e6000400f3f801d867f8f00047f8a0003d288a0904f0e7f8f70065f801d89a5b1b60f3f8e14749803d17f3f814f043f8e347fd08f3fa3cfc41a89d0443fa87db9d010d03e18a75fa01d8f3fae34741a89d08f7fa14f00d059a0903f0e18a75fa01d8fcf5fcf4fc008a0902f0fa022609fa02f007ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0ef2"
+    },
+    {
+      "off": 236988,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ec00ecf4e6000400c2fdb9029a5b1160f3f8e14749803d0df3f801d867f8f80047f8a0003d06c2f4eb4746f4ff002d01f0d4fcf4fc00fc88f0dddb00f044"
+    },
+    {
+      "off": 237088,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ec00ecf4e6000400c2fdba029a5b1160f3f8e14749803d0df3f801d867f8f80047f8a0003d06c2f4ec4746f4ff002d01f0d4fcf4fc00fc88f0dddb00ffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 237440,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4ecf5ecf6e6000400f3fa01d867faf00047faa0002d04e7faa000f7fa01d8f3f8e04747f8ff002d31f3f89af143f8e5479d2cf3f8d0e843f8e6478d27f3f89af143f8e4479d23f3f8e04749802d1c49813d04f3f861fd69820d0c49823d04f3f861fd69810d0649843d10f3f860fd67f88000f3fae24749a02d0349802d040d0649803d010d036f5b0d016e5bf3f8b6fd67f840002d42f3f8e14749802d2c49813d3ce7f8fb0065f801d8f3f801d869822d14f3f8e84747f8ff002d07f3fae34741a88d032d0221a80d03f3fae3470d00f3f83cfc418a8d0a0d05f3f83cfc43f8e3478d04e12875f801d80d1be7f8fd0065f801d80d16e7f8fd0065f801d8f3f813fd67f880002d04e14875f801d80d09e7f8fb0065f801d80d04e7f8f90065f801d8fcf6fcf5fcf4fc00f3f89af1fa032c99"
+    },
+    {
+      "off": 237824,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "0df2ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 237888,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf5e6000400f3fab6fd67fa40002d18f3fae14749a03d14f3fae74747faff003d0af3fae34747fafd008d03e7faff000d0209a30d0043fa87db9d02418a0d0243f887dbfcf5fc00db00ffffffffffffffffffff"
+    },
+    {
+      "off": 252200,
+      "expect": "f3f89af1",
+      "data": "fa0380df"
+    }
+  ],
+  "family_id": "launch_control_v18",
+  "revert_superseded": true,
+  "cal_defaults": {
+    "LC_RETARD_RANGE": 6
+  }
+}

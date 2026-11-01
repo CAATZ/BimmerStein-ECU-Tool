@@ -9,7 +9,7 @@ from definition_registry import (
     DefinitionRegistryError,
 )
 import rom_analyzer
-import romraider_defs
+import calibration_defs
 
 
 def _definition(path: Path, marker: str = "41") -> Path:
@@ -136,9 +136,9 @@ def test_invalid_xml_and_unregistered_selection_are_rejected(tmp_path):
 
 def test_loader_cache_refreshes_when_file_changes(tmp_path):
     definition = _definition(tmp_path / "MS41.xml", "41")
-    first = romraider_defs.load_definitions(definition)
+    first = calibration_defs.load_definitions(definition)
     _definition(definition, "60")
-    second = romraider_defs.load_definitions(definition)
+    second = calibration_defs.load_definitions(definition)
     assert first is not second
 
 

@@ -1,4 +1,4 @@
-"""Regression tests for the captured MS41 DS2 command-0x04 record layout."""
+"""Regression tests for captured MS41 stored and shadow fault-record layouts."""
 import csv
 import os
 from pathlib import Path
@@ -106,9 +106,9 @@ def test_rich_fault_decode_uses_exact_bmw_status_and_environment_scaling():
     assert record.occurred_hours_ago == pytest.approx(16.9)
 
 
-def test_shadow_decode_and_owner_follow_the_factory_jobs():
+def test_shadow_decode_and_owner_use_native_layout_and_shared_operating_counter():
     stored = bytes.fromhex("08 B4 03 04 17 0B 30 05 AB 57")
-    shadow = bytes.fromhex("08 78 02 09 10 20 30 40 AA 0C BB")
+    shadow = bytes.fromhex("08 78 02 09 10 20 30 40 AA AB 67")
 
     class FakeDs2:
         def __init__(self):
@@ -136,7 +136,11 @@ def test_shadow_decode_and_owner_follow_the_factory_jobs():
     assert ds2.calls == [(0x04, 0), (0x04, 0), (0x04, 1), (0x14, 1)]
     assert result.stored[0].occurred_hours_ago == pytest.approx(16.9)
     assert result.shadow[0].memory == "shadow"
-    assert result.shadow[0].operating_hours == 12.0
+    assert result.shadow[0].frequency == 9
+    assert result.shadow[0].logistics_counter == 0x10
+    assert [value.raw for value in result.shadow[0].freeze_frame] == [0x20, 0x30, 0x40, 0xAA]
+    assert result.shadow[0].occurred_hours_ago == pytest.approx(15.3)
+    assert result.shadow[0].operating_hours is None
     assert len(result.shadow[0].raw_record) == 11
 
     with pytest.raises(ValueError, match="shadow DTC payload length"):
@@ -147,7 +151,7 @@ def test_four_family_replay_keeps_common_and_family_specific_environment_scopes(
     common = bytes.fromhex("0C 71 01 28 10 20 30 40 AA 00")
     ms410_only = bytes.fromhex("0B 71 01 28 10 20 30 40 AA 00")
     ms412_only = bytes.fromhex("BE 71 01 28 10 20 30 40 AA 00")
-    shadow = bytes.fromhex("0C 71 01 28 10 20 30 40 AA 0C BB")
+    shadow = common[:2] + b"\x0A" + common[2:]
 
     for variant in ("common", "MS41.0", "MS41.1", "MS41.2", "MS41.3"):
         stored = parse_ds2_dtc_response(b"\x01" + common, variant=variant)[0]
@@ -156,7 +160,11 @@ def test_four_family_replay_keeps_common_and_family_specific_environment_scopes(
         assert [value.identifier for value in stored.freeze_frame] == [
             0x01, 0x0C, 0x18, 0x0A]
         assert replayed_shadow.memory == "shadow"
-        assert replayed_shadow.operating_hours == 12.0
+        assert replayed_shadow.freeze_frame == stored.freeze_frame
+        assert replayed_shadow.frequency == stored.frequency
+        assert replayed_shadow.logistics_counter == stored.logistics_counter
+        assert replayed_shadow.occurred_hours_ago is None
+        assert replayed_shadow.operating_hours is None
 
     assert [
         bool(parse_ds2_dtc_response(
@@ -168,6 +176,64 @@ def test_four_family_replay_keeps_common_and_family_specific_environment_scopes(
             b"\x01" + ms412_only, variant=variant)[0].freeze_frame)
         for variant in ("common", "MS41.0", "MS41.1", "MS41.2", "MS41.3")
     ] == [False, False, False, True, True]
+
+
+@pytest.mark.parametrize("variant", ["common", "MS41.0", "MS41.1", "MS41.2", "MS41.3"])
+def test_user_report_stored_and_shadow_freeze_frames_match(variant):
+    stored_raw = [bytes.fromhex(raw) for raw in (
+        "0C 71 01 28 00 00 0B FF 00 00",
+        "16 72 01 28 00 00 7A 80 00 00",
+        "64 78 01 28 FF 7A 00 01 00 00",
+    )]
+    shadow_raw = [bytes.fromhex(raw) for raw in (
+        "0C 71 0A 01 28 00 00 0B FF 00 00",
+        "16 72 0A 01 28 00 00 7A 80 00 00",
+        "64 78 00 01 28 FF 7A 00 01 00 00",
+    )]
+    stored = parse_ds2_dtc_response(b"\x03" + b"".join(stored_raw), variant=variant)
+    shadow = parse_ds2_shadow_response(b"\x03" + b"".join(shadow_raw), variant=variant)
+    for index, (normal, extra) in enumerate(zip(stored, shadow)):
+        assert normal.raw_record == stored_raw[index]
+        assert extra.raw_record == shadow_raw[index]
+        assert normal.frequency == extra.frequency == 1
+        assert normal.logistics_counter == extra.logistics_counter == 0x28
+        assert normal.freeze_frame == extra.freeze_frame
+        assert normal.occurred_hours_ago is extra.occurred_hours_ago is None
+        assert extra.operating_hours is None
+    for record in (stored[0], shadow[0], stored[1], shadow[1]):
+        assert next(value.value for value in record.freeze_frame if value.label == "Engine speed") == 0
+        assert record.self_test_reason is None
+    for record in (stored[1], shadow[1], stored[2], shadow[2]):
+        assert next(value.value for value in record.freeze_frame if value.label == "Battery voltage") == pytest.approx(12.444)
+    assert stored[2].self_test_reason == shadow[2].self_test_reason == "0x0100"
+    report = format_dtc_table(shadow)
+    assert report.count("Freeze Frame:") == 3
+    assert "Engine speed: 0 rpm" in report
+    assert "Battery voltage: 12.444 V" in report
+    assert "Self-Test Reason: 0x0100" in report
+    assert "Operating hours:" not in report
+
+
+def test_shadow_counter_is_optional_and_uses_both_big_endian_timestamp_bytes():
+    raw = bytes.fromhex("64 78 0A 01 28 FF 7A 34 12 12 34")
+    without_counter = parse_ds2_shadow_response(b"\x01" + raw, variant="MS41.0")[0]
+    with_counter = parse_ds2_shadow_response(
+        b"\x01" + raw, variant="MS41.0", current_counter=0x1357)[0]
+    assert without_counter.occurred_hours_ago is None
+    assert without_counter.operating_hours is None
+    assert with_counter.occurred_hours_ago == pytest.approx(29.1)
+    assert with_counter.operating_hours is None
+    assert with_counter.self_test_reason == "0x1234"
+
+
+@pytest.mark.parametrize("parser,raw", [
+    (parse_ds2_dtc_response, "0C 71 01 28 00 00 0B FF FF FF"),
+    (parse_ds2_shadow_response, "0C 71 0A 01 28 00 00 0B FF FF FF"),
+])
+def test_fault_age_wraps_the_native_16_bit_operating_counter(parser, raw):
+    record = parser(
+        b"\x01" + bytes.fromhex(raw), variant="MS41.0", current_counter=0x0001)[0]
+    assert record.occurred_hours_ago == pytest.approx(0.2)
 
 
 def _load_payload() -> bytes:

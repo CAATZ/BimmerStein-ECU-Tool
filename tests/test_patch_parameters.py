@@ -10,36 +10,42 @@ from tests.conftest import ref
 CASES = (
     (
         "MS41.0",
-        ["ignition_cut_v10_ms410", "launch_control_v11_ms410", "vanos_minrpm_v2_ms410"],
-        {"ignition_cut_v10_ms410": 4, "launch_control_v11_ms410": 12,
+        ["ignition_cut_v18_ms410", "launch_control_v18_ms410", "vanos_minrpm_v2_ms410"],
+        {"ignition_cut_v18_ms410": 6, "launch_control_v18_ms410": 15,
          "vanos_minrpm_v2_ms410": 1},
     ),
     (
         "MS41.1",
-        ["ignition_cut_v10_ms411", "launch_control_v11_ms411"],
-        {"ignition_cut_v10_ms411": 4, "launch_control_v11_ms411": 12,
+        ["ignition_cut_v18_ms411", "launch_control_v18_ms411"],
+        {"ignition_cut_v18_ms411": 6, "launch_control_v18_ms411": 15,
          "vanos_minrpm_ms411": 1},
     ),
     (
         "MS41.2",
-        ["ignition_cut_v10_ms412", "launch_control_v11_ms412"],
-        {"ignition_cut_v10_ms412": 4, "launch_control_v11_ms412": 12},
+        ["ignition_cut_v18_ms412", "launch_control_v18_ms412"],
+        {"ignition_cut_v18_ms412": 6, "launch_control_v18_ms412": 15},
     ),
     (
         "MS41.3",
-        ["ignition_cut_v11", "launch_control_v11"],
-        {"ignition_cut_v11": 4, "launch_control_v11": 12},
+        ["ignition_cut_v18", "launch_control_v18"],
+        {"ignition_cut_v18": 6, "launch_control_v18": 15},
     ),
 )
 
 EXPECTED_PARAMETER_IDS = {
     "ignition_cut_v10": {"CUTSW", "CUTRPM", "CUT_HYST", "CUT_IPW"},
-    "launch_control_v11": {
+    "launch_control_v12": {
         "LC_SW", "LC_CUTTYPE", "LC_CLUTCHPOL", "LC_MAXRPM", "LC_ARMSPEED",
         "LC_MAXSPEED", "LC_MINTPS", "LC_HARDRPM", "LC_HYST", "LC_IPW",
-        "LC_FUEL_HYST_B", "LC_FUEL_HYST_A",
+        "LC_FUEL_HYST_B", "LC_FUEL_HYST_A", "LC_IGN_ANGLE",
     },
     "vanos_minrpm": {"VANOSRPM"},
+}
+EXPECTED_PARAMETER_IDS["ignition_cut_v18"] = EXPECTED_PARAMETER_IDS["ignition_cut_v10"] | {
+    "CUT_RETARD_RANGE", "CUT_IGN_ANGLE",
+}
+EXPECTED_PARAMETER_IDS["launch_control_v18"] = EXPECTED_PARAMETER_IDS["launch_control_v12"] | {
+    "LC_RETARD_RANGE", "LC_CUT_IGN_ANGLE",
 }
 
 
@@ -48,7 +54,7 @@ def test_installable_patch_exposes_schema_but_cannot_be_edited_directly(monkeypa
     image = bytes(256 * 1024)
     monkeypatch.setattr(patch_service, "base_version", lambda _data: "MS41.3")
     monkeypatch.setattr(patch_service, "available_patches", lambda _data: [{
-        "id": "ignition_cut_v11", "installed": False, "deprecated": False,
+        "id": "ignition_cut_v18", "installed": False, "deprecated": False,
         "ok": True, "badge": "OK",
     }])
     monkeypatch.setattr(
@@ -61,11 +67,11 @@ def test_installable_patch_exposes_schema_but_cannot_be_edited_directly(monkeypa
 
     groups = patch_service.editable_parameters(image)
 
-    assert [group["patch_id"] for group in groups] == ["ignition_cut_v11"]
+    assert [group["patch_id"] for group in groups] == ["ignition_cut_v18"]
     assert groups[0]["editable"] is True
     with pytest.raises(patch_service.PatchError, match="not an editable current installation"):
         patch_service.apply_parameter_changes(
-            image, "ignition_cut_v11", {"CUTRPM": "4000"},
+            image, "ignition_cut_v18", {"CUTRPM": "4000"},
         )
 
 
@@ -74,14 +80,14 @@ def _built(variant, patch_ids):
 
 
 def test_installed_parameter_writes_still_require_valid_checksums():
-    source = bytearray(_built("MS41.3", ["ignition_cut_v11"]))
+    source = bytearray(_built("MS41.3", ["ignition_cut_v18"]))
     source[0x5C80] ^= 1  # Stored boot checksum, outside the patch's executable bytes.
     group = next(group for group in patch_service.editable_parameters(source)
-                 if group["patch_id"] == "ignition_cut_v11")
+                 if group["patch_id"] == "ignition_cut_v18")
     assert not group["editable"]
     assert "checksum" in group["blocked_reason"].lower()
     with pytest.raises(patch_service.PatchError, match="checksum"):
-        patch_service.apply_parameter_changes(source, "ignition_cut_v11", {"CUTRPM": "4000"})
+        patch_service.apply_parameter_changes(source, "ignition_cut_v18", {"CUTRPM": "4000"})
 
 
 @pytest.mark.parametrize("variant,patch_ids,expected", CASES)
@@ -105,10 +111,10 @@ def test_parameter_inventory_is_exact_and_address_free(variant, patch_ids, expec
 @pytest.mark.parametrize(
     "variant,patch_id",
     (
-        ("MS41.0", "ignition_cut_v10_ms410"),
-        ("MS41.1", "ignition_cut_v10_ms411"),
-        ("MS41.2", "ignition_cut_v10_ms412"),
-        ("MS41.3", "ignition_cut_v11"),
+        ("MS41.0", "ignition_cut_v18_ms410"),
+        ("MS41.1", "ignition_cut_v18_ms411"),
+        ("MS41.2", "ignition_cut_v18_ms412"),
+        ("MS41.3", "ignition_cut_v18"),
     ),
 )
 def test_ignition_parameters_round_trip_without_touching_identity(variant, patch_id):
@@ -141,9 +147,9 @@ def test_ignition_parameters_round_trip_without_touching_identity(variant, patch
 
 
 def test_launch_parameters_validate_and_keep_named_sentinels():
-    source = _built("MS41.3", ["ignition_cut_v11", "launch_control_v11"])
+    source = _built("MS41.3", ["ignition_cut_v18", "launch_control_v18"])
     groups = {group["patch_id"]: group for group in patch_service.editable_parameters(source)}
-    launch = groups["launch_control_v11"]
+    launch = groups["launch_control_v18"]
     hard = next(parameter for parameter in launch["parameters"]
                 if parameter["id"] == "LC_HARDRPM")
     assert hard["current"] == "@auto"
@@ -151,7 +157,7 @@ def test_launch_parameters_validate_and_keep_named_sentinels():
 
     result, _report = patch_service.apply_parameter_changes(
         source,
-        "launch_control_v11",
+        "launch_control_v18",
         {
             "LC_SW": "pin80", "LC_CUTTYPE": "fuel", "LC_CLUTCHPOL": "active_low",
             "LC_MAXRPM": "4000", "LC_ARMSPEED": "5", "LC_MAXSPEED": "10",
@@ -163,7 +169,7 @@ def test_launch_parameters_validate_and_keep_named_sentinels():
     values = {
         parameter["id"]: parameter
         for group in patch_service.editable_parameters(result)
-        if group["patch_id"] == "launch_control_v11"
+        if group["patch_id"] == "launch_control_v18"
         for parameter in group["parameters"]
     }
     assert values["LC_MAXRPM"]["current"] == "4000"
@@ -173,13 +179,99 @@ def test_launch_parameters_validate_and_keep_named_sentinels():
 
 
 def test_launch_relationships_fail_closed_when_enabled():
-    source = _built("MS41.3", ["ignition_cut_v11", "launch_control_v11"])
+    source = _built("MS41.3", ["ignition_cut_v18", "launch_control_v18"])
     with pytest.raises(patch_service.PatchError, match="LC_MAXSPEED"):
         patch_service.apply_parameter_changes(
             source,
-            "launch_control_v11",
+            "launch_control_v18",
             {"LC_SW": "pin80", "LC_ARMSPEED": "10", "LC_MAXSPEED": "5"},
         )
+
+
+@pytest.mark.parametrize("variant,patch_ids,_expected", CASES)
+@pytest.mark.parametrize("mode", ("always", "pin80", "pin81", "pin82"))
+def test_enabled_launch_requires_explicit_strategy_and_physical_input_polarity(
+        variant, patch_ids, _expected, mode):
+    source = _built(variant, patch_ids)
+    launch = patch_ids[1]
+    cals = patch_service.definitions()[launch]["cave"]["cals"]
+    assert source[cals["LC_CUTTYPE"]] == source[cals["LC_CLUTCHPOL"]] == 255
+    changes = {"LC_SW": mode, "LC_ARMSPEED": "1", "LC_MAXSPEED": "10"}
+    with pytest.raises(patch_service.PatchError, match="LC_CUTTYPE"):
+        patch_service.apply_parameter_changes(source, launch, changes)
+    changes["LC_CUTTYPE"] = "ignition"
+    if mode == "always":
+        result = patch_service.apply_parameter_changes(source, launch, changes)[0]
+        assert result[cals["LC_CLUTCHPOL"]] == 255  # Ignored in Always mode.
+    else:
+        with pytest.raises(patch_service.PatchError, match="LC_CLUTCHPOL"):
+            patch_service.apply_parameter_changes(source, launch, changes)
+        for polarity, raw in (("active_high", 0), ("active_low", 1)):
+            result = patch_service.apply_parameter_changes(
+                source, launch, dict(changes, LC_CLUTCHPOL=polarity))[0]
+            assert result[cals["LC_CLUTCHPOL"]] == raw
+    assert result[cals["LC_CUTTYPE"]] == 1
+    assert checksum.verify_checksum(bytearray(result))[0]
+
+
+@pytest.mark.parametrize("variant,patch_ids,_expected", CASES)
+def test_disabled_launch_preserves_unknown_choices_and_can_disable_invalid_existing_setup(
+        variant, patch_ids, _expected):
+    source = bytearray(_built(variant, patch_ids))
+    launch = patch_ids[1]
+    cals = patch_service.definitions()[launch]["cave"]["cals"]
+    source[cals["LC_CUTTYPE"]] = 254
+    source[cals["LC_CLUTCHPOL"]] = 253
+    source[cals["LC_ARMSPEED"]] = 1
+    source[cals["LC_MAXSPEED"]] = 10
+    source = bytes(checksum.correct_checksums(source, correct_program=False)[0])
+    edited = patch_service.apply_parameter_changes(source, launch, {"LC_MAXRPM": "4000"})[0]
+    assert edited[cals["LC_CUTTYPE"]] == 254 and edited[cals["LC_CLUTCHPOL"]] == 253
+    existing = bytearray(edited)
+    existing[cals["LC_SW"]] = 1
+    existing = bytes(checksum.correct_checksums(existing, correct_program=False)[0])
+    with pytest.raises(patch_service.PatchError, match="LC_CUTTYPE"):
+        patch_service.apply_parameter_changes(existing, launch, {"LC_MAXRPM": "5000"})
+    disabled = patch_service.apply_parameter_changes(existing, launch, {"LC_SW": "off"})[0]
+    assert disabled == edited
+    unknown_switch = bytearray(existing)
+    unknown_switch[cals["LC_SW"]] = 3
+    unknown_switch = bytes(checksum.correct_checksums(unknown_switch, correct_program=False)[0])
+    with pytest.raises(patch_service.PatchError, match="LC_SW"):
+        patch_service.apply_parameter_changes(unknown_switch, launch, {"LC_CUTTYPE": "ignition"})
+
+
+def test_ms410_throttle_angle_schema_preserves_every_raw_value():
+    patch = patch_service.definitions()["launch_control_v18_ms410"]
+    spec = next(spec for spec in patch_service._parameter_specs(patch) if spec["id"] == "LC_MINTPS")
+    assert spec["units"] == "° throttle" and spec["maximum"] == "119.5"
+    for raw in range(256):
+        value, _ = patch_service._decode_parameter(spec, raw)
+        assert patch_service._encode_parameter(spec, value) == raw
+        assert patch_service.normalize_parameter_value(spec, value) == value
+    assert patch_service._encode_parameter(spec, "50") == 107
+    assert patch_service._encode_parameter(spec, "119.5") == 255
+    for suffix in ("_ms411", "_ms412", ""):
+        other = next(spec for spec in patch_service._parameter_specs(
+            patch_service.definitions()["launch_control_v18" + suffix]) if spec["id"] == "LC_MINTPS")
+        assert (other["units"], other["step"], other["maximum"]) == ("%", "0.47", "119.85")
+
+
+@pytest.mark.parametrize("raw", (0, 1, 106, 128, 254, 255))
+def test_ms410_throttle_display_and_save_leave_unchanged_calibration_byte(raw):
+    launch = "launch_control_v18_ms410"
+    source = bytearray(_built("MS41.0", ["ignition_cut_v18_ms410", launch]))
+    offset = patch_service.definitions()[launch]["cave"]["cals"]["LC_MINTPS"]
+    source[offset] = raw
+    source = bytes(checksum.correct_checksums(source, correct_program=False)[0])
+    group = next(group for group in patch_service.editable_parameters(source) if group["patch_id"] == launch)
+    parameter = next(parameter for parameter in group["parameters"] if parameter["id"] == "LC_MINTPS")
+    assert parameter["units"] == "° throttle" and parameter["raw_hex"] == f"{raw:02X}"
+    expected = patch_service.apply_parameter_changes(source, launch, {"LC_HYST": "64"})[0]
+    actual = patch_service.apply_parameter_changes(source, launch, {
+        "LC_HYST": "64", "LC_MINTPS": parameter["current"],
+    })[0]
+    assert actual == expected and actual[offset] == raw
 
 
 @pytest.mark.parametrize("variant,patch_ids,_expected", CASES)
@@ -260,7 +352,7 @@ def test_launch_arm_speed_zero_rejected_and_one_round_trips(
                      if parameter["id"] == "LC_ARMSPEED")
     assert arm_speed["minimum"] == "1"
     assert "reported speed of 0 km/h" in arm_speed["description"]
-    changes = {"LC_SW": mode, "LC_CUTTYPE": "ignition", "LC_ARMSPEED": "0",
+    changes = {"LC_SW": mode, "LC_CUTTYPE": "ignition", "LC_CLUTCHPOL": "active_low", "LC_ARMSPEED": "0",
                "LC_MAXSPEED": "10", "LC_MAXRPM": "4000", "LC_MINTPS": "50"}
     with pytest.raises(patch_service.PatchError, match="LC_ARMSPEED must be between 1"):
         patch_service.apply_parameter_changes(source, patch_id, changes)
@@ -282,7 +374,7 @@ def test_launch_existing_zero_arm_speed_requires_correction_or_disable(
     source = _built(variant, patch_ids)
     patch_id = next(name for name in patch_ids if name.startswith("launch_control_"))
     source, _report = patch_service.apply_parameter_changes(source, patch_id, {
-        "LC_SW": mode, "LC_CUTTYPE": "ignition", "LC_ARMSPEED": "1",
+        "LC_SW": mode, "LC_CUTTYPE": "ignition", "LC_CLUTCHPOL": "active_low", "LC_ARMSPEED": "1",
         "LC_MAXSPEED": "10", "LC_MAXRPM": "4000", "LC_MINTPS": "50",
     })
     cals = patch_service.definitions()[patch_id]["cave"]["cals"]
@@ -308,19 +400,19 @@ def test_launch_existing_zero_arm_speed_requires_correction_or_disable(
 
 
 def test_unknown_stale_partial_and_uninstalled_requests_are_rejected():
-    source = _built("MS41.3", ["ignition_cut_v11"])
+    source = _built("MS41.3", ["ignition_cut_v18"])
     with pytest.raises(patch_service.PatchError, match="unknown patch parameter"):
-        patch_service.apply_parameter_changes(source, "ignition_cut_v11", {"OFFSET": "1"})
+        patch_service.apply_parameter_changes(source, "ignition_cut_v18", {"OFFSET": "1"})
     with pytest.raises(patch_service.PatchError, match="string ids and values"):
-        patch_service.apply_parameter_changes(source, "ignition_cut_v11", {"CUTRPM": 4000})
+        patch_service.apply_parameter_changes(source, "ignition_cut_v18", {"CUTRPM": 4000})
     with pytest.raises(patch_service.PatchError, match="source ROM changed"):
         patch_service.apply_parameter_changes(
-            source, "ignition_cut_v11", {"CUTRPM": "4000"}, expected_sha256="0" * 64)
+            source, "ignition_cut_v18", {"CUTRPM": "4000"}, expected_sha256="0" * 64)
     with pytest.raises(patch_service.PatchError, match="256 KiB"):
         patch_service.editable_parameters(source[:0x6000])
     with pytest.raises(patch_service.PatchError, match="not an editable current installation"):
         patch_service.apply_parameter_changes(
-            ref("MS41.3"), "ignition_cut_v11", {"CUTRPM": "4000"})
+            ref("MS41.3"), "ignition_cut_v18", {"CUTRPM": "4000"})
 
 
 def test_parameter_edit_does_not_mutate_the_source_buffer():
@@ -339,12 +431,15 @@ def test_parameter_edit_does_not_mutate_the_source_buffer():
     ("ignition_cut_v10", "CUT_HYST", "15", "0"),
     ("ignition_cut_v10", "CUT_HYST", "16", "32"),
     ("ignition_cut_v10", "CUT_IPW", "12", "11.99898"),
-    ("launch_control_v11", "LC_MINTPS", "50", "49.82"),
-    ("launch_control_v11", "LC_ARMSPEED", "5.5", "6"),
-    ("launch_control_v11", "LC_HARDRPM", "@auto", "@auto"),
-    ("launch_control_v11", "LC_FUEL_HYST_B", "15", "0"),
-    ("launch_control_v11", "LC_FUEL_HYST_A", "16", "32"),
-    ("launch_control_v11", "LC_FUEL_HYST_B", "@stock", "@stock"),
+    ("launch_control_v12", "LC_MINTPS", "50", "49.82"),
+    ("launch_control_v12", "LC_ARMSPEED", "5.5", "6"),
+    ("launch_control_v12", "LC_HARDRPM", "@auto", "@auto"),
+    ("launch_control_v12", "LC_FUEL_HYST_B", "15", "0"),
+    ("launch_control_v12", "LC_FUEL_HYST_A", "16", "32"),
+    ("launch_control_v12", "LC_FUEL_HYST_B", "@stock", "@stock"),
+    ("launch_control_v12", "LC_IGN_ANGLE", "-10", "-10.125"),
+    ("launch_control_v12", "LC_IGN_ANGLE", "0", "0.000"),
+    ("launch_control_v12", "LC_IGN_ANGLE", "@off", "@off"),
     ("ignition_cut_v10", "CUT_IPW", "@stock", "@stock"),
     ("ignition_cut_v10", "CUT_HYST", "@legacy_zero", "@legacy_zero"),
 ])
@@ -354,6 +449,32 @@ def test_schema_quantization_matches_stored_value(family, parameter_id, requeste
     assert patch_service.normalize_parameter_value(spec, requested) == applied
     raw = patch_service._encode_parameter(spec, requested)
     assert patch_service._decode_parameter(spec, raw)[0] == applied
+
+
+@pytest.mark.parametrize("variant,patch_ids,_expected", CASES)
+def test_launch_absolute_angle_encodings_keep_off_distinct_and_identity_intact(
+        variant, patch_ids, _expected):
+    source = _built(variant, patch_ids)
+    patch_id = next(name for name in patch_ids if name.startswith("launch_control_"))
+    spec = next(spec for spec in patch_service._EDITABLE_PARAMETER_FAMILIES["launch_control_v12"]
+                if spec["id"] == "LC_IGN_ANGLE")
+    address = patch_service.definitions()[patch_id]["cave"]["cals"]["LC_IGN_ANGLE"]
+    assert source[address] == 255
+    assert patch_service._decode_parameter(spec, 255)[0] == "@off"
+    for raw in range(64):
+        value, _display = patch_service._decode_parameter(spec, raw)
+        assert patch_service._encode_parameter(spec, value) == raw
+    for raw in range(64, 255):
+        assert patch_service._decode_parameter(spec, raw)[0].startswith("@raw:")
+    for value in ("-24", "0.001", "NaN", "Infinity"):
+        with pytest.raises(patch_service.PatchError):
+            patch_service._encode_parameter(spec, value)
+    configured, _ = patch_service.apply_parameter_changes(source, patch_id, {"LC_IGN_ANGLE": "0"})
+    assert configured[address] == 63
+    restored, _ = patch_service.apply_parameter_changes(configured, patch_id, {"LC_IGN_ANGLE": "@off"})
+    assert restored == source
+    assert configured[0x5CD5:0x5F8B] == source[0x5CD5:0x5F8B]
+    assert checksum.verify_checksum(bytearray(configured))[0]
 
 
 @pytest.mark.parametrize("requested", ["", "NaN", "Infinity", "-1", "8161"])
@@ -369,8 +490,41 @@ def test_numeric_normalization_uses_declared_step():
     assert patch_service.normalize_parameter_value(parameter, "4200") == "4208"
 
 
+@pytest.mark.parametrize("variant,patch_ids,_expected", CASES)
+def test_ignition_retard_controls_are_independent_and_validate_quantized_band(
+        variant, patch_ids, _expected):
+    source = _built(variant, patch_ids)
+    original = source
+    for patch_id, angle, width, limit in (
+            (patch_ids[0], "CUT_IGN_ANGLE", "CUT_RETARD_RANGE", "CUTRPM"),
+            (patch_ids[1], "LC_CUT_IGN_ANGLE", "LC_RETARD_RANGE", "LC_MAXRPM")):
+        cals = patch_service.definitions()[patch_id]["cave"]["cals"]
+        assert source[cals[width]] == 6 and source[cals[angle]] == 255
+        configured, _ = patch_service.apply_parameter_changes(source, patch_id, {
+            limit: "4000", width: "200", angle: "-10",
+        })
+        assert configured[cals[width]] == 6  # 200 RPM rounds to 192.
+        assert configured[cals[angle]] == 36  # -10.125 degrees BTDC.
+        assert checksum.verify_checksum(bytearray(configured))[0]
+        assert configured[0x5CD5:0x5F8B] == original[0x5CD5:0x5F8B]
+        if "LC_IGN_ANGLE" in cals:
+            assert configured[cals["LC_IGN_ANGLE"]] == source[cals["LC_IGN_ANGLE"]] == 255
+        for bad_range in ("0", "15", "3984", "4000", "4032"):
+            with pytest.raises(patch_service.PatchError, match=width):
+                patch_service.apply_parameter_changes(source, patch_id, {
+                    limit: "4000", width: bad_range, angle: "0",
+                })
+        with pytest.raises(patch_service.PatchError, match=width):
+            patch_service.apply_parameter_changes(configured, patch_id, {limit: "192"})
+        disabled, _ = patch_service.apply_parameter_changes(configured, patch_id, {
+            angle: "@off", width: "0",
+        })
+        assert disabled[cals[angle]] == 255 and disabled[cals[width]] == 0
+        source = configured
+
+
 def test_fresh_patch_parameters_expose_current_numeric_values_and_named_modes():
-    source = _built("MS41.3", ["ignition_cut_v11", "launch_control_v11"])
+    source = _built("MS41.3", ["ignition_cut_v18", "launch_control_v18"])
     values = {parameter["id"]: parameter for group in patch_service.editable_parameters(source)
               for parameter in group["parameters"]}
     assert all(value["current"] and value["current_display"] for value in values.values())

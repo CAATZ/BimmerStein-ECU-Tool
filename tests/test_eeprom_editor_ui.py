@@ -162,6 +162,35 @@ def test_unknown_comparison_does_not_inherit_current_layout(editor, monkeypatch,
     assert all(shown[0].table.item(row, 0).text() == 'Raw byte' for row in range(shown[0].table.rowCount()))
 
 
+@pytest.mark.parametrize('size', (2048, 16384))
+def test_ms42_ms43_storage_comparison_is_raw_only(monkeypatch, size):
+    app = QApplication.instance() or QApplication([])
+    before, after = bytes(size), bytearray(size)
+    after[0], after[-1] = 0x12, 0xAB
+    monkeypatch.setattr(eeprom, 'validate_image', lambda *_:
+                        pytest.fail('Raw storage must not use the MS41 decoder'))
+    rows = ui.comparison_rows(before, after)
+    assert rows == [
+        ('Raw byte', 'Byte 0x000', '00', '12', '0x000', 'Exact bytes'),
+        ('Raw byte', f'Byte 0x{size - 1:03X}', '00', 'AB', f'0x{size - 1:03X}', 'Exact bytes'),
+    ]
+    assert ui.comparison_rows(before, before) == []
+    dialog = ui.EepromComparisonDialog(None, before, after)
+    try:
+        assert dialog.table.rowCount() == 2
+        assert any('2 changed bytes.' in label.text() and 'Raw comparison only' in label.text()
+                   for label in dialog.findChildren(ui.QLabel))
+    finally:
+        dialog.close()
+        app.processEvents()
+
+
+@pytest.mark.parametrize('sizes', ((512, 2048), (2048, 512), (2048, 16384), (16384, 2048)))
+def test_storage_comparison_rejects_different_sizes(sizes):
+    with pytest.raises(ValueError, match='same size'):
+        ui.comparison_rows(bytes(sizes[0]), bytes(sizes[1]))
+
+
 @pytest.mark.parametrize('full', (False, True))
 def test_exact_rom_context_uses_active_definition_and_framing(tmp_path, monkeypatch, full):
     path = tmp_path / 'axes.xml'

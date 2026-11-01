@@ -67,6 +67,7 @@ def test_admission_list_needs_no_private_inputs():
         "cal-guard", "loader-doors", "intel-flash", "amd-flash", "top-ds2",
         "st9030-proxy",
         "features-ms410", "features-ms411", "features-ms412", "features-ms413",
+        "launch-retard",
     ]
 
 

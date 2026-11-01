@@ -31,10 +31,17 @@ PROHIBITED_PUBLIC_TERMS = tuple("".join(parts) for parts in (
     ("ews", "sync"),
     ("gall", "etto"),
     ("gall", "eto"),
+    ("gal", "eto"),
+    ("ghi", "dra"),
     ("in", "pa"),
     ("is", "ta"),
+    ("ms", "4x"),
     ("open", "a", "i"),
     ("quick", "flash"),
+    ("rom", "raider"),
+    ("tuner", "pro"),
+    ("decompil", "ation"),
+    ("decompil", "ed"),
 ))
 _PROHIBITED_PUBLIC_PATTERN = re.compile(
     rb"(?<![a-z0-9])(?:"
@@ -48,6 +55,7 @@ _PROHIBITED_PUBLIC_TEXT_PATTERN = re.compile(
 _PUBLIC_DOCUMENT_NAMES = (
     "README.md", "RELEASE_NOTES.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md",
     "RELEASE-METADATA.json", "BimmerStein-ECU-Tool-User-Manual.pdf",
+    "MS42_MS43.md", "MS41_EEPROM.md",
 )
 _PRIVATE_PROVENANCE_PATTERN = re.compile(
     rb"(?<![a-z0-9])(?:" + b"".join((b"And", b"roid"))
@@ -216,7 +224,7 @@ def _verify_license_inventory(app_dir: Path) -> dict[str, str]:
 
 
 def _pyinstaller_msvc_runtime_sources() -> dict[Path, tuple[Path, str]]:
-    """The exact dependency files PyInstaller is expected to copy unchanged."""
+    """The exact dependency files the legacy package backend copies unchanged."""
     pyqt_spec = importlib.util.find_spec("PyQt5")
     if pyqt_spec is None or not pyqt_spec.submodule_search_locations:
         raise RuntimeError("PyQt5 build dependency is unavailable for runtime verification")
@@ -450,6 +458,8 @@ def verify_distribution(
         app_dir / "LICENSE.txt",
         app_dir / "RELEASE_NOTES.md",
         app_dir / "THIRD_PARTY_NOTICES.md",
+        app_dir / "MS42_MS43.md",
+        app_dir / "MS41_EEPROM.md",
         app_dir / "BimmerStein-ECU-Tool-User-Manual.pdf",
         app_dir / PATCH_DEFINITION_NAME,
         content / "logger_definitions" / LOGGER_DEFINITION_NAME,
@@ -548,7 +558,7 @@ def verify_distribution(
 
     patch_definition = app_dir / PATCH_DEFINITION_NAME
     tracked_definition = (
-        ROOT / "engines" / "patcher" / "romraider" / PATCH_DEFINITION_NAME
+        ROOT / "engines" / "patcher" / "definitions" / PATCH_DEFINITION_NAME
     )
     if patch_definition.read_bytes() != tracked_definition.read_bytes():
         raise RuntimeError("bundled patch definition does not match tracked source")
@@ -565,6 +575,11 @@ def verify_distribution(
         ET.parse(logger_definition)
     except ET.ParseError as error:
         raise RuntimeError("bundled logger definition is invalid XML") from error
+
+    for source in sorted((ROOT / "data/ms42_ms43").glob("*.json")):
+        packaged = content / "data/ms42_ms43" / source.name
+        if not packaged.is_file() or packaged.read_bytes() != source.read_bytes():
+            raise RuntimeError(f"bundled MS42/MS43 data differs from source: {source.name}")
 
     verified_licenses = _verify_license_inventory(app_dir)
     if content != app_dir and (content / "THIRD_PARTY_LICENSES").exists():
@@ -598,6 +613,7 @@ def verify_distribution(
         patch_definition,
         logger_definition,
         *patch_dir.glob("*.json"),
+        *(content / "data/ms42_ms43").glob("*.json"),
     ))
 
     return {

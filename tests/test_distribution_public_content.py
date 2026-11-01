@@ -89,7 +89,7 @@ def test_backend_metadata_and_required_dependency_names_remain_allowed(tmp_path,
         "vc_runtime_files": {"PyQt5/Qt5/bin/MSVCP140.dll": {"sha256": "abc"}},
     }), encoding="utf-8")
     (tmp_path / "THIRD_PARTY_NOTICES.md").write_text(
-        "CPython, Qt, PyQt5, PyInstaller, Nuitka, pyserial and libusb license notices.",
+        "CPython, Qt, PyQt5, Nuitka, pyserial and libusb license notices.",
         encoding="utf-8")
     _pdf(tmp_path / "BimmerStein-ECU-Tool-User-Manual.pdf", "BimmerStein ECU Tool")
     verifier._verify_public_documents(tmp_path)

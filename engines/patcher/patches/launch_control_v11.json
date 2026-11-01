@@ -159,5 +159,7 @@
     }
   ],
   "family_id": "launch_control_v11",
-  "revert_superseded": true
+  "revert_superseded": true,
+  "deprecated": true,
+  "superseded_by": "launch_control_v12"
 }

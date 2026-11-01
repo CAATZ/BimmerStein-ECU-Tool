@@ -122,6 +122,9 @@ class D2XXSerial:
             self._wtimeout = write_timeout
             _stop = _STOP_2 if two_stop else _STOP_1
             _parity = self._parity_code(parity)
+            self._data_bits = int(bytesize)
+            self._parity = _parity
+            self._stopbits = 2 if two_stop else 1
             _chk(_driver().FT_SetDataCharacteristics(
                 self._h, int(bytesize), _stop, _parity), "SetDataCharacteristics")
             _chk(_driver().FT_SetBaudRate(self._h, self._baud), "SetBaudRate")
@@ -174,7 +177,33 @@ class D2XXSerial:
         w = int(max(1, round((self._wtimeout or 3.0) * 1000)))
         _chk(_driver().FT_SetTimeouts(self._h, r, w), "SetTimeouts")
 
-    # -- baudrate (get/set) --
+    @property
+    def parity(self):
+        return {_PAR_NONE: "N", _PAR_ODD: "O", _PAR_EVEN: "E",
+                _PAR_MARK: "M", _PAR_SPACE: "S"}[self._parity]
+
+    @parity.setter
+    def parity(self, value):
+        code = self._parity_code(value)
+        _chk(_driver().FT_SetDataCharacteristics(
+            self._h, self._data_bits, _STOP_2 if self._stopbits == 2 else _STOP_1,
+            code), "SetDataCharacteristics")
+        self._parity = code
+
+    # -- framing and baudrate (get/set) --
+    @property
+    def stopbits(self):
+        return self._stopbits
+
+    @stopbits.setter
+    def stopbits(self, value):
+        if value not in (1, 2):
+            raise ValueError("D2XX stopbits must be 1 or 2")
+        _chk(_driver().FT_SetDataCharacteristics(
+            self._h, self._data_bits, _STOP_2 if value == 2 else _STOP_1,
+            self._parity), "SetDataCharacteristics")
+        self._stopbits = value
+
     @property
     def baudrate(self):
         return self._baud

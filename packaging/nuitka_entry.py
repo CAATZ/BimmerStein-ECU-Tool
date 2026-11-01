@@ -6,7 +6,7 @@ import sys
 
 
 # The application deliberately stores portable user data beside the executable.
-# Match PyInstaller's frozen contract before importing modules that resolve paths.
+# Set the frozen contract before importing modules that resolve paths.
 sys.frozen = True
 
 from PyQt5.QtWidgets import QApplication  # noqa: E402

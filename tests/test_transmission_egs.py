@@ -162,7 +162,7 @@ def test_e46_automatic_donor_admission_requires_exact_vehicle_identity():
     assert tx._e46_egs_admission(
         "MS43", tx.OrderFormat.FA, fa=ev51,
         production=(2002, 2))[0] == "GS8604"
-    with pytest.raises(ValueError, match="EV51 only"):
+    with pytest.raises(ValueError, match="not reviewed for AV51"):
         tx._e46_egs_admission(
             "MS43", tx.OrderFormat.FA,
             fa=tx.FaV2(**{**ev51.__dict__, "vehicle_type": "AV51"}),
@@ -182,7 +182,7 @@ def test_e46_manual_direction_still_requires_exact_reviewed_vehicle(monkeypatch)
         tx, "read_ews_zcs", lambda _ds2: tx.ZcsHolderState("EWS", b"id", 1, raw))
     monkeypatch.setattr(tx, "cluster_zcs", lambda _state: zcs)
 
-    with pytest.raises(ValueError, match="AM51 only"):
+    with pytest.raises(ValueError, match="not reviewed for 0000"):
         tx._prepare_e46_swap(
             object(), b"dme", "7500255", "MS42", tx.Transmission.MANUAL)
 

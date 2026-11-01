@@ -1,61 +1,60 @@
-# BimmerStein ECU Tool — Beta 18
+# BimmerStein ECU Tool — Beta 19
 
-Version `0.1.0b18`
+Version 0.1.0b19
 
-Beta 18 makes patch configuration easier to use and improves ECU boot recovery.
+Beta 19 brings MS42 and MS43 into the same application as MS41, with faster
+reads and writes, clearer diagnostics and better tools for ECU data.
 
-**The Coding tab is highly experimental.** Do not use it unless you have a backup
-of the module you are coding, or the tools and knowledge needed to recover that
-module if something goes wrong.
+## What's new
 
-## What's improved
+- **MS42/MS43 flashing:** full and calibration reads/writes through temporary
+  RAM agents, with stock DS2 fallback where available. The 125,000-baud
+  compatibility setting works for these transfers too.
+- **Safer boot writes:** explicit confirmation, optional preservation of the
+  ECU's identity and pairing data, and recovery for interrupted operations.
+- **More useful diagnostics:** English fault descriptions, supported engine,
+  transmission and ABS freeze frames, direct actuator controls and roughness
+  plots. Clearing faults reports acceptance separately from the follow-up read.
+- **Live Data improvements:** selectable channels, CSV recording, graphs and
+  customizable instruments, with saved preferences and adjustable panels.
+- **ECU identity and storage:** VIN/history editing, optional virginizing,
+  storage backup/restore and editing of verified fields with meaningful units.
+  Virginizing leaves EWS alignment to the user.
+- **Expanded configuration:** more firmware revisions and supported vehicle
+  profiles, plus clearer controls that cannot change accidentally with the
+  mouse wheel.
+- **MS41 updates:** Ignition Cut and Launch Control V18, improved patch status
+  information and the existing Soft-BSL and hardware-recovery workflows.
 
-- Configure selected patches before building an image. Numeric settings now use
-  number controls, show their current values, and round entries to the supported
-  step when you review changes. Stock and automatic modes have separate controls,
-  with the stock value shown where available.
-- The Patches tab has aligned columns and headers. Compact configuration dialogs
-  and Details popovers keep descriptions accessible without crowding the controls.
-  ECU Info buttons also have matching sizes and corrected hover help.
-- Fixed an MS41.3 ignition-cut installation defect that could prevent ECU
-  communication after flashing. This release includes Ignition Cut V11 for
-  MS41.3 and V10 for MS41.0, MS41.1 and MS41.2.
-- Launch Control V11 corrects arming and release conditions. **Always** mode
-  allows arming without a switch while still respecting speed and throttle
-  limits. Soft and hard cut settings remain independent, including a hard cut
-  below the soft cut. Fuel hysteresis A and B can follow the stock settings or
-  use separate values. The stock limiter remains active.
-- CalGuard V6 keeps its initial recovery window and calibration compatibility
-  check in the boot area. Its shared 40 ms startup wait supports Intel and AMD
-  flash setups, including the AMD upper bank. Removing CalGuard restores the
-  original startup timing.
-- Normal Soft-BSL operations avoid the unnecessary full CalGuard read before
-  connecting. Updates and removal retain checks for patch compatibility,
-  dependencies and protected data. Soft-BSL V12 and AMD flash driver V4 are included.
+## Before using it
 
-## Downloads
+**Coding and guided transmission conversion are HIGHLY EXPERIMENTAL and are
+not recommended until further testing is completed.**
 
-Choose **x64** for 64-bit Windows or **x86** for 32-bit Windows. Installers and
-complete portable ZIPs include the user manual and patch definitions. Keep the
-complete portable folder together. Separate Windows 7 SP1 packages require
-KB2533623 or a superseding update.
+**Ignition Cut and Launch Control are HIGHLY EXPERIMENTAL.** They still require
+vehicle testing. Do not rely on them for engine protection, and do not use
+ignition cut with catalytic converters fitted: unburned fuel can damage the
+exhaust. Other patches retain their
+individual status; **Untested** means untested.
 
-The installers are unsigned. The Windows 7 packages passed checks on a newer
-Windows PC, but still need testing on Windows 7 itself.
+MS42/MS43 features depend on the detected firmware and memory layout. Some
+storage values and configuration equivalents remain unavailable. See the
+[support guide](docs/MS42_MS43.md) for the current boundaries.
 
-Installing the application does not flash or change the firmware in your ECU.
+Use stable power and keep original backups. If a write is interrupted, follow
+the app's recovery instructions before disconnecting or cycling ignition.
+Installing this application does not flash or update ECU firmware automatically.
 
-## Firmware notes
+## Windows downloads
 
-Ignition cut, launch control, CalGuard and Soft-BSL remain experimental.
-Bench results cover specific ECU and firmware combinations; the current cut
-and launch revisions still need further vehicle testing. Other firmware options
-retain the test status shown in the Patches tab.
+Installer and complete portable packages are provided for **x64**, **x86**,
+**Windows 7 x64** and **Windows 7 x86**. Choose the package matching your Windows
+version and architecture. Keep the complete portable folder together.
 
-Spark suppression can send unburned fuel into the exhaust and damage catalytic
-converters and other components. Do not use ignition cut with catalytic converters
-fitted.
+Packages include the user manual, required runtime licenses and
+`BimmerStein MS41 Patch Definitions.xml` beside the executable.
+Verify downloads against the supplied SHA-256 checksums.
 
 **OFF-ROAD, COMPETITION, RESEARCH, AND BENCH USE ONLY.**
-The project is distributed under GNU GPL version 3 (`GPL-3.0-only`). Required
-runtime licenses and notices are included.
+
+Copyright (C) 2026 CAATZ. GNU GPL version 3 (GPL-3.0-only).

@@ -16,8 +16,71 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import re
+import sys
+import tempfile
 
 import pytest
+
+
+# Windows offscreen Qt needs the system font directory for real layout metrics.
+if os.name == "nt" and os.environ.get("WINDIR"):
+    os.environ.setdefault("QT_QPA_FONTDIR", str(Path(os.environ["WINDIR"]) / "Fonts"))
+
+
+def pytest_configure(config):
+    """Isolate app writes and Windows temporary files before collecting modules."""
+    scratch = Path(config.rootpath) / ".tmp"
+    scratch.mkdir(exist_ok=True)
+    runtime = tempfile.TemporaryDirectory(prefix="pytest-runtime-", dir=scratch,
+                                          ignore_cleanup_errors=True)
+    config.add_cleanup(runtime.cleanup)
+    paths = pytest.MonkeyPatch()
+    config.add_cleanup(paths.undo)
+    root = Path(runtime.name)
+    system_temp = root / "temp"
+    system_temp.mkdir()
+    paths.setenv("BIMMERSTEIN_DATA_DIR", str(root / "app-data"))
+    paths.setenv("TEMP", str(system_temp))
+    paths.setenv("TMP", str(system_temp))
+    paths.setattr(tempfile, "tempdir", str(system_temp))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _configure_gui_tests(request):
+    if any("qapp" in item.fixturenames or "QApplication" in vars(item.module)
+           for item in request.session.items):
+        # Apply the production policy before pytest-qt or a test creates QApplication.
+        import gui
+        from PyQt5.QtCore import QSettings
+        gui.configure_high_dpi()
+        settings_file = str(Path(os.environ["BIMMERSTEIN_DATA_DIR"]) / "preferences.ini")
+
+        def settings():
+            return QSettings(settings_file, QSettings.IniFormat)
+
+        # Organization/application QSettings constructors ignore setDefaultFormat.
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(gui.MS41FlashGUI, "_live_settings", staticmethod(settings))
+            patch.setattr(gui._PanelSplitter, "_settings", lambda self: settings())
+            yield
+    else:
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _dispose_gui_objects():
+    """Closing a window does not release its Qt objects or their theme work."""
+    yield
+    widgets = sys.modules.get("PyQt5.QtWidgets")
+    app = widgets.QApplication.instance() if widgets is not None else None
+    if app is None:
+        return
+    from PyQt5.QtCore import QEvent
+    for widget in list(app.topLevelWidgets()):
+        widget.close()
+        widget.deleteLater()
+    widgets.QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.processEvents()
 
 
 FULL_IMAGE_SIZE = 0x40000

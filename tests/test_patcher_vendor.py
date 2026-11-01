@@ -7,7 +7,7 @@ import checksum
 import pytest
 
 EXPECTED_IDS = {
-    "alphan_failsafe", "alphan_failsafe_v1", "alphan_failsafe_v2", "amd_flash", "amd_flash_v3", "top_ds2_guard", "cal_guard", "cal_guard_v1",
+    "alphan_failsafe", "alphan_failsafe_v1", "alphan_failsafe_v2", "amd_flash", "amd_flash_v3", "amd_flash_v4", "top_ds2_guard", "cal_guard", "cal_guard_v1",
     "cal_guard_v2", "cal_guard_v4", "cal_guard_v5", "softbsl_loader_v11", "door_0x43",
     "door_0x43_ms410", "door_0x43_ms411", "door_magic", "door_magic_ms410",
     "door_magic_ms411", "ignition_cut", "ignition_cut_v2", "ignition_cut_v3", "ignition_cut_v4",
@@ -34,6 +34,14 @@ EXPECTED_IDS = {
     "launch_control_v10_ms411", "launch_control_v10_ms412",
     "launch_control_v11", "launch_control_v11_ms410",
     "launch_control_v11_ms411", "launch_control_v11_ms412",
+    "ignition_cut_v12", "ignition_cut_v13", "ignition_cut_v11_ms410", "ignition_cut_v11_ms411",
+    "ignition_cut_v11_ms412", "launch_control_v12", "launch_control_v13", "launch_control_v12_ms410",
+    "launch_control_v12_ms411", "launch_control_v12_ms412",
+    "ignition_cut_v14", "ignition_cut_v14_ms410", "ignition_cut_v14_ms411", "ignition_cut_v14_ms412",
+    "launch_control_v14", "launch_control_v14_ms410", "launch_control_v14_ms411", "launch_control_v14_ms412",
+    "ignition_cut_v15_ms410", "launch_control_v15_ms410",
+    *(f"{feature}_v{revision}{suffix}" for feature in ("ignition_cut", "launch_control")
+      for revision in (16, 17, 18) for suffix in ("", "_ms410", "_ms411", "_ms412")),
     "softbsl_loader", "softbsl_loader_legacy", "softbsl_loader_relocated_v1",
     "softbsl_loader_v2", "softbsl_loader_v3_bench_failed", "softbsl_loader_v9",
     "softbsl_loader_v10", "cal_guard_v3_compatibility", "cal_guard_v4_bench_failed",
@@ -43,6 +51,11 @@ EXPECTED_IDS = {
 _CUT_STATE_ASM = {
     *(f"ignition_cut_v10_ms41{variant}_{part}.asm"
       for variant in range(4) for part in ("control", "guards")),
+    *(f"ignition_cut_v{12 if variant == 3 else 11}_ms41{variant}_{part}.asm"
+      for variant in range(4) for part in ("control", "guards")),
+    *(f"launch_control_v12_ms41{variant}_state.asm" for variant in range(4)),
+    "ignition_cut_v13_ms413_control.asm",
+    "ignition_cut_v13_ms413_gate.asm",
     "ignition_cut_v9_ms410_control.asm",
     "ignition_cut_v9_ms410_gate.asm",
     "ignition_cut_v9_ms410_guards.asm",
@@ -62,7 +75,9 @@ _CUT_STATE_ASM = {
 }
 
 
-def test_cut_runtime_state_uses_the_certified_family_safe_byte():
+def test_retired_cut_sources_preserve_their_original_ram_operands():
+    # Historical payloads remain removable; E847 is not free in current stock.
+    # Native collision regression lives in verify_patch_ram, with V16 at D801.
     patcher = Path(__file__).resolve().parents[1] / "engines" / "patcher"
     for name in _CUT_STATE_ASM:
         source = (patcher / name).read_text(encoding="utf-8")
@@ -70,9 +85,20 @@ def test_cut_runtime_state_uses_the_certified_family_safe_byte():
         assert "0xE812" not in source, name
         for line in source.splitlines():
             code = line.split(";", 1)[0]
-            if "0xE847" in code or "0xE848" in code:
+            if any(address in code for address in ("0xE847", "0xE848", "0xE849")):
                 assert code.split()[0].lower() in {"movb", "andb", "orb"}, (
                     name, line)
+
+
+def test_current_sources_use_relocated_state():
+    patcher = Path(__file__).resolve().parents[1] / "engines" / "patcher"
+    for path in (*patcher.glob("*v16*.asm"), *patcher.glob("*v18*.asm")):
+        code = "\n".join(line.split(";", 1)[0]
+                         for line in path.read_text(encoding="utf-8").splitlines())
+        assert not re.search(r"0xE84[7-A]\b", code, re.IGNORECASE), path.name
+    for variant in range(4):
+        source = (patcher / f"ignition_cut_v{16 if variant == 3 else 17}_ms41{variant}_control.asm").read_text(encoding="utf-8")
+        assert "0xD801" in source
 
 
 def test_patch_asm_has_no_odd_direct_word_operands():
@@ -102,20 +128,28 @@ def test_current_launch_sources_have_no_fd5a_latch_reader():
     patcher = Path(__file__).resolve().parents[1] / "engines" / "patcher"
     for path in (*patcher.glob("launch_control_v[789]*.asm"),
                  *patcher.glob("launch_control_v10*.asm"),
-                 *patcher.glob("launch_control_v11*.asm")):
+                 *patcher.glob("launch_control_v11*.asm"),
+                 *patcher.glob("launch_control_v12*.asm")):
         source = path.read_text(encoding="utf-8")
         assert "0xFD5A.6" not in source, path.name
         assert not re.search(r"\bmovb\s+RL[45],0xFD5A\b", source), path.name
 
 
-@pytest.mark.parametrize("variant", range(4))
-def test_launch_v11_descriptor_matches_assembled_artifacts(variant):
+@pytest.mark.parametrize("variant,revision", [
+    *((variant, revision) for variant in range(4) for revision in (11, 12)),
+    (3, 13),
+])
+def test_launch_descriptors_match_assembled_artifacts(variant, revision):
     patcher = Path(__file__).resolve().parents[1] / "engines" / "patcher"
     family = f"ms41{variant}"
     suffix = "" if variant == 3 else "_" + family
-    patch = patch_ms41.load_patches()["launch_control_v11" + suffix]
-    for part in ("cave_b", "hard_compare", "hyst_a", "hyst_b"):
-        source = patcher / f"launch_control_v11_{family}_{part}.asm"
+    patch = patch_ms41.load_patches()[f"launch_control_v{revision}" + suffix]
+    parts = ("cave_b", "hard_compare", "hyst_a", "hyst_b")
+    if revision >= 12:
+        parts += ("state", "timing", "qualification")
+    for part in parts:
+        source_revision = 12 if part in ("state", "timing", "qualification") else 11
+        source = patcher / f"launch_control_v{source_revision}_{family}_{part}.asm"
         cpu_address = int(re.search(
             r"^base 0x([0-9A-Fa-f]+)$", source.read_text(encoding="utf-8"),
             re.MULTILINE)[1], 16)
@@ -124,6 +158,10 @@ def test_launch_v11_descriptor_matches_assembled_artifacts(variant):
         payload = bytes.fromhex(edit["data"])
         assert payload.startswith(artifact), (family, part)
         assert set(payload[len(artifact):]) <= {0xFF}, (family, part)
+        if part == "state":
+            check_offset = patch["cave"]["retard_entries"]["check"] - edit["off"]
+            assert payload[check_offset:check_offset + 4] == bytes.fromhex("ec88ecf7"), (
+                family, "CHECK must enter before its PSW/R7 saves")
     assert patch_ms41.validate_splices(patch) == []
     assert not patch_ms41.needs_boot_write(patch)
 
@@ -165,17 +203,17 @@ def test_top_ds2_guard_requires_final_top_marker_and_current_amd(version):
     assert patch_ms41.is_applied(protected, patches["top_ds2_guard"])
 
 @pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
-def test_amd_v4_recognizes_exact_v3_core_without_owning_startup_wait(version):
+def test_amd_v5_upgrades_exact_v3_core_without_owning_startup_wait(version):
     import identity
 
     patches = patch_ms41.load_patches()
     prior = patches["amd_flash_v3"]
     current = patches["amd_flash"]
     base = ref(version)
-    assert current["version"] == "V4"
-    assert current["supersedes"] == ["amd_flash_v3"]
+    assert current["version"] == "V5"
+    assert set(current["supersedes"]) == {"amd_flash_v3", "amd_flash_v4"}
     assert prior["deprecated"] is True
-    assert current["edits"] == prior["edits"][:4]
+    assert patches["amd_flash_v4"]["edits"] == prior["edits"][:4]
     assert [(edit["off"], edit["expect"], edit["data"])
             for edit in prior["edits"][4:]] == [
         (0x4460, "cc00cc00", "cc00cc00"),
@@ -183,15 +221,15 @@ def test_amd_v4_recognizes_exact_v3_core_without_owning_startup_wait(version):
 
     old, _ = patch_ms41.build(base, ["amd_flash_v3"], allow_deprecated=True)
     assert patch_ms41.is_applied(old, prior)
-    assert patch_ms41.is_applied(old, current)
+    assert not patch_ms41.is_applied(old, current)
     assert patch_ms41.is_absent(old, patch_ms41.startup_wait_definition(patches))
     with pytest.raises(patch_ms41.PatchError, match="deprecated"):
         patch_ms41.build(base, ["amd_flash_v3"])
 
     upgraded, _ = patch_ms41.build(old, ["amd_flash"])
     assert patch_ms41.is_applied(upgraded, current)
-    assert patch_ms41.is_applied(upgraded, prior)
-    assert upgraded == old
+    assert not patch_ms41.is_applied(upgraded, prior)
+    assert upgraded != old
     assert patch_ms41.build(upgraded, ["amd_flash"])[0] == upgraded
     assert upgraded[0x6000:] == old[0x6000:]
     for start, end in identity.IDENTITY_GRAFT_RANGES:
@@ -548,11 +586,11 @@ def test_needs_boot_write_flags_only_the_sa1_patches():
         "softbsl_loader_legacy", "softbsl_loader_relocated_v1",
         "softbsl_loader_v2", "softbsl_loader_v3_bench_failed",
         "softbsl_loader_v9", "softbsl_loader_v10",
-        "cal_guard_v3_compatibility", "cal_guard_v4_bench_failed", "amd_flash", "amd_flash_v3", "top_ds2_guard",
+        "cal_guard_v3_compatibility", "cal_guard_v4_bench_failed", "amd_flash", "amd_flash_v3", "amd_flash_v4", "top_ds2_guard",
     }
     # Program/cal patches are DS2-writable.
-    assert patch_ms41.needs_boot_write(patches["ignition_cut_v11"]) is False
-    assert patch_ms41.needs_boot_write(patches["launch_control_v11"]) is False
+    assert patch_ms41.needs_boot_write(patches["ignition_cut_v13"]) is False
+    assert patch_ms41.needs_boot_write(patches["launch_control_v13"]) is False
 
 
 def test_relocated_loader_preserves_optional_descriptor_and_composes_with_guard_and_amd():
@@ -617,7 +655,7 @@ def test_softbsl_v11_rejects_a_corrupted_boot_hook_prefix():
         patch_ms41.build(bytes(base), ["softbsl_loader"])
 
 
-def test_relocated_loader_and_latest_patch_descriptors_use_built_hex_artifacts():
+def test_relocated_loader_and_historical_feature_descriptors_use_built_hex_artifacts():
     root = Path(__file__).resolve().parents[1]
     patches = patch_ms41.load_patches()
     alphan = patches["alphan_failsafe"]
@@ -752,6 +790,8 @@ def test_relocated_loader_and_latest_patch_descriptors_use_built_hex_artifacts()
         ("ignition_cut_v10_ms411", "ignition_cut_v10_ms411_guards.hex", 0x3BBE0),
         ("ignition_cut_v10_ms412", "ignition_cut_v10_ms412_guards.hex", 0x3A1A0),
         ("ignition_cut_v11", "ignition_cut_v10_ms413_guards.hex", 0x3A1A0),
+        ("ignition_cut_v13", "ignition_cut_v13_ms413_control.hex", 0x3A600),
+        ("ignition_cut_v13", "ignition_cut_v13_ms413_gate.hex", 0x39C70),
     ):
         cave = next(
             edit["data"].lower() for edit in patches[patch_id]["edits"]
@@ -779,18 +819,18 @@ def test_no_current_patch_owns_any_ms412_aif_byte():
 @pytest.mark.parametrize(
     "variant,patch_id,heater_sites",
     [
-        ("MS41.1", "ignition_cut_v10_ms411",
+        ("MS41.1", "ignition_cut_v11_ms411",
          (0x259E4, 0x26052, 0x267BE, 0x26AC0)),
-        ("MS41.2", "ignition_cut_v10_ms412",
+        ("MS41.2", "ignition_cut_v11_ms412",
          (0x25AC2, 0x26130, 0x2689C, 0x26B9E)),
-        ("MS41.3", "ignition_cut_v11",
+        ("MS41.3", "ignition_cut_v13",
          (0x25AC2, 0x26130, 0x2689C, 0x26B9E)),
     ],
 )
 def test_ignition_cut_guards_leave_o2_heater_diagnostics_untouched(
         variant, patch_id, heater_sites):
     stock = ref(variant)
-    patched, _log = patch_ms41.build(stock, [patch_id])
+    patched, _log = patch_ms41.build(stock, [patch_id], allow_deprecated=True)
     for site in heater_sites:
         assert patched[site:site + 4] == stock[site:site + 4]
 
@@ -798,19 +838,19 @@ def test_ignition_cut_guards_leave_o2_heater_diagnostics_untouched(
 def test_latest_switch_caves_follow_the_stock_sir_selector_order():
     patches = patch_ms41.load_patches()
     active_caves = {
-        "ignition_cut_v11": bytes.fromhex(next(
+        "ignition_cut_v18": bytes.fromhex(next(
             edit["data"]
-            for edit in patches["ignition_cut_v11"]["edits"]
+            for edit in patches["ignition_cut_v18"]["edits"]
             if edit["off"] == 0x3A600
         )),
-        "launch_control_v11": bytes.fromhex(next(
+        "launch_control_v18": bytes.fromhex(next(
             edit["data"]
-            for edit in patches["launch_control_v11"]["edits"]
+            for edit in patches["launch_control_v18"]["edits"]
             if edit["off"] == 0x39F80
         )),
-        "launch_control_v11_ms412": bytes.fromhex(next(
+        "launch_control_v18_ms412": bytes.fromhex(next(
             edit["data"]
-            for edit in patches["launch_control_v11_ms412"]["edits"]
+            for edit in patches["launch_control_v18_ms412"]["edits"]
             if edit["off"] == 0x39F80
         )),
     }
@@ -827,7 +867,7 @@ def test_latest_switch_caves_follow_the_stock_sir_selector_order():
                 bytes.fromhex("f3fa61fd69a1"),
                 bytes.fromhex("f3fa60fd67fa8000"),
             )
-            if patch_id == "ignition_cut_v11"
+            if patch_id == "ignition_cut_v18"
             else launch_reads
         )
         offsets = [cave.find(read) for read in sir_reads]
@@ -835,15 +875,15 @@ def test_latest_switch_caves_follow_the_stock_sir_selector_order():
         assert all(offset >= 0 for offset in offsets), (patch_id, offsets)
         assert all(cave.count(read) == 1 for read in sir_reads), patch_id
 
-    ms413 = active_caves["launch_control_v11"]
-    ms412 = active_caves["launch_control_v11_ms412"]
+    ms413 = active_caves["launch_control_v18"]
+    ms412 = active_caves["launch_control_v18_ms412"]
     assert len(ms413) == len(ms412)
     assert ms413 != ms412
 
 
 def test_ms413_launch_uses_erased_tail_and_preserves_live_boost_table():
     patches = patch_ms41.load_patches()
-    launch = patches["launch_control_v11"]
+    launch = patches["launch_control_v13"]
     expected_cals = {
         "LC_SW": 0x107E0,
         "LC_CUTTYPE": 0x107E1,
@@ -857,25 +897,26 @@ def test_ms413_launch_uses_erased_tail_and_preserves_live_boost_table():
         "LC_IPW": 0x107E9,
         "LC_FUEL_HYST_B": 0x107EB,
         "LC_FUEL_HYST_A": 0x107EC,
+        "LC_IGN_ANGLE": 0x107ED,
     }
     assert launch["cave"]["cals"] == expected_cals
 
     stock = ref("MS41.3")
-    assert stock[0x107E0:0x107ED] == b"\xFF" * 13
+    assert stock[0x107E0:0x107EE] == b"\xFF" * 14
     boost_table = stock[0x1752C:0x1756C]
     patched, _log = patch_ms41.build(
-        stock, ["ignition_cut_v11", "launch_control_v11"])
-    assert patched[0x107E0:0x107ED] == b"\xFF" * 13
+        stock, ["ignition_cut_v13", "launch_control_v13"], allow_deprecated=True)
+    assert patched[0x107E0:0x107EE] == b"\xFF" * 14
     assert patched[0x1752C:0x1756C] == boost_table
 
 
 @pytest.mark.parametrize(
     "variant,patch_id,hyst_offset,ipw_offset",
     [
-        ("MS41.0", "launch_control_v11_ms410", 0x17028, 0x17029),
-        ("MS41.1", "launch_control_v11_ms411", 0x17718, 0x17719),
-        ("MS41.2", "launch_control_v11_ms412", 0x17534, 0x17535),
-        ("MS41.3", "launch_control_v11", 0x107E8, 0x107E9),
+        ("MS41.0", "launch_control_v12_ms410", 0x17028, 0x17029),
+        ("MS41.1", "launch_control_v12_ms411", 0x17718, 0x17719),
+        ("MS41.2", "launch_control_v12_ms412", 0x17534, 0x17535),
+        ("MS41.3", "launch_control_v13", 0x107E8, 0x107E9),
     ],
 )
 def test_launch_ignition_calibrations_use_erased_variant_specific_bytes(
@@ -963,22 +1004,22 @@ def test_ignition_v7_is_anchored_only_at_the_six_channel_p1l_final_stage():
 
 def test_latest_ms412_program_patches_recompute_enabled_program_checksum():
     out, _log = patch_ms41.build(
-        ref("MS41.2"), ["ignition_cut_v10_ms412", "launch_control_v11_ms412"])
+        ref("MS41.2"), ["ignition_cut_v18_ms412", "launch_control_v18_ms412"])
     status = checksum.checksum_status(out)
     assert status == {
         "boot": True, "program": True, "cal": True,
         "prog_disabled": False, "cal_disabled": False,
     }
     assert patch_ms41.validate_splices(
-        patch_ms41.load_patches()["launch_control_v11_ms412"]) == []
-    # V11 runs after the native soft/fault selection; its former hook is stock.
+        patch_ms41.load_patches()["launch_control_v18_ms412"]) == []
+    # V16 retains the native soft/fault selection; the former hook is stock.
     assert out[0x247D2:0x247D6] == ref("MS41.2")[0x247D2:0x247D6]
 
 
 def test_latest_ms413_program_patches_recompute_all_checksums():
     out, _log = patch_ms41.build(
         ref("MS41.3clean"),
-        ["alphan_failsafe", "ignition_cut_v11", "launch_control_v11"],
+        ["alphan_failsafe", "ignition_cut_v18", "launch_control_v18"],
     )
     status = checksum.checksum_status(out)
     assert status["boot"] and status["program"] and status["cal"]
@@ -991,16 +1032,16 @@ def test_latest_ms413_program_patches_recompute_all_checksums():
         (
             "MS41.0",
             [
-                "ignition_cut_v10_ms410",
-                "launch_control_v11_ms410",
+                "ignition_cut_v18_ms410",
+                "launch_control_v18_ms410",
                 "vanos_minrpm_v2_ms410",
             ],
         ),
         (
             "MS41.1",
             [
-                "ignition_cut_v10_ms411",
-                "launch_control_v11_ms411",
+                "ignition_cut_v18_ms411",
+                "launch_control_v18_ms411",
                 "vanos_minrpm_ms411",
             ],
         ),
@@ -1023,22 +1064,22 @@ def test_latest_older_firmware_feature_ports_compose_and_recompute_program(
         (
             "MS41.0",
             ["ignition_cut_v8_ms410", "launch_control_v6_ms410"],
-            ["ignition_cut_v10_ms410", "launch_control_v11_ms410"],
+            ["ignition_cut_v18_ms410", "launch_control_v18_ms410"],
         ),
         (
             "MS41.1",
             ["ignition_cut_v8_ms411", "launch_control_v6_ms411"],
-            ["ignition_cut_v10_ms411", "launch_control_v11_ms411"],
+            ["ignition_cut_v18_ms411", "launch_control_v18_ms411"],
         ),
         (
             "MS41.2",
             ["ignition_cut_v8_ms412", "launch_control_v6_ms412"],
-            ["ignition_cut_v10_ms412", "launch_control_v11_ms412"],
+            ["ignition_cut_v18_ms412", "launch_control_v18_ms412"],
         ),
         (
             "MS41.3",
             ["ignition_cut_v8", "launch_control_v6"],
-            ["ignition_cut_v11", "launch_control_v11"],
+            ["ignition_cut_v18", "launch_control_v18"],
         ),
     ],
 )

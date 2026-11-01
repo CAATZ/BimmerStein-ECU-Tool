@@ -236,5 +236,7 @@
       "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "data": "ec88ecf4da03202d3d0ee7f8fe0046f956ed2d02e7f8fd0065f848e8fcf4fc88e4c92b00db00fcf4fc88db00"
     }
-  ]
+  ],
+  "deprecated": true,
+  "superseded_by": "ignition_cut_v11_ms410"
 }

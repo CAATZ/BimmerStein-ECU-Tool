@@ -36,6 +36,9 @@ def format_dtc_table(dtcs: list) -> str:
         conditions = getattr(d, "conditions", ())
         if conditions:
             lines.append(f"{'':<21}Conditions: {'; '.join(conditions)}")
+        environment = getattr(d, "environment_raw", b"")
+        if environment:
+            lines.append(f"{'':<21}Raw environment / detail: {environment.hex(' ').upper()}")
         qualifiers = getattr(d, "qualifiers", ())
         if qualifiers:
             lines.append(f"{'':<21}Conditions: {'; '.join(qualifiers)}")
@@ -45,7 +48,10 @@ def format_dtc_table(dtcs: list) -> str:
             value = getattr(d, attribute, None)
             if value is not None:
                 lines.append(f"{'':<21}{label}: {value}")
-        for value in getattr(d, "freeze_frame", ()):
+        freeze_frame = getattr(d, "freeze_frame", ())
+        if freeze_frame:
+            lines.append(f"{'':<21}Freeze Frame:")
+        for value in freeze_frame:
             lines.append(f"{'':<21}{value.label}: {value.value:g} {value.unit}")
         reported_total = getattr(d, "reported_total", None)
         if reported_total is not None:
@@ -515,10 +521,11 @@ class DS2DTCRecord:
 
     @property
     def self_test_reason(self) -> str | None:
-        if self.code != 100 or self.memory != "stored":
+        if self.code != 100:
             return None
-        # Native command 0x04 omits internal record byte 1, placing the reason here.
-        return f"0x{int.from_bytes(self.raw_record[6:8], 'little'):04X}"
+        # Shadow command 0x14 retains the debounce byte omitted by command 0x04.
+        shift = 1 if self.memory == "shadow" else 0
+        return f"0x{int.from_bytes(self.raw_record[6 + shift:8 + shift], 'little'):04X}"
 
     def __repr__(self):
         return f"DS2 DTC {self.code:03d}  [{self.status_text}]  {self.description}"
@@ -564,23 +571,22 @@ def _freeze_frame(variant: str | None, code: int, raw_values: bytes) -> tuple:
 
 def _record(raw: bytes, variant: str | None, memory: str,
             current_counter: int | None = None) -> DS2DTCRecord:
+    # Shadow wire byte 2 is the retained debounce accumulator, not frequency.
+    shift = 1 if memory == "shadow" else 0
     occurred = None
-    operating = None
-    if memory == "stored" and current_counter is not None:
-        occurred = (current_counter - int.from_bytes(raw[8:10], "big")) * 0.1
-    elif memory == "shadow":
-        operating = float(raw[9])
+    if current_counter is not None:
+        timestamp = int.from_bytes(raw[8 + shift:10 + shift], "big")
+        occurred = ((current_counter - timestamp) & 0xFFFF) * 0.1
     return DS2DTCRecord(
         code=raw[0],
         status_raw=raw[1],
         raw_record=raw,
         memory=memory,
-        frequency=raw[2],
-        logistics_counter=raw[3],
+        frequency=raw[2 + shift],
+        logistics_counter=raw[3 + shift],
         qualifiers=_qualifiers(variant, raw[0], raw[1]),
-        freeze_frame=_freeze_frame(variant, raw[0], raw[4:8]),
+        freeze_frame=_freeze_frame(variant, raw[0], raw[4 + shift:8 + shift]),
         occurred_hours_ago=occurred,
-        operating_hours=operating,
     )
 
 
@@ -622,7 +628,8 @@ def parse_ds2_dtc_response(payload: bytes, *, variant: str | None = None,
     return records
 
 
-def parse_ds2_shadow_response(payload: bytes, *, variant: str | None = None) -> list:
+def parse_ds2_shadow_response(payload: bytes, *, variant: str | None = None,
+                              current_counter: int | None = None) -> list:
     """Decode the 11-byte records returned by BMW FS_SHADOW_LESEN."""
     data = bytes(payload)
     if data in (b"\x00", b"\x00\x00"):
@@ -640,7 +647,7 @@ def parse_ds2_shadow_response(payload: bytes, *, variant: str | None = None) -> 
         raw = data[1 + index * 11:12 + index * 11]
         if raw[0] and raw[0] not in seen:
             seen.add(raw[0])
-            records.append(_record(raw, variant, "shadow"))
+            records.append(_record(raw, variant, "shadow", current_counter))
     return sorted(records, key=lambda record: record.code)
 
 
@@ -665,5 +672,6 @@ def read_ms41_fault_memory(ds2, variant: str | None = None) -> MS41FaultMemory:
     profile = variant or "common"
     stored = parse_ds2_dtc_response(
         ds2.read_dtc(1), variant=profile, current_counter=current_counter)
-    shadow = parse_ds2_shadow_response(ds2.read_shadow_dtc(), variant=profile)
+    shadow = parse_ds2_shadow_response(
+        ds2.read_shadow_dtc(), variant=profile, current_counter=current_counter)
     return MS41FaultMemory(profile, tuple(stored), tuple(shadow))

@@ -176,6 +176,55 @@
           <conversions><conversion units="V" storagetype="uint8" expr="x*0.10196" format="0.00" gauge_min="0" gauge_max="20" gauge_step="2"/></conversions>
         </ecuparam>
 
+        <!-- Exact SHINDE1 model context. Extended values require verified runtime admission. -->
+        <ecuparam id="BS_MODE_MAF_FAULT" name="Active MAF Fault" desc="Native matured MAF fault; does not identify a failsafe patch" target="1">
+          <ecu id="SHINDE1"><address>0x0000FD30</address></ecu>
+          <conversions><conversion units="" storagetype="uint16" endian="little" expr="BitWise(2,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion> </conversions>
+        </ecuparam>
+        <ecuparam id="BS_MODE_MANUAL_ALPHA" name="Manual AlphaN Mode" desc="Native manual AlphaN selection" target="1">
+          <ecu id="SHINDE1"><address>0x0000FD22</address></ecu>
+          <conversions><conversion units="" storagetype="uint16" endian="little" expr="BitWise(1024,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion> </conversions>
+        </ecuparam>
+        <ecuparam id="BS_MODE_SPEED_DENSITY" name="Speed Density Mode" desc="Native Speed Density selection; extended mirrors are unavailable in this mode" target="1">
+          <ecu id="SHINDE1"><address>0x0000FD22</address></ecu>
+          <conversions><conversion units="" storagetype="uint16" endian="little" expr="BitWise(512,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion> </conversions>
+        </ecuparam>
+        <ecuparam id="BS_ALPHA_EXTENDED_LOAD" name="Extended Engine Load" desc="Extended model load; requires exact AlphaN V3, x4 scaling and no Speed Density" target="1">
+          <ecu id="SHINDE1"><address>0x0000E80A</address></ecu>
+          <conversions><conversion units="mg/st" storagetype="uint16" endian="little" expr="x*0.021195*4" format="0.0"/> </conversions>
+        </ecuparam>
+        <ecuparam id="BS_ALPHA_EXTENDED_MAF" name="Extended MAF / Model" desc="Extended air-mass model; requires exact AlphaN V3, x4 scaling and no Speed Density" target="1">
+          <ecu id="SHINDE1"><address>0x0000E80C</address></ecu>
+          <conversions><conversion units="kg/h" storagetype="uint16" endian="little" expr="x*0.25*4" format="0.0"/> </conversions>
+        </ecuparam>
+
+        <!-- Native filtered cylinder results: signed RAM, not BMW's lossy
+             magnitude display. Producer eligibility is applied by the logger. -->
+        <ecuparam id="BS_ROUGHNESS_CYL1" name="Cylinder 1 Roughness" desc="Signed native filtered roughness; unitless, cylinder 1" target="1">
+          <ecu id="1429861,1437806,1406464,SHINDE1"><address>0x0000E854</address></ecu>
+          <conversions><conversion units="raw" storagetype="int16" endian="little" expr="x" format="0"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_ROUGHNESS_CYL2" name="Cylinder 2 Roughness" desc="Signed native filtered roughness; unitless, cylinder 2" target="1">
+          <ecu id="1429861,1437806,1406464,SHINDE1"><address>0x0000E856</address></ecu>
+          <conversions><conversion units="raw" storagetype="int16" endian="little" expr="x" format="0"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_ROUGHNESS_CYL3" name="Cylinder 3 Roughness" desc="Signed native filtered roughness; unitless, cylinder 3" target="1">
+          <ecu id="1429861,1437806,1406464,SHINDE1"><address>0x0000E858</address></ecu>
+          <conversions><conversion units="raw" storagetype="int16" endian="little" expr="x" format="0"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_ROUGHNESS_CYL4" name="Cylinder 4 Roughness" desc="Signed native filtered roughness; unitless, cylinder 4" target="1">
+          <ecu id="1429861,1437806,1406464,SHINDE1"><address>0x0000E85A</address></ecu>
+          <conversions><conversion units="raw" storagetype="int16" endian="little" expr="x" format="0"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_ROUGHNESS_CYL5" name="Cylinder 5 Roughness" desc="Signed native filtered roughness; unitless, cylinder 5" target="1">
+          <ecu id="1429861,1437806,1406464,SHINDE1"><address>0x0000E85C</address></ecu>
+          <conversions><conversion units="raw" storagetype="int16" endian="little" expr="x" format="0"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_ROUGHNESS_CYL6" name="Cylinder 6 Roughness" desc="Signed native filtered roughness; unitless, cylinder 6" target="1">
+          <ecu id="1429861,1437806,1406464,SHINDE1"><address>0x0000E85E</address></ecu>
+          <conversions><conversion units="raw" storagetype="int16" endian="little" expr="x" format="0"/></conversions>
+        </ecuparam>
+
         <!-- Channels shared by both stock and wideband display profiles. -->
         <ecuparam id="BS_STATE_CLOSED_THROTTLE" name="Closed Throttle" desc="Closed-throttle state" group="0x0B" subgroup="0x01" target="1">
           <ecu id="1405854,1406464,SHINDE1,1429373,1429861,1432401,1437806,1440176"><address>0x0000FD24</address></ecu>
@@ -230,7 +279,79 @@
           <conversions><conversion units="AFR" storagetype="uint8" expr="x*0.05+8.25" format="0.00" gauge_min="8" gauge_max="22" gauge_step="1"/></conversions>
         </ecuparam>
 
-        <!-- Ignition-cut and launch-control V9/V7 channels; runtime admission stays in code. -->
+        <!-- Ignition-cut and launch-control channels; installed ABI and independent
+             Launch admission stay in code. These fields require current V16. -->
+        <ecuparam id="BS_CUT_RETARD_RANGE" name="Ignition Retard Range" desc="V16 standalone ignition retard band" target="1">
+          <ecu id="1429861"><address>0x00013015</address></ecu>
+          <ecu id="1437806"><address>0x00013705</address></ecu>
+          <ecu id="1406464"><address>0x00012A6A</address></ecu>
+          <ecu id="SHINDE1"><address>0x00012A6A</address></ecu>
+          <conversions><conversion units="RPM" storagetype="uint8" expr="x*32" format="0"/> </conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_IGN_ANGLE" name="Ignition Cut Timing" desc="V16 standalone timing angle; disabled encodings are not measured timing" target="1">
+          <ecu id="1429861"><address>0x00013016</address></ecu>
+          <ecu id="1437806"><address>0x00013706</address></ecu>
+          <ecu id="1406464"><address>0x00012A6B</address></ecu>
+          <ecu id="SHINDE1"><address>0x00012A6B</address></ecu>
+          <conversions><conversion units="°BTDC" storagetype="uint8" expr="if(x&lt;64,x*0.375-23.625,if(x==255,1000,1001))" format="0.000"><replace value="1000" with="Off"/><replace value="1001" with="Invalid / disabled"/></conversion> </conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_FUEL_HYST_B" name="Launch Fuel Hysteresis B" desc="V16 launch fuel stage B hysteresis" target="1">
+          <ecu id="1429861"><address>0x0001302B</address></ecu>
+          <ecu id="1437806"><address>0x0001371B</address></ecu>
+          <ecu id="1406464"><address>0x00013537</address></ecu>
+          <ecu id="SHINDE1"><address>0x000147EB</address></ecu>
+          <conversions><conversion units="RPM" storagetype="uint8" expr="if(x==255,10000,x*32)" format="0"><replace value="10000" with="Follow stock"/></conversion> </conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_FUEL_HYST_A" name="Launch Fuel Hysteresis A" desc="V16 launch fuel stage A hysteresis" target="1">
+          <ecu id="1429861"><address>0x0001302C</address></ecu>
+          <ecu id="1437806"><address>0x0001371C</address></ecu>
+          <ecu id="1406464"><address>0x00013538</address></ecu>
+          <ecu id="SHINDE1"><address>0x000147EC</address></ecu>
+          <conversions><conversion units="RPM" storagetype="uint8" expr="if(x==255,10000,x*32)" format="0"><replace value="10000" with="Follow stock"/></conversion> </conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_IGN_ANGLE" name="Launch Ignition Timing" desc="V16 launch ignition retard angle; disabled encodings are not measured timing" target="1">
+          <ecu id="1429861"><address>0x0001302D</address></ecu>
+          <ecu id="1437806"><address>0x0001371D</address></ecu>
+          <ecu id="1406464"><address>0x00013539</address></ecu>
+          <ecu id="SHINDE1"><address>0x000147ED</address></ecu>
+          <conversions><conversion units="°BTDC" storagetype="uint8" expr="if(x&lt;64,x*0.375-23.625,if(x==255,1000,1001))" format="0.000"><replace value="1000" with="Off"/><replace value="1001" with="Invalid / disabled"/></conversion> </conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_RETARD_RANGE" name="Launch Retard Range" desc="V16 launch retard band" target="1">
+          <ecu id="1429861"><address>0x0001302E</address></ecu>
+          <ecu id="1437806"><address>0x0001371E</address></ecu>
+          <ecu id="1406464"><address>0x0001353A</address></ecu>
+          <ecu id="SHINDE1"><address>0x000147EE</address></ecu>
+          <conversions><conversion units="RPM" storagetype="uint8" expr="x*32" format="0"/> </conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_CUT_IGN_ANGLE" name="Launch Cut Timing" desc="V16 launch hard-cut timing angle; disabled encodings are not measured timing" target="1">
+          <ecu id="1429861"><address>0x0001302F</address></ecu>
+          <ecu id="1437806"><address>0x0001371F</address></ecu>
+          <ecu id="1406464"><address>0x0001353B</address></ecu>
+          <ecu id="SHINDE1"><address>0x000147EF</address></ecu>
+          <conversions><conversion units="°BTDC" storagetype="uint8" expr="if(x&lt;64,x*0.375-23.625,if(x==255,1000,1001))" format="0.000"><replace value="1000" with="Off"/><replace value="1001" with="Invalid / disabled"/></conversion> </conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_RECOVERY_PENDING" name="Cut Recovery Pending" desc="V16 deferred recovery flags; front banks bits0-1; later families also rear banks bits2-3 and misfire bit4" target="1">
+          <ecu id="1429861"><address>0x0000D802</address></ecu>
+          <ecu id="1437806"><address>0x0000D802</address></ecu>
+          <ecu id="1406464"><address>0x0000D802</address></ecu>
+          <ecu id="SHINDE1"><address>0x0000D802</address></ecu>
+          <conversions><conversion units="raw" storagetype="uint8" expr="x" format="0"/> </conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_TIMING_STATE" name="Cut Timing State" desc="V16 ABI last published timing decision. V17/V18 may retain the native protected angle while the limiter constraint is active; this does not prove an angle change or physical spark timing." target="1">
+          <ecu id="1429861"><address>0x0000D803</address></ecu>
+          <ecu id="1437806"><address>0x0000D803</address></ecu>
+          <ecu id="1406464"><address>0x0000D803</address></ecu>
+          <ecu id="SHINDE1"><address>0x0000D803</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="x" format="0"><replace value="192" with="Inactive"/><replace value="193" with="Eligible / inhibited"/><replace value="195" with="Timing constraint active"/></conversion> </conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_TIMING_SOURCE" name="Cut Timing Source" desc="V16 last published timing source" target="1">
+          <ecu id="1429861"><address>0x0000D804</address></ecu>
+          <ecu id="1437806"><address>0x0000D804</address></ecu>
+          <ecu id="1406464"><address>0x0000D804</address></ecu>
+          <ecu id="SHINDE1"><address>0x0000D804</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="x" format="0"><replace value="0" with="None"/><replace value="1" with="Fuel launch"/><replace value="2" with="Ignition launch"/><replace value="3" with="Standalone cut"/></conversion> </conversions>
+        </ecuparam>
+
         <ecuparam id="BS_CUT_INPUT_80" name="Cut Input 80" desc="Cut-patch input 80" target="1">
           <ecu id="1429861"><address>0x0000FD51</address></ecu><ecu id="1406464,SHINDE1,1437806"><address>0x0000FD61</address></ecu>
           <conversions><conversion units="" storagetype="uint8" expr="BitWise(2,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
@@ -284,8 +405,12 @@
           <conversions><conversion units="km/h" storagetype="uint8" expr="x" format="0"/></conversions>
         </ecuparam>
         <ecuparam id="BS_CUT_LAUNCH_MIN_TPS" name="Launch Min TPS" desc="Launch-control minimum throttle" target="1">
-          <ecu id="1429861"><address>0x00013026</address></ecu><ecu id="1437806"><address>0x00013716</address></ecu><ecu id="1406464"><address>0x00013532</address></ecu><ecu id="SHINDE1"><address>0x000147E6</address></ecu>
+          <ecu id="1437806"><address>0x00013716</address></ecu><ecu id="1406464"><address>0x00013532</address></ecu><ecu id="SHINDE1"><address>0x000147E6</address></ecu>
           <conversions><conversion units="%" storagetype="uint8" expr="x*0.47" format="0"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_MIN_TPS_MS410" name="Launch Min TPS" desc="Exact 1429861 launch threshold in the native throttle-angle domain; raw bytes are unchanged. Firmware-grounded units, not a physical throttle sweep." target="1">
+          <ecu id="1429861"><address>0x00013026</address></ecu>
+          <conversions><conversion units="° throttle" storagetype="uint8" expr="x*0.46862745098039" format="0.00"/></conversions>
         </ecuparam>
         <ecuparam id="BS_CUT_LAUNCH_HARD_RPM" name="Launch Hard Cut RPM" desc="Launch-control hard-cut RPM" target="1">
           <ecu id="1429861"><address>0x00013027</address></ecu><ecu id="1437806"><address>0x00013717</address></ecu><ecu id="1406464"><address>0x00013533</address></ecu><ecu id="SHINDE1"><address>0x000147E7</address></ecu>
@@ -299,27 +424,32 @@
           <ecu id="1429861"><address>0x00013029</address></ecu><ecu id="1437806"><address>0x00013719</address></ecu><ecu id="1406464"><address>0x00013535</address></ecu><ecu id="SHINDE1"><address>0x000147E9</address></ecu>
           <conversions><conversion units="ms" storagetype="uint16" endian="little" expr="if(x==65535,-1,x*0.00534)" format="0.00"><replace value="-1.00" with="Stock"/></conversion></conversions>
         </ecuparam>
+        <!-- Runtime state channels require Ignition/Launch V16. BimmerStein remaps known legacy code layouts. -->
         <ecuparam id="BS_CUT_IGNITION_REQUEST" name="Ignition Cut Request" desc="Runtime ignition-cut request" target="1">
-          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000E847</address></ecu>
+          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000D801</address></ecu>
           <conversions><conversion units="" storagetype="uint8" expr="BitWise(1,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
         </ecuparam>
         <ecuparam id="BS_CUT_LAUNCH_IGN_REQUEST" name="Launch Ignition Request" desc="Runtime launch ignition-cut request" target="1">
-          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000E847</address></ecu>
+          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000D801</address></ecu>
           <conversions><conversion units="" storagetype="uint8" expr="BitWise(2,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
         </ecuparam>
         <ecuparam id="BS_CUT_LAUNCH_FUEL_ACTIVE" name="Launch Fuel Cut Active" desc="Runtime launch fuel-cut state" target="1">
-          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000E847</address></ecu>
+          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000D801</address></ecu>
           <conversions><conversion units="" storagetype="uint8" expr="BitWise(4,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
         </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_RECOVERY_PRIORITY" name="Native Fuel Recovery Priority" desc="V16 ABI D801.3 selects native recovery settings for the current fuel-limiter episode. It is not a spark-cut request or proof of which RPM threshold was selected." target="1">
+          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000D801</address></ecu>
+          <conversions><conversion units="" storagetype="uint8" expr="if(BitWise(240,x,1)==160,BitWise(8,x,1)!=0,-1)" format="0"><replace value="-1" with="Uninitialized"/><replace value="0" with="Not selected"/><replace value="1" with="Native recovery"/></conversion></conversions>
+        </ecuparam>
         <ecuparam id="BS_CUT_INTENTIONAL" name="Intentional Combustion Cut" desc="Intentional combustion-cut state" target="1">
-          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000E847</address></ecu>
+          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000D801</address></ecu>
           <conversions><conversion units="" storagetype="uint8" expr="(BitWise(240,x,1)==160)&amp;&amp;(BitWise(7,x,1)!=0)" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
         </ecuparam>
         <ecuparam id="BS_CUT_RUNTIME" name="Cut Patch Runtime" desc="Cut-patch runtime marker" target="1">
-          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000E847</address></ecu>
+          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000D801</address></ecu>
           <conversions><conversion units="" storagetype="uint8" expr="BitWise(240,x,1)==160" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
         </ecuparam>
-        <ecuparam id="BS_CUT_LAUNCH_ARMED" name="Launch Armed" desc="Launch armed latch" target="1">
+        <ecuparam id="BS_CUT_LAUNCH_ARMED" name="Launch Armed" desc="Retained launch latch: throttle below minimum or speed at/above maximum releases it; arming requires speed below arm speed. Releasing the input alone does not clear this latch." target="1">
           <ecu id="1429861"><address>0x0000FD80</address></ecu><ecu id="1406464,SHINDE1,1437806"><address>0x0000FDB6</address></ecu>
           <conversions><conversion units="" storagetype="uint8" expr="BitWise(64,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
         </ecuparam>
@@ -327,9 +457,13 @@
           <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000FD5A</address></ecu>
           <conversions><conversion units="" storagetype="uint8" expr="BitWise(128,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
         </ecuparam>
-        <ecuparam id="BS_CUT_STOCK_LIMITER" name="Stock Limiter Active" desc="Stock limiter state" target="1">
+        <ecuparam id="BS_CUT_STOCK_LIMITER" name="Native Fuel Limiter Active" desc="FD12.15 native fuel-limiter episode, also used by fuel-mode Launch Control. This flag alone does not identify the selected RPM threshold or source." target="1">
           <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000FD13</address></ecu>
           <conversions><conversion units="" storagetype="uint8" expr="BitWise(128,x,1)!=0" format="0"><replace value="0" with="Inactive"/><replace value="1" with="Active"/></conversion></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_EFFECTIVE_SOFT_RPM" name="Effective Fuel Limiter RPM" desc="Last effective soft threshold published by the native limiter, including native protection and any fuel-mode launch selection. Compare with configured targets; a snapshot is not an atomic ignition-event trace." target="1">
+          <ecu id="1429861"><address>0x0000ED52</address></ecu><ecu id="1437806"><address>0x0000F02C</address></ecu><ecu id="1406464,SHINDE1"><address>0x0000F014</address></ecu>
+          <conversions><conversion units="RPM" storagetype="uint8" expr="x*32" format="0"/></conversions>
         </ecuparam>
         <ecuparam id="BS_CUT_STAGE_COUNT" name="Fuel Cut Stage Count" desc="Fuel-cut stage count" target="1">
           <ecu id="1429861"><address>0x0000ED51</address></ecu><ecu id="1437806"><address>0x0000F02B</address></ecu><ecu id="1406464,SHINDE1"><address>0x0000F013</address></ecu>
@@ -339,9 +473,13 @@
           <ecu id="1429861"><address>0x0000FAE6</address></ecu><ecu id="1406464,SHINDE1,1437806"><address>0x0000FC3C</address></ecu>
           <conversions><conversion units="RPM" storagetype="uint8" expr="x*32" format="0"/></conversions>
         </ecuparam>
-        <ecuparam id="BS_CUT_LAUNCH_TPS" name="Launch TPS" desc="Runtime launch throttle" target="1">
-          <ecu id="1406464,SHINDE1,1429861,1437806"><address>0x0000E8D0</address></ecu>
+        <ecuparam id="BS_CUT_LAUNCH_TPS" name="Launch TPS (threshold scale)" desc="Launch threshold scale x0.47; distinct from normalized core throttle x100/255" target="1">
+          <ecu id="1406464,SHINDE1,1437806"><address>0x0000E8D0</address></ecu>
           <conversions><conversion units="%" storagetype="uint8" expr="x*0.47" format="0.0"/></conversions>
+        </ecuparam>
+        <ecuparam id="BS_CUT_LAUNCH_TPS_MS410" name="Launch TPS (threshold scale)" desc="Exact 1429861 E8D0 native throttle-angle comparison domain; may be adapted or substituted. Distinct from normalized core throttle x100/255." target="1">
+          <ecu id="1429861"><address>0x0000E8D0</address></ecu>
+          <conversions><conversion units="° throttle" storagetype="uint8" expr="x*0.46862745098039" format="0.00"/></conversions>
         </ecuparam>
         <ecuparam id="BS_CUT_LAUNCH_SPEED" name="Launch Speed" desc="Runtime launch speed" target="1">
           <ecu id="1429861"><address>0x0000EDF4</address></ecu><ecu id="1437806"><address>0x0000F1BE</address></ecu><ecu id="1406464,SHINDE1"><address>0x0000F19A</address></ecu>

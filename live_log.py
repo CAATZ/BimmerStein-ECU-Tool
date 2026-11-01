@@ -8,6 +8,8 @@ from live_data import display_rows, live_display_spec
 
 
 MAX_LOG_BYTES = 16 * 1024 * 1024
+_SUPPLY_NAMES = ("Ignition Supply Voltage", "Ignition Supply Voltage (KL15)",
+                 "Battery Voltage (after main relay)")
 
 
 def sample_value(raw):
@@ -27,10 +29,23 @@ def sample_value(raw):
     return None, raw or None
 
 
-def display_specs(channels, definition_path=None):
+def display_specs(channels, definition_path=None, family=None):
     result = {}
+    ms41_names = {name for name, _unit in display_rows()} if definition_path is None and family is None else set()
+    family_names = set()
+    if family in {"MS42", "MS43"} and definition_path is None:
+        from ms42_ms43_live import display_rows as family_rows
+        family_names = {name for name, _unit in family_rows(family)}
     for name, unit in channels:
-        spec = live_display_spec(name, unit, definition_path)
+        if name in family_names or (definition_path is None and name in _SUPPLY_NAMES):
+            from ms42_ms43_live import display_spec
+            spec = display_spec(name, unit)
+        else:
+            spec = live_display_spec(name, unit, definition_path)
+            if definition_path is None and family is None and name not in ms41_names:
+                from ms42_ms43_live import display_spec, display_rows as family_rows
+                if any((name, unit) in family_rows(variant) for variant in ("MS42", "MS43")):
+                    spec = display_spec(name, unit)
         if spec["kind"] != "value":
             result[name] = {
                 key: spec[key] for key in ("kind", "minimum", "maximum", "step")
@@ -39,7 +54,7 @@ def display_specs(channels, definition_path=None):
     return result
 
 
-def parse_log(payload, definition_path=None):
+def parse_log(payload, definition_path=None, family=None):
     """Read canonical Time[,Datetime],channel... CSV without inventing units."""
     data = bytes(payload)
     if not data or len(data) > MAX_LOG_BYTES:
@@ -94,11 +109,28 @@ def parse_log(payload, definition_path=None):
     if not times:
         raise ValueError("Live Data log contains no samples")
     units = dict(display_rows(definition_path))
+    if definition_path is None:
+        # Older CSVs predate the rail-qualified MS43 labels; values stay unchanged.
+        units.update((name, "V") for name in _SUPPLY_NAMES)
+        from ms42_ms43_live import display_rows as family_rows
+        if family in {"MS42", "MS43"}:
+            # The connected family is only a viewer hint: an arbitrary selected
+            # CSV can still contain channels captured from another ECU.
+            units.update(family_rows(family))
+        else:
+            # Old CSVs carry names, not family metadata. Add only unambiguous
+            # units and leave every existing MS41 mapping untouched.
+            candidates = {}
+            for ecu_family in ("MS42", "MS43"):
+                for name, unit in family_rows(ecu_family):
+                    candidates.setdefault(name, set()).add(unit)
+            units.update((name, next(iter(values))) for name, values in candidates.items()
+                         if name not in units and len(values) == 1)
     for item in series:
         item["unit"] = units.get(item["name"], "")
     return {
         "times": times,
         "series": series,
         "display_specs": display_specs(
-            ((name, units.get(name, "")) for name in channels), definition_path),
+            ((name, units.get(name, "")) for name in channels), definition_path, family),
     }

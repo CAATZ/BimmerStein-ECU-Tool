@@ -505,12 +505,16 @@ def test_advanced_signed_idle_words_are_twos_complement_not_offset_binary(varian
 def test_signed_load_model_has_verified_encoding_and_damos_derived_units(variant):
     before = _image(variant)
     row = _rows(before, variant)["load_model_correction"]
-    scale = 5.46850393700787 if variant == "MS41.0" else 5.46850393700787 / 256
+    scale = 5.46850393700787 / 256
+    assert row["offset"] == {"MS41.0": 0x052, "MS41.1": 0x032,
+                             "MS41.2": 0x052, "MS41.3": 0x052}[variant]
+    assert row["length"] == 2
     assert row["unit"] == "mg/stroke"
     assert row["step"] == pytest.approx(scale)
     assert row["minimum"] == pytest.approx(-128 * 5.46850393700787)
     assert row["maximum"] == pytest.approx(127 * 5.46850393700787)
-    counts = (-128, -1, 0, 127) if variant == "MS41.0" else (-32768, -256, -1, 0, 32512)
+    # Nonzero low bytes must affect the engineering value on ID41 too.
+    counts = (-32768, -256, -1, 0, 1, 0x1234, 32512)
     record = _record_for(variant, row["offset"])
     for count in counts:
         value = count * scale
@@ -526,13 +530,7 @@ def test_signed_load_model_has_verified_encoding_and_damos_derived_units(variant
     with pytest.raises(ValueError, match="must be between"):
         eeprom.set_decoded_field(
             before, variant, "load_model_correction", str(128 * 5.46850393700787), allow_advanced=True)
-    if variant == "MS41.0":
-        fraction = _rows(before, variant)["load_model_fraction_not_restored_raw"]
-        assert fraction["offset"] == record.offset and fraction["unit"] == "raw"
-        target = eeprom.set_decoded_field(before, variant, fraction["id"], "1", allow_advanced=True)
-        assert target[record.offset] == 1 and target[row["offset"]] == before[row["offset"]]
-    else:
-        assert "load_model_fraction_not_restored_raw" not in _rows(before, variant)
+    assert "load_model_fraction_not_restored_raw" not in _rows(before, variant)
 
 
 @pytest.mark.parametrize("variant", VARIANTS)

@@ -1,5 +1,7 @@
 param(
     [switch]$SkipTests,
+    [switch]$FullTests,
+    [string[]]$TestPaths = @(),
     [switch]$SkipDocumentation,
     [ValidateSet("x64", "x86")][string]$Architecture = "x64",
     [string]$PythonPath,
@@ -52,16 +54,16 @@ try {
 
     & $python -m engines.softbsl.verify_agent_artifacts
     if ($LASTEXITCODE -ne 0) { throw "RAM-agent artifact verification failed." }
+    & $python -m engines.ms42_ms43.build --verify
+    if ($LASTEXITCODE -ne 0) { throw "MS42/MS43 RAM-agent artifact verification failed." }
+    & $python -m engines.ms42_ms43.build --verify --eeprom
+    if ($LASTEXITCODE -ne 0) { throw "MS43 EEPROM-agent artifact verification failed." }
 
     if (-not $SkipTests) {
-        & $python -m ruff check . --select F,E9
-        if ($LASTEXITCODE -ne 0) { throw "Static analysis failed." }
-        $testTempRoot = Join-Path $root ".tmp"
-        New-Item -ItemType Directory -Path $testTempRoot -Force | Out-Null
-        $testBaseTemp = Join-Path $testTempRoot (
-            "pytest-windows-nuitka-build-" + [guid]::NewGuid().ToString("N")
-        )
-        & $python -m pytest -q -p no:cacheprovider --basetemp $testBaseTemp
+        $checkArguments = @("packaging\check_offline.py")
+        if ($FullTests) { $checkArguments += "--full" }
+        $checkArguments += $TestPaths
+        & $python @checkArguments
         if ($LASTEXITCODE -ne 0) { throw "Automated tests failed." }
     }
 
@@ -106,12 +108,13 @@ try {
         "--windows-console-mode=disable",
         "--include-windows-runtime-dlls=yes",
         "--include-data-dir=$root\assets=assets",
+        "--include-data-files=$root\data\ms42_ms43\*.json=data/ms42_ms43/",
         "--include-data-dir=$root\engines\patcher\patches=engines/patcher/patches",
         "--include-data-dir=$root\THIRD_PARTY_LICENSES=THIRD_PARTY_LICENSES",
         "--include-data-files=$root\engines\softbsl\*.hex=engines/softbsl/",
         "--include-data-file=$root\engines\softbsl\stage1_manifest.json=engines/softbsl/stage1_manifest.json",
         "--include-data-file=$root\engines\softbsl\agent_manifest.json=engines/softbsl/agent_manifest.json",
-        "--include-data-file=$root\engines\patcher\romraider\BimmerStein MS41 Patch Definitions.xml=BimmerStein MS41 Patch Definitions.xml",
+        "--include-data-file=$root\engines\patcher\definitions\BimmerStein MS41 Patch Definitions.xml=BimmerStein MS41 Patch Definitions.xml",
         "--include-data-file=$root\logger_definitions\BimmerStein MS41 Logger Definitions.xml=logger_definitions/BimmerStein MS41 Logger Definitions.xml",
         "--windows-icon-from-ico=$root\assets\bimmerstein_ecu_tool.ico",
         "--output-filename=BimmerStein ECU Tool.exe",
@@ -148,7 +151,8 @@ try {
     )
     foreach ($sourceOnlyLink in @(
         "User manual (web-readable Markdown)",
-        "Build and release instructions"
+        "Build and release instructions",
+        "Build instructions"
     )) {
         $releaseReadme = [regex]::Replace(
             $releaseReadme,
@@ -168,14 +172,21 @@ try {
         )
     }
     $releaseReadme = $releaseReadme.Replace('(LICENSE)', '(LICENSE.txt)')
+    $releaseReadme = $releaseReadme.Replace('(manual/USER_MANUAL.md)', '(BimmerStein-ECU-Tool-User-Manual.pdf)')
+    $releaseReadme = $releaseReadme.Replace('(docs/MS42_MS43.md)', '(MS42_MS43.md)')
+    $releaseReadme = $releaseReadme.Replace('(docs/MS41_EEPROM.md)', '(MS41_EEPROM.md)')
+    $releaseReadme = [regex]::Replace($releaseReadme, ',\s+shared by desktop and Android', '')
     [System.IO.File]::WriteAllText(
         (Join-Path $appDir "README.md"),
         $releaseReadme,
         [System.Text.UTF8Encoding]::new($false)
     )
     Copy-Item -LiteralPath "LICENSE" -Destination (Join-Path $appDir "LICENSE.txt")
-    Copy-Item -LiteralPath "RELEASE_NOTES.md" -Destination $appDir
+    $releaseNotes = (Get-Content -Raw -LiteralPath "RELEASE_NOTES.md" -Encoding utf8).Replace('(docs/MS42_MS43.md)', '(MS42_MS43.md)')
+    [System.IO.File]::WriteAllText((Join-Path $appDir "RELEASE_NOTES.md"), $releaseNotes, [System.Text.UTF8Encoding]::new($false))
     Copy-Item -LiteralPath "THIRD_PARTY_NOTICES.md" -Destination $appDir
+    Copy-Item -LiteralPath "docs\MS42_MS43.md" -Destination $appDir
+    Copy-Item -LiteralPath "docs\MS41_EEPROM.md" -Destination $appDir
     Copy-Item -LiteralPath "output\pdf\BimmerStein-ECU-Tool-User-Manual.pdf" -Destination $appDir
 
     & $python "packaging\verify_dist.py" --backend nuitka --expected-version $Version --architecture $Architecture $appDir

@@ -10,7 +10,7 @@ import shutil
 import tempfile
 
 from app_paths import user_data_path
-import romraider_defs
+import calibration_defs
 
 
 class DefinitionRegistryError(RuntimeError):
@@ -46,7 +46,7 @@ class DefinitionRegistry:
             return []
         return sorted(
             (path.name for path in self.directory.iterdir()
-             if path.is_file() and path.suffix.lower() == ".xml"),
+             if path.is_file() and path.suffix.lower() in (".xml", ".xdf")),
             key=str.casefold,
         )
 
@@ -107,12 +107,16 @@ class DefinitionRegistry:
         source_path = Path(source)
         if not source_path.is_file():
             raise DefinitionRegistryError("The selected definition file does not exist.")
-        if source_path.suffix.lower() != ".xml":
-            raise DefinitionRegistryError("Definition files must use the .xml extension.")
+        if source_path.suffix.lower() not in (".xml", ".xdf"):
+            raise DefinitionRegistryError("Definition files must use the .xml or .xdf extension.")
 
         try:
-            romraider_defs.load_definitions(source_path)
-        except romraider_defs.DefinitionError as exc:
+            if source_path.suffix.lower() == ".xdf":
+                from ms42_ms43_xdf import load_definitions
+                load_definitions(source_path)
+            else:
+                calibration_defs.load_definitions(source_path)
+        except calibration_defs.DefinitionError as exc:
             raise DefinitionRegistryError(f"Invalid calibration definition: {exc}") from exc
 
         self.directory.mkdir(parents=True, exist_ok=True)

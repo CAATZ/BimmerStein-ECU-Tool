@@ -4,20 +4,53 @@ from bisect import bisect_left
 import math
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QRectF, QPointF
+from PyQt5.QtCore import Qt, QRectF, QPointF, QSize, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (
     QAbstractItemView, QCheckBox, QDialog, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
-    QScrollArea, QSlider, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem,
+    QScrollArea, QSizePolicy, QSlider, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
 )
 
 from live_log import MAX_LOG_BYTES, display_specs, parse_log, sample_value
+from live_instruments import LiveInstruments
+from live_statistics import BoxSummary, box_summary
 
 
 COLORS = ("#70c7ec", "#efbd65", "#93d58e", "#da9aea", "#f68b8b", "#75d8cb")
 MAX_LIVE_SAMPLES = 5_000
+
+
+class _LiveStatusLabel(QLabel):
+    """Keep capture status on one line without losing its full text."""
+
+    def __init__(self):
+        super().__init__()
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.setTextFormat(Qt.PlainText)
+        self.setAccessibleName("Live Data capture status")
+        self.setText("Not polling")
+
+    def setText(self, text):
+        super().setText(text)
+        self.setToolTip(
+            text + "\nLive history keeps 5,000 samples; CSV retains every recorded sample.")
+        self.setAccessibleDescription(text)
+
+    def sizeHint(self):
+        return QSize(0, self.fontMetrics().height())
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setPen(self.palette().windowText().color())
+        painter.drawText(
+            self.contentsRect(), Qt.AlignLeft | Qt.AlignVCenter,
+            self.fontMetrics().elidedText(
+                " ".join(self.text().splitlines()), Qt.ElideRight, self.contentsRect().width()))
 
 
 def nearest_sample(times, timestamp):
@@ -83,10 +116,13 @@ class _HistoryPlot(QWidget):
         stop = min(len(view.times), bisect_left(view.times, right) + 1)
         chart_width = max(1, self.width() - 88)
         row_height = max(120, self.height() // len(names))
+        dirty = QRectF(event.rect())
         for order, name in enumerate(names):
+            top = order * row_height
+            if not dirty.intersects(QRectF(0, top, self.width(), row_height)):
+                continue
             series = view.series[name]
             color = QColor(COLORS[order % len(COLORS)])
-            top = order * row_height
             rect = QRectF(65, top + 28, chart_width, row_height - 52)
             numeric = [v for v in series["values"][start:stop] if v is not None]
             low, high = (min(numeric), max(numeric)) if numeric else (0, 1)
@@ -168,74 +204,15 @@ class _HistoryPlot(QWidget):
             super().keyPressEvent(event)
 
 
-class _Gauges(QWidget):
-    def __init__(self, view):
-        super().__init__()
-        self.view = view
-        self.setAccessibleName("Live Data gauges and digital values")
-
-    def resizeEvent(self, event):
-        self.update_geometry()
-        super().resizeEvent(event)
-
-    def update_geometry(self):
-        columns = max(1, self.width() // 240)
-        self.setMinimumHeight(max(180, math.ceil(len(self.view.selected_channels()) / columns) * 185))
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        names = self.view.selected_channels()
-        columns = max(1, self.width() // 240)
-        width = self.width() / columns
-        for index, name in enumerate(names):
-            x, y = (index % columns) * width, (index // columns) * 185
-            rect = QRectF(x + 6, y + 6, width - 12, 173)
-            painter.setBrush(QColor("#242424"))
-            painter.setPen(QColor("#444444"))
-            painter.drawRoundedRect(rect, 5, 5)
-            painter.setFont(self.font())
-            painter.setPen(self.palette().windowText().color())
-            painter.drawText(rect.adjusted(10, 6, -10, -125),
-                             Qt.AlignCenter | Qt.TextWordWrap, name)
-            spec = self.view.specs.get(name, {})
-            series = self.view.series[name]
-            value = series["values"][self.view.cursor] if self.view.times else None
-            color = QColor(COLORS[index % len(COLORS)])
-            if spec.get("kind") == "dial":
-                dial = QRectF(rect.center().x() - 53, y + 50, 106, 106)
-                painter.setPen(QPen(QColor("#555555"), 6))
-                painter.drawArc(dial, -30 * 16, 240 * 16)
-                low, high = spec["minimum"], spec["maximum"]
-                if value is not None:
-                    fraction = max(0., min(1., (value - low) / (high - low)))
-                    angle = math.radians(210 - 240 * fraction)
-                    painter.setPen(QPen(color, 3))
-                    painter.drawLine(dial.center(), dial.center() + QPointF(
-                        math.cos(angle) * 43, -math.sin(angle) * 43))
-                painter.setPen(QColor("#bbbbbb"))
-                painter.drawText(QRectF(x + 12, y + 135, width - 24, 20),
-                                 Qt.AlignLeft, f"{low:g}")
-                painter.drawText(QRectF(x + 12, y + 135, width - 24, 20),
-                                 Qt.AlignRight, f"{high:g}")
-                value_rect = QRectF(x + 15, y + 152, width - 30, 23)
-            else:
-                value_rect = rect.adjusted(12, 60, -12, -23)
-            font = QFont(self.font())
-            font.setFamily("Consolas")
-            font.setPointSizeF(max(font.pointSizeF(), 12))
-            painter.setFont(font)
-            painter.setPen(color)
-            painter.drawText(value_rect, Qt.AlignCenter | Qt.TextWordWrap,
-                             f"{self.view.sample_text(name)} {series['unit']}")
-
-
 class LiveDataView(QWidget):
     """Display exact poll cycles or a validated CSV with the same controls."""
-    def __init__(self, parent=None, *, definition_path=None, live=True):
+    selection_changed = pyqtSignal()
+    presentation_changed = pyqtSignal(str, str)
+
+    def __init__(self, parent=None, *, definition_path=None, live=True, splitter=None):
         super().__init__(parent)
         self.definition_path = definition_path
+        self.family = None
         self.live = live
         self.times = []
         self.series = {}
@@ -243,6 +220,15 @@ class LiveDataView(QWidget):
         self.cursor = 0
         self._range = None
         self.dropped = 0
+        self.presentations = {}
+        self._numeric_channels = set()
+        self._text_channels = set()
+        self._extrema = {}
+        self._sample_base = 0
+        self._stats_start = 0
+        self._card_cache = {}
+        self._window_cache = {}
+        self._bounds_cache = {}
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         toolbar = QHBoxLayout()
@@ -251,34 +237,50 @@ class LiveDataView(QWidget):
         self.follow.setVisible(live)
         self.follow.toggled.connect(self._follow_changed)
         toolbar.addWidget(self.follow)
-        for text, callback in (("Zoom +", lambda: self.zoom(.5)),
-                               ("Zoom −", lambda: self.zoom(2)), ("Fit", self.fit)):
+        self.time_buttons = []
+        for text, callback in (("Time +", lambda: self.zoom(.5)),
+                               ("Time −", lambda: self.zoom(2)), ("Fit time", self.fit)):
             button = QPushButton(text)
             button.clicked.connect(callback)
             toolbar.addWidget(button)
+            self.time_buttons.append(button)
+        self.card_buttons = []
+        for text, callback in (("Smaller", lambda: self.gauges.set_size(self.gauges.size_level - 1)),
+                               ("Larger", lambda: self.gauges.set_size(self.gauges.size_level + 1)),
+                               ("Fit panel", lambda: self.gauges.fit_panel()),
+                               ("Reset min/max", self.reset_extrema)):
+            button = QPushButton(text)
+            button.clicked.connect(callback)
+            toolbar.addWidget(button)
+            self.card_buttons.append(button)
+        self.card_buttons[-1].setToolTip(
+            "Reset instrument min/max at the latest sample. Captured data and 30-second box plots stay intact.")
         toolbar.addStretch()
         self.position = QLabel("No samples")
         toolbar.addWidget(self.position)
         layout.addLayout(toolbar)
-        splitter = QSplitter()
+        splitter = splitter if splitter is not None else QSplitter()
         channels = QWidget()
         channels_layout = QVBoxLayout(channels)
         channels_layout.setContentsMargins(0, 0, 0, 0)
-        channels_layout.addWidget(QLabel("Graph / gauge channels"))
+        channels_layout.addWidget(QLabel("Channels"))
         self.search = QLineEdit()
         self.search.setPlaceholderText("Find channel…")
         self.search.textChanged.connect(self._filter_channels)
         channels_layout.addWidget(self.search)
         self.channels = QListWidget()
         self.channels.setMinimumWidth(160)
-        self.channels.setAccessibleName("Channels shown in graphs and gauges")
+        self.channels.setAccessibleName(
+            "Channels to read, log and display" if live else "Channels to display")
         self.channels.itemChanged.connect(self._selection_changed)
         channels_layout.addWidget(self.channels)
         buttons = QHBoxLayout()
+        self.selection_buttons = []
         for text, state in (("All", Qt.Checked), ("None", Qt.Unchecked)):
             button = QPushButton(text)
             button.clicked.connect(lambda checked=False, value=state: self._select_all(value))
             buttons.addWidget(button)
+            self.selection_buttons.append(button)
         channels_layout.addLayout(buttons)
         splitter.addWidget(channels)
         self.tabs = QTabWidget()
@@ -292,12 +294,13 @@ class LiveDataView(QWidget):
         self.table.verticalHeader().hide()
         self.tabs.addTab(self.table, "Values")
         self.plot = _HistoryPlot(self)
-        self.gauges = _Gauges(self)
-        for widget, title in ((self.plot, "Graphs"), (self.gauges, "Gauges / digital")):
+        self.gauges = LiveInstruments(self, COLORS)
+        for widget, title in ((self.plot, "Graphs"), (self.gauges, "Instruments")):
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
             scroll.setWidget(widget)
             self.tabs.addTab(scroll, title)
+        self.tabs.currentChanged.connect(self._tab_changed)
         splitter.addWidget(self.tabs)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([200, 700])
@@ -306,23 +309,174 @@ class LiveDataView(QWidget):
         self.slider.setAccessibleName("Sample cursor")
         self.slider.valueChanged.connect(self._slider_changed)
         layout.addWidget(self.slider)
-        self.note = QLabel("Live history keeps 5,000 samples; CSV retains every recorded sample."
-                           if live else "Wheel: zoom time · Drag: cursor · Shift-drag: pan · Arrows: one sample")
-        self.note.setWordWrap(True)
+        self.note = (_LiveStatusLabel() if live else QLabel(
+            "Wheel: zoom time · Drag: cursor · Shift-drag: pan · Arrows: one sample"))
+        self.note.setWordWrap(not live)
         layout.addWidget(self.note)
+        self.gauges.size_changed.connect(lambda _level: self._tab_changed())
+        self._tab_changed()
 
     def selected_channels(self):
         return [self.channels.item(i).text() for i in range(self.channels.count())
                 if self.channels.item(i).checkState() == Qt.Checked]
 
+    def presentation_options(self, name):
+        spec = self.specs.get(name, {})
+        if spec.get("kind") == "status" or name in self._text_channels:
+            return ("digital",)
+        if (spec.get("kind") in ("dial", "raw") or name in self._numeric_channels
+                or self.series.get(name, {}).get("unit")):
+            return ("gauge", "digital", "box")
+        return ("digital",)
+
+    def presentation_for(self, name):
+        default = ("box" if self._comparison_group(name) == "roughness" else
+                   "gauge" if self.specs.get(name, {}).get("kind") == "dial" else "digital")
+        requested = self.presentations.get(name, default)
+        return requested if requested in self.presentation_options(name) else "digital"
+
+    def set_presentations(self, mapping):
+        self.presentations = {name: mode for name, mode in mapping.items()
+                              if mode in ("gauge", "digital", "box")}
+        self._card_cache.clear()
+        self.gauges.update_geometry()
+
+    def set_presentation(self, name, mode):
+        if mode not in self.presentation_options(name):
+            return
+        self.presentations[name] = mode
+        self._card_cache.pop(name, None)
+        self.gauges.update_geometry()
+        self.presentation_changed.emit(name, mode)
+
+    def _comparison_group(self, name):
+        if name in {f"Cylinder {index} Roughness" for index in range(1, 7)}:
+            return "roughness"
+        for trim in ("ST", "LT"):
+            if name in (f"Fuel Trim {trim}", f"Fuel Trim {trim} B2"):
+                return f"trim_{trim}"
+        return None
+
+    def _window_values(self, name):
+        if name not in self._window_cache:
+            item = self.series[name]
+            start = bisect_left(self.times, self.times[self.cursor] - 30) if self.times else 0
+            self._window_cache[name] = [value for value, label in zip(
+                item["values"][start:self.cursor + 1], item["labels"][start:self.cursor + 1])
+                if value is not None and label is None and math.isfinite(value)]
+        return self._window_cache[name]
+
+    def _card_bounds(self, name):
+        group = self._comparison_group(name)
+        key = (group or name, self.series[name]["unit"])
+        if key in self._bounds_cache:
+            return self._bounds_cache[key]
+        names = [other for other in self.series
+                 if self._comparison_group(other) == group
+                 and self.series[other]["unit"] == self.series[name]["unit"]] if group else [name]
+        values = [value for other in names for value in self._window_values(other)]
+        low, high = (min(values), max(values)) if values else (0., 0.)
+        if group or low < 0 < high:
+            limit = max(1., abs(low) * 1.1, abs(high) * 1.1)
+            bounds = (-limit, limit)
+        else:
+            margin = max((high - low) * .1, abs(low) * .05, .01)
+            bounds = (low - margin, high + margin)
+        self._bounds_cache[key] = bounds
+        return bounds
+
+    def card_snapshot(self, name):
+        # Text formatting remains cheap; expensive distribution work is cached until
+        # the next sample batch/cursor change and only requested for visible cards.
+        text = self.sample_text(name)
+        if name not in self._card_cache:
+            item = self.series[name]
+            value = item["values"][self.cursor] if self.times else None
+            if self.times and item["labels"][self.cursor] is not None:
+                value = None
+            low, high = self._extrema.get(name, (None, None))
+            if self.times and self.cursor != len(self.times) - 1:
+                start = max(0, self._stats_start - self._sample_base)
+                values = [v for v, label in zip(item["values"][start:self.cursor + 1],
+                                               item["labels"][start:self.cursor + 1])
+                          if v is not None and label is None and math.isfinite(v)]
+                low, high = (min(values), max(values)) if values else (None, None)
+            spec = self.specs.get(name, {})
+            defined_range = spec.get("kind") == "dial"
+            mode = self.presentation_for(name)
+            bounds = (self._card_bounds(name) if mode == "box" or (mode == "gauge" and not defined_range)
+                      else (-1., 1.))
+            self._card_cache[name] = dict(
+                current=value, unit=item["unit"], min=low, max=high,
+                summary=box_summary(self._window_values(name))
+                if mode == "box" else BoxSummary(0),
+                bounds=bounds,
+                gauge_bounds=(spec["minimum"], spec["maximum"]) if defined_range else bounds,
+                gauge_auto=not defined_range)
+        return dict(self._card_cache[name], text=text)
+
+    def _record_value(self, name, value, label):
+        if value is not None and label is None:
+            self._numeric_channels.add(name)
+            low, high = self._extrema.get(name, (value, value))
+            self._extrema[name] = (min(low, value), max(high, value))
+        elif label and label.casefold() in {
+                "active", "inactive", "on", "off", "enabled", "disabled", "yes", "no", "true", "false"}:
+            self._text_channels.add(name)
+
+    def reset_extrema(self):
+        if self.times and self.cursor != len(self.times) - 1:
+            return
+        self._extrema.clear()
+        self._stats_start = self._sample_base + max(0, len(self.times) - 1)
+        if self.times:
+            for name, item in self.series.items():
+                self._record_value(name, item["values"][-1], item["labels"][-1])
+        self._refresh()
+
+    def _tab_changed(self, *_args):
+        tab = self.tabs.currentIndex()
+        for button in self.time_buttons:
+            button.setVisible(tab == 1)
+        for button in self.card_buttons:
+            button.setVisible(tab == 2)
+        self.card_buttons[0].setEnabled(self.gauges.size_level > self.gauges.MIN_SIZE)
+        self.card_buttons[1].setEnabled(self.gauges.size_level < self.gauges.MAX_SIZE)
+
+    def set_selected_channels(self, names):
+        selected = set(names)
+        before = self.selected_channels()
+        self.channels.blockSignals(True)
+        for index in range(self.channels.count()):
+            item = self.channels.item(index)
+            item.setCheckState(Qt.Checked if item.text() in selected else Qt.Unchecked)
+        self.channels.blockSignals(False)
+        if self.selected_channels() != before:
+            self._selection_changed()
+
+    def set_selection_enabled(self, enabled):
+        self.channels.setEnabled(enabled)
+        for button in self.selection_buttons:
+            button.setEnabled(enabled)
+
     def set_channels(self, rows):
+        rows = list(rows)
         selected = set(self.selected_channels())
         had_channels = self.channels.count() > 0
         self.channels.blockSignals(True)
         self.channels.clear()
-        self.series = {name: {"name": name, "unit": unit, "values": [], "labels": []}
-                       for name, unit in rows}
-        self.specs = display_specs(rows, self.definition_path)
+        previous = self.series
+        self.series = {}
+        for name, unit in rows:
+            item = previous.get(name)
+            if item is None or item["unit"] != unit:
+                self._numeric_channels.discard(name)
+                self._text_channels.discard(name)
+                self._extrema.pop(name, None)
+                item = {"name": name, "unit": unit,
+                        "values": [None] * len(self.times), "labels": [None] * len(self.times)}
+            self.series[name] = item
+        self.specs = display_specs(rows, self.definition_path, family=self.family)
         self.table.setRowCount(len(rows))
         self.table_rows = {}
         for index, (name, unit) in enumerate(rows):
@@ -345,12 +499,19 @@ class LiveDataView(QWidget):
         self._selection_changed()
 
     def clear(self, rows=None):
+        rows = list(rows) if rows is not None else [
+            (name, item["unit"]) for name, item in self.series.items()]
         self.times = []
+        self.series = {}
         self.cursor = 0
         self._range = None
         self.dropped = 0
-        self.set_channels(rows if rows is not None else
-                          [(name, item["unit"]) for name, item in self.series.items()])
+        self._numeric_channels.clear()
+        self._text_channels.clear()
+        self._extrema.clear()
+        self._sample_base = 0
+        self._stats_start = 0
+        self.set_channels(rows)
         self.follow.setChecked(self.live)
         self._refresh()
 
@@ -359,6 +520,10 @@ class LiveDataView(QWidget):
         self.times = list(payload["times"])
         self.series = {item["name"]: item for item in payload["series"]}
         self.specs = payload["display_specs"]
+        for name, item in self.series.items():
+            for value, label in zip(item["values"], item["labels"]):
+                self._record_value(name, value, label)
+        self.gauges.update_geometry()
         self.cursor = 0
         self.fit()
         self._refresh()
@@ -366,28 +531,37 @@ class LiveDataView(QWidget):
     def append_samples(self, rows, samples, dropped=0):
         if not samples:
             return
-        if list(rows) != [(name, item["unit"]) for name, item in self.series.items()]:
-            self.clear(list(rows))
+        rows = list(rows)
+        catalog = {name: item["unit"] for name, item in self.series.items()}
+        if any(catalog.get(name) != unit for name, unit in rows):
+            catalog.update(rows)
+            self.set_channels(catalog.items())
         cursor_time = self.times[self.cursor] if self.times else 0
+        numeric_before, text_before = set(self._numeric_channels), set(self._text_channels)
         self.dropped += dropped
         for _sequence, elapsed, values in samples:
             self.times.append(elapsed)
-            for item, raw in zip(self.series.values(), values):
-                value, label = sample_value(raw)
+            acquired = dict(zip((name for name, _unit in rows), values))
+            for name, item in self.series.items():
+                value, label = sample_value(acquired.get(name))
                 item["values"].append(value)
                 item["labels"].append(label)
+                self._record_value(name, value, label)
         # ponytail: bounded in-memory history; use the complete CSV for longer sessions.
         remove = max(0, len(self.times) - MAX_LIVE_SAMPLES)
         if remove:
+            self._sample_base += remove
             del self.times[:remove]
             for item in self.series.values():
                 del item["values"][:remove]
                 del item["labels"][:remove]
         if self.follow.isChecked():
             self.cursor = len(self.times) - 1
-            self._range = (max(self.times[0], self.times[-1] - 30), self.times[-1])
+            self._range = (max(0, self.times[-1] - 30), max(30, self.times[-1]))
         else:
             self.cursor = nearest_sample(self.times, cursor_time)
+        if self._numeric_channels != numeric_before or self._text_channels != text_before:
+            self.gauges.update_geometry()
         self._refresh()
 
     def sample_text(self, name):
@@ -434,13 +608,14 @@ class LiveDataView(QWidget):
 
     def _follow_changed(self, checked):
         if checked and self.times:
-            self._range = (max(self.times[0], self.times[-1] - 30), self.times[-1])
+            self._range = (max(0, self.times[-1] - 30), max(30, self.times[-1]))
             self.set_cursor(len(self.times) - 1)
 
     def _filter_channels(self, text):
+        query = text.casefold()
         for index in range(self.channels.count()):
             item = self.channels.item(index)
-            item.setHidden(text.casefold() not in item.text().casefold())
+            item.setHidden(query not in item.text().casefold())
 
     def _select_all(self, state):
         self.channels.blockSignals(True)
@@ -450,17 +625,26 @@ class LiveDataView(QWidget):
         self._selection_changed()
 
     def _selection_changed(self, *_args):
-        self.plot.setMinimumHeight(max(260, len(self.selected_channels()) * 120))
-        self.plot.update()
+        selected = set(self.selected_channels())
+        for name, index in getattr(self, "table_rows", {}).items():
+            self.table.setRowHidden(index, name not in selected)
+        self.plot.setMinimumHeight(max(260, len(selected) * 120))
         self.gauges.update_geometry()
+        self._refresh()
+        self.selection_changed.emit()
 
     def _refresh(self):
+        self._card_cache.clear()
+        self._window_cache.clear()
+        self._bounds_cache.clear()
         self.slider.blockSignals(True)
         self.slider.setRange(0, max(0, len(self.times) - 1))
         self.slider.setValue(self.cursor)
         self.slider.blockSignals(False)
         self.slider.setEnabled(bool(self.times))
         for name, index in getattr(self, "table_rows", {}).items():
+            if self.table.isRowHidden(index):
+                continue
             value = self.sample_text(name)
             self.table.item(index, 1).setText(value)
             self.table.item(index, 1).setToolTip(value)
@@ -468,19 +652,23 @@ class LiveDataView(QWidget):
                 if self.times else "No samples")
         if self.dropped:
             text += f" · {self.dropped:,} display samples missed"
+        if self.times and self.cursor < len(self.times) - 1:
+            text = "History · " + text
+        self.card_buttons[-1].setEnabled(bool(self.times) and self.cursor == len(self.times) - 1)
         self.position.setText(text)
         self.plot.update()
         self.gauges.update()
 
 
-def show_log(parent, path, definition_path=None):
+def show_log(parent, path, definition_path=None, family=None):
     """Open a saved CSV without connecting to an ECU; errors stay in the UI."""
     try:
         if definition_path is None:
             from logger_definition_registry import LoggerDefinitionRegistry
-            definition_path = LoggerDefinitionRegistry().active_path()
+            status = LoggerDefinitionRegistry().status()
+            definition_path = None if status.bundled else status.path
         with open(path, "rb") as stream:
-            payload = parse_log(stream.read(MAX_LOG_BYTES + 1), definition_path)
+            payload = parse_log(stream.read(MAX_LOG_BYTES + 1), definition_path, family)
         dialog = QDialog(parent)
         dialog.setAttribute(Qt.WA_DeleteOnClose)
         dialog.setWindowTitle(f"Live Data Log — {Path(path).name}")
@@ -488,6 +676,7 @@ def show_log(parent, path, definition_path=None):
         dialog.setMinimumSize(600, 450)
         layout = QVBoxLayout(dialog)
         view = LiveDataView(dialog, definition_path=definition_path, live=False)
+        view.family = family
         view.load(payload)
         layout.addWidget(view)
         close = QPushButton("Close")

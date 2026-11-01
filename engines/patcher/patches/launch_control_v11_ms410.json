@@ -146,5 +146,7 @@
       "data": "ec00ecf5e6000400f3fa80fd67fa40002d18f3fa213049a03d14f3fa273047faff003d0af3fa233047fafd008d03e7faff000d0209a30d0043fad3019d02418a0d0243f8d301fcf5fc00db00ffffffffffffffffffff"
     }
   ],
-  "revert_superseded": true
+  "revert_superseded": true,
+  "deprecated": true,
+  "superseded_by": "launch_control_v12_ms410"
 }

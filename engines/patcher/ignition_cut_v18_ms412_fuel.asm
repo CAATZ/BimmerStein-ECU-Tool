@@ -1,0 +1,299 @@
+; V18 fixed base IPW: current synchronized segment envelope, native fallback.
+; D80C=A0 native, A1 accepted fixed base, A2 requested override rejected.
+; Prepare all six deltas with IRQs enabled; revalidate phase/period/request at commit.
+; T1 128 model units and T5 16 model units: segment timer budget is FA74>>3.
+; This is a conservative current-period envelope, not a future acceleration guarantee.
+base 0x3F400
+        push r1
+        push r2
+        push r3
+        push r6
+        push r7
+        push r8
+        push r9
+        push r10
+        push r11
+        push r14
+        push r15
+        push DPP0
+        mov DPP0,#4
+        push PSW
+        bclr 0xFF10.11
+        movbz r1,0xD801
+        and r1,#3
+        movb RH1,0xFA80
+        mov r2,0xF68E
+        mov r3,0xFA74
+        movb RL4,RL1
+        andb RL4,#2
+        jmpr cc_EQ,select_standalone
+        movb RL5,0x3535
+        movb RH5,0x3536
+        jmpr cc_UC,selected
+select_standalone:
+        movb RL4,RL1
+        andb RL4,#1
+        jmpa cc_EQ,native_snapshot
+        movb RL5,0x2A68
+        movb RH5,0x2A69
+selected:
+        cmp r5,#0xFFFF
+        jmpa cc_EQ,native_snapshot
+        mov r4,0xFD5E
+        and r4,#0xA400
+        cmp r4,#0x0400
+        jmpa cc_NE,rejected_snapshot
+        mov r4,0xFD02
+        and r4,#0x0008
+        jmpa cc_NE,rejected_snapshot
+        movb RL4,0xFA81
+        jmpa cc_NE,rejected_snapshot
+        cmpb RH1,#5
+        jmpa cc_UGT,rejected_snapshot
+        movb RL4,0xFCA0
+        cmpb RL4,#5
+        jmpa cc_UGT,rejected_snapshot
+        mov r4,0xFF50
+        and r4,#0x4F00
+        cmp r4,#0x4300
+        jmpa cc_NE,rejected_snapshot
+        mov r4,0xFF46
+        and r4,#0x00CF
+        cmp r4,#0x0041
+        jmpa cc_NE,rejected_snapshot
+        cmp r3,#0
+        jmpa cc_EQ,rejected_snapshot
+        cmp r3,0xFE46
+        jmpa cc_ULE,rejected_snapshot
+        mov r14,r5
+        mov r15,r5
+        mov r5,r3
+        shr r5,#3
+        sub r5,r2
+        jmpa cc_C,rejected_snapshot
+        cmp r5,#0
+        jmpa cc_EQ,rejected_snapshot
+        sub r5,#1
+        mov r4,r5
+        shl r4,#1
+        add r4,#1
+        cmp r14,r4
+        jmpa cc_UGT,rejected_snapshot
+        pop PSW
+        jmpa cc_UC,prepare
+native_snapshot:
+        pop PSW
+        mov r1,#0xA0
+        jmpr cc_UC,restore_native
+rejected_snapshot:
+        pop PSW
+rejected:
+        mov r1,#0xA2
+restore_native:
+        movb RL4,0xD80C
+        cmpb RL4,#0xA1
+        jmpr cc_EQ,cleanup
+        movb 0xD80C,RL1
+        jmpa cc_UC,restore_registers
+cleanup:
+        mov r3,#0
+        mov r14,0xEF7E
+        mov r15,0xEF80
+        mov r2,0xF68E
+prepare:
+        mov r12,r14
+        movbz r13,0xDC28
+        shl r13,#4
+        add r13,#0x800
+        calls calculate
+        jmpa cc_C,rejected
+        mov r6,r4
+        mov r12,r15
+        movbz r13,0xDC29
+        shl r13,#4
+        add r13,#0x800
+        calls calculate
+        jmpa cc_C,rejected
+        mov r7,r4
+        mov r12,r14
+        movbz r13,0xDC2A
+        shl r13,#4
+        add r13,#0x800
+        calls calculate
+        jmpa cc_C,rejected
+        mov r8,r4
+        mov r12,r15
+        movbz r13,0xDC2B
+        shl r13,#4
+        add r13,#0x800
+        calls calculate
+        jmpa cc_C,rejected
+        mov r9,r4
+        mov r12,r14
+        movbz r13,0xDC2C
+        shl r13,#4
+        add r13,#0x800
+        calls calculate
+        jmpa cc_C,rejected
+        mov r10,r4
+        mov r12,r15
+        movbz r13,0xDC2D
+        shl r13,#4
+        add r13,#0x800
+        calls calculate
+        jmpa cc_C,rejected
+        mov r11,r4
+        push PSW
+        bclr 0xFF10.11
+        cmp r3,#0
+        jmpa cc_EQ,commit
+        cmp r3,0xFA74
+        jmpa cc_NE,changed
+        cmp r2,0xF68E
+        jmpa cc_NE,changed
+        cmpb RH1,0xFA80
+        jmpa cc_NE,changed
+        movb RL4,0xD801
+        andb RL4,#3
+        cmpb RL4,RL1
+        jmpa cc_NE,changed
+        mov r4,0xFD5E
+        and r4,#0xA400
+        cmp r4,#0x0400
+        jmpa cc_NE,changed
+        mov r4,0xFD02
+        and r4,#0x0008
+        jmpa cc_NE,changed
+        movb RL4,0xFA81
+        jmpa cc_NE,changed
+        cmpb RH1,#5
+        jmpa cc_UGT,changed
+        movb RL4,0xFCA0
+        cmpb RL4,#5
+        jmpa cc_UGT,changed
+        mov r4,0xFF50
+        and r4,#0x4F00
+        cmp r4,#0x4300
+        jmpa cc_NE,changed
+        mov r4,0xFF46
+        and r4,#0x00CF
+        cmp r4,#0x0041
+        jmpa cc_NE,changed
+        cmp r3,#0
+        jmpa cc_EQ,changed
+        cmp r3,0xFE46
+        jmpa cc_ULE,changed
+        mov r1,#0xA1
+commit:
+        mov 0xEF7E,r14
+        mov 0xEF80,r15
+        mov r4,r14
+        add r4,r2
+        jmpr cc_NC,bank1_sum
+        mov r4,#0xFFFF
+bank1_sum:
+        mov 0xFC20,r4
+        mov r4,r15
+        add r4,r2
+        jmpr cc_NC,bank2_sum
+        mov r4,#0xFFFF
+bank2_sum:
+        mov 0xFC22,r4
+        mov 0xFC28,r6
+        mov 0xFC2A,r7
+        mov 0xFC2C,r8
+        mov 0xFC2E,r9
+        mov 0xFC30,r10
+        mov 0xFC32,r11
+        movb 0xD80C,RL1
+        pop PSW
+        jmpr cc_UC,restore_registers
+changed:
+        pop PSW
+        jmpa cc_UC,rejected
+restore_registers:
+        pop DPP0
+        pop r15
+        pop r14
+        pop r11
+        pop r10
+        pop r9
+        pop r8
+        pop r7
+        pop r6
+        pop r3
+        pop r2
+        pop r1
+        jmpa cc_UC,native_tail
+calculate:
+        mulu r12,r13
+        mov r4,0xFE0C
+        cmp r4,#0x1000
+        jmpr cc_C,product_fits
+        mov r4,#0xFFFF
+        jmpr cc_UC,product_ready
+product_fits:
+        shl r4,#4
+        mov r13,0xFE0E
+        shr r13,#12
+        or r4,r13
+product_ready:
+        cmp r3,#0
+        jmpr cc_EQ,delta
+        cmp r4,r5
+        jmpr cc_UGT,invalid
+        cmp r4,#0
+        jmpr cc_NE,delta
+        cmp r2,#0
+        jmpr cc_EQ,invalid
+delta:
+        sub r4,r12
+        bclr 0xFF10.1
+        rets
+invalid:
+        bset 0xFF10.1
+        rets
+native_tail:
+        mov r4,0xEF7C
+        mov 0xEF82,r4
+        movbz r5,0xFCA0
+        movb RL4,[r5+#0xABCE]
+        jmpr cc_NE,native_bank2
+        mov r12,0xEF7E
+        movbz r4,0xFCA0
+        movb RL5,[r4+#0xDC28]
+        movbz r13,RL5
+        shl r13,#4
+        add r13,#0x800
+        calls 0x346DC
+        sub r4,0xEF7E
+        movbz r5,0xFCA0
+        shl r5,#1
+        mov [r5+#0xFC28],r4
+        jmpr cc_UC,native_latency
+native_bank2:
+        mov r12,0xEF80
+        movbz r4,0xFCA0
+        movb RL5,[r4+#0xDC28]
+        movbz r13,RL5
+        shl r13,#4
+        add r13,#0x800
+        calls 0x346DC
+        sub r4,0xEF80
+        movbz r5,0xFCA0
+        shl r5,#1
+        mov [r5+#0xFC28],r4
+native_latency:
+        mov r12,0xEF7C
+        mov r13,0xF68E
+        calls 0x34484
+        mov 0xEF7C,r4
+        mov r12,0xEF7E
+        mov r13,0xF68E
+        calls 0x34484
+        mov 0xFC20,r4
+        mov r12,0xEF80
+        mov r13,0xF68E
+        calls 0x34484
+        mov 0xFC22,r4
+        rets

@@ -449,7 +449,7 @@ def build_pdf(output: Path) -> Path:
         canvas.setFont(styles["regular"], 7.2)
         canvas.setFillColor(colors.HexColor("#cbd1da"))
         canvas.drawRightString(page_width - right, page_height - 8.5 * mm,
-                               "BMW MS41 Programming and Diagnostics")
+                               "BMW MS41 / MS42 / MS43 Programming and Diagnostics")
         canvas.setStrokeColor(colors.HexColor("#d8dce2"))
         canvas.line(left, 13 * mm, page_width - right, 13 * mm)
         canvas.setFont(styles["regular"], 7.5)
@@ -466,8 +466,8 @@ def build_pdf(output: Path) -> Path:
         topMargin=22 * mm,
         bottomMargin=18 * mm,
         title="BimmerStein ECU Tool User Manual",
-        author="CAATZ and contributors",
-        subject="BMW MS41 programming, diagnostics, and recovery user manual",
+        author="CAATZ",
+        subject="BMW MS41, MS42 and MS43 programming and diagnostics user manual",
         creator="BimmerStein ECU Tool documentation build",
         invariant=1,
     )
@@ -478,7 +478,7 @@ def build_pdf(output: Path) -> Path:
         cover.extend([icon, Spacer(1, 12 * mm)])
     cover.extend([
         Paragraph("BimmerStein<br/>ECU Tool", styles["cover_title"]),
-        Paragraph("BMW MS41 Programming, Diagnostics, and Recovery", styles["cover_subtitle"]),
+        Paragraph("BMW MS41, MS42 and MS43 Programming and Diagnostics", styles["cover_subtitle"]),
         Spacer(1, 15 * mm),
         Paragraph("USER MANUAL", styles["cover_meta"]),
         Paragraph(COVER_VERSION_TEXT, styles["cover_meta"]),

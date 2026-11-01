@@ -1,10 +1,378 @@
 import os
 import sys
+import threading
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import csv as _csv
 import pytest
 import live_data
+from cut_runtime import detect_cut_runtime
+
+
+@pytest.mark.parametrize("ecu_id,family,revision", [
+    ("1429861", "MS41.0", "V18"), ("1437806", "MS41.1", "V18"),
+    ("1406464", "MS41.2", "V18"), ("SHINDE1", "MS41.3", "V18"),
+    ("1429861", "MS41.0", "V16"), ("1437806", "MS41.1", "V16"),
+    ("1406464", "MS41.2", "V16"), ("SHINDE1", "MS41.3", "V16"),
+    ("1429861", "MS41.0", "V15"), ("1437806", "MS41.1", "V14"),
+    ("1406464", "MS41.2", "V14"), ("SHINDE1", "MS41.3", "V14"),
+    ("SHINDE1", "MS41.3", "V12"), ("SHINDE1", "MS41.3", "V11"),
+    ("SHINDE1", "MS41.3", "V10"),
+])
+def test_cut_ram_abi_follows_installed_program_not_native_marker(ecu_id, family, revision):
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+
+    suffix = {"MS41.0": "_ms410", "MS41.1": "_ms411", "MS41.2": "_ms412",
+              "MS41.3": ""}[family]
+    image, _ = patch_ms41.build(
+        ref(family), ["ignition_cut_" + revision.lower() + suffix], allow_deprecated=True)
+    reads = []
+
+    class ImageDS2:
+        def read_mem(self, address, length):
+            reads.append((address, length))
+            if address < 0x10000:
+                # Native roughness can produce an A0-looking high byte at E847.
+                return b"\xa0" if (address, length) == (0xE847, 1) else bytes(length)
+            return bytes(image[(address + i) ^ 0x4000] for i in range(length))
+
+    expected = "V16" if revision in ("V16", "V18") else "legacy"
+    assert detect_cut_runtime(ImageDS2(), ecu_id) == expected
+    assert all(address >= 0x18000 for address, _length in reads)
+    poller = live_data.LiveDataPoller(ecu_id=ecu_id, ds2=ImageDS2())
+    poller._prepare_live_profile()
+    states = {param.name: param.address for param in poller._tel_params
+              if param.id in {"BS_CUT_IGNITION_REQUEST", "BS_CUT_LAUNCH_IGN_REQUEST",
+                              "BS_CUT_LAUNCH_FUEL_ACTIVE", "BS_CUT_INTENTIONAL", "BS_CUT_RUNTIME"}}
+    assert len(states) == 3  # The fixture installs ignition cut, not Launch.
+    assert set(states.values()) == {0xD801 if revision in ("V16", "V18") else 0xE847}
+
+    # A RAM marker cannot compensate for a missing activation hook.
+    from cut_runtime import cut_runtime_probes
+    address, expected_bytes = cut_runtime_probes(ecu_id)[0][1][0]
+    image = bytearray(image)
+    for i in range(len(expected_bytes)):
+        image[(address + i) ^ 0x4000] = 0
+    assert detect_cut_runtime(ImageDS2(), ecu_id) is None
+
+
+def test_native_a0_byte_without_patch_code_never_enables_cut_channels():
+    reads = []
+
+    class NativeDS2:
+        def read_mem(self, address, length):
+            reads.append((address, length))
+            return b"\xa0" if (address, length) == (0xE847, 1) else bytes(length)
+
+    poller = live_data.LiveDataPoller(ecu_id="1429861", ds2=NativeDS2())
+    poller._prepare_live_profile()
+    assert not poller._cut_patch_active
+    assert (0xE847, 1) not in reads
+    assert not any(param.id.startswith("BS_CUT_") and param.id not in live_data._NATIVE_LIVE_IDS
+                   for param in poller._tel_params)
+
+
+class _RoughnessRAMDS2:
+    def __init__(self, values=(-2, -1, 7, 0, -32768, 32767), *,
+                 mask=0x3F, rpm=800, running=4, faults=0):
+        self.calls = []
+        self.memory = {
+            (0xE854, 14): b"".join(value.to_bytes(2, "little", signed=True)
+                                  for value in values) + bytes((0, mask)),
+            (0xDA2A, 2): rpm.to_bytes(2, "little"),
+            (0xFD14, 1): bytes((running,)),
+            (0xFD30, 2): faults.to_bytes(2, "little"),
+        }
+
+    def read_mem(self, address, length):
+        self.calls.append((address, length))
+        return self.memory[address, length]
+
+
+@pytest.mark.parametrize("variant", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
+def test_roughness_ram_preserves_signed_little_endian_values(variant, monkeypatch):
+    monkeypatch.setattr(live_data.time, "monotonic", lambda: 123.5)
+    ds2 = _RoughnessRAMDS2()
+    reading = live_data.read_ram_roughness(ds2, variant)
+    assert reading.cylinders == (-2, -1, 7, 0, -32768, 32767)
+    assert reading.timestamp == 123.5
+    assert reading.rpm == 800
+    assert reading.validity_mask == reading.status == 0x3F
+    assert reading.state == "available"
+    assert ds2.calls == [(0xE854, 14), (0xDA2A, 2), (0xFD14, 1), (0xFD30, 2)]
+
+
+@pytest.mark.parametrize("variant", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
+@pytest.mark.parametrize("options,state", [
+    ({"rpm": 0}, "engine_stopped"),
+    ({"running": 0}, "unavailable"),
+    ({"faults": 2}, "unavailable"),
+    ({"faults": 4}, "unavailable"),
+    ({"faults": 8}, "unavailable"),
+    ({"mask": 0}, "unavailable"),
+])
+def test_roughness_does_not_show_stale_or_engine_stopped_values(variant, options, state):
+    reading = live_data.read_ram_roughness(_RoughnessRAMDS2(values=(-5,) * 6, **options), variant)
+    assert reading.cylinders == (None,) * 6
+    assert reading.state == state
+
+
+@pytest.mark.parametrize("variant", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
+def test_roughness_eligibility_bits_follow_cylinder_order(variant):
+    reading = live_data.read_ram_roughness(
+        _RoughnessRAMDS2(values=(-5,) * 6, mask=0xEA, faults=0xF001), variant)
+    assert reading.cylinders == (None, -5, None, -5, None, -5)
+    assert reading.validity_mask == 0x2A
+    assert reading.state == "partial"
+    reading = live_data.read_ram_roughness(_RoughnessRAMDS2(values=(-5,) * 6), variant)
+    assert reading.cylinders == (-5,) * 6
+    assert reading.state == "available"
+
+
+@pytest.mark.parametrize("address,length", [(0xE854, 14), (0xDA2A, 2), (0xFD14, 1), (0xFD30, 2)])
+def test_roughness_rejects_incomplete_ram_snapshots(address, length):
+    ds2 = _RoughnessRAMDS2()
+    ds2.memory[address, length] = bytes(length - 1)
+    with pytest.raises(ValueError, match="short roughness RAM read"):
+        live_data.read_ram_roughness(ds2, "MS41.2")
+
+
+class _RoughnessCommandDS2:
+    def __init__(self):
+        self.calls = []
+        self.threads = []
+        self.responses = {
+            0x22: [b"\x00"], 0x23: [b""],
+            0x2B: [b"\x00" + b"".join(value.to_bytes(2, "big", signed=True)
+                                       for value in (-32768, -200, -1, 0, 123, 32767))],
+        }
+
+    def execute(self, command, args):
+        self.calls.append((command, args))
+        self.threads.append(threading.get_ident())
+        outcomes = self.responses[command]
+        outcome = outcomes.pop(0) if len(outcomes) > 1 else outcomes[0]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+@pytest.mark.parametrize("variant", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
+def test_bmw_roughness_commands_use_selector_five_and_preserve_signed_words(variant, monkeypatch):
+    monkeypatch.setattr(live_data.time, "monotonic", lambda: 123.5)
+    ds2 = _RoughnessCommandDS2()
+    live_data.start_roughness_check(ds2, variant)
+    reading = live_data.read_roughness(ds2, variant)
+    live_data.stop_roughness_check(ds2, variant)
+    assert ds2.calls == [(0x22, b"\x05"), (0x2B, b"\x05"), (0x23, b"\x05")]
+    assert reading.cylinders == (-32768, -200, -1, 0, 123, 32767)
+    assert reading.timestamp == 123.5 and reading.status == 0
+    assert reading.rpm is None and reading.state == "available"
+
+
+def test_roughness_unknown_family_never_contacts_ecu():
+    ds2 = _RoughnessCommandDS2()
+    with pytest.raises(ValueError, match="not mapped"):
+        live_data.read_roughness(ds2, "unknown")
+    assert ds2.calls == []
+
+
+@pytest.mark.parametrize("payload", [b"", b"\x00" * 12, b"\x00" * 14])
+def test_bmw_roughness_rejects_incomplete_or_extra_data(payload):
+    ds2 = _RoughnessCommandDS2()
+    ds2.responses[0x2B] = [payload]
+    with pytest.raises(live_data.DS2Error, match="payload length"):
+        live_data.read_roughness(ds2, "MS41.2")
+
+
+def test_bmw_roughness_unknown_result_status_is_unavailable():
+    ds2 = _RoughnessCommandDS2()
+    ds2.responses[0x2B] = [b"\x01" + b"\xff" * 12]
+    reading = live_data.read_roughness(ds2, "MS41.0")
+    assert reading.status == 1 and reading.cylinders == (None,) * 6
+    assert reading.state == "unavailable"
+
+
+@pytest.mark.parametrize("command", [0x22, 0x23, 0x2B])
+def test_bmw_roughness_busy_retry_is_bounded_and_only_retries_a1(command, monkeypatch):
+    ds2 = _RoughnessCommandDS2()
+    reply = ds2.responses[command][0]
+    busy = live_data.DS2NegativeResponse("busy", command=command, status=0xA1)
+    monkeypatch.setattr(live_data.time, "sleep", lambda _seconds: None)
+    ds2.responses[command] = [busy, busy, reply]
+    assert live_data._roughness_command(ds2, command) == reply
+    assert len(ds2.calls) == 3
+    ds2.calls.clear()
+    ds2.responses[command] = [busy]
+    with pytest.raises(live_data.DS2NegativeResponse):
+        live_data._roughness_command(ds2, command)
+    assert len(ds2.calls) == 3
+    ds2.calls.clear()
+    ds2.responses[command] = [live_data.DS2NegativeResponse("bad selector", command=command, status=0xB0)]
+    with pytest.raises(live_data.DS2NegativeResponse):
+        live_data._roughness_command(ds2, command)
+    assert len(ds2.calls) == 1
+
+
+def test_roughness_stop_only_joins_worker_and_cleanup_runs_after_blocked_read():
+    reading = threading.Event()
+    release = threading.Event()
+
+    class BlockedDS2(_RoughnessCommandDS2):
+        def execute(self, command, args):
+            result = super().execute(command, args)
+            if command == 0x2B:
+                reading.set()
+                assert release.wait(2)
+            return result
+
+    ds2 = BlockedDS2()
+    poller = live_data.RoughnessPoller(ds2, "MS41.2")
+    poller.start()
+    try:
+        assert reading.wait(2)
+        assert poller.stop(timeout=0.01) is False
+        assert not poller.stop_confirmed
+        assert ds2.calls == [(0x22, b"\x05"), (0x2B, b"\x05")]
+    finally:
+        release.set()
+        assert poller.stop(timeout=2) is True
+    assert poller.stop_confirmed
+    assert poller.stop(timeout=0) is True
+    assert ds2.calls == [(0x22, b"\x05"), (0x2B, b"\x05"), (0x23, b"\x05")]
+    assert all(thread != threading.get_ident() for thread in ds2.threads)
+    completed = poller.drain_readings()
+    assert len(completed) == 1
+    assert completed[0] is poller.latest_reading()
+    assert poller.drain_readings() == []
+
+
+@pytest.mark.parametrize("outcome,needs_stop", [
+    (live_data.DS2NegativeResponse("bad selector", command=0x22, status=0xB0), False),
+    (b"\x01", False), (TimeoutError("lost start reply"), True), (b"", True),
+])
+def test_roughness_start_rejection_does_not_stop_but_ambiguous_start_does(outcome, needs_stop):
+    ds2 = _RoughnessCommandDS2()
+    ds2.responses[0x22] = [outcome]
+    poller = live_data.RoughnessPoller(ds2, "MS41.2")
+    poller.start()
+    poller._thread.join(2)
+    assert poller.stop_confirmed
+    assert ds2.calls == [(0x22, b"\x05")] + ([(0x23, b"\x05")] if needs_stop else [])
+    assert "start failed" in poller.pop_errors()[0]
+
+
+def test_roughness_unconfirmed_cleanup_requires_explicit_worker_retry():
+    retry_entered, retry_release = threading.Event(), threading.Event()
+
+    class DS2(_RoughnessCommandDS2):
+        def execute(self, command, args):
+            if command == 0x23 and len([call for call in self.calls if call[0] == 0x23]):
+                retry_entered.set()
+                assert retry_release.wait(2)
+            return super().execute(command, args)
+
+    ds2 = DS2()
+    ds2.responses[0x22] = [TimeoutError("start response lost")]
+    ds2.responses[0x23] = [live_data.DS2NegativeResponse("rejected", command=0x23, status=0xB0), b""]
+    poller = live_data.RoughnessPoller(ds2, "MS41.2")
+    poller.start()
+    poller._thread.join(2)
+    assert not poller.is_running and not poller.stop_confirmed
+    assert poller.cleanup_error is not None
+    for _ in range(3):
+        assert not poller.stop(timeout=0)
+    assert len(ds2.calls) == 2
+    with pytest.raises(live_data.DS2Error, match="STOP is unconfirmed"):
+        poller.start()
+    poller.retry_stop()
+    try:
+        assert retry_entered.wait(2)
+        assert not poller.stop(timeout=0)  # stop Event must not cancel cleanup.
+    finally:
+        retry_release.set()
+        assert poller.stop(timeout=2)
+    assert poller.cleanup_error is None
+    assert ds2.calls == [(0x22, b"\x05"), (0x23, b"\x05"), (0x23, b"\x05")]
+    assert all(thread != threading.get_ident() for thread in ds2.threads)
+
+
+@pytest.mark.parametrize("acquisition_time,expected_wait", [(0.2, 0.3), (0.8, 0.0)])
+def test_roughness_completed_samples_have_gaps_and_deadline_based_pacing(
+        monkeypatch, acquisition_time, expected_wait):
+    clock = [0.0]
+    waits = []
+    attempts = []
+
+    class ControlledStop:
+        stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def set(self):
+            self.stopped = True
+
+        def wait(self, delay):
+            waits.append(delay)
+            clock[0] += delay
+            if len(waits) == 3:
+                self.set()
+
+    def acquire(_ds2, _variant):
+        clock[0] += acquisition_time
+        attempts.append(clock[0])
+        if len(attempts) == 2:
+            raise TimeoutError("lost RAM reply")
+        return live_data.RoughnessReading(0x3F, (5,) * 6, timestamp=clock[0],
+                                          rpm=800, validity_mask=0x3F, state="available")
+
+    monkeypatch.setattr(live_data.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(live_data, "read_roughness", acquire)
+    poller = live_data.RoughnessPoller(_RoughnessCommandDS2(), "MS41.2", interval=0.5)
+    poller._stop = ControlledStop()
+    poller._run()
+    samples = poller.drain_readings()
+    assert len(samples) == 3 and samples[1] is None
+    assert samples[0].timestamp == attempts[0]
+    assert samples[2].timestamp == attempts[2]
+    assert waits == pytest.approx([expected_wait] * 3)
+    assert poller.latest_reading() is samples[2]
+    assert poller.drain_readings() == []
+    assert "lost RAM reply" in poller.pop_errors()[0]
+
+
+def test_roughness_failures_clear_latest_and_stop_after_three_failed_reads(monkeypatch):
+    def fail(_ds2, _variant):
+        raise TimeoutError("lost RAM reply")
+
+    monkeypatch.setattr(live_data, "read_roughness", fail)
+    poller = live_data.RoughnessPoller(_RoughnessCommandDS2(), "MS41.2", interval=0.001)
+    poller._latest = live_data.RoughnessReading(0x3F, (5,) * 6)
+    poller._run()
+    assert poller.latest_reading() is None
+    assert poller.drain_readings() == [None, None, None]
+    assert len(poller.pop_errors()) == 3
+    assert poller.stop_confirmed
+
+
+def test_roughness_pending_samples_are_bounded(monkeypatch):
+    attempts = [0]
+    poller = live_data.RoughnessPoller(_RoughnessCommandDS2(), "MS41.2", interval=0.000001)
+
+    def acquire(_ds2, _variant):
+        attempts[0] += 1
+        if attempts[0] == 260:
+            poller._stop.set()
+        return live_data.RoughnessReading(0x3F, (5,) * 6, timestamp=float(attempts[0]))
+
+    monkeypatch.setattr(live_data, "read_roughness", acquire)
+    poller._run()
+    samples = poller.drain_readings()
+    assert len(samples) == 256
+    assert samples[0].timestamp == 5
+    assert samples[-1].timestamp == 260
 
 
 class _FakeDS2:
@@ -16,8 +384,8 @@ class _FakeDS2:
         self._on_stop = on_stop
 
     def read_mem(self, start, size):
-        if (start, size) == (0xE847, 1):
-            return b"\x00"
+        if start >= 0x18000:
+            return bytes(size)
         self.calls += 1
         if self.calls == self._stop_on:
             self._on_stop()          # Stop pressed while this block is being read
@@ -70,23 +438,29 @@ def test_batch_mode_uses_one_poll_after_one_time_cut_runtime_probe(tmp_path):
 
         def poll_telegram_batch(self):
             self.polls += 1
-            self.poller._stop.set()
-            return bytes(38)
+            return bytes(sum(width for _address, width in self.setup_entries[-1]))
 
         def read_mem(self, address, length):
-            assert (address, length) == (0xE847, 1)
-            return b"\x00"
+            return bytes(length)
 
     p = live_data.LiveDataPoller(interval=0, use_telegram=True, ecu_id="1437806")
     fake = FakeBatchDS2(p)
     p._ds2 = fake
     log = str(tmp_path / "batch.csv")
     p._open_csv(log)
+    commit = p._write_csv_row
+
+    def commit_and_stop(row):
+        commit(row)
+        p._stop.set()
+
+    p._write_csv_row = commit_and_stop
     p._poll_loop_ds2_batch()
     p._close_csv()
 
     assert fake.setup_ids == ["1437806"]
-    assert len(fake.setup_entries[0]) == 24
+    assert fake.setup_entries == [p._batch_entries]
+    assert 1 <= len(fake.setup_entries[0]) <= 49
     assert fake.polls == 1
     assert p.csv_rows == 1
 
@@ -144,37 +518,31 @@ def test_completed_sample_cursor_reports_ring_overflow():
         p.completed_samples_since(258)
 
 
-def _batch_payload(layout, values):
-    raw = bytearray(38)
-    offset = 2
-    for index, entry in enumerate(layout):
-        if index == 20:
-            offset = 30
-        nbytes = entry[2]
-        raw[offset:offset + nbytes] = int(values.get(index, 0)).to_bytes(nbytes, "big")
-        offset += nbytes
-    return bytes(raw)
+def _batch_values(parameters, memory):
+    entries, supplemental = live_data._batch_entries_for(parameters)
+    assert not supplemental
+    raw = b"".join(bytes(memory.get(address + offset, 0)
+                         for offset in reversed(range(width)))
+                   for address, width in entries)
+    snapshot = live_data._decode_batch_snapshot(raw, entries)
+    return entries, {
+        parameter.name: (parameter.display(parameter.parse(bytes(
+            snapshot[parameter.address + i] for i in range(parameter.length)),
+            parameter.address)), parameter.unit)
+        for parameter in parameters
+    }
 
 
-def test_universal_batch_uses_all_six_previous_spare_slots():
-    layout = live_data.batch_layout_for("1437806")
-    assert len(layout) == 24
-    assert sum(entry[2] for entry in layout[:20]) == 26
-    assert sum(entry[2] for entry in layout[20:]) == 8
-    assert [layout[index][1] for index in (13, 18, 19, 21, 22, 23)] == [
-        0xDA56, 0xFD24, 0xFD14, 0xFA9A, 0xFA98, 0xFA9E,
-    ]
-
-    latest = {}
-    csv_row = {}
-    raw = _batch_payload(layout, {
-        18: 0x02,       # full load on; closed-throttle active-low bit remains clear
-        19: 0x2A,       # part load, decel fuel cut, and engine start
-        21: 512,
-        22: 0,
-        23: 1023,
+def test_universal_batch_reads_state_bits_and_adc_channels_from_definition():
+    wanted = {"Closed Throttle", "Full Load", "Part Load", "Decel Fuel Cut",
+              "Engine Start", "Front O2 B1 Voltage", "Front O2 B2 Voltage",
+              "MAF Sensor Voltage", "EVAP Purge Duty"}
+    parameters = [p for p in live_data.telegram_params_for("1437806") if p.name in wanted]
+    entries, latest = _batch_values(parameters, {
+        0xFD24: 0x02, 0xFD14: 0x2A, 0xFA9B: 2, 0xFA9E: 0xFF, 0xFA9F: 3,
     })
-    live_data._parse_ds2_batch(raw, latest, live_data.threading.Lock(), csv_row, layout)
+    assert {address for address, _width in entries} == {
+        0xDA56, 0xFD24, 0xFD14, 0xFA9A, 0xFA98, 0xFA9E}
 
     assert latest["Closed Throttle"][0] == "Active"
     assert latest["Full Load"][0] == "Active"
@@ -197,11 +565,72 @@ def test_universal_batch_uses_all_six_previous_spare_slots():
 )
 def test_verified_firmware_uses_normalized_tps_and_correct_battery(
         ecu_id, battery_address):
-    direct = {param.name: param.address for param in live_data.telegram_params_for(ecu_id)}
-    batch = {entry[0]: entry[1] for entry in live_data.batch_layout_for(ecu_id) if entry[0]}
+    params = [p for p in live_data.telegram_params_for(ecu_id)
+              if p.id in ("P13", "P17")]
+    entries, values = _batch_values(params, {0xE8D0: 128, battery_address: 128})
+    assert set(entries) == {(0xE8D0, 1), (battery_address, 1)}
+    assert values["Throttle Position"] == ("50.2", "%")
+    assert values["Battery Voltage"] == ("13.05", "V")
 
-    assert direct["Throttle Position"] == batch["Throttle Position"] == 0xE8D0
-    assert direct["Battery Voltage"] == batch["Battery Voltage"] == battery_address
+
+@pytest.mark.parametrize("ecu_id,injector,load,st1,st2,lt1,lt2", [
+    ("1429861", 0xECBC, 0xFAFC, 0xED5C, 0xED96, 0xED6E, 0xEDA8),
+    ("1437806", 0xEF96, 0xFC52, 0xF036, 0xF0F2, 0xF048, 0xF104),
+    ("1406464", 0xEF7E, 0xFC52, 0xF01E, 0xF0CA, 0xF030, 0xF0DC),
+    ("SHINDE1", 0xEF7E, 0xFC52, 0xF01E, 0xF0CA, 0xF030, 0xF0DC),
+])
+def test_descriptor_plan_preserves_corrected_family_words_and_scales(
+        ecu_id, injector, load, st1, st2, lt1, lt2):
+    expected = {
+        "BS_INJECTOR_PW": (injector, 0x1234, "24.88", "ms"),
+        "E2": (load, 0x1234, "98.8", "mg/st"),
+        # Nonzero low bytes catch the old Telegram high-byte approximation.
+        "E13": (st1, 0x8080, "0.2", "%"),
+        "E14": (st2, 0x7F80, "-0.2", "%"),
+        "E21": (lt1, 0x8000, "0.0", "%"),
+        "E22": (lt2, 0, "-50.0", "%"),
+        "E9": (0xDA36, 0xFF00, "-0.4", "%"),
+        "BS_ROUGHNESS_CYL1": (0xE854, 0xFFFF, "-1", "raw"),
+    }
+    params = [p for p in live_data.telegram_params_for(ecu_id) if p.id in expected]
+    assert {p.id for p in params} == set(expected)
+    memory = {}
+    for p in params:
+        address, raw, _display, _unit = expected[p.id]
+        assert (p.address, p.length, p.endian) == (address, 2, "little")
+        memory[address] = raw & 255
+        memory[address + 1] = raw >> 8
+    entries, values = _batch_values(params, memory)
+    assert set(entries) == {(address, 2) for address, *_rest in expected.values()}
+    for p in params:
+        assert values[p.name] == expected[p.id][2:]
+
+
+@pytest.mark.parametrize("ecu_id,cut_address,launch_address", [
+    ("1429861", 0x13013, 0x13029), ("1437806", 0x13703, 0x13719),
+    ("1406464", 0x12A68, 0x13535), ("SHINDE1", 0x12A68, 0x147E9),
+])
+def test_descriptor_plan_splits_odd_cal_words_and_preserves_tps_alias_scaling(
+        ecu_id, cut_address, launch_address):
+    wanted = {"BS_CUT_FIXED_IPW", "BS_CUT_LAUNCH_FIXED_IPW", "P13", "BS_CUT_LAUNCH_TPS"}
+    params = [p for p in live_data.telegram_params_for(
+        ecu_id, include_cut=True, include_launch=True) if p.id in wanted]
+    assert {p.id for p in params} == wanted
+    memory = {cut_address: 0x34, cut_address + 1: 0x12,
+              launch_address: 0xFF, launch_address + 1: 0xFF, 0xE8D0: 128}
+    entries, values = _batch_values(params, memory)
+    for address in (cut_address, launch_address):
+        if address & 1:
+            assert (address, 1) in entries and (address + 1, 1) in entries
+            assert (address, 2) not in entries
+        else:
+            assert (address, 2) in entries
+    assert entries.count((0xE8D0, 1)) == 1
+    assert values["Cut Fixed IPW"] == ("24.88", "ms")
+    assert values["Launch Ignition Fixed IPW"] == ("Stock", "ms")
+    assert values["Throttle Position"] == ("50.2", "%")
+    assert values["Launch TPS (threshold scale)"] == (
+        ("59.98", "° throttle") if ecu_id == "1429861" else ("60.2", "%"))
 
 
 def test_selected_definition_drives_direct_and_batch_address_conversion(tmp_path):
@@ -216,14 +645,14 @@ def test_selected_definition_drives_direct_and_batch_address_conversion(tmp_path
 
     rpm = next(param for param in live_data.telegram_params_for(
         "1437806", definition_path=selected) if param.name == "Engine RPM")
-    layout = live_data.batch_layout_for("1437806", definition_path=selected)
-    batch_rpm = next(entry for entry in layout if entry[0] == "Engine RPM")
+    entries, values = _batch_values([rpm], {0xD000: 0xE8, 0xD001: 3})
+    assert entries == ((0xD000, 2),)
+    assert rpm.address == 0xD000
+    assert rpm.convert(1000) == 2000
+    assert values["Engine RPM"] == ("2000", "RPM")
 
-    assert rpm.address == batch_rpm[1] == 0xD000
-    assert rpm.convert(1000) == batch_rpm[4](1000) == 2000
 
-
-def test_non_memory_romraider_selectors_are_not_read_as_ram(tmp_path):
+def test_non_memory_xml_definition_selectors_are_not_read_as_ram(tmp_path):
     source = live_data.bundled_logger_definition_path().read_text(encoding="utf-8")
     selected = tmp_path / "selectors.xml"
     selected.write_text(
@@ -258,7 +687,7 @@ def test_live_display_specs_cover_packaged_rows_and_unknowns_fail_closed():
         set(live_data._LIVE_VALUE_CHANNELS),
         set(live_data._LIVE_RAW_CHANNELS),
     ]
-    assert tuple(map(len, groups)) == (30, 20, 19, 4)
+    assert tuple(map(len, groups)) == (30, 26, 31, 11)
     assert sum(map(len, groups)) == len(set().union(*groups))
     assert rows == set().union(*groups)
     for row in gauges:
@@ -274,24 +703,14 @@ def test_live_display_specs_cover_packaged_rows_and_unknowns_fail_closed():
     }
 
 
-def test_wideband_batch_preserves_the_proven_38_byte_response_shape():
-    layout = live_data.batch_layout_for(
-        "SHINDE1", live_data.PROFILE_WIDEBAND, 0xFA98)
-    assert len(layout) == 24
-    assert sum(entry[2] for entry in layout[:20]) == 26
-    assert sum(entry[2] for entry in layout[20:]) == 8
-    assert [layout[index][1] for index in (13, 18, 19, 21, 22, 23)] == [
-        0xE800, 0xFD24, 0xFD14, 0xFA98, 0xFA9E, 0xE810,
-    ]
-
-    latest = {}
-    raw = _batch_payload(layout, {
-        13: 117,        # 14.10 AFR
-        21: 512,
-        22: 1023,
-        23: 0x8032,     # E811=0x80 target; E810=0x32 target-voltage byte
+def test_wideband_batch_uses_resolved_input_and_target_byte():
+    wanted = {"Wideband AFR", "AFR Target", "Wideband Input Voltage", "MAF Sensor Voltage"}
+    params = [p for p in live_data.telegram_params_for(
+        "SHINDE1", live_data.PROFILE_WIDEBAND, 0xFA98) if p.name in wanted]
+    entries, latest = _batch_values(params, {
+        0xE800: 117, 0xFA99: 2, 0xFA9E: 0xFF, 0xFA9F: 3, 0xE811: 128,
     })
-    live_data._parse_ds2_batch(raw, latest, live_data.threading.Lock(), {}, layout)
+    assert set(entries) == {(0xE800, 1), (0xE811, 1), (0xFA98, 2), (0xFA9E, 2)}
 
     assert latest["Wideband AFR"] == ("14.10", "AFR")
     assert latest["AFR Target"] == ("14.65", "AFR")
@@ -310,8 +729,8 @@ def test_live_parameters_do_not_inherit_unverified_ram_addresses():
 
     assert live_data.telegram_params_for("1438068") == []
     assert live_data.telegram_params_for("1438137") == []
-    assert live_data.batch_layout_for("1429373") is None
-    assert live_data.batch_layout_for("1438068") is None
+    assert not live_data.LiveDataPoller(ecu_id="1429373")._batch_entries
+    assert not live_data.LiveDataPoller(ecu_id="1438068")._batch_entries
 
 
 def test_unmapped_batch_uses_available_direct_parameters_instead():
@@ -323,7 +742,7 @@ def test_unmapped_batch_uses_available_direct_parameters_instead():
 
         def setup_telegram_batch(self, **_kwargs):
             self.setup_called = True
-            raise AssertionError("unmapped ECU must not configure a fixed batch")
+            raise AssertionError("unqualified ECU must not configure a native batch")
 
         def read_mem(self, _address, length):
             self.reads += 1
@@ -383,7 +802,7 @@ def test_ms413_profile_detection_uses_runtime_flag_and_selected_input():
 
         def poll_telegram_batch(self):
             self.poller._stop.set()
-            return bytes(38)
+            return bytes(sum(width for _address, width in self.entries))
 
     p = live_data.LiveDataPoller(
         interval=0, use_telegram=True, ecu_id="1406464", ecu_variant="MS41.3")
@@ -393,7 +812,7 @@ def test_ms413_profile_detection_uses_runtime_flag_and_selected_input():
 
     assert p._profile == live_data.PROFILE_WIDEBAND
     assert p._wideband_input_addr == 0xFA98
-    assert fake.entries[21] == (0xFA98, 2)
+    assert (0xFA98, 2) in fake.entries
     assert p.latest_values()["Wideband Mode"] == ("Enabled", "")
     assert p.latest_values()["Wideband Input Source"] == (
         "Front O2 Bank 2 (0xFA98)", "")
@@ -421,7 +840,7 @@ def test_ms413_with_wideband_disabled_keeps_universal_profile():
 
         def poll_telegram_batch(self):
             self.poller._stop.set()
-            return bytes(38)
+            return bytes(sum(width for _address, width in self.entries))
 
     p = live_data.LiveDataPoller(
         interval=0, use_telegram=True, ecu_id="1406464", ecu_variant="MS41.3")
@@ -431,7 +850,7 @@ def test_ms413_with_wideband_disabled_keeps_universal_profile():
 
     assert p._profile == live_data.PROFILE_STANDARD
     assert (0x133C0, 2) not in fake.reads
-    assert fake.entries[13] == (0xDA56, 1)
+    assert (0xDA56, 1) in fake.entries
     assert p.latest_values()["Wideband Mode"] == ("Disabled", "")
     assert "EVAP Purge Duty" in p.active_profile_names
     assert "Wideband AFR" not in p.active_profile_names
@@ -455,34 +874,34 @@ def test_direct_read_profile_matches_wideband_batch_selection():
         (
             "1429861", (0xFD51, 0xFD51, 0xFD50), 0xFAE6, 0xEDF4, 0xED51,
             0x13010, 0x13020, (0xED66, 0xEDA0),
-            (0xED58, 0xED92), (0xEDE3, 0xEDEB), (), (0x13010, 27),
+            (0xED58, 0xED92), (0xEDE3, 0xEDEB), (), (0x13010, 32),
         ),
         (
             "1437806", (0xFD61, 0xFD61, 0xFD60), 0xFC3C, 0xF1BE, 0xF02B,
             0x13700, 0x13710, (0xF040, 0xF0FC),
             (0xF032, 0xF0EE), (0xF1AF, 0xF1B7), (0xF07C, 0xF138),
-            (0x13700, 27),
+            (0x13700, 32),
         ),
         (
             "1406464", (0xFD61, 0xFD61, 0xFD60), 0xFC3C, 0xF19A, 0xF013,
             0x12A65, 0x1352C, (0xF028, 0xF0D4),
             (0xF01A, 0xF0C6), (0xF189, 0xF191), (0xF064, 0xF110),
-            (0x1352C, 11),
+            (0x1352C, 16),
         ),
         (
             "SHINDE1", (0xFD61, 0xFD61, 0xFD60), 0xFC3C, 0xF19A, 0xF013,
             0x12A65, 0x147E0, (0xF028, 0xF0D4),
             (0xF01A, 0xF0C6), (0xF189, 0xF191), (0xF064, 0xF110),
-            (0x147E0, 11),
+            (0x147E0, 16),
         ),
     ],
 )
 def test_cut_diagnostics_use_grounded_four_variant_addresses(
         ecu_id, input_addresses, rpm, speed, stage, ignition_cals, launch_cals,
-        additive, sreg, front_heaters, rear_heaters, cal_block):
+        additive, sreg, front_heaters, rear_heaters, cal_block, monkeypatch):
     params = {
         param.name: param
-        for param in live_data.telegram_params_for(ecu_id, include_cut=True)
+        for param in live_data.telegram_params_for(ecu_id, include_cut=True, include_launch=True)
     }
     expected = {
         "Cut Input 80": (input_addresses[0], b"\x02", "Active"),
@@ -499,25 +918,26 @@ def test_cut_diagnostics_use_grounded_four_variant_addresses(
         "Launch Control RPM": (launch_cals + 3, b"\x7d", "4000"),
         "Launch Arm Speed": (launch_cals + 4, b"\x05", "5"),
         "Launch Max Speed": (launch_cals + 5, b"\x28", "40"),
-        "Launch Min TPS": (launch_cals + 6, b"\x80", "60"),
+        "Launch Min TPS": (launch_cals + 6, b"\x80", "59.98" if ecu_id == "1429861" else "60"),
         "Launch Hard Cut RPM": (
             launch_cals + 7, b"\xff", "Soft + 96"),
         "Launch Ignition Hysteresis": (launch_cals + 8, b"\x0a", "320"),
         "Launch Ignition Fixed IPW": (launch_cals + 9, b"\x34\x12", "24.88"),
-        "Ignition Cut Request": (0xE847, b"\x01", "Active"),
-        "Launch Ignition Request": (0xE847, b"\x02", "Active"),
-        "Launch Fuel Cut Active": (0xE847, b"\x04", "Active"),
-        "Intentional Combustion Cut": (0xE847, b"\xa4", "Active"),
-        "Cut Patch Runtime": (0xE847, b"\xa0", "Active"),
+        "Ignition Cut Request": (0xD801, b"\x01", "Active"),
+        "Launch Ignition Request": (0xD801, b"\x02", "Active"),
+        "Launch Fuel Cut Active": (0xD801, b"\x04", "Active"),
+        "Intentional Combustion Cut": (0xD801, b"\xa4", "Active"),
+        "Cut Patch Runtime": (0xD801, b"\xa0", "Active"),
         "Launch Armed": (
             0xFD80 if ecu_id == "1429861" else 0xFDB6,
             b"\x40", "Active",
         ),
-        "Launch Legacy FD5A.7": (0xFD5A, b"\x80", "Active"),
-        "Stock Limiter Active": (0xFD13, b"\x80", "Active"),
+        "Native Fuel Limiter Active": (0xFD13, b"\x80", "Active"),
+        "Effective Fuel Limiter RPM": (stage + 1, b"\x7d", "4000"),
+        "Native Fuel Recovery Priority": (0xD801, b"\xa8", "Native recovery"),
         "Fuel Cut Stage Count": (stage, b"\x03", "3"),
         "Cut RPM": (rpm, b"\x7d", "4000"),
-        "Launch TPS": (0xE8D0, b"\x80", "60.2"),
+        "Launch TPS (threshold scale)": (0xE8D0, b"\x80", "59.98" if ecu_id == "1429861" else "60.2"),
         "Launch Speed": (speed, b"\x28", "40"),
         "Fuel Trim Additive": (additive[0], b"\x00\x80", "0.00"),
         "Fuel Trim Additive B2": (additive[1], b"\x00\x80", "0.00"),
@@ -552,6 +972,9 @@ def test_cut_diagnostics_use_grounded_four_variant_addresses(
     )
     assert (launch_block.start, launch_block.size) == cal_block
 
+    monkeypatch.setattr(live_data, "detect_cut_runtime", lambda *_args: "V16")
+    monkeypatch.setattr(live_data, "detect_launch_runtime", lambda *_args: "V16")
+
     class ActivePatchDS2:
         def read_mem(self, address, length):
             if (address, length) == (0xE847, 1):
@@ -570,10 +993,10 @@ def test_inactive_or_unavailable_cut_patch_hides_diagnostics(
         use_telegram, marker):
     class FakeDS2:
         def read_mem(self, address, length):
-            assert (address, length) == (0xE847, 1)
+            assert address >= 0x18000
             if marker is None:
                 raise TimeoutError("marker timeout")
-            return marker
+            return bytes(length)
 
     poller = live_data.LiveDataPoller(
         use_telegram=use_telegram, ecu_id="1429861", ds2=FakeDS2())
@@ -591,33 +1014,47 @@ def test_inactive_or_unavailable_cut_patch_hides_diagnostics(
 
 
 @pytest.mark.parametrize("ecu_id", ["1429861", "1437806", "1406464", "SHINDE1"])
-def test_active_cut_patch_diagnostics_force_direct_reads_in_batch_mode(ecu_id):
+def test_active_cut_patch_reads_dynamic_batch_and_remaining_supplements(ecu_id, monkeypatch):
+    monkeypatch.setattr(live_data, "detect_cut_runtime", lambda *_args: "V16")
+    monkeypatch.setattr(live_data, "detect_launch_runtime", lambda *_args: "V16")
     class FakeDS2:
         def __init__(self, poller):
             self.poller = poller
             self.setup_called = False
             self.reads = []
 
-        def setup_telegram_batch(self, **_kwargs):
+        def setup_telegram_batch(self, entries=None, **_kwargs):
             self.setup_called = True
+            self.entries = tuple(entries)
+
+        def poll_telegram_batch(self):
+            return bytes(sum(width for _address, width in self.entries))
 
         def read_mem(self, address, length):
             self.reads.append((address, length))
             if (address, length) == (0xE847, 1):
                 return b"\xA0"
-            self.poller._stop.set()
             return bytes(length)
 
     poller = live_data.LiveDataPoller(
         interval=0, use_telegram=True, ecu_id=ecu_id)
     fake = FakeDS2(poller)
     poller._ds2 = fake
+    commit = poller._write_csv_row
+
+    def commit_and_stop(row):
+        commit(row)
+        poller._stop.set()
+
+    poller._write_csv_row = commit_and_stop
     poller._poll_loop_ds2_batch()
 
-    assert not fake.setup_called
+    assert fake.setup_called
     assert fake.reads
-    assert any("Cut-patch diagnostics require direct" in error
-               for error in poller.pop_errors())
+    assert poller.completed_samples_since(0)[0] == 1
+    assert "Ignition Cut Switch" in poller.latest_values()
+    assert "Launch Control Switch" in poller.latest_values()
+    assert not poller.pop_errors()
 
 
 def test_read_adaptations_decodes_fuel_axes_and_six_knock_tables():

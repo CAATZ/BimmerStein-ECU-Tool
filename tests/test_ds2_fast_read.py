@@ -37,6 +37,7 @@ from ds2_fast_read import (
     NativeFastReadSession,
     NativeFastReadTransport,
     SELECTOR_COMMAND,
+    SELECTOR_COMPATIBILITY,
     SELECTOR_HIGH,
     SELECTOR_LOW,
     SELECTOR_MID,
@@ -72,6 +73,7 @@ class ReadOnlyStockSerial:
         SELECTOR_LOW: 9615.4,
         SELECTOR_MID: 19736.8,
         SELECTOR_HIGH: 187500.0,
+        SELECTOR_COMPATIBILITY: 125000.0,
     }
 
     def __init__(
@@ -204,7 +206,7 @@ class ReadOnlyStockSerial:
             count = args[4]
             if (
                 self.drop_high_token_response
-                and self._baud == int(self.ECU_RATES[SELECTOR_HIGH])
+                and self.selector in (SELECTOR_HIGH, SELECTOR_COMPATIBILITY)
                 and address == TOKEN_ADDRESS
             ):
                 return len(raw)
@@ -220,7 +222,7 @@ class ReadOnlyStockSerial:
                 self.reentry_index += 1
             elif address >> 24 == EEPROM_READ_SELECTOR:
                 assert self.fast_state
-                assert self.selector == SELECTOR_HIGH
+                assert self.selector in (SELECTOR_HIGH, SELECTOR_COMPATIBILITY)
                 offset = address & 0xFFFFFF
                 data = bytearray(self.eeprom[offset : offset + count])
             else:
