@@ -1,4 +1,4 @@
-# bimmerstein-test: {"api":1,"id":"ms413-ignition-cut","name":"MS41.3 ignition-cut recovery diagnosis","description":"Read-only cut and recovery capture with raw replies and retry evidence.","version":"3","mode":"read_only","ecu_ids":["SHINDE1"],"default_duration_seconds":60,"result_schema":"bimmerstein-ms413-diagnostic-v3"}
+# bimmerstein-test: {"api":1,"id":"ms413-ignition-cut","name":"MS41.3 ignition-cut recovery diagnosis","description":"MS41.3 only: V18 and legacy cut, launch inputs, effective limiter threshold, timing and recovery capture.","version":"8","mode":"read_only","ecu_ids":["SHINDE1"],"default_duration_seconds":60,"result_schema":"bimmerstein-ms413-diagnostic-v5"}
 """Read-only MS41.3/SS1v2 cut, limiter, fueling, and self-test capture."""
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ds2 import DS2Error, DS2Interface
+from cut_runtime import cut_program_state_probe, cut_state_address
 from ds2_fast_read import IDENTITY_LENGTH
 from dtc import parse_ds2_dtc_response
 from ecu_info import (
@@ -30,9 +31,8 @@ from ms41 import (
 )
 
 
-# Group 1 must contain 26 data bytes and group 2 exactly 8. Keeping the
-# transient cut, limiter, and fueling values in one ECU telegram avoids the
-# time skew of many individual 9600-baud reads.
+# Keep transient cut, limiter, and fueling values in one ECU telegram to
+# avoid the time skew of many individual 9600-baud reads.
 BATCH_LAYOUT = (
     ("cut_state", 0xE847, 1),
     ("launch_latch", 0xFDB6, 1),
@@ -69,6 +69,26 @@ RECOVERY_BATCH_LAYOUT = tuple(
     else (name, address, length)
     for name, address, length in STATIONARY_WIDEBAND_BATCH_LAYOUT
 )
+# Keep the 34-byte payload. V14 uses the second O2 voltage
+# slot for the timing state/source word; both O2 voltages remain in snapshots.
+V14_RECOVERY_BATCH_LAYOUT = tuple(
+    ("timing_state_source", 0xE849, 2) if name == "front_o2_b2"
+    else (name, address, length)
+    for name, address, length in RECOVERY_BATCH_LAYOUT
+)
+V17_KNOCK_GUARD_LAYOUT = tuple(
+    (name, 0xD805 + index, 1) for index, name in enumerate((
+        "knock_guard_marker", "knock_clean_window_mask", "knock_open_phase_mask",
+        "knock_old_reply_drained", "knock_request_qualified", "knock_snapshot_qualified",
+        "knock_retained_valid_mask"))
+)
+V17_RECOVERY_BATCH_LAYOUT = V14_RECOVERY_BATCH_LAYOUT + (
+    ("knock_global_history", 0xE9D9, 1),
+    *((f"knock_history_channel_{index + 1}", 0xE9CC + index, 1) for index in range(6)),
+    ("knock_fault_flags_a", 0xFD30, 2),
+    ("knock_fault_flags_b", 0xFD32, 2),
+) + V17_KNOCK_GUARD_LAYOUT
+V18_RECOVERY_BATCH_LAYOUT = V17_RECOVERY_BATCH_LAYOUT + (("fixed_ipw_state", 0xD80C, 1),)
 
 SLOW_READS = (
     ("cut_recovery_pending", 0xE848, 1),
@@ -83,10 +103,14 @@ SLOW_READS = (
     ("boot_scratch_support_only", 0xE732, 2),
     ("softbsl_phase", 0xE740, 1),
     ("native_resume_state", 0xF015, 2),
+    ("effective_soft_rpm", 0xF014, 1),
+    ("native_fuel_limiter", 0xFD13, 1),
+    ("launch_armed_latch", 0xFDB6, 1),
     ("native_thresholds", 0xDB86, 2),
     ("native_state_flags", 0xFD44, 2),
     ("legacy_launch_state", 0xFD5A, 1),
     ("input_82_latch", 0xFD60, 1),
+    ("input_80_81_latch", 0xFD61, 1),
     ("battery", 0xFC9D, 1),
     ("additive_trim_b1", 0xF028, 2),
     ("additive_trim_b2", 0xF0D4, 2),
@@ -117,9 +141,64 @@ SLOW_READS = (
     ("heater_front_b2", 0xF191, 1),
     ("diagnostic_masks", 0x133DB, 5),
     ("coil_monitor_switches", 0x1023D, 2),
-    ("ignition_cals", 0x12A65, 5),
-    ("launch_cals", 0x147E0, 11),
+    ("ignition_cals", 0x12A65, 7),
+    ("launch_cals", 0x147E0, 16),
+    ("front_o2_b1", 0xFA9A, 2),
+    ("front_o2_b2", 0xFA98, 2),
+    ("knock_selected_cells", 0xE9BA, 6),
+    ("knock_retained_channels", 0xE9C0, 12),
+    ("knock_channel_histories", 0xE9CC, 6),
+    ("knock_global_history", 0xE9D9, 1),
+    ("knock_fault_flags", 0xFD30, 4),
+    *((f"knock_learned_row_{index + 1}", 0xD840 + 64 * index, 64) for index in range(6)),
 )
+
+
+def _state_address(revision):
+    address = cut_state_address(revision)
+    if revision in ("V17", "V18") and address != 0xD801:
+        raise RuntimeError("V17/V18 recording requires an updated app/core; update the application and try again")
+    return address
+
+
+def _batch_layout_for_revision(layout, revision):
+    base = _state_address(revision)
+    addresses = {"cut_state": base, "cut_recovery_pending": base + 1,
+                 "timing_state_source": base + 2}
+    resolved = tuple((name, addresses.get(name, address), length)
+                     for name, address, length in layout)
+    # Recovery used the input slots for WBO/recovery state. Keep those values
+    # and restore the switch inputs within the 49-entry native telegram limit.
+    if any(name == "cut_recovery_pending" for name, _address, _length in resolved):
+        names = {name for name, _address, _length in resolved}
+        resolved += tuple(item for item in (("input_82", 0xFD60, 1),
+                                           ("input_80_81", 0xFD61, 1))
+                          if item[0] not in names)
+    return resolved
+
+
+def _batch_entries(layout):
+    """Read odd-address words as two bytes; native word descriptors require alignment."""
+    entries = []
+    for _name, address, length in layout:
+        if length == 2 and address & 1:
+            entries.extend(((address, 1), (address + 1, 1)))
+        else:
+            entries.append((address, length))
+    return entries
+
+
+def _slow_reads_for_revision(revision):
+    if revision not in ("V16", "V17", "V18"):
+        return SLOW_READS
+    addresses = {"cut_recovery_pending": 0xD802,
+                 "cut_state_and_recovery": 0xD801,
+                 "cut_state_and_recovery_repeat": 0xD801,
+                 "recovery_neighbors": 0xD800}
+    return tuple((name, addresses.get(name, address), length)
+                 for name, address, length in SLOW_READS) + (
+        (("knock_guard", 0xD805, 7),) if revision in ("V17", "V18") else ()) + (
+        (("fixed_ipw_state", 0xD80C, 1),) if revision == "V18" else ())
 
 SELF_TEST_BITS = {
     0x0001: "startup RAM pattern test: FA00-FDFE",
@@ -169,7 +248,478 @@ V11_PATCH_PROBES = tuple(
     for name, address, expected in V10_PATCH_PROBES if address != 0x2B5A6
 ) + (("ignition_cut_v11_2b5a6_stock", 0x2B5A6, bytes.fromhex("d633c2fd")),)
 
-PATCH_PROBES = V11_PATCH_PROBES + V10_PATCH_PROBES + (
+# These probes identify the installed runtime layout, not full-ROM integrity.
+V14_PATCH_PROBES = tuple(
+    (name.replace("v11_", "v14_"), address, {
+        0x30468: bytes.fromhex("fa0346e3"),
+        0x2B258: bytes.fromhex("fa036ae3"),
+        0x2B116: bytes.fromhex("da032ee5"),
+        0x2B188: bytes.fromhex("da032ee5"),
+        0x291E2: bytes.fromhex("fa035ce5"),
+    }.get(address, expected))
+    for name, address, expected in V11_PATCH_PROBES
+) + (
+    ("ignition_cut_v14_timing_a", 0x05D58, bytes.fromhex("da0300e7cc00")),
+    ("ignition_cut_v14_timing_b", 0x05E2C, bytes.fromhex("da0300e7cc00")),
+    ("ignition_cut_v14_control", 0x3E600, bytes.fromhex("ec88be88ec00ecf5e6000400da03b0dc")),
+    ("ignition_cut_v14_timing", 0x3E700, bytes.fromhex("ecf4da0300e847f83f00ed07e6f2ff00")),
+    ("ignition_cut_v14_qualification", 0x3E740, bytes.fromhex(
+        "ec88ecf4ecf5ecf747fdc1003d1af2f430fd66f47f003d15f2f432fd66f400c03d10f3f8d9e947f8")),
+    ("ignition_cut_v14_state_entry", 0x3E800, bytes.fromhex("fa0300eacc00cc00cc00fa030aea")),
+    ("ignition_cut_v14_state", 0x3EA00, bytes.fromhex("ec88ecf7e0070d04cc00ec88ecf7e017")),
+    ("ignition_cut_v14_gate", 0x3DC70, bytes.fromhex("ecf4f3f847e867f8f00047f8a0003d06")),
+)
+_v14_launch_state_probe = cut_program_state_probe("launch_control_v14")
+V14_LAUNCH_PROBES = (
+    ("launch_control_v14_stock_prologue", 0x207D2, bytes.fromhex("fe2dfe11")),
+    ("launch_control_v14_soft_hook", 0x207E8, bytes.fromhex("fa0300dd")),
+    ("launch_control_v14_hyst_a", 0x207F4, bytes.fromhex("da0320de")),
+    ("launch_control_v14_hyst_b", 0x20816, bytes.fromhex("da03bcdd")),
+    ("launch_control_v14_hard_a", 0x2088A, bytes.fromhex("da0340e1")),
+    ("launch_control_v14_hard_b", 0x2092A, bytes.fromhex("da0340e1")),
+    ("launch_control_v14_marker", 0x3DDBA, bytes.fromhex("0ef2")),
+    ("launch_control_v14_retired_soft", 0x3E100, bytes.fromhex("0df2ffffffffffffffffffffffffffff")),
+    ("launch_control_v14_hook", 0x39928, bytes.fromhex("fa0380df")),
+    ("launch_control_v14_revision", 0x3DDEC, bytes.fromhex("2d01f0d4fcf4fc00fc88f0dddb00ffff")),
+) + ((("launch_control_v14_state_operand", *_v14_launch_state_probe),)
+     if _v14_launch_state_probe else ())
+
+V16_PATCH_PROBES = tuple(
+    (name.replace("v14_", "v16_"), address,
+     expected.replace(bytes.fromhex("47e8"), bytes.fromhex("01d8"))
+     if name.endswith("_gate") else expected)
+    for name, address, expected in V14_PATCH_PROBES
+)
+_v16_launch_state_probe = cut_program_state_probe("launch_control_v16")
+V16_LAUNCH_PROBES = tuple(
+    (name.replace("v14_", "v16_"), address, expected)
+    for name, address, expected in V14_LAUNCH_PROBES if not name.endswith("_state_operand")
+) + ((("launch_control_v16_state_operand", *_v16_launch_state_probe),)
+     if _v16_launch_state_probe else ())
+
+# Exact V17 provenance code and every native hook into it.
+V17_KNOCK_PROBES = (
+    ("ignition_cut_v17_knock_3f000", 0x3F000, bytes.fromhex(
+        "ec88be88ecf4e004f6f406d8f6f408d8f6f40ad8e7f8a700f7f805d8fcf4fc88db00f3f805d847f8a7002d02da0300f0"
+        "db00da0322f0f3f801d867f8f00047f8a0003d0df3f801d869873d05f3f803d847f8c3003d04da0300f0e014db00e004"
+        "db00ec88be88ecf4ecf5da0332f03d0cf3f808d849813d08c2f480fa4845ed04e0154c54f7fa07d8fcf5fcf4fc88db00"
+        "ec88be88ecf4da0332f03d07f3f807d875f806d8e108f7f807d8fcf4fc88db00ec88be88ecf4da0332f03d07f3f806d8")),
+    ("ignition_cut_v17_knock_3f0c0", 0x3F0C0, bytes.fromhex(
+        "47f83f003d02e1180d01e108f7f809d8f3f80bd847f83f002d03e1c8f7f8dff6fcf4fc88e6f1def6db00ec88be88ecf4"
+        "da0332f0e108f7f80ad8f2f6def649d5ed07f3f809d8f7f80ad8e118f7f808d8fcf4fc88f066db00ec88be88ecf4ecf5"
+        "da0332f0c2f1e1f6f7f293f44815ed12f3f4e0f6e44176fcec88e0154c51f3f80ad849813d0375fa0bd80d03915065fa"
+        "0bd80d01ec88fcf466f4fff7f2f512fed455040066f500087045f2f512fec4450400fcf5fcf4fc88fa03124fecf4ecf5")),
+    ("ignition_cut_v17_knock_3f180", 0x3F180, bytes.fromhex(
+        "da0332f03d0ce0154c56f3f80bd8618a2d06fcf5fcf4f0465c14fa02bca7f2f41cfd68442d0d8a1917e08a1915f08a2f"
+        "13808a2f11a0f2f40cea66f400103d0cfcf5fcf4e6f4fffb64f41cfdf4e6cce9c0e75c87fa024cadfcf5fcf4fa0200ac"
+        "ec88ecf4da0332f03d0ef3f80bd847f83f003d09f2f41cfd66f400042d04fcf4fc88fa021ca2fcf4fc88fa02aca243f0"
+        "90fa3d054fe2da0362f0fa004c4343f091fa3d034ee2da0390f0fa004c4343f090fa3d054fe2da0362f0fa00725143f0")),
+    ("ignition_cut_v17_knock_3f240", 0x3F240, bytes.fromhex("91fa3d034ee2da0390f0fa007251")),
+    ("ignition_cut_v17_knock_0433a", 0x0433A, bytes.fromhex("fa030ef2")),
+    ("ignition_cut_v17_knock_05160", 0x05160, bytes.fromhex("fa032ef2")),
+    ("ignition_cut_v17_knock_3d568", 0x3D568, bytes.fromhex("da03b0f0")),
+    ("ignition_cut_v17_knock_043d4", 0x043D4, bytes.fromhex("da03eaf0")),
+    ("ignition_cut_v17_knock_0448c", 0x0448C, bytes.fromhex("da03eaf0")),
+    ("ignition_cut_v17_knock_04542", 0x04542, bytes.fromhex("da03eaf0")),
+    ("ignition_cut_v17_knock_04822", 0x04822, bytes.fromhex("da03eaf0")),
+    ("ignition_cut_v17_knock_048da", 0x048DA, bytes.fromhex("da03eaf0")),
+    ("ignition_cut_v17_knock_04990", 0x04990, bytes.fromhex("da03eaf0")),
+    ("ignition_cut_v17_knock_051b2", 0x051B2, bytes.fromhex("da03eaf0")),
+    ("ignition_cut_v17_knock_05248", 0x05248, bytes.fromhex("da03eaf0")),
+    ("ignition_cut_v17_knock_052de", 0x052DE, bytes.fromhex("da03eaf0")),
+    ("ignition_cut_v17_knock_0538a", 0x0538A, bytes.fromhex("da03eaf0")),
+    ("ignition_cut_v17_knock_05420", 0x05420, bytes.fromhex("da03eaf0")),
+    ("ignition_cut_v17_knock_054b4", 0x054B4, bytes.fromhex("da03eaf0")),
+    ("ignition_cut_v17_knock_34efe", 0x34EFE, bytes.fromhex("fa0318f1")),
+    ("ignition_cut_v17_knock_2a7b8", 0x2A7B8, bytes.fromhex("fa037cf1")),
+    ("ignition_cut_v17_knock_2a218", 0x2A218, bytes.fromhex("fa03e0f1")),
+)
+
+V17_PATCH_PROBES = tuple(
+    (name.replace("v16_", "v17_"), address, {
+        0x3DC70: bytes.fromhex(
+            "ecf4f3f801d867f8f00047f8a0003d06da0360e6f3f801d869833d04fcf465f204ffdb00da0300f0e7f81f0075f802d8fcf4db00"
+            "cc00cc00cc00cc00cc00cc00f3fa01d867faf00047faa0002d0ce6f500c0f6f502d8f7fa04d8da0300f0e7faa000f7fa01d8db00"),
+        0x3E700: bytes.fromhex(
+            "ecf4da0300e847f83f00ed0ce6f0ff00210840209d01f020da0300f0e7f81f0075f802d8fcf4f00267f00f00db00"),
+        0x3E740: bytes.fromhex(
+            "ec88ecf447fdc1003d0cf2f430fd66f47f003d07f2f432fd66f400c03d02e7fdc300fcf4fc88db00"),
+    }.get(address, expected))
+    for name, address, expected in V16_PATCH_PROBES
+) + V17_KNOCK_PROBES
+V17_LAUNCH_PROBES = tuple(
+    (name.replace("v16_", "v17_"), address,
+     bytes.fromhex("2d01f0d4fcf4fc00fc88f0dddb00cc00") if name.endswith("_revision") else expected)
+    for name, address, expected in V16_LAUNCH_PROBES
+)
+
+# BEGIN V18 PROBES
+# Generated from the V18 descriptors; calibration values are read separately.
+V18_PATCH_PROBES = (
+    ("ignition_cut_v18_3d92a", 0x3D92A, bytes.fromhex(
+        "da0370dc"
+    )),
+    ("ignition_cut_v18_3d98e", 0x3D98E, bytes.fromhex(
+        "da0370dc"
+    )),
+    ("ignition_cut_v18_2755a", 0x2755A, bytes.fromhex(
+        "da0300e6da0300f4fa02ea75"
+    )),
+    ("ignition_cut_v18_3dea0", 0x3DEA0, bytes.fromhex(
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    )),
+    ("ignition_cut_v18_3df20", 0x3DF20, bytes.fromhex(
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    )),
+    ("ignition_cut_v18_2bf10", 0x2BF10, bytes.fromhex(
+        "fa0310e2"
+    )),
+    ("ignition_cut_v18_2c86e", 0x2C86E, bytes.fromhex(
+        "c4861800"
+    )),
+    ("ignition_cut_v18_2c89c", 0x2C89C, bytes.fromhex(
+        "c4471000"
+    )),
+    ("ignition_cut_v18_3553e", 0x3553E, bytes.fromhex(
+        "fa03aae2"
+    )),
+    ("ignition_cut_v18_2b05c", 0x2B05C, bytes.fromhex(
+        "fa03e6e2"
+    )),
+    ("ignition_cut_v18_2b11e", 0x2B11E, bytes.fromhex(
+        "fa03fee2"
+    )),
+    ("ignition_cut_v18_36248", 0x36248, bytes.fromhex(
+        "e6fc46ee"
+    )),
+    ("ignition_cut_v18_36274", 0x36274, bytes.fromhex(
+        "e6fc52ee"
+    )),
+    ("ignition_cut_v18_3025c", 0x3025C, bytes.fromhex(
+        "f3f83cfc"
+    )),
+    ("ignition_cut_v18_3e1a0", 0x3E1A0, bytes.fromhex(
+        "f3f801d867f8f00047f8a0003d08f3f801d869872d03e1f875f802d8db00e004db00da03a2e33d0ff3f801d867f8f000"
+        "47f8a0003df4f3f802d846f518f03d0269810d016982db00da03a2e33d10f3f801d867f8f00047f8a0003de1f3f802d8"
+        "46f518f03d0269850d0267f80a00db00ecf4ecf5f05eda03c2e12d03fcf5fcf4"
+    )),
+    ("ignition_cut_v18_3e220", 0x3E220, bytes.fromhex(
+        "db00fcf5fcf488d08880fa0214bf8a180b10ecf4ecf5f05cda03c2e12d03fcf5fcf4db00fcf5fcf488608880fa0240c5"
+        "ecf4ecf5f05cda03c2e12d03fcf5fcf4db00fcf5fcf488608890fa0236bdecf4ecf5f05cda03c2e12d03fcf5fcf4db00"
+        "fcf5fcf488608890fa02b8c0ecf4ecf5f05cda03c2e12d03fcf5fcf4db00fcf5"
+    )),
+    ("ignition_cut_v18_3e2a0", 0x3E2A0, bytes.fromhex(
+        "fcf488808890fa020ec3ecf4da03a0e12d03fcf4fa032e58fcf4f3fa34fcfa0342558a180c10ecf4ecf5f059da03c2e1"
+        "2d04fcf5fcf4fa02a8b6fcf5fcf4f4893300fa02aab5ecf4da03a2e32d03fcf4fa02bcb0fcf4e6f4c4f0fa0260b0ecf4"
+        "da03a2e32d03fcf4fa027eb1fcf4e6f418f0fa0222b1ecf4da03bae72d0fe6f4"
+    )),
+    ("ignition_cut_v18_3e320", 0x3E320, bytes.fromhex(
+        "0202f6f43af5f6f43cf5f6f43ef5e7f8ef0065f802d8fcf4fa037003fcf4f489d4abfa032202ecf4da03bae73d0bf489"
+        "f2abc084f4843af53d05fcf4c2f45af5fa036c04fcf4fa03da048a181410ecf4ecf5f059da03c2e12d0cd4490200f6f4"
+        "0efdd4490400f6f410fdfcf5fcf4fa0222b4fcf5fcf48a0a0200fa025cb2fa02"
+    )),
+    ("ignition_cut_v18_3e3a0", 0x3E3A0, bytes.fromhex(
+        "9ab2da03a0e13d14f3f801d867f8f00047f8a0003d0ef3f803d847f8c3003d09da030ae847f8c3003d04e1f875f802d8"
+        "db00e004db00"
+    )),
+    ("ignition_cut_v18_2c53c", 0x2C53C, bytes.fromhex(
+        "fa032ee2"
+    )),
+    ("ignition_cut_v18_2bd32", 0x2BD32, bytes.fromhex(
+        "fa0350e2"
+    )),
+    ("ignition_cut_v18_2c0b4", 0x2C0B4, bytes.fromhex(
+        "fa036ee2"
+    )),
+    ("ignition_cut_v18_2c30a", 0x2C30A, bytes.fromhex(
+        "fa038ce2"
+    )),
+    ("ignition_cut_v18_2b5a6", 0x2B5A6, bytes.fromhex(
+        "d633c2fd"
+    )),
+    ("ignition_cut_v18_3021e", 0x3021E, bytes.fromhex(
+        "fa0316e3"
+    )),
+    ("ignition_cut_v18_30468", 0x30468, bytes.fromhex(
+        "fa0346e3"
+    )),
+    ("ignition_cut_v18_2b258", 0x2B258, bytes.fromhex(
+        "fa036ae3"
+    )),
+    ("ignition_cut_v18_2b054", 0x2B054, bytes.fromhex(
+        "da0300e5"
+    )),
+    ("ignition_cut_v18_2b0c2", 0x2B0C2, bytes.fromhex(
+        "da0300e5"
+    )),
+    ("ignition_cut_v18_2b116", 0x2B116, bytes.fromhex(
+        "da032ee5"
+    )),
+    ("ignition_cut_v18_2b188", 0x2B188, bytes.fromhex(
+        "da032ee5"
+    )),
+    ("ignition_cut_v18_291e2", 0x291E2, bytes.fromhex(
+        "fa035ce5"
+    )),
+    ("ignition_cut_v18_3e500", 0x3E500, bytes.fromhex(
+        "ec88be88ecf4da0390e73d0ee7f8fe0046f918f02d02e7f8fd0065f802d8fcf4fc88e4c92b00db00fcf4fc88db00ec88"
+        "be88ecf4da0390e73d0ee7f8fb0046f918f02d02e7f8f70065f802d8fcf4fc88e4894200db00fcf4fc88db00ecf4ecf5"
+        "f059da03e8e12d23e004e4894000c4495e00c4496000c4496200c4496400d449"
+    )),
+    ("ignition_cut_v18_3e580", 0x3E580, bytes.fromhex(
+        "6e0042f46800ed0fe004c4496600c4496800c4496a00c4496c00c4496e00fcf5fcf4fa027694fcf5fcf4fa02e093fcf5"
+        "fcf48a080220fa02da93fa02ea91"
+    )),
+    ("ignition_cut_v18_3e790", 0x3E790, bytes.fromhex(
+        "da03a0e13d0ff3f801d867f8f00047f8a0003d09f3f803d847f8c3003d04e1f875f802d8db00e004db00da03a2e33d0b"
+        "f3f801d867f8f00047f8a0003df4f3f802d867f81000db00"
+    )),
+    ("ignition_cut_v18_05d58", 0x05D58, bytes.fromhex(
+        "da0300e7cc00"
+    )),
+    ("ignition_cut_v18_05e2c", 0x05E2C, bytes.fromhex(
+        "da0300e7cc00"
+    )),
+    ("ignition_cut_v18_3e600", 0x3E600, bytes.fromhex(
+        "ec88be88ec00ecf5e6000400da03b0dcf3fa01d869a72d03e1fa75fa02d8fcf5fc00fc88f2f47cefdb00cc00cc00cc00"
+        "cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00"
+        "ec00ecf5ecf6e6000400f3fa652a47faff002d3849a02d1549a13d05f3fa61fd"
+    )),
+    ("ignition_cut_v18_3e680", 0x3E680, bytes.fromhex(
+        "69a22d300d0e49a23d05f3fa61fd69a12d290d0749a43d26f3fa60fd67fa80002d21f3fa01d869a12d14f3fa672a47fa"
+        "ff002d07f3fc662a41ca8d032d0221ca0d03f3fc662a0d00f3fa3cfc41ac8d0a0d05f3fa3cfc43fa662a8d04e11a75fa"
+        "01d80d04e7fafe0065fa01d8fcf6fcf5fc00db00"
+    )),
+    ("ignition_cut_v18_3e700", 0x3E700, bytes.fromhex(
+        "ecf4da0300e847f83f00ed0de6f0ff00210840209d03f020da0336f0e7f81f0075f802d80d02da034ef0fcf4f00267f0"
+        "0f00db00"
+    )),
+    ("ignition_cut_v18_3e740", 0x3E740, bytes.fromhex(
+        "ec88ecf447fdc1003d0cf2f430fd66f47f003d07f2f432fd66f400c03d02e7fdc300fcf4fc88db00ffffffffffffffff"
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    )),
+    ("ignition_cut_v18_3e800", 0x3E800, bytes.fromhex(
+        "fa0300eacc00cc00cc00fa030aea"
+    )),
+    ("ignition_cut_v18_3ea00", 0x3EA00, bytes.fromhex(
+        "ec88ecf7e0070d04cc00ec88ecf7e017ec00ecf4ecf5ecf6ecf3e6000400f3fc03d8e7fdc000e6f3ff00f3f801d867f8"
+        "f80047f8a000ea3038ecf3fa3cfc43fa87dbea9038ece6000800f2f4e80746f4fa03ea309cebf2f4ea0746f400ddea30"
+        "9cebe6000400f3f8b6fd67f84000ea20a0ebf3f89af143f8e547ea90a0ebf3f8"
+    )),
+    ("ignition_cut_v18_3ea80", 0x3EA80, bytes.fromhex(
+        "d0e843f8e647ea80a0ebf3f8e0474980ea20e2ea4981ea30a4eaf3f861fd6982ea00c2ea4982ea30b4eaf3f861fd6981"
+        "ea00c2ea4984ea30a0ebf3f860fd67f88000f3fae24749a0ea20dcea49a1ea30a0eb4980ea30a0ebea00e2ea4980ea20"
+        "a0ebf3f8e1474980ea200ceb4981ea30a0ebf3f6ef4747f63f00eae0a0ebf3f8"
+    )),
+    ("ignition_cut_v18_3eb00", 0x3EB00, bytes.fromhex(
+        "e347f3faee47e127ea00feebf3f6ed4747f63f00eae0a0ebf3fa3cfcf3f8e34743f814f0eae0a0ebea2034eb43fa14f0"
+        "ea90a0ebf3fae74747faff00ea3056ebf3fae34747fafd00ea8054ebe7faff00ea0056eb09a343fa87dbea8062ebf3fa"
+        "87db41a8ea906aebf18af3fa3cfc41a8ea9096eb67fcfd0047fcc100ea30a0eb"
+    )),
+    ("ignition_cut_v18_3eb80", 0x3EB80, bytes.fromhex(
+        "f3f804d84981ea30a0ebf3f813fd67f88000ea20a0ebe117ea0026ece6000400e6f3ff00f3f8652a4980ea20e8eb4981"
+        "ea30c2ebf3f861fd6982ea2038ecea00e8eb4982ea30d6ebf3f861fd6981ea2038ecea00e8eb4984ea3038ecf3f860fd"
+        "67f88000ea2038ecf3f66b2a47f63f00eae038ecf3f8662af3fa6a2ae13749a0"
+    )),
+    ("ignition_cut_v18_3ec00", 0x3EC00, bytes.fromhex(
+        "ea202eec41a8ea902eec43f83cfceaf02eec218af3fa3cfc41a8ea802eec43fa14f0ea902eece7fdc100ea0038ec4972"
+        "ea20a0ebe6f3ff00da0340e749e1ea205eece7ffff0047fdc300ea3050ecf1f6be88f7f704d8f7fd03d8ea0084ece7ff"
+        "c00047fdc300ea3084ecf3f803d847f8c300ea3084ecf3f804d84187ea3084ec"
+    )),
+    ("ignition_cut_v18_3ec80", 0x3EC80, bytes.fromhex(
+        "e7ffc300fcf3fcf6fcf5fcf4fc00f18ffcf7fc88db00"
+    )),
+    ("ignition_cut_v18_3dc70", 0x3DC70, bytes.fromhex(
+        "ecf4f3f801d867f8f00047f8a0003d06da0360e6f3f801d869833d04fcf465f204ffdb00da0300f0e7f81f0075f802d8"
+        "fcf4db00cc00cc00cc00cc00cc00cc00f3fa01d867faf00047faa0002d0ee6f500c0f6f502d8f7fa04d8da0300f0e7fa"
+        "a000f7fa0cd8f7fa01d8db00"
+    )),
+    ("ignition_cut_v18_3f000", 0x3F000, bytes.fromhex(
+        "ec88be88ecf4e004f6f406d8f6f408d8f6f40ad8f3f805d847f8e7003d05f3f803d847f8c3002d04e7f8a700f7f805d8"
+        "fcf4fc88db00ec88be88da0300f0ecf4e7f8e700f7f805d8fcf4fc88db00ec88be88ecf4f3f803d847f8c3002d09f3f8"
+        "05d847f8e7003d04e7f8a700f7f805d8fcf4fc88db00f3f805d867f8bf0047f8"
+    )),
+    ("ignition_cut_v18_3f080", 0x3F080, bytes.fromhex(
+        "a7002d02da0300f0db00ec88be88da0376f0f3f801d867f8f00047f8a0003d12f3f801d869873d0af3f803d847f8c300"
+        "3d09f3f805d847f8e7003d08da0300f0e0140d05e7f8a700f7f805d8e004fc884840db00ec88be88ecf4ecf5da038af0"
+        "3d0cf3f808d849813d08c2f480fa4845ed04e0154c54f7fa07d8fcf5fcf4fc88"
+    )),
+    ("ignition_cut_v18_3f100", 0x3F100, bytes.fromhex(
+        "db00ec88be88ecf4da038af03d07f3f807d875f806d8e108f7f807d8fcf4fc88db00ec88be88ecf4da038af03d07f3f8"
+        "06d847f83f003d02e1180d01e108f7f809d8f3f80bd847f83f002d03e1c8f7f8dff6fcf4fc88e6f1def6db00ec88be88"
+        "ecf4da038af0e108f7f80ad8f2f6def649d5ed07f3f809d8f7f80ad8e118f7f8"
+    )),
+    ("ignition_cut_v18_3f180", 0x3F180, bytes.fromhex(
+        "08d8fcf4fc88f066db00ec88be88ecf4ecf5da038af0c2f1e1f6f7f293f44815ed12f3f4e0f6e44176fcec88e0154c51"
+        "f3f80ad849813d0375fa0bd80d03915065fa0bd80d01ec88fcf466f4fff7f2f512fed455040066f500087045f2f512fe"
+        "c4450400fcf5fcf4fc88fa03124fecf4ecf5da038af03d0ce0154c56f3f80bd8"
+    )),
+    ("ignition_cut_v18_3f200", 0x3F200, bytes.fromhex(
+        "618a2d06fcf5fcf4f0465c14fa02bca7f2f41cfd68442d0d8a1917e08a1915f08a2f13808a2f11a0f2f40cea66f40010"
+        "3d0cfcf5fcf4e6f4fffb64f41cfdf4e6cce9c0e75c87fa024cadfcf5fcf4fa0200acec88ecf4da038af03d0ef3f80bd8"
+        "47f83f003d09f2f41cfd66f400042d04fcf4fc88fa021ca2fcf4fc88fa02aca2"
+    )),
+    ("ignition_cut_v18_3f280", 0x3F280, bytes.fromhex(
+        "43f090fa3d054fe2da03d4f0fa004c4343f091fa3d034ee2da0302f1fa004c4343f090fa3d054fe2da03d4f0fa007251"
+        "43f091fa3d034ee2da0302f1fa007251"
+    )),
+    ("ignition_cut_v18_0433a", 0x0433A, bytes.fromhex(
+        "fa0380f2"
+    )),
+    ("ignition_cut_v18_05160", 0x05160, bytes.fromhex(
+        "fa03a0f2"
+    )),
+    ("ignition_cut_v18_3d568", 0x3D568, bytes.fromhex(
+        "da0322f1"
+    )),
+    ("ignition_cut_v18_043d4", 0x043D4, bytes.fromhex(
+        "da035cf1"
+    )),
+    ("ignition_cut_v18_0448c", 0x0448C, bytes.fromhex(
+        "da035cf1"
+    )),
+    ("ignition_cut_v18_04542", 0x04542, bytes.fromhex(
+        "da035cf1"
+    )),
+    ("ignition_cut_v18_04822", 0x04822, bytes.fromhex(
+        "da035cf1"
+    )),
+    ("ignition_cut_v18_048da", 0x048DA, bytes.fromhex(
+        "da035cf1"
+    )),
+    ("ignition_cut_v18_04990", 0x04990, bytes.fromhex(
+        "da035cf1"
+    )),
+    ("ignition_cut_v18_051b2", 0x051B2, bytes.fromhex(
+        "da035cf1"
+    )),
+    ("ignition_cut_v18_05248", 0x05248, bytes.fromhex(
+        "da035cf1"
+    )),
+    ("ignition_cut_v18_052de", 0x052DE, bytes.fromhex(
+        "da035cf1"
+    )),
+    ("ignition_cut_v18_0538a", 0x0538A, bytes.fromhex(
+        "da035cf1"
+    )),
+    ("ignition_cut_v18_05420", 0x05420, bytes.fromhex(
+        "da035cf1"
+    )),
+    ("ignition_cut_v18_054b4", 0x054B4, bytes.fromhex(
+        "da035cf1"
+    )),
+    ("ignition_cut_v18_34efe", 0x34EFE, bytes.fromhex(
+        "fa038af1"
+    )),
+    ("ignition_cut_v18_2a7b8", 0x2A7B8, bytes.fromhex(
+        "fa03eef1"
+    )),
+    ("ignition_cut_v18_2a218", 0x2A218, bytes.fromhex(
+        "fa0352f2"
+    )),
+    ("ignition_cut_v18_3f400", 0x3F400, bytes.fromhex(
+        "ecf1ecf2ecf3ecf6ecf7ecf8ecf9ecfaecfbecfeecffec00e6000400ec88be88c2f101d86813f3f380faf2f28ef6f2f3"
+        "74faf18269822d05f3fae947f3fbea470d08f1826981ea20e4f4f3fa682af3fb692a46f5ffffea20e4f4f2f45efd66f4"
+        "00a446f40004ea30ecf4f2f402fd66f40800ea30ecf4f3f881faea30ecf44935"
+    )),
+    ("ignition_cut_v18_3f480", 0x3F480, bytes.fromhex(
+        "eae0ecf4f3f8a0fc4985eae0ecf4f2f450ff66f4004f46f40043ea30ecf4f2f446ff66f4cf0046f44100ea30ecf44830"
+        "ea20ecf442f346feeaf0ecf4f0e5f0f5f0537c352052ea80ecf44850ea20ecf42851f0455c14084140e4eae0ecf4fc88"
+        "ea0012f5fc88e6f1a0000d03fc88e6f1a200f3f80cd847f8a1002d04f7f20cd8"
+    )),
+    ("ignition_cut_v18_3f500", 0x3F500, bytes.fromhex(
+        "ea0074f6e003f2fe7eeff2ff80eff2f28ef6f0cec2fd28dc5c4d06fd0008da0390f6ea80eef4f064f0cfc2fd29dc5c4d"
+        "06fd0008da0390f6ea80eef4f074f0cec2fd2adc5c4d06fd0008da0390f6ea80eef4f084f0cfc2fd2bdc5c4d06fd0008"
+        "da0390f6ea80eef4f094f0cec2fd2cdc5c4d06fd0008da0390f6ea80eef4f0a4"
+    )),
+    ("ignition_cut_v18_3f580", 0x3F580, bytes.fromhex(
+        "f0cfc2fd2ddc5c4d06fd0008da0390f6ea80eef4f0b4ec88be884830ea202af642f374faea306ef642f28ef6ea306ef6"
+        "43f380faea306ef6f3f801d869834182ea306ef6f2f45efd66f400a446f40004ea306ef6f2f402fd66f40800ea306ef6"
+        "f3f881faea306ef64935eae06ef6f3f8a0fc4985eae06ef6f2f450ff66f4004f"
+    )),
+    ("ignition_cut_v18_3f600", 0x3F600, bytes.fromhex(
+        "46f40043ea306ef6f2f446ff66f4cf0046f44100ea306ef64830ea206ef642f346feeaf06ef6e6f1a100f6fe7eeff6ff"
+        "80eff04e00429d02e6f4fffff6f420fcf04f00429d02e6f4fffff6f422fcf6f628fcf6f72afcf6f82cfcf6f92efcf6fa"
+        "30fcf6fb32fcf7f20cd8fc880d03fc88ea00eef4fc00fcfffcfefcfbfcfafcf9"
+    )),
+    ("ignition_cut_v18_3f680", 0x3F680, bytes.fromhex(
+        "fcf8fcf7fcf6fcf3fcf2fcf1ea00c6f61bcdf2f40cfe46f400108d03e6f4ffff0d055c44f2fd0efe7ccd704d48302d06"
+        "4045ed0748403d0248202d03204c1e88db001f88db00f2f47ceff6f482efc2f5a0fcf485ceab3d14f2fc7eefc2f4a0fc"
+        "f4a428dcc0ad5c4d06fd0008da03dc4622f47eefc2f5a0fc5c15c44528fc0d13"
+    )),
+    ("ignition_cut_v18_3f700", 0x3F700, bytes.fromhex(
+        "f2fc80efc2f4a0fcf4a428dcc0ad5c4d06fd0008da03dc4622f480efc2f5a0fc5c15c44528fcf2fc7ceff2fd8ef6da03"
+        "8444f6f47ceff2fc7eeff2fd8ef6da038444f6f420fcf2fc80eff2fd8ef6da038444f6f422fcdb00"
+    )),
+)
+V18_LAUNCH_PROBES = (
+    ("launch_control_v18_207d2", 0x207D2, bytes.fromhex(
+        "fe2dfe11"
+    )),
+    ("launch_control_v18_207e8", 0x207E8, bytes.fromhex(
+        "fa0300dd"
+    )),
+    ("launch_control_v18_207f4", 0x207F4, bytes.fromhex(
+        "da0320de"
+    )),
+    ("launch_control_v18_20816", 0x20816, bytes.fromhex(
+        "da03bcdd"
+    )),
+    ("launch_control_v18_2088a", 0x2088A, bytes.fromhex(
+        "da0340e1"
+    )),
+    ("launch_control_v18_2092a", 0x2092A, bytes.fromhex(
+        "da0340e1"
+    )),
+    ("launch_control_v18_3dd00", 0x3DD00, bytes.fromhex(
+        "ec00ecf4ecf5e6000400f3f801d867f8f00047f8a0003d288a0904f0e7f8f70065f801d89a5b1b60f3f8e14749803d17"
+        "f3f814f043f8e347fd08f3fa3cfc41a89d0443fa87db9d010d03e18a75fa01d8f3fae34741a89d08f7fa14f00d059a09"
+        "03f0e18a75fa01d8fcf5fcf4fc008a0902f0fa022609fa02f007ffffffffffff"
+    )),
+    ("launch_control_v18_3dd80", 0x3DD80, bytes.fromhex(
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        "ffffffffffffffffffff0ef2"
+    )),
+    ("launch_control_v18_3ddbc", 0x3DDBC, bytes.fromhex(
+        "ec88ec00ecf4e6000400c2fdb9029a5b1160f3f8e14749803d0df3f801d867f8f80047f8a0003d06c2f4eb4746f4ff00"
+        "2d01f0d4fcf4fc00fc88f0dddb00f044"
+    )),
+    ("launch_control_v18_3de20", 0x3DE20, bytes.fromhex(
+        "ec88ec00ecf4e6000400c2fdba029a5b1160f3f8e14749803d0df3f801d867f8f80047f8a0003d06c2f4ec4746f4ff00"
+        "2d01f0d4fcf4fc00fc88f0dddb00ffffffffffffffffffffffffffffffffffff"
+    )),
+    ("launch_control_v18_3df80", 0x3DF80, bytes.fromhex(
+        "ec00ecf4ecf5ecf6e6000400f3fa01d867faf00047faa0002d04e7faa000f7fa01d8f3f8e04747f8ff002d31f3f89af1"
+        "43f8e5479d2cf3f8d0e843f8e6478d27f3f89af143f8e4479d23f3f8e04749802d1c49813d04f3f861fd69820d0c4982"
+        "3d04f3f861fd69810d0649843d10f3f860fd67f88000f3fae24749a02d034980"
+    )),
+    ("launch_control_v18_3e000", 0x3E000, bytes.fromhex(
+        "2d040d0649803d010d036f5b0d016e5bf3f8b6fd67f840002d42f3f8e14749802d2c49813d3ce7f8fb0065f801d8f3f8"
+        "01d869822d14f3f8e84747f8ff002d07f3fae34741a88d032d0221a80d03f3fae3470d00f3f83cfc418a8d0a0d05f3f8"
+        "3cfc43f8e3478d04e12875f801d80d1be7f8fd0065f801d80d16e7f8fd0065f8"
+    )),
+    ("launch_control_v18_3e080", 0x3E080, bytes.fromhex(
+        "01d8f3f813fd67f880002d04e14875f801d80d09e7f8fb0065f801d80d04e7f8f90065f801d8fcf6fcf5fcf4fc00f3f8"
+        "9af1fa032c99"
+    )),
+    ("launch_control_v18_3e100", 0x3E100, bytes.fromhex(
+        "0df2ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        "ffffffffffffffff"
+    )),
+    ("launch_control_v18_3e140", 0x3E140, bytes.fromhex(
+        "ec00ecf5e6000400f3fab6fd67fa40002d18f3fae14749a03d14f3fae74747faff003d0af3fae34747fafd008d03e7fa"
+        "ff000d0209a30d0043fa87db9d02418a0d0243f887dbfcf5fc00db00ffffffffffffffffffff"
+    )),
+    ("launch_control_v18_39928", 0x39928, bytes.fromhex(
+        "fa0380df"
+    )),
+)
+# END V18 PROBES
+
+PATCH_PROBES = V18_PATCH_PROBES + V18_LAUNCH_PROBES + V17_PATCH_PROBES + V17_LAUNCH_PROBES + V16_PATCH_PROBES + V16_LAUNCH_PROBES + V14_PATCH_PROBES + V14_LAUNCH_PROBES + V11_PATCH_PROBES + V10_PATCH_PROBES + (
     ("ignition_cut_v9_hook", 0x3D92A, bytes.fromhex("da0370dc")),
     ("ignition_cut_v9_coil_hook", 0x3D98E, bytes.fromhex("da0370dc")),
     ("ignition_cut_v9_control_hook", 0x2755A, bytes.fromhex("da03a0de")),
@@ -314,7 +864,8 @@ def _wire_capture(ds2, report):
         address = int.from_bytes(args[:4], "big") if command == 0x06 else None
         selected = ((command == 0x0B and args[:1] == b"\x00")
                     or (command == 0x06 and address is not None
-                        and 0xE840 <= address <= 0xE84F))
+                        and (0xE840 <= address <= 0xE84F
+                             or 0xD800 <= address <= 0xD80C)))
         if not selected:
             return execute(command, args, timeout, context, **kwargs)
         record = {"type": "wire_exchange", "started_utc": _utc_now(),
@@ -348,14 +899,15 @@ def _wire_capture(ds2, report):
                 setattr(transport, name, original)
 
 
-def _recovery_confirmation(ds2, report, elapsed_s):
+def _recovery_confirmation(ds2, report, elapsed_s, revision=None):
     """Three adjacent-byte reads after the first anomalous fast sample."""
     for index in range(3):
         evidence = {}
         record = {"type": "recovery_confirmation", "index": index,
-                  "trigger_elapsed_s": elapsed_s, "address": "0xE847", "length": 4}
+                  "trigger_elapsed_s": elapsed_s,
+                  "address": f"0x{_state_address(revision):04X}", "length": 4}
         try:
-            record["raw"] = _read_exact(ds2, 0xE847, 4, evidence).hex()
+            record["raw"] = _read_exact(ds2, _state_address(revision), 4, evidence).hex()
         except (DS2Error, OSError) as error:
             record["error"] = f"{type(error).__name__}: {error}"
         record["read_evidence"] = evidence
@@ -399,7 +951,11 @@ def _selector(raw: int) -> str:
     }.get(raw, f"invalid 0x{raw:02X}")
 
 
-def _decode_ignition_cals(raw: bytes) -> dict:
+def _angle(raw: int) -> float | None:
+    return round(raw * 0.375 - 23.625, 3) if raw <= 63 else None
+
+
+def _decode_ignition_cals(raw: bytes, revision=None) -> dict:
     ipw = _le(raw[3:5])
     return {
         "switch": _selector(raw[0]),
@@ -407,10 +963,13 @@ def _decode_ignition_cals(raw: bytes) -> dict:
         "hysteresis_rpm": 0 if raw[2] == 0xFF else raw[2] * 32,
         "fixed_ipw_mode": "stock" if ipw == 0xFFFF else "fixed",
         "fixed_ipw_ms": None if ipw == 0xFFFF else round(ipw * 0.00534, 4),
+        **({"retard_range_rpm": raw[5] * 32,
+            "fixed_angle_raw": f"0x{raw[6]:02X}",
+            "fixed_angle_deg_btdc": _angle(raw[6])} if revision in ("V14", "V16", "V17", "V18") else {}),
     }
 
 
-def _decode_launch_cals(raw: bytes) -> dict:
+def _decode_launch_cals(raw: bytes, revision=None) -> dict:
     ipw = _le(raw[9:11])
     return {
         "switch": _selector(raw[0]),
@@ -421,11 +980,25 @@ def _decode_launch_cals(raw: bytes) -> dict:
         "arm_speed_kmh": raw[4],
         "max_speed_kmh": raw[5],
         "min_tps_pct": round(raw[6] * 0.47, 2),
+        "min_tps_raw": raw[6],
+        "throttle_comparison_scale": "raw * 0.47; distinct from normalized throttle percent",
         "hard_rpm": None if raw[7] == 0xFF else raw[7] * 32,
-        "hard_rpm_mode": "soft + 96" if raw[7] == 0xFF else "fixed",
+        "hard_rpm_mode": ("soft + 96, capped by native hard RPM" if raw[7] == 0xFF
+                          else "independent, capped by native hard RPM")
+                         if revision in ("V14", "V16", "V17", "V18") else
+                         ("soft + 96" if raw[7] == 0xFF else "fixed"),
         "hysteresis_rpm": 0 if raw[8] == 0xFF else raw[8] * 32,
         "fixed_ipw_mode": "stock" if ipw == 0xFFFF else "fixed",
         "fixed_ipw_ms": None if ipw == 0xFFFF else round(ipw * 0.00534, 4),
+        **({"fuel_hysteresis_b_rpm": None if raw[11] == 0xFF else raw[11] * 32,
+            "fuel_hysteresis_a_rpm": None if raw[12] == 0xFF else raw[12] * 32,
+            "fuel_hysteresis_default": "None means follow native calibration",
+            "fuel_cut_angle_raw": f"0x{raw[13]:02X}",
+            "fuel_cut_angle_deg_btdc": _angle(raw[13]),
+            "retard_range_rpm": raw[14] * 32,
+            "ignition_cut_angle_raw": f"0x{raw[15]:02X}",
+            "ignition_cut_angle_deg_btdc": _angle(raw[15])}
+           if revision in ("V14", "V16", "V17", "V18") else {}),
     }
 
 
@@ -452,7 +1025,11 @@ def _required_probe_failures(probes: dict) -> list[str]:
         + tuple(name for name in REQUIRED_RUNTIME_PROBES
                 if name.startswith("launch_control_"))
         for ignition_probes in (V11_PATCH_PROBES, V10_PATCH_PROBES)
-    ) + (REQUIRED_RUNTIME_PROBES,)
+    ) + (REQUIRED_RUNTIME_PROBES,
+         tuple(name for name, _address, _expected in V14_PATCH_PROBES + V14_LAUNCH_PROBES),
+         tuple(name for name, _address, _expected in V16_PATCH_PROBES + V16_LAUNCH_PROBES),
+         tuple(name for name, _address, _expected in V17_PATCH_PROBES + V17_LAUNCH_PROBES),
+         tuple(name for name, _address, _expected in V18_PATCH_PROBES + V18_LAUNCH_PROBES))
     return min(([
         name for name in profile
         if not probes.get(name, {}).get("matches", False)
@@ -460,13 +1037,75 @@ def _required_probe_failures(probes: dict) -> list[str]:
 
 
 def _runtime_revision(probes: dict) -> str | None:
-    for label in ("V11", "V10", "V9"):
+    for label in ("V18", "V17", "V16", "V14", "V11", "V10", "V9"):
         prefix = "ignition_cut_" + label.lower() + "_"
         names = [name for name, _address, _expected in PATCH_PROBES
                  if name.startswith(prefix)]
         if names and all(probes.get(name, {}).get("matches", False) for name in names):
             return label
     return None
+
+
+def _decode_recovery(pending: int, revision) -> dict:
+    decoded = {
+        "cut_recovery_pending_raw": f"0x{pending:02X}",
+        "cut_recovery_unknown_bits": f"0x{pending & (0xE0 if revision in ('V14', 'V16', 'V17', 'V18') else 0xF0):02X}",
+        "cut_recovery_pending": {
+            name: bool(pending & mask)
+            for name, mask in (("front_b1", 1), ("front_b2", 2),
+                               ("rear_b1", 4), ("rear_b2", 8))},
+    }
+    if revision in ("V14", "V16", "V17", "V18"):
+        decoded["misfire_recovery_pending"] = bool(pending & 0x10)
+    return decoded
+
+
+def _decode_timing(state: int, source: int, revision=None) -> dict:
+    return {
+        "timing_state_raw": f"0x{state:02X}",
+        "timing_state": {0xC0: "inactive",
+                         0xC1: ("eligible, native fault veto" if revision in ("V17", "V18")
+                                else "eligible, native protection veto"),
+                         0xC3: ("limiter timing constraint active" if revision in ("V17", "V18")
+                                else "timing override published")}.get(state, "unknown/uninitialized"),
+        "timing_source_raw": f"0x{source:02X}",
+        "timing_source": {0: "none", 1: "fuel launch", 2: "ignition launch",
+                          3: "standalone ignition band"}.get(source, "unknown"),
+    }
+
+
+def _decode_knock_qualification(global_history, channel_histories, faults_a, faults_b):
+    return {
+        "knock_global_history_raw": global_history,
+        "knock_channel_histories_raw": list(channel_histories),
+        "knock_fault_flags_a_raw": f"0x{faults_a:04X}",
+        "knock_fault_flags_b_raw": f"0x{faults_b:04X}",
+        "native_timing_fault_veto": bool(faults_a & 0x007F or faults_b & 0xC000),
+    }
+
+
+def _decode_knock_guard(raw, revision="V17"):
+    initialized = raw[0] in ((0xA7, 0xE7) if revision == "V18" else (0xA7,))
+    return {
+        "knock_guard_raw": bytes(raw).hex(),
+        "knock_guard_initialized": initialized,
+        **({"knock_modified_timing_episode": raw[0] == 0xE7 if initialized else None}
+           if revision == "V18" else {}),
+        "knock_clean_window_mask_raw": f"0x{raw[1]:02X}",
+        "knock_open_phase_mask_raw": f"0x{raw[2]:02X}",
+        **{name: bool(value) if initialized and value in (0, 1) else None
+           for name, value in zip(("knock_old_reply_drained", "knock_request_qualified",
+                                   "knock_snapshot_qualified"), raw[3:6])},
+        "knock_retained_valid_mask_raw": f"0x{raw[6]:02X}",
+    }
+
+
+def _decode_fixed_ipw_state(value):
+    return {
+        "fixed_ipw_state_raw": f"0x{value:02X}",
+        "fixed_ipw_state": {0xA0: "native", 0xA1: "fixed base override",
+                            0xA2: "native fallback"}.get(value, "unknown/uninitialized"),
+    }
 
 
 def _identity_snapshot(ds2) -> tuple[bytes, dict]:
@@ -596,13 +1235,15 @@ def _reopen_same_ecu(ds2, expected_identity: bytes, *, deadline: float,
 
 def _recovery_evidence_snapshot(ds2) -> dict:
     live = _read_exact(ds2, 0xEA0C, 2)
-    cut_state = _read_exact(ds2, 0xE847, 1)
+    probes = _patch_probe_snapshot(ds2)
+    revision = _runtime_revision(probes)
+    cut_address = _state_address(revision)
+    cut_state = _read_exact(ds2, cut_address, 1)
     launch_latch = _read_exact(ds2, 0xFDB6, 1)
     battery = _read_exact(ds2, 0xFC9D, 1)
     boot_scratch = _read_exact(ds2, 0xE732, 2)
     record = _read_exact(ds2, 0xEC2A, 12)
     dtc_payload = bytes(_retry("read DTC after reconnect", ds2.read_dtc))
-    probes = _patch_probe_snapshot(ds2)
     reason = record[6] | (record[7] << 8)
     live_reason = _le(live)
 
@@ -613,7 +1254,7 @@ def _recovery_evidence_snapshot(ds2) -> dict:
             "self_test_live": {
                 "address": "0x0EA0C", "length": 2, "raw": live.hex()},
             "cut_state": {
-                "address": "0x0E847", "length": 1,
+                "address": f"0x{cut_address:05X}", "length": 1,
                 "raw": cut_state.hex()},
             "launch_latch": {
                 "address": "0x0FDB6", "length": 1,
@@ -631,7 +1272,7 @@ def _recovery_evidence_snapshot(ds2) -> dict:
         "dtc_payload_raw": dtc_payload.hex(),
         "dtcs": decode_dtc_payload(dtc_payload),
         "patch_probes": probes,
-        "ignition_hook_revision": _runtime_revision(probes),
+        "ignition_hook_revision": revision,
         "post_reconnect_values": {
             "cut_state_raw": f"0x{cut_state[0]:02X}",
             "launch_latch_raw": f"0x{launch_latch[0]:02X}",
@@ -653,7 +1294,8 @@ def _recovery_evidence_snapshot(ds2) -> dict:
 
 def _slow_snapshot(ds2, phase: str, revision: str | None = None, report=None) -> dict:
     raw, read_evidence = {}, {}
-    for name, address, length in SLOW_READS:
+    reads = _slow_reads_for_revision(revision)
+    for name, address, length in reads:
         read_evidence[name] = {}
         observation = {"type": "slow_read", "snapshot_phase": phase,
                        "name": name, "address": f"0x{address:05X}", "length": length}
@@ -683,7 +1325,7 @@ def _slow_snapshot(ds2, phase: str, revision: str | None = None, report=None) ->
                 "raw": raw[name].hex(),
                 "read_evidence": read_evidence[name],
             }
-            for name, address, length in SLOW_READS
+            for name, address, length in reads
         },
         "dtc_payload_raw": dtc_payload.hex(),
         "dtcs": dtcs,
@@ -699,12 +1341,13 @@ def _slow_snapshot(ds2, phase: str, revision: str | None = None, report=None) ->
                     "early DPP/bus mapping; this is not a proven physical reset signature.",
         },
         "slow_values": {
-            "cut_recovery_pending_raw": f"0x{raw['cut_recovery_pending'][0]:02X}",
-            "cut_recovery_pending": ({
-                name: bool(raw["cut_recovery_pending"][0] & mask)
-                for name, mask in (("front_b1", 1), ("front_b2", 2),
-                                   ("rear_b1", 4), ("rear_b2", 8))
-            } if revision in ("V10", "V11") else None),
+            **_decode_recovery(raw["cut_recovery_pending"][0], revision),
+            **({"cut_recovery_pending": None} if revision not in ("V10", "V11", "V14", "V16", "V17", "V18") else {}),
+            **(_decode_timing(raw["recovery_neighbors"][3 if revision in ("V16", "V17", "V18") else 9],
+                             raw["recovery_neighbors"][4 if revision in ("V16", "V17", "V18") else 10], revision)
+               if revision in ("V14", "V16", "V17", "V18") else {}),
+            "front_o2_b1_v": round((_le(raw["front_o2_b1"]) & 0x03FF) * 5 / 1023, 4),
+            "front_o2_b2_v": round((_le(raw["front_o2_b2"]) & 0x03FF) * 5 / 1023, 4),
             "softbsl_phase_e740": raw["softbsl_phase"][0],
             "native_resume_f015": raw["native_resume_state"][0],
             "native_resume_f016": raw["native_resume_state"][1],
@@ -715,6 +1358,8 @@ def _slow_snapshot(ds2, phase: str, revision: str | None = None, report=None) ->
             "narrowband_emulation": bool(
                 raw["legacy_launch_state"][0] & 0x04),
             "input_82": bool(raw["input_82_latch"][0] & 0x80),
+            "input_80": bool(raw["input_80_81_latch"][0] & 0x02),
+            "input_81": bool(raw["input_80_81_latch"][0] & 0x01),
             "battery_v": round(raw["battery"][0] * 0.10196, 3),
             "additive_trim_b1_ms": _additive_ms(_le(raw["additive_trim_b1"])),
             "additive_trim_b2_ms": _additive_ms(_le(raw["additive_trim_b2"])),
@@ -780,25 +1425,51 @@ def _slow_snapshot(ds2, phase: str, revision: str | None = None, report=None) ->
             "coil_monitor_switches_1023d": raw[
                 "coil_monitor_switches"].hex(),
         },
-        "ignition_cut_cals": _decode_ignition_cals(raw["ignition_cals"]),
-        "launch_control_cals": _decode_launch_cals(raw["launch_cals"]),
+        **(_decode_fixed_ipw_state(raw["fixed_ipw_state"][0]) if revision == "V18" else {}),
+        "ignition_cut_cals": _decode_ignition_cals(raw["ignition_cals"], revision),
+        "launch_control_cals": _decode_launch_cals(raw["launch_cals"], revision),
+        "limiter_context": {
+            "native_fuel_limiter_active": bool(raw["native_fuel_limiter"][0] & 0x80),
+            "effective_soft_threshold_rpm": raw["effective_soft_rpm"][0] * 32,
+            "launch_armed": bool(raw["launch_armed_latch"][0] & 0x40),
+            "native_fuel_recovery_priority": bool(raw["cut_state_and_recovery"][0] & 8),
+            "runtime_valid": (raw["cut_state_and_recovery"][0] & 0xF0) == 0xA0,
+            "note": "Sequential snapshot. Fuel-limiter active does not identify the threshold source. "
+                    "Recovery priority selects native recovery settings; it is not a cut request. "
+                    "Compare the effective threshold with the configured ignition and launch targets.",
+        },
+        "knock_learning": {
+            **(_decode_knock_guard(raw["knock_guard"], revision) if revision in ("V17", "V18") else {}),
+            **_decode_knock_qualification(
+                raw["knock_global_history"][0], raw["knock_channel_histories"],
+                _le(raw["knock_fault_flags"][:2]), _le(raw["knock_fault_flags"][2:])),
+            "selected_cells_raw": list(raw["knock_selected_cells"]),
+            "retained_channel_words_raw": [
+                _le(raw["knock_retained_channels"][index:index + 2])
+                for index in range(0, 12, 2)],
+            "learned_rows_raw": [raw[f"knock_learned_row_{index + 1}"].hex()
+                                 for index in range(6)],
+            "note": "Sequential snapshots in native channel order; raw values have no asserted "
+                    "physical units or cylinder numbering. Changes do not establish their cause.",
+        },
     }
 
 
-def decode_batch_payload(raw: bytes, layout=BATCH_LAYOUT) -> dict:
-    if len(raw) != 38:
-        raise DS2Error(f"short telegram payload: {len(raw)}/38 bytes")
+def decode_batch_payload(raw: bytes, layout=BATCH_LAYOUT, revision=None) -> dict:
+    expected_length = sum(length for _name, _address, length in layout)
+    if len(raw) != expected_length:
+        raise DS2Error(f"telegram payload length: {len(raw)}/{expected_length} bytes")
 
     values = {}
     raw_by_address = {}
-    offset = 2
-    for index, (name, address, length) in enumerate(layout):
-        if index == 20:
-            offset = 30
+    offset = 0
+    for name, address, length in layout:
         chunk = raw[offset:offset + length]
         if len(chunk) != length:
             raise DS2Error(f"short telegram value at 0x{address:04X}")
-        values[name] = int.from_bytes(chunk, "big")
+        # Split odd words arrive low byte first; native word descriptors are BE.
+        endian = "little" if length == 2 and address & 1 else "big"
+        values[name] = int.from_bytes(chunk, endian)
         raw_by_address[f"0x{address:04X}"] = chunk.hex()
         offset += length
 
@@ -809,15 +1480,20 @@ def decode_batch_payload(raw: bytes, layout=BATCH_LAYOUT) -> dict:
             "working_speed_kmh": values["working_speed"],
             "battery_v": round(values["battery"] * 0.10196, 3),
             "throttle_pct": round(values["throttle"] * 100 / 255, 3),
+            "throttle_raw": values["throttle"],
+            "launch_tps_threshold_pct": round(values["throttle"] * 0.47, 3),
             "cut_state_raw": f"0x{cut:02X}",
             "cut_patch_runtime": (cut & 0xF0) == 0xA0,
             "standalone_ignition_cut": bool(cut & 0x01),
             "launch_ignition_cut": bool(cut & 0x02),
             "launch_fuel_cut": bool(cut & 0x04),
+            "native_fuel_recovery_priority": bool(cut & 0x08),
             "launch_armed": bool(values["launch_latch"] & 0x40),
             "native_limiter_active": bool(values["native_limiter"] & 0x80),
+            "native_fuel_limiter_active": bool(values["native_limiter"] & 0x80),
             "fuel_cut_stage": values["fuel_cut_stage"],
             "native_soft_threshold_rpm": values["native_soft_rpm"] * 32,
+            "effective_soft_threshold_rpm": values["native_soft_rpm"] * 32,
             "input_80": (bool(values["input_80_81"] & 0x02)
                          if "input_80_81" in values else None),
             "input_81": (bool(values["input_80_81"] & 0x01)
@@ -826,6 +1502,7 @@ def decode_batch_payload(raw: bytes, layout=BATCH_LAYOUT) -> dict:
             "lambda_regulation_b1": bool(values["lambda_state_b1"] & 0x08),
             "lambda_regulation_b2": bool(values["lambda_state_b2"] & 0x08),
             "base_ipw_ms": round(values["base_ipw"] * 0.00534, 4),
+            # Keep legacy result keys; these are bank base widths before latency/cylinder correction.
             "final_ipw_b1_ms": round(values["final_ipw_b1"] * 0.00534, 4),
             "final_ipw_b2_ms": round(values["final_ipw_b2"] * 0.00534, 4),
             "stft_b1_pct": _trim_percent(values["stft_b1"]),
@@ -833,7 +1510,8 @@ def decode_batch_payload(raw: bytes, layout=BATCH_LAYOUT) -> dict:
             "engine_load_mg_st": round(values["engine_load"] * 0.021195, 3),
             "maf_kg_h": round(values["maf"] * 0.25, 3),
             "front_o2_b1_v": round((values["front_o2_b1"] & 0x03FF) * 5 / 1023, 4),
-            "front_o2_b2_v": round((values["front_o2_b2"] & 0x03FF) * 5 / 1023, 4),
+            "front_o2_b2_v": (round((values["front_o2_b2"] & 0x03FF) * 5 / 1023, 4)
+                              if "front_o2_b2" in values else None),
     }
     if "input_82" in values:
         decoded["input_82"] = bool(values["input_82"] & 0x80)
@@ -841,15 +1519,20 @@ def decode_batch_payload(raw: bytes, layout=BATCH_LAYOUT) -> dict:
         decoded["wbo_afr"] = round(
             values["wbo_telemetry"] * 0.05 + 8.25, 2)
     if "cut_recovery_pending" in values:
-        pending = values["cut_recovery_pending"]
-        decoded.update(
-            cut_recovery_pending_raw=f"0x{pending:02X}",
-            cut_recovery_unknown_bits=f"0x{pending & 0xF0:02X}",
-            cut_recovery_pending={
-                name: bool(pending & mask)
-                for name, mask in (("front_b1", 1), ("front_b2", 2),
-                                   ("rear_b1", 4), ("rear_b2", 8))},
-        )
+        decoded.update(_decode_recovery(values["cut_recovery_pending"], revision))
+    if "timing_state_source" in values:
+        state = values["timing_state_source"]
+        decoded.update(_decode_timing(state & 0xFF, state >> 8, revision))
+    if "knock_global_history" in values:
+        decoded.update(_decode_knock_qualification(
+            values["knock_global_history"],
+            [values[f"knock_history_channel_{index + 1}"] for index in range(6)],
+            values["knock_fault_flags_a"], values["knock_fault_flags_b"]))
+    if "knock_guard_marker" in values:
+        decoded.update(_decode_knock_guard(
+            [values[name] for name, _address, _length in V17_KNOCK_GUARD_LAYOUT], revision))
+    if "fixed_ipw_state" in values:
+        decoded.update(_decode_fixed_ipw_state(values["fixed_ipw_state"]))
     return {"raw_by_address": raw_by_address, "values": decoded}
 
 
@@ -859,15 +1542,19 @@ def _status_line(sample: dict) -> str:
         f"  WBO={value['wbo_afr']:.2f} AFR"
         if "wbo_afr" in value else ""
     )
-    recovery = (f"  E848={value['cut_recovery_pending_raw']}"
+    recovery = (f"  recovery={value['cut_recovery_pending_raw']}"
                 if "cut_recovery_pending_raw" in value else "")
+    fuel_state = (f"  fuel={value['fixed_ipw_state']}" if "fixed_ipw_state" in value else "")
     return (
         f"{sample['elapsed_s']:6.2f}s  rpm={value['rpm']:4d}  "
-        f"E847={value['cut_state_raw']}  native={int(value['native_limiter_active'])}  "
+        f"cut={value['cut_state_raw']}  fuel limiter={int(value['native_limiter_active'])}  "
+        f"effective soft={value['effective_soft_threshold_rpm']}rpm  "
+        f"armed={int(value['launch_armed'])}  "
+        f"native recovery={int(value['native_fuel_recovery_priority'])}  "
         f"stage={value['fuel_cut_stage']}  "
-        f"IPW={value['final_ipw_b1_ms']:.2f}/{value['final_ipw_b2_ms']:.2f}ms  "
+        f"bank base IPW={value['final_ipw_b1_ms']:.2f}/{value['final_ipw_b2_ms']:.2f}ms  "
         f"STFT={value['stft_b1_pct']:+.1f}/{value['stft_b2_pct']:+.1f}%"
-        f"{wideband}{recovery}"
+        f"{wideband}{recovery}{fuel_state}"
     )
 
 
@@ -916,7 +1603,19 @@ def run_capture(args) -> int:
     with report_owner as report, _wire_capture(ds2, report) as wire_available:
         _write_record(report, {
             "type": "start",
-            "schema": "bimmerstein-ms413-diagnostic-v3",
+            "schema": "bimmerstein-ms413-diagnostic-v5",
+            "recorder_version": "8",
+            "supported_family": "MS41.3 / exact SS1v2 program signature",
+            "measurement_notes": {
+                "native_fuel_limiter": "Native fuel-limiter episode, including fuel-mode launch. "
+                                       "The active flag alone does not identify its threshold source.",
+                "timing_state": "V17/V18 C3 means the limiter timing constraint is active. "
+                                "The native protected angle may win or tie; no physical spark timing is measured.",
+                "launch_latch": "Throttle below minimum or speed at/above maximum releases launch. "
+                                "Arming requires speed below arm speed; switch release alone retains the latch.",
+                "sampling": "Telegram values are acquired together but are not an atomic engine-event trace. "
+                            "Calibration and slow context snapshots are read sequentially.",
+            },
             "captured_utc": _utc_now(),
             "transport": "DS2 9600 8E2",
             "operator_note": getattr(args, "note", ""),
@@ -954,15 +1653,31 @@ def run_capture(args) -> int:
                     + ", ".join(required_probe_failures))
 
             revision = identity["ignition_hook_revision"]
-            if recovery_tracking and revision not in ("V10", "V11"):
-                raise RuntimeError("Recovery tracking requires the V10/V11 E848 layout")
+            if recovery_tracking and revision not in ("V10", "V11", "V14", "V16", "V17", "V18"):
+                raise RuntimeError("Recovery tracking requires a supported V10/V11/V14/V16/V17/V18 layout")
+            if recovery_tracking and revision in ("V14", "V16", "V17", "V18"):
+                batch_layout = _batch_layout_for_revision(
+                    V18_RECOVERY_BATCH_LAYOUT if revision == "V18" else
+                    V17_RECOVERY_BATCH_LAYOUT if revision == "V17" else V14_RECOVERY_BATCH_LAYOUT,
+                    revision)
+                _write_record(report, {
+                    "type": "batch_layout", "ignition_hook_revision": revision,
+                    "note": f"{revision} timing state/source replaces fast bank-2 O2 voltage; "
+                            "both O2 voltages remain in preflight/postflight snapshots. "
+                            "Timing state describes software decisions, not measured spark timing.",
+                    "batch_layout": [{"name": name, "address": f"0x{address:04X}", "length": length}
+                                     for name, address, length in batch_layout],
+                })
+            batch_layout = _batch_layout_for_revision(batch_layout, revision)
+            if revision in ("V16", "V17", "V18") and not recovery_tracking:
+                _write_record(report, {
+                    "type": "batch_layout", "ignition_hook_revision": revision,
+                    "batch_layout": [{"name": name, "address": f"0x{address:04X}", "length": length}
+                                     for name, address, length in batch_layout],
+                })
             _write_record(report, _slow_snapshot(ds2, "preflight", revision, report))
             ready = True
-            ds2.setup_telegram_batch(
-                entries=[
-                    (address, length)
-                    for _name, address, length in batch_layout
-                ])
+            ds2.setup_telegram_batch(entries=_batch_entries(batch_layout))
             started = time.monotonic()
             deadline = started + args.seconds
             last_print = -1.0
@@ -979,7 +1694,7 @@ def run_capture(args) -> int:
                     raw = bytes(_retry(
                         "telegram poll", ds2.poll_telegram_batch,
                         poll_evidence))
-                    sample = decode_batch_payload(raw, batch_layout)
+                    sample = decode_batch_payload(raw, batch_layout, revision)
                 except (DS2Error, OSError) as gap_error:
                     gap_started = time.monotonic()
                     if gap_missing_since is None:
@@ -1063,10 +1778,7 @@ def run_capture(args) -> int:
                     )
                     if args.seconds > 0 and time.monotonic() >= deadline:
                         break
-                    ds2.setup_telegram_batch(entries=[
-                        (address, length)
-                        for _name, address, length in batch_layout
-                    ])
+                    ds2.setup_telegram_batch(entries=_batch_entries(batch_layout))
                     continue
                 sample_at = time.monotonic()
                 sample["type"] = "sample"
@@ -1089,7 +1801,7 @@ def run_capture(args) -> int:
                     recovery_anomaly_samples += 1
                     if not recovery_confirmed:
                         recovery_confirmed = True
-                        _recovery_confirmation(ds2, report, sample["elapsed_s"])
+                        _recovery_confirmation(ds2, report, sample["elapsed_s"], revision)
                 progress(
                     "Capturing",
                     min(int(sample["elapsed_s"] * 1000), int(args.seconds * 1000)),
@@ -1238,7 +1950,7 @@ def _parser() -> argparse.ArgumentParser:
         help="replace unused fast pin-82 sampling with E800 WBO AFR telemetry")
     parser.add_argument(
         "--recovery-tracking", action="store_true",
-        help="capture E848 and WBO in every frame; pins 80/81 remain unsampled")
+        help="capture revision-specific recovery flags and WBO in every frame; pins 80/81 remain unsampled")
     parser.add_argument(
         "--no-echo", action="store_true",
         help="direct ASC0 tap only; normal K-line adapters must keep echo enabled")

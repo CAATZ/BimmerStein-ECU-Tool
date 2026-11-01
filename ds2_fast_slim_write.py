@@ -42,7 +42,6 @@ from ds2_fast_partial_write import (
     PartialWriteReadbackMismatch,
     PartialWriteStateError,
     PartialWriteTiming,
-    PRODUCTION_RATE_PROFILE,
     TOKEN_ADDRESS,
     TOKEN_LENGTH,
     TOKEN_READ_A_ADDRESS,
@@ -67,7 +66,7 @@ from ds2_fast_plans import (
     build_fast_full_write_plan,
     build_fast_partial_write_plan,
 )
-from ds2_fast_read import RateProfile
+from ds2_fast_read import RateProfile, selected_rate_profile
 from ds2_fast_safety import OperationJournal
 from ms41 import (
     CODING_FAMILY_DS2_ADDR,
@@ -204,7 +203,7 @@ class SlimNativeFastPartialWriteSession(
         journal: OperationJournal,
         *,
         verify_write: bool,
-        rates: RateProfile = PRODUCTION_RATE_PROFILE,
+        rates: Optional[RateProfile] = None,
         timing: PartialWriteTiming = CAPTURED_PARTIAL_WRITE_TIMING,
         challenge: int = INITIAL_CHALLENGE,
         finalize_challenge: int = FINALIZE_CHALLENGE,
@@ -220,6 +219,7 @@ class SlimNativeFastPartialWriteSession(
         progress_cb: Optional[Callable[[str, int, int], None]] = None,
         sleeper: Callable[[float], None] = time.sleep,
     ):
+        rates = selected_rate_profile() if rates is None else rates
         if journal.operation != FastOperation.PARTIAL_WRITE.value:
             raise PartialWriteStateError("journal operation must be partial_write")
         if transport.baud != rates.low or not rates.direct_low_to_high:
@@ -561,7 +561,7 @@ class SlimNativeFastPartialWriteSession(
             self._arm_and_enter_high()
             self._high_rate_stability_check()
 
-            # The authorized selector-0x01 entry retains the stock 0x55 fast
+            # The authorized high-rate entry retains the stock 0x55 fast
             # marker required by both EEPROM selector-3 read and subcommand-3 write.
             read_address = (0x03 << 24) | offset
             actual_before = self._read_mem(
@@ -705,7 +705,7 @@ class SlimNativeFastFullWriteSession(
         connected_family: str,
         verify_write: bool,
         variant_conversion: bool = False,
-        rates: RateProfile = PRODUCTION_RATE_PROFILE,
+        rates: Optional[RateProfile] = None,
         timing: FullWriteTiming = FullWriteTiming(),
         challenge: int = INITIAL_CHALLENGE,
         reentry_required: bool = False,
@@ -719,6 +719,7 @@ class SlimNativeFastFullWriteSession(
         progress_cb: Optional[Callable[[str, int, int], None]] = None,
         sleeper: Callable[[float], None] = time.sleep,
     ):
+        rates = selected_rate_profile() if rates is None else rates
         if journal.operation != FastOperation.FULL_WRITE.value:
             raise PartialWriteStateError("journal operation must be full_write")
         if transport.baud != rates.low or not rates.direct_low_to_high:

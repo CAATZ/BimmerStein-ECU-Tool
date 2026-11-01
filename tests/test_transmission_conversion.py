@@ -953,28 +953,31 @@ def test_connected_swap_archive_rejects_unknown_record_type(tmp_path):
         tx.load_connected_swap_archive(path)
 
 
-def _e46_connected_session():
+def _e46_connected_session(family="MS42"):
     stability = tx.CodingState("MK20", b"stability", 3, b"\x00" * 12)
     target_stability = bytearray(stability.data)
     target_stability[2] = 0x80
+    program = "7500255" if family == "MS42" else "7551615"
     return tx.ConnectedSwapSession(
         "0123456789abcdef0123456789abcdef", "ready", "Ready", (), (), (),
-        Transmission.MANUAL, Transmission.AUTOMATIC, "MS42", "E46",
-        dme_ident=b"7500255 connected identity", program="7500255",
+        Transmission.MANUAL, Transmission.AUTOMATIC, family, "E46",
+        dme_ident=f"{program} connected identity".encode("ascii"), program=program,
         order_format=OrderFormat.ZCS, stability=stability,
         target_stability=bytes(target_stability),
     )
 
 
-def test_connected_write_journal_reaches_awaiting_cycle(monkeypatch, tmp_path):
-    session = _e46_connected_session()
+@pytest.mark.parametrize("family", ("MS42", "MS43"))
+def test_connected_write_journal_reaches_awaiting_cycle(monkeypatch, tmp_path, family):
+    session = _e46_connected_session(family)
     journal = SwapOperationJournal(tmp_path / "journal")
     monkeypatch.setattr(tx, "_assert_session_fresh", lambda *_args: None)
     monkeypatch.setattr(tx, "_write_connected_owner", lambda *_args: None)
 
     class Ds2:
         @staticmethod
-        def send_frame(*_args, **_kwargs):
+        def send_frame(frame, **_kwargs):
+            assert frame == tx.post_coding_frame(family)
             return b"\x12\x04\xA0\x00"
 
     result = tx.write_connected_modules(
@@ -988,9 +991,10 @@ def test_connected_write_journal_reaches_awaiting_cycle(monkeypatch, tmp_path):
     ]
 
 
+@pytest.mark.parametrize("family", ("MS42", "MS43"))
 def test_interrupted_recovery_can_restore_original_and_verify(
-        monkeypatch, tmp_path):
-    session = _e46_connected_session()
+        monkeypatch, tmp_path, family):
+    session = _e46_connected_session(family)
     archive = tx.archive_connected_swap(session, tmp_path)
     journal = SwapOperationJournal(tmp_path / "journal")
     journal.create(

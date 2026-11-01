@@ -5,6 +5,46 @@ All notable changes to this project are documented in this file.
 Release numbers use a `major.minor.patch` base and the compact `bN` beta suffix
 shared by BimmerStein applications.
 
+## [0.1.0b19]
+
+### Added
+
+- MS42/MS43 full and calibration reads/writes with temporary high-speed RAM
+  agents, stock DS2 fallback and retained-session recovery.
+- Supported MS42/MS43 ECU configuration, VIN/history editing, optional
+  virginizing, identity-preserving boot writes and storage backup/editing.
+- Firmware-specific live data, adaptations and passive roughness monitoring.
+- English fault descriptions and supported engine, transmission and ABS
+  freeze-frame details.
+- Separate Faults, Actuator Tests and Roughness views, customizable Live Data
+  instruments and CSV review.
+
+### Improved
+
+- Explicit typed approval before MS42/MS43 boot writes.
+- Fault clear acceptance is reported separately from refresh failures; only
+  reads are retried and stale results are removed.
+- Faster transfer setup and RAM-agent finalization, live baud reporting, and
+  the shared 125,000-baud compatibility option.
+- EEPROM read alignment, identity display and programming-history decoding.
+- Storage values with established units, exact-revision editing and
+  calibration-dependent fields.
+- Layout scaling, adjustable panels and configuration controls protected
+  against accidental mouse-wheel edits.
+- Ignition Cut and Launch Control V18, preserving compatible settings during
+  upgrade and correcting timing and injection-recovery behavior.
+- Existing MS41 flashing, Soft-BSL, hardware recovery and patch migration.
+
+### Use limits
+
+- Coding and transmission conversion remain HIGHLY EXPERIMENTAL and are not
+  recommended until further testing.
+- Ignition Cut and Launch Control remain HIGHLY EXPERIMENTAL and require
+  vehicle testing. Other patches keep their individual tested/untested status.
+- Windows packages use Nuitka for x64/x86 and separate Windows 7 profiles.
+- See RELEASE_NOTES.md for the short overview and the user manual for
+  operation-specific limits.
+
 ## [0.1.0b18] - 2026-10-01
 
 ### Fixed

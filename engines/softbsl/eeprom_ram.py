@@ -1266,24 +1266,15 @@ def decoded_fields(image: bytes, variant: str = "MS41.3") -> list[dict]:
     load_description = (
         "Signed filtered difference between throttle-model load and measured/filtered load. "
         "Positive values raise corrected load; negative values lower it. The engineering "
-        "projection comes from the ID41 DAMOS load-count scale; the exact stored representation "
+        "projection comes from the ID41 load-count scale; the exact stored representation "
         "is signed Q8.8 state, not a calibration or altitude value."
     )
-    if variant == "MS41.0":
-        number("load_model_correction", "Learned load-model correction", "adaptation",
-               load["offset"] + 1, 1,
-               load_description + " Only this signed high byte is restored at startup.",
-               scale=load_scale, unit="mg/stroke", signed=True, confidence="STATIC")
-        number("load_model_fraction_not_restored_raw", "Saved load-model fractional byte", "adaptation",
-               load["offset"], 1,
-               "The saver and record check retain this low byte, but MS41.0 startup does not restore it. "
-               "It therefore has no startup-effective engineering edit and remains explicit raw state.",
-               unit="raw", confidence="STATIC")
-    else:
-        number("load_model_correction", "Learned load-model correction", "adaptation",
-               load["offset"], 2, load_description,
-               scale=load_scale / 256, unit="mg/stroke", signed=True,
-               stored_maximum=0x7F00, confidence="HOMOLOG")
+    number("load_model_correction", "Learned load-model correction", "adaptation",
+           load["offset"], 2,
+           load_description + " Both payload bytes are restored after the record check.",
+           scale=load_scale / 256, unit="mg/stroke", signed=True,
+           stored_maximum=0x7F00,
+           confidence="STATIC" if variant == "MS41.0" else "HOMOLOG")
 
     # Retain the legacy serialized IDs even though exact traces corrected their old labels.
     coolant = records["coolant_latch"]
@@ -1326,7 +1317,7 @@ def decoded_fields(image: bytes, variant: str = "MS41.3") -> list[dict]:
     record = records["vanos_adaptation"]
     number("vanos_reference_degrees", "Learned VANOS reference", "adaptation", record["offset"], 2,
            "Stored Q8.8 learned reference: raw × 0.375 / 256 crankshaft degrees. "
-           "MS41.0 DAMOS nw_ini/nw_hys_ini and corresponding family firmware "
+           "MS41.0 nw_ini/nw_hys_ini and corresponding family firmware "
            "load/filter/save paths establish this scale; this is not live VANOS position.",
            scale=0.375 / 256, unit="° crank", confidence="STATIC")
     learned = image[record["offset"] + 2]
@@ -1339,7 +1330,7 @@ def decoded_fields(image: bytes, variant: str = "MS41.3") -> list[dict]:
         ))
     number("tps_baseline_degrees", "Learned closed-throttle reference", "adaptation", layout["tps"], 2,
            "Stored Q8.8 closed-throttle baseline, not live throttle opening. "
-           "The DAMOS dk_max_ll/dk_add scale and the corresponding startup clamps "
+           "The dk_max_ll/dk_add scale and the corresponding startup clamps "
            "and filters give raw × 0.46862745098039 / 256 throttle degrees.",
            scale=0.46862745098039 / 256, unit="° throttle", confidence="STATIC")
     record = records["idle_regulator_adaptation"]
@@ -1357,7 +1348,7 @@ def decoded_fields(image: bytes, variant: str = "MS41.3") -> list[dict]:
                + ("The saved A/C value already includes a calibration-dependent factor; "
                   "it is not the current live correction." if relative == 6 else
                   "Selected by the ECU drive-state signal, not by cylinder bank. "
-                  "DAMOS bounds and equivalent family filter/save paths establish this percent domain."),
+                  "Calibration bounds and equivalent family filter/save paths establish this percent domain."),
                scale=100 / 65536, unit="%", confidence="STATIC", signed=True)
     # Keep the legacy ID; the firmware copies only this byte, not the pad at +9.
     number("idle_speed_command_raw", "Programmed idle-speed addition", "adaptation", record["offset"] + 8, 1,

@@ -721,7 +721,8 @@ def _exact_legacy_amd_image(version):
     legacy = bytearray(current)
     for edit in amd["edits"]:
         if "upgrade_expect" in edit:
-            payload = bytes.fromhex(edit["upgrade_expect"])
+            expected = edit["upgrade_expect"]
+            payload = bytes.fromhex(expected if isinstance(expected, str) else expected[-1])
             legacy[edit["off"]:edit["off"] + len(payload)] = payload
     assert softbsl_install._sb._patch_state(legacy, amd) == "legacy"
     return bytes(legacy)
@@ -752,7 +753,7 @@ def test_persistent_composer_upgrades_exact_legacy_amd(version, marker):
 
 @pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
 @pytest.mark.parametrize("marker", [None, "B", "T"])
-def test_persistent_composer_recognizes_amd_v3_core_and_adds_guard_wait(version, marker):
+def test_persistent_composer_upgrades_amd_v3_core_and_adds_guard_wait(version, marker):
     import checksum
     import identity
     from engines.patcher import patch_ms41
@@ -765,7 +766,7 @@ def test_persistent_composer_recognizes_amd_v3_core_and_adds_guard_wait(version,
         prior, _ = patch_ms41.build(prior, ["top_ds2_guard"])
     image, patch_ids, _ = softbsl_install.compose_persistent_target(
         prior, with_calguard=True, marker=marker, chip="29f400")
-    assert "amd_flash" not in patch_ids
+    assert "amd_flash" in patch_ids
     assert patch_ms41.is_applied(image, patches["amd_flash"])
     assert not patch_ms41.is_applied(image, patches["amd_flash_v3"])
     assert patch_ms41.is_applied(image, patch_ms41.startup_wait_definition(patches))

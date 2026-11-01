@@ -1,7 +1,6 @@
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ds2
-import live_data
 from ds2 import DS2Interface, _xor
 from ds2_fast_contracts import MAX_FLASH_DATA
 from ds2_fast_plans import ds2_image_to_file_layout
@@ -400,6 +399,46 @@ def test_wire_decoded_a1_preserves_command_status_and_payload_context():
     assert caught.value.status == 0xA1
     assert caught.value.payload == b"\x7e"
     assert caught.value.response == bytes.fromhex("12 05 A1 7E C8")
+
+
+@pytest.mark.parametrize("command,checksum", [(0x22, 0x30), (0x23, 0x31), (0x2B, 0x39)])
+@pytest.mark.parametrize("status", [0xA0, 0xA1, 0xB0, 0xFF])
+def test_systemcheck_wire_commands_require_a0_and_use_selector_five(command, checksum, status):
+    class Serial:
+        is_open = True
+        timeout = 1.5
+
+        def __init__(self):
+            self.pending = bytearray()
+            self.frames = []
+
+        def reset_input_buffer(self):
+            self.pending.clear()
+
+        def write(self, frame):
+            self.frames.append(bytes(frame))
+            reply = bytearray((0x12, 0x05, status, 0x00))
+            reply.append(_xor(reply))
+            self.pending.extend(reply)
+            return len(frame)
+
+        def flush(self):
+            pass
+
+        def read(self, count):
+            result = bytes(self.pending[:count])
+            del self.pending[:count]
+            return result
+
+    interface = DS2Interface("COM1", echo=False)
+    interface._ser = serial = Serial()
+    if status == 0xA0:
+        assert interface.execute(command, b"\x05") == b"\x00"
+    else:
+        with pytest.raises(ds2.DS2NegativeResponse) as caught:
+            interface.execute(command, b"\x05")
+        assert caught.value.command == command and caught.value.status == status
+    assert serial.frames == [bytes((0x12, 0x05, command, 0x05, checksum))]
 
 
 def test_factory_battery_voltage_telegram_decodes_big_endian(monkeypatch):
@@ -910,6 +949,9 @@ def test_send_no_response_rejects_a_short_adapter_write():
 
 def test_ms412_batch_setup_includes_all_fast_logger_parameters():
     payload = DS2Interface._build_batch_setup("1406464")
+    assert payload[:2] == bytes((0x01, 24))
+    assert len(payload) == 122
+    assert all(payload[offset] in (0, 1) for offset in range(2, len(payload), 5))
     # Dynamic MS41.2/MS41.3 addresses: injector PW, load, TPS, and both trim banks.
     for entry in ("010000EF7E", "010000FC52", "000000E8D0",
                   "010000F030", "010000F0DC", "000000F01F", "000000F0CB",
@@ -935,16 +977,54 @@ def test_ms410_batch_setup_uses_normalized_tps_and_ms410_battery():
     assert bytes.fromhex("000000FC9D") not in payload
 
 
-def test_custom_batch_plan_preserves_group_lengths_and_wire_size():
-    layout = live_data.batch_layout_for(
-        "1406464", live_data.PROFILE_WIDEBAND, 0xFA98)
-    entries = live_data.batch_wire_entries(layout)
+@pytest.mark.parametrize("entries,expected_frame", [
+    ([(0xDA2A, 2)], bytes.fromhex("12 0B 0B 01 01 01 00 00 DA 2A E3")),
+    ([(0xDA2A, 2), (0xE989, 1), (0x13010, 1), (0xE854, 2),
+      (0xFD14, 1), (0xFD30, 2), (0xE861, 1)], bytes.fromhex(
+          "12 29 0B 01 07 01 00 00 DA 2A 00 00 00 E9 89 00 00 01 30 10 "
+          "01 00 00 E8 54 00 00 00 FD 14 01 00 00 FD 30 00 00 00 E8 61 97")),
+    ([(0x1FFFE, 2)] * 49,
+     bytes.fromhex("12 FB 0B 01 31") + bytes.fromhex("01 00 01 FF FE") * 49 + b"\xD3"),
+])
+def test_variable_batch_setup_and_minimal_poll_exact_wire_frames(entries, expected_frame):
+    reply_payload = bytes(range(sum(length for _address, length in entries)))
 
-    payload = DS2Interface._build_batch_setup("1406464", entries)
+    class Serial(_FakeReadSerial):
+        def __init__(self):
+            super().__init__()
+            self.frames = []
 
-    assert len(payload) == 132
-    for entry in ("000000E800", "010000FA98", "010000FA9E", "010000E810"):
-        assert bytes.fromhex(entry) in payload
+        def write(self, frame):
+            self.frames.append(bytes(frame))
+            payload = b"" if frame[3] == 0x01 else reply_payload
+            response = bytes((0x12, len(payload) + 4, 0xA0)) + payload
+            self._pending = response + bytes((_xor(response),))
+            return len(frame)
+
+    interface = DS2Interface("COM_TEST", echo=False)
+    interface._ser = serial = Serial()
+    interface.setup_telegram_batch(entries=entries)
+    assert serial.frames == [expected_frame]
+    assert interface.poll_telegram_batch() == reply_payload
+    assert serial.frames == [expected_frame, bytes.fromhex("12 05 0B 00 1C")]
+
+
+@pytest.mark.parametrize("entries,message", [
+    ([], "requires 1"), ([(0xDA2A, 2)] * 50, "got 50"),
+    ([(0xE855, 2)], "must be even"), ([(0x1FFFF, 2)], "must be even"),
+    ([(0x20000, 1)], "outside 17-bit"), ([(-1, 1)], "outside 17-bit"),
+    ([(0xE854, 0)], "entry length"), ([(0xE854, 3)], "entry length"),
+])
+def test_invalid_batch_plan_is_rejected_before_transport(entries, message, monkeypatch):
+    interface = DS2Interface("COM_TEST")
+    monkeypatch.setattr(interface, "execute", lambda *_args: pytest.fail("invalid setup sent"))
+    with pytest.raises(ValueError, match=message):
+        interface.setup_telegram_batch(entries=entries)
+
+
+def test_batch_byte_addresses_include_odd_and_17_bit_boundary():
+    assert DS2Interface._build_batch_setup(entries=[(0xE855, 1), (0x1FFFF, 1)]) == bytes.fromhex(
+        "01 02 00 00 00 E8 55 00 00 01 FF FF")
 
 
 def test_adaptation_clear_uses_factory_family_frame_lengths():

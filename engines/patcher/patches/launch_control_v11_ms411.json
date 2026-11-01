@@ -136,5 +136,7 @@
       "data": "ec88ec00ecf4e6000400c2fdd9029a5b1160f3f8113749803d0df3f847e867f8f80047f8a0003d06c2f41b3746f4ff002d01f0d4fcf4fc00fc88f0dddb00ffff"
     }
   ],
-  "revert_superseded": true
+  "revert_superseded": true,
+  "deprecated": true,
+  "superseded_by": "launch_control_v12_ms411"
 }

@@ -6,6 +6,8 @@ on a normally-running ECU — no BSL/flash-listen mode required. Stdlib only,
 no Qt / hardware dependency, so these are unit-testable with plain bytes.
 """
 
+from datetime import date as calendar_date
+
 # Flash-driver signature @ SA1 driver entry (DS2 0x023C = file 0x423C).
 # Byte-identical location across MS41.0/.1/.2/.3; identifies the flash DRIVER
 # family compiled into the firmware (AMD vs Intel command set), not the
@@ -14,7 +16,8 @@ no Qt / hardware dependency, so these are unit-testable with plain bytes.
 DRV_SIG_ADDR  = 0x023C
 DRV_SIG_LEN   = 8
 DRV_SIG_FILE_OFFSET = DRV_SIG_ADDR ^ 0x4000
-_DRV_SIG_AMD   = bytes.fromhex("e00e0d58f04ec084")   # AMD driver -> 29F200 / 29F400 (bottom half)
+_DRV_SIG_AMD   = bytes.fromhex("e00e0d5ff04ec084")   # AMD V5 driver -> 29F200 / 29F400
+_DRV_SIG_AMD_LEGACY = bytes.fromhex("e00e0d58f04ec084")
 _DRV_SIG_INTEL = bytes.fromhex("e6f45000b84c6fe0")   # Intel driver -> 28F200
 
 # Program-side BMW part number (DS2 0x2025 = file 0x6025), 7 ASCII digits.
@@ -58,9 +61,8 @@ MS413_CAL_MARKER = b"SS1v2"
 MS413_CREDIT_ADDR = 0x15F60
 MS413_CREDIT_MARKER = b"ABHISHEK"
 
-# Exact MS41.2 AIF geometry recovered from the application status builder and
-# 10MDS412.prg. MS41.3 inherits this region from 1406464; it is deliberately
-# not projected onto MS41.0/.1.
+# The 0x2E-byte AIF slot layout is corroborated by MS410DS3/10MDS411/10MDS412
+# AIF_LESEN jobs and full reads from all four families. MS41.3 inherits MS41.2.
 AIF_FILE_ADDR = 0x5D07
 AIF_DS2_ADDR = AIF_FILE_ADDR ^ 0x4000
 AIF_RECORD_SIZE = 0x2E
@@ -151,7 +153,7 @@ def decode_flash_chip(sig: bytes) -> str:
     """Map an 8-byte SA1 driver signature to a chip family label. Never
     guesses: an unrecognized signature (or no response) reports itself as
     unknown, including the raw bytes so a human can investigate."""
-    if sig == _DRV_SIG_AMD:
+    if sig in (_DRV_SIG_AMD, _DRV_SIG_AMD_LEGACY):
         return "AMD driver — 29F200 / 29F400"
     if sig == _DRV_SIG_INTEL:
         return "Intel driver — 28F200"
@@ -163,7 +165,7 @@ def chip_family(sig: bytes) -> str:
     """The flash DRIVER FAMILY from the SA1 driver signature: 'amd' (29F200/29F400), 'intel'
     (28F200), or None if unrecognized. Selects which soft-BSL agent command set to use. Never
     guesses — an unknown signature returns None so the caller can fail safe."""
-    if sig == _DRV_SIG_AMD:
+    if sig in (_DRV_SIG_AMD, _DRV_SIG_AMD_LEGACY):
         return "amd"
     if sig == _DRV_SIG_INTEL:
         return "intel"
@@ -286,14 +288,16 @@ def _aif_number(raw: bytes) -> str | None:
     return text if 0 < value < 0xFFFFFF and len(text) == 7 else None
 
 
-def decode_aif_history(raw: bytes, family: str | None) -> dict:
-    """Decode the current append-only MS41.2/.3 AIF programming record.
+def decode_aif_history(raw: bytes, family: str | None, *, record="current") -> dict:
+    """Decode a verified append-only AIF programming record.
 
     ``raw`` may be the bare 14-record range or a file-offset-addressable image.
+    ``record`` selects the first physical slot or the latest occupied slot.
     A non-erased slot after an erased slot is rejected because it cannot satisfy
     BMW's "current record followed by a free record" selection rule.
     """
-    if family not in ("MS41.2", "MS41.3"):
+    if (family not in ("MS41.0", "MS41.1", "MS41.2", "MS41.3")
+            or record not in ("first", "current")):
         return {}
     raw = bytes(raw)
     if len(raw) >= AIF_FILE_ADDR + AIF_LEN:
@@ -304,31 +308,35 @@ def decode_aif_history(raw: bytes, family: str | None) -> dict:
     occupied = []
     free_seen = False
     for offset in range(0, AIF_LEN, AIF_RECORD_SIZE):
-        record = raw[offset:offset + AIF_RECORD_SIZE]
-        if record == b"\xFF" * AIF_RECORD_SIZE:
+        slot = raw[offset:offset + AIF_RECORD_SIZE]
+        if slot == b"\xFF" * AIF_RECORD_SIZE:
             free_seen = True
         elif free_seen:
             return {}
         else:
-            occupied.append(record)
+            occupied.append(slot)
     if not occupied:
         return {}
 
-    record = occupied[-1]
-    day = record[0x0E] >> 3
-    month = ((record[0x0E] & 0x07) << 1) | (record[0x0F] >> 7)
-    year = 1900 + (record[0x0F] & 0x7F)
-    date = f"{day:02d}.{month:02d}.{year:04d}" if (
-        1 <= day <= 31 and 1 <= month <= 12 and 1980 <= year <= 2027
-    ) else None
-    zb = _aif_number(record[0x1B:0x1E])
-    software = _aif_number(record[0x11:0x14])
+    selected = occupied[0] if record == "first" else occupied[-1]
+    day = selected[0x0E] >> 3
+    month = ((selected[0x0E] & 0x07) << 1) | (selected[0x0F] >> 7)
+    year = 1900 + (selected[0x0F] & 0x7F)
+    try:
+        calendar_date(year, month, day)
+    except ValueError:
+        return {}
+    date = f"{day:02d}.{month:02d}.{year:04d}" if 1980 <= year <= 2027 else None
+    zb = _aif_number(selected[0x1B:0x1E])
+    software = _aif_number(selected[0x11:0x14])
     if not (zb and software and date):
         return {}
     return {
         "recorded_zb_zusb": zb,
         "programming_date": date,
         "recorded_software_number": software,
+        "recorded_authority_number": _aif_number(selected[0x17:0x1A]),
+        "aif_record_number": 1 if record == "first" else len(occupied),
         "programming_count": len(occupied),
     }
 

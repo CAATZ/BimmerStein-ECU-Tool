@@ -54,8 +54,10 @@ def _synthetic_patch_records() -> list[dict]:
             "description": "Adds a compatibility gate and boot-recovery window.",
             "user_description": "Adds a compatibility gate and boot-recovery window.",
             "target": "MS41.3",
-            "status": "EXPERIMENTAL",
-            "tested": False,
+            "status": "TESTED",
+            "tested": True,
+            "maturity": "Experimental",
+            "validation": "Tested",
             "requires": ["softbsl_loader"],
             "conflicts": [],
             "ok": True,
@@ -75,6 +77,8 @@ def _synthetic_patch_records() -> list[dict]:
             "target": "MS41.3",
             "status": "TESTED",
             "tested": True,
+            "maturity": "—",
+            "validation": "Tested",
             "requires": ["softbsl_loader"],
             "conflicts": [],
             "ok": True,
@@ -86,14 +90,16 @@ def _synthetic_patch_records() -> list[dict]:
             "removable": True,
         },
         {
-            "id": "ignition_cut_v11",
+            "id": "ignition_cut_v18",
             "title": "Ignition Cut",
-            "version": "V11",
+            "version": "V18",
             "description": "Independent ignition-cut limiter with hysteresis and fixed-IPW control.",
             "user_description": "Adds an independent ignition-cut limiter.",
             "target": "MS41.3",
             "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
             "tested": False,
+            "maturity": "HIGHLY EXPERIMENTAL",
+            "validation": "Needs testing",
             "requires": [],
             "conflicts": [],
             "ok": True,
@@ -105,15 +111,17 @@ def _synthetic_patch_records() -> list[dict]:
             "removable": False,
         },
         {
-            "id": "launch_control_v11",
+            "id": "launch_control_v18",
             "title": "Launch Control / 2-step",
-            "version": "V11",
-            "description": "Independent launch requester using fuel cut or the shared V11 ignition engine.",
+            "version": "V18",
+            "description": "Independent launch requester using fuel cut or the shared V18 ignition engine.",
             "user_description": "Adds independently armed staged launch control.",
             "target": "MS41.3",
             "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
             "tested": False,
-            "requires": ["ignition_cut_v11"],
+            "maturity": "HIGHLY EXPERIMENTAL",
+            "validation": "Needs testing",
+            "requires": ["ignition_cut_v18"],
             "conflicts": [],
             "ok": True,
             "badge": "",
@@ -130,8 +138,10 @@ def _synthetic_patch_records() -> list[dict]:
             "description": "Installs the persistent Soft-BSL entry loader.",
             "user_description": "Installs the persistent Soft-BSL entry loader.",
             "target": "MS41.3",
-            "status": "EXPERIMENTAL",
-            "tested": False,
+            "status": "TESTED",
+            "tested": True,
+            "maturity": "Experimental",
+            "validation": "Tested",
             "requires": [],
             "conflicts": [],
             "ok": True,
@@ -227,7 +237,7 @@ def main() -> int:
         "Calibration ID": "98A0 (synthetic)",
         "Program / Calibration Match": "Match (synthetic)",
         "Recorded ZB / ZUSB": "Documentation example",
-        "Programming Date": "2026-08-22 (synthetic)",
+        "AIF Record Date": "2026-08-22 (synthetic)",
         "Recorded Software Number": "0000000 (synthetic)",
         "Programming Count": "1 (synthetic)",
         "BMW DATEN Lineage": "MS41.3 documentation example",
@@ -293,16 +303,16 @@ def main() -> int:
         patch_service.available_patches = lambda _data: _synthetic_patch_records()
         patch_service.editable_parameters = lambda _data: [
             {"patch_id": patch_id, "editable": True, "blocked_reason": ""}
-            for patch_id in ("ignition_cut_v11", "launch_control_v11")
+            for patch_id in ("ignition_cut_v18", "launch_control_v18")
         ]
         window._patch_base = bytes(256 * 1024)
         window._patch_base_source = "Synthetic_MS41_3_Demo.bin"
         window.lbl_patch_base.setText(
-            "Base: Synthetic_MS41_3_Demo.bin — MS41.3 documentation example"
+            "Base: Synthetic_MS41_3_Demo.bin · Program MS41.3 · Cal MS41.3"
         )
         window._refresh_patch_list()
-        window._patch_checkboxes["ignition_cut_v11"].setChecked(True)
-        window._patch_checkboxes["launch_control_v11"].setChecked(True)
+        window._patch_checkboxes["ignition_cut_v18"].setChecked(True)
+        window._patch_checkboxes["launch_control_v18"].setChecked(True)
     finally:
         patch_service.available_patches = original_available
         patch_service.editable_parameters = original_parameters

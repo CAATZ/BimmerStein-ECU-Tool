@@ -71,6 +71,101 @@ def test_add_data_eeprom_is_catalogued_separately(tmp_path, monkeypatch):
     assert entry.program_variant == entry.cal_variant == entry.cal_id == ""
 
 
+@pytest.mark.parametrize("variant", ("", "MS43"))
+def test_2k_eeprom_uses_explicit_family_and_unknown_record_status(tmp_path, monkeypatch, variant):
+    from engines.softbsl import eeprom_ram
+
+    monkeypatch.setattr(eeprom_ram, "field_report", lambda *_:
+                        pytest.fail("MS41 record decoder must not receive 2 KiB EEPROM"))
+    manager = _mgr(tmp_path, monkeypatch)
+    data = bytes(range(256)) * 8
+    entry = manager.add_data(data, "eeprom.bin", source="ECU EEPROM read", variant=variant)
+    assert entry.file_type == "EEPROM" and entry.variant == (variant or "Unknown")
+    assert entry.cs_ok is None and entry.checksum_label == "UNKNOWN"
+    assert entry.program_variant == entry.cal_variant == entry.cal_id == ""
+    assert manager.read_data(entry.filename, entry.sha256) == data
+    reloaded = backup_manager.BackupManager().exact_entry(entry.filename)
+    assert asdict(reloaded) == asdict(entry)
+
+
+def test_ms43_eeprom_provenance_tracks_content_after_move_and_replacement(tmp_path, monkeypatch):
+    manager = _mgr(tmp_path, monkeypatch)
+    entry = manager.add_data(bytes(2048), "eeprom.bin", variant="MS43", source="ECU EEPROM read")
+    Path(entry.path).rename(tmp_path / "backups" / "moved.bin")
+    manager.refresh()
+    moved = manager.exact_entry("moved.bin")
+    assert moved.variant == "MS43" and moved.source == "ECU EEPROM read"
+    Path(moved.path).write_bytes(bytes([1]) + bytes(2047))
+    manager.refresh()
+    replaced = manager.exact_entry("moved.bin")
+    assert replaced.file_type == "EEPROM" and replaced.variant == "Unknown"
+    assert replaced.cs_ok is None and replaced.source == "imported"
+    with pytest.raises(ValueError, match="identity changed"):
+        manager.read_data(replaced.filename, entry.sha256)
+
+
+def test_2k_eeprom_file_import_does_not_infer_ms43_family(tmp_path, monkeypatch):
+    manager = _mgr(tmp_path, monkeypatch)
+    source = tmp_path / "ms43-eeprom.bin"
+    source.write_bytes(bytes(2048))
+    entry = manager.add(str(source))
+    assert entry.file_type == "EEPROM" and entry.variant == "Unknown"
+    assert entry.cs_ok is None and entry.checksum_label == "UNKNOWN"
+
+
+@pytest.mark.parametrize("family", ("MS42", "MS43"))
+def test_retained_data_catalog_requires_family_provenance(tmp_path, monkeypatch, family):
+    manager = _mgr(tmp_path, monkeypatch)
+    data = bytes(range(256)) * 64
+    entry = manager.add_data(data, "retained.bin", variant=family,
+                             source="ECU retained data read")
+    assert entry.file_type == "Retained Data" and entry.variant == family
+    assert entry.cs_ok is None and entry.checksum_label == "UNKNOWN"
+    assert entry.cal_id == entry.program_variant == entry.cal_variant == ""
+    reloaded = backup_manager.BackupManager().exact_entry(entry.filename)
+    assert asdict(reloaded) == asdict(entry)
+    assert manager.read_data(entry.filename, entry.sha256) == data
+    unlabelled = manager.add_data(data, "imported.bin")
+    assert unlabelled.file_type == unlabelled.variant == "Unknown"
+    Path(entry.path).write_bytes(bytes(16384))
+    manager.refresh()
+    assert manager.exact_entry(entry.filename).file_type == "Unknown"
+
+
+@pytest.mark.parametrize("context_kind,expected", [
+    ("valid", True), ("mismatch", False), ("missing", None), ("short", None),
+])
+def test_ms43_partial_checksum_context_persists_with_exact_image(
+        tmp_path, monkeypatch, context_kind, expected):
+    import ms42_ms43_image as images
+    from tests.test_ms42_ms43_image import synthetic_image
+
+    full, _ = images.correct_checksums(synthetic_image("MS43"), "MS43")
+    partial = images.extract_calibration(full)
+    context = bytearray(full[0x6FDB8:0x6FDE0])
+    if context_kind == "mismatch":
+        context[0] ^= 1
+    elif context_kind == "missing":
+        context = None
+    elif context_kind == "short":
+        context = context[:-1]
+    manager = _mgr(tmp_path, monkeypatch)
+    entry = manager.add_data(partial, "partial.bin", source="ECU RAM loader read",
+                             checksum_context=context)
+
+    assert entry.cs_ok is expected
+    assert manager.read_data(entry.filename, entry.sha256) == partial
+    manager.refresh()
+    reloaded = backup_manager.BackupManager()
+    assert reloaded.entries[0].cs_ok is expected
+    assert reloaded.add_data(partial, "imported.bin").cs_ok is None
+    changed = bytearray(partial)
+    changed[-1] ^= 1  # Outside the synthetic checksum spans; context is now absent.
+    Path(entry.path).write_bytes(changed)
+    reloaded.refresh()
+    assert reloaded.exact_entry(entry.filename).cs_ok is None
+
+
 def test_old_index_entries_without_new_fields_load_cleanly(tmp_path, monkeypatch):
     """An index.json written before this schema change lacks program_variant/cal_variant/
     hybrid — loading it must not crash, and the new fields should default to ''."""
@@ -149,6 +244,52 @@ def test_catalog_exact_crud_is_content_checked_and_collision_safe(tmp_path, monk
         second.filename,
         third.filename,
     ]
+
+
+@pytest.mark.parametrize("replacement", [b"replaced", b"replacement is longer"])
+def test_delete_preserves_externally_replaced_image(tmp_path, monkeypatch, replacement):
+    manager = _mgr(tmp_path, monkeypatch)
+    entry = manager.add_data(b"original", "image.bin")
+    image = Path(entry.path)
+    index_before = Path(backup_manager.INDEX_FILE).read_bytes()
+    image.write_bytes(replacement)
+
+    with pytest.raises(ValueError, match="content check"):
+        manager.remove_exact(entry.filename, entry.sha256)
+
+    assert image.read_bytes() == replacement
+    assert Path(backup_manager.INDEX_FILE).read_bytes() == index_before
+    assert manager.entries == [entry]
+
+
+@pytest.mark.parametrize("reference", ["matching", "different", "invalid", "missing"])
+def test_refresh_recovers_old_ms43_partial_status_only_from_exact_valid_full(
+        tmp_path, monkeypatch, reference):
+    import ms42_ms43_image as images
+    from tests.test_ms42_ms43_image import synthetic_image
+
+    mgr = _mgr(tmp_path, monkeypatch)
+    full, _ = images.correct_checksums(synthetic_image("MS43"), "MS43")
+    partial = images.extract_calibration(full)
+    entry = mgr.add_data(partial, "old-partial.bin", source="ECU RAM loader read")
+    assert entry.cs_ok is None
+    original = Path(entry.path).read_bytes()
+    if reference != "missing":
+        candidate = bytearray(full)
+        if reference == "different":
+            candidate[-1] ^= 1  # Same HW/SW and valid checksums, different calibration bytes.
+        elif reference == "invalid":
+            candidate[0x10080] ^= 1
+        ref_entry = mgr.add_data(candidate, "reference.bin")
+        if reference == "invalid":
+            assert ref_entry.cs_ok is False
+        else:
+            assert ref_entry.cs_ok is True
+    mgr.refresh()
+    assert entry.cs_ok is (True if reference == "matching" else None)
+    reloaded = backup_manager.BackupManager()
+    assert reloaded.exact_entry(entry.filename).cs_ok is entry.cs_ok
+    assert Path(entry.path).read_bytes() == original
 
 
 def test_catalog_folders_move_images_on_disk(tmp_path, monkeypatch):

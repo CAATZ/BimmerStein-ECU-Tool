@@ -6,13 +6,14 @@ import hashlib
 
 from checksum import checksum_status
 from ms41 import MS41ECU
+import ms42_ms43_image as images
 import patch_service
 
 
 _MAX_DISPLAY_RANGES = 200
 
 
-def analyze_image(data: bytes, stored_sha256: str = "") -> dict:
+def analyze_image(data: bytes, stored_sha256: str = "", *, checksum_context=None) -> dict:
     """Inspect current bytes without updating the catalogue baseline."""
     data = bytes(data)
     digest = hashlib.sha256(data).hexdigest()
@@ -36,6 +37,13 @@ def analyze_image(data: bytes, stored_sha256: str = "") -> dict:
         "calibration_variant": None,
         "hybrid": None,
     }
+    profile = images.image_profile(data)
+    if profile:
+        status = images.checksum_status(data, context=checksum_context)
+        return {**common, "checksum": {**status, "prog_disabled": False, "cal_disabled": False},
+                "type": "Full ROM" if len(data) == images.FULL_SIZE else "Tune",
+                "program_variant": profile.name if len(data) == images.FULL_SIZE else None,
+                "calibration_variant": profile.name, "hybrid": None, "analysis_error": ""}
     if len(data) not in (MS41ECU.TUNE_SIZE, MS41ECU.FULL_ROM_SIZE):
         return {
             **common,
@@ -93,22 +101,33 @@ def analyze_image(data: bytes, stored_sha256: str = "") -> dict:
 def support_metadata(entry) -> dict:
     """Return selected-Bin metadata with no filename, identity, notes, or raw bytes."""
     with open(entry.path, "rb") as stream:
-        result = analyze_image(stream.read(), getattr(entry, "sha256", ""))
+        data = stream.read()
+    result = analyze_image(data, getattr(entry, "sha256", ""),
+                           checksum_context=_entry_context(entry, data))
     source = str(getattr(entry, "source", "") or "").strip()
     if source:
         result["catalog_source"] = source
     return result
 
 
-def compare_entries(first, second) -> str:
+def _entry_context(entry, data):
+    read_context = getattr(entry, "read_checksum_context", None)
+    return read_context(data) if read_context is not None else None
+
+
+def compare_entries(first, second, *, context_provider=None) -> str:
     """Build a bounded plain-text report for two catalogue entries."""
     with open(first.path, "rb") as stream:
         first_data = stream.read()
     with open(second.path, "rb") as stream:
         second_data = stream.read()
 
-    first_info = analyze_image(first_data, getattr(first, "sha256", ""))
-    second_info = analyze_image(second_data, getattr(second, "sha256", ""))
+    first_context = context_provider(first_data) if context_provider else _entry_context(first, first_data)
+    second_context = context_provider(second_data) if context_provider else _entry_context(second, second_data)
+    if first_data == second_data and first_context is not None and second_context is not None and first_context != second_context:
+        first_context = second_context = None
+    first_info = analyze_image(first_data, getattr(first, "sha256", ""), checksum_context=first_context)
+    second_info = analyze_image(second_data, getattr(second, "sha256", ""), checksum_context=second_context)
     lines = [
         "BIN COMPARISON (READ-ONLY)",
         "",
@@ -151,6 +170,18 @@ def compare_entries(first, second) -> str:
 
 
 def _comparison_bytes(first: bytes, second: bytes):
+    first_profile = images.image_profile(first)
+    second_profile = images.image_profile(second)
+    if first_profile or second_profile:
+        if first_profile is None or first_profile != second_profile:
+            raise ValueError("Both images must identify the same ECU family")
+        if len(first) == len(second) == images.FULL_SIZE:
+            return first, second, 0, "Full-ROM file offsets"
+        base = first_profile.calibration_offset
+        size = first_profile.partial_size
+        left = first[base:base + size] if len(first) == images.FULL_SIZE else first
+        right = second[base:base + size] if len(second) == images.FULL_SIZE else second
+        return left, right, base, "Calibration file offsets"
     full = MS41ECU.FULL_ROM_SIZE
     tune = MS41ECU.TUNE_SIZE
     sizes = {len(first), len(second)}

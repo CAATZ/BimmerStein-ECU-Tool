@@ -1,0 +1,272 @@
+{
+  "id": "ignition_cut_v14_ms410",
+  "family_id": "ignition_cut_v14",
+  "version": "V14",
+  "status": "DEPRECATED - timing-source ownership defect",
+  "tested": false,
+  "verification": "Exact-byte regression reproduces the E84A ownership defect. Do not install this revision.",
+  "title": "Ignition Cut",
+  "user_description": "Independent ignition-cut limiter with RPM hysteresis, optional fixed injector pulse width and an optional fixed ignition angle in a configurable RPM region below the cut limit. Provides shared timing and combustion-observation recovery for Launch Control V14.",
+  "description": "MS41.0 Ignition Cut V14 can overwrite the fuel-launch timing owner during a cut and end recovery retard early. Detection/removal only; use V15.",
+  "target": "MS41.0",
+  "recompute": [
+    "program",
+    "cal"
+  ],
+  "requires": [],
+  "conflicts": [
+    "ignition_cut_v7_ms410",
+    "ignition_cut_v8_ms410",
+    "ignition_cut_v9_ms410",
+    "ignition_cut_v10_ms410",
+    "ignition_cut_v11_ms410"
+  ],
+  "supersedes": [
+    "ignition_cut_v7_ms410",
+    "ignition_cut_v8_ms410",
+    "ignition_cut_v9_ms410",
+    "ignition_cut_v10_ms410",
+    "ignition_cut_v11_ms410"
+  ],
+  "cave": {
+    "region": "proghigh-tail",
+    "base": 223264,
+    "splice_off": 222968,
+    "splice_op": "calls",
+    "relocatable": false,
+    "splices": [
+      {
+        "off": 222968,
+        "base": 223264,
+        "op": "calls"
+      },
+      {
+        "off": 223068,
+        "base": 223264,
+        "op": "calls"
+      },
+      {
+        "off": 137280,
+        "base": 223744,
+        "op": "calls"
+      },
+      {
+        "off": 181860,
+        "base": 224616,
+        "op": "jmps"
+      },
+      {
+        "off": 182610,
+        "base": 224646,
+        "op": "jmps"
+      },
+      {
+        "off": 181382,
+        "base": 224680,
+        "op": "jmps"
+      },
+      {
+        "off": 182280,
+        "base": 224710,
+        "op": "jmps"
+      },
+      {
+        "off": 167064,
+        "base": 224740,
+        "op": "jmps"
+      },
+      {
+        "off": 146754,
+        "base": 224764,
+        "op": "jmps"
+      },
+      {
+        "off": 145796,
+        "base": 224800,
+        "op": "jmps"
+      },
+      {
+        "off": 146008,
+        "base": 224824,
+        "op": "jmps"
+      },
+      {
+        "off": 145788,
+        "base": 225280,
+        "op": "calls"
+      },
+      {
+        "off": 145862,
+        "base": 225280,
+        "op": "calls"
+      },
+      {
+        "off": 7382,
+        "base": 224960,
+        "op": "calls"
+      },
+      {
+        "off": 7594,
+        "base": 224960,
+        "op": "calls"
+      }
+    ],
+    "cals": {
+      "CUTSW": 94224,
+      "CUTRPM": 94225,
+      "CUT_HYST": 94226,
+      "CUT_IPW": 94227,
+      "CUT_RETARD_RANGE": 94229,
+      "CUT_IGN_ANGLE": 94230
+    },
+    "retard_entries": {
+      "state": 225344,
+      "timing": 224960,
+      "qualification": 225024,
+      "ram": 59465,
+      "check": 225354,
+      "state_body": 225792,
+      "source_ram": 59466
+    }
+  },
+  "edits": [
+    {
+      "off": 222968,
+      "expect": "65f204ff",
+      "data": "da032028"
+    },
+    {
+      "off": 223068,
+      "expect": "65f204ff",
+      "data": "da032028"
+    },
+    {
+      "off": 137280,
+      "expect": "f2f4baec",
+      "data": "da03002a"
+    },
+    {
+      "off": 223264,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ecf4f3f847e867f8f00047f8a0003d04f3f847e869833d04fcf465f204ffdb00fcf4db00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 181860,
+      "expect": "88d08880",
+      "data": "fa03682d"
+    },
+    {
+      "off": 183360,
+      "expect": "c4861800",
+      "data": "c4861800"
+    },
+    {
+      "off": 183406,
+      "expect": "c4471000",
+      "data": "c4471000"
+    },
+    {
+      "off": 167064,
+      "expect": "f3f8defa",
+      "data": "fa03e42d"
+    },
+    {
+      "off": 146754,
+      "expect": "f4893300",
+      "data": "fa03fc2d"
+    },
+    {
+      "off": 145796,
+      "expect": "e6f490ed",
+      "data": "fa03202e"
+    },
+    {
+      "off": 224544,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "f3f847e867f8f00047f8a0003d08f3f847e869872d03e138f7f848e8db00e004db00da03702e3d0ff3f847e867f8f00047f8a0003df4f3f848e846f556ed3d0269810d016982db00ecf4ecf5f05eda03422d2d03fcf5fcf4db00fcf5fcf488d08880fa0268868a180b10ecf4ecf5f05cda03422d2d03fcf5fcf4db00fcf5fcf488608880fa025689ecf4ecf5f05cda03422d2d03fcf5fcf4db00fcf5fcf488608890fa028a84ecf4ecf5f05cda03422d2d03fcf5fcf4db00fcf5fcf488608890fa020c88ecf4da03202d2d03fcf4fa0258cffcf4f3f8defafa029ccc8a180c10ecf4ecf5f059da03422d2d04fcf5fcf4fa02fa7dfcf5fcf4f4893300fa02467decf4da03702e2d03fcf4fa02c079fcf4e6f490edfa0288798a181410ecf4ecf5f059da03422d2d0cd4490200f6f40efdd4490400f6f410fdfcf5fcf4fa02be7bfcf5fcf48a0a0200fa025c7afa029a7ada03202d3d14f3f847e867f8f00047f8a0003d0ef3f849e847f8c3003d09da034a3047f8c3003d04e138f7f848e8db00e004db00"
+    },
+    {
+      "off": 182610,
+      "expect": "88608880",
+      "data": "fa03862d"
+    },
+    {
+      "off": 181382,
+      "expect": "88608890",
+      "data": "fa03a82d"
+    },
+    {
+      "off": 182280,
+      "expect": "88608890",
+      "data": "fa03c62d"
+    },
+    {
+      "off": 146008,
+      "expect": "8a0a1f00",
+      "data": "fa03382e"
+    },
+    {
+      "off": 145788,
+      "expect": "e4c92b00",
+      "data": "da030030"
+    },
+    {
+      "off": 145862,
+      "expect": "e4c92b00",
+      "data": "da030030"
+    },
+    {
+      "off": 225280,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88be88ecf4da03502f3d0ee7f8fe0046f956ed2d02e7f8fd0065f848e8fcf4fc88e4c92b00db00fcf4fc88db00"
+    },
+    {
+      "off": 225104,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "da03202d3d0ff3f847e867f8f00047f8a0003d09f3f849e847f8c3003d04e13875f848e8db00e004db00"
+    },
+    {
+      "off": 7382,
+      "expect": "f00267f00f00",
+      "data": "da03c02ecc00"
+    },
+    {
+      "off": 7594,
+      "expect": "f00267f00f00",
+      "data": "da03c02ecc00"
+    },
+    {
+      "off": 223744,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf5ecf6e6000400f3fa47e867faf00047faa0002d0ae6f500c0f6f548e8f7fa4ae8e7faa000f7fa47e8f3fa103047faff002d3849a02d1549a13d05f3fa51fd69a22d300d0e49a23d05f3fa51fd69a12d290d0749a43d26f3fa50fd67fa80002d21f3fa47e869a12d14f3fa123047faff002d07f3fc113041ca8d032d0221ca0d03f3fc11300d00f3fae6fa41ac8d0a0d05f3fae6fa43fa11308d04e11a75fa47e80d04e7fafe0065fa47e8f3fa47e869a72d05e13af7fa48e8f7fa4ae8f3fa47e869a22d05f3fa2930f3fb2a300d08f3fa47e869a12d0bf3fa1330f3fb143046f5ffff2d04f6f5bcecf6f5beecfcf6fcf5fc00f2f4baecdb00"
+    },
+    {
+      "off": 224960,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ecf4da03403047f83f00ed06e6f2ff002148e13875f848e8fcf4f00267f00f00db00"
+    },
+    {
+      "off": 225024,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ecf4ecf5ecf747fdc1003d1af2f430fd66f47f003d15f2f432fd66f400c03d10f3f8d9e947f880008d0be6f4cce9e06799a447fa80008d0428713dfae7fdc300fcf7fcf5fcf4fc88db00"
+    },
+    {
+      "off": 225344,
+      "expect": "ffffffffffffffffffffffffffff",
+      "data": "fa030032cc00cc00cc00fa030a32"
+    },
+    {
+      "off": 225792,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ecf7e0070d04cc00ec88ecf7e017ec00ecf4ecf5ecf6ecf3e6000400f3fc49e8e7fdc000e6f3ff00f3f847e867f8f80047f8a000ea303834f3fae6fa43fad301ea903834e6000800f2f4260746f4fa03ea309c33f2f4280746f4002bea309c33e6000400f3f880fd67f84000ea20a033f3f8f4ed43f82530ea90a033f3f8d0e843f82630ea80a033f3f820304980ea20e2324981ea30a432f3f851fd6982ea00c2324982ea30b432f3f851fd6981ea00c2324984ea30a033f3f850fd67f88000f3fa223049a0ea20dc3249a1ea30a0334980ea30a033ea00e2324980ea20a033f3f821304980ea200c334981ea30a033f3f62f3047f63f00eae0a033f3f82330f3fa2e30e127ea00fe33f3f62d3047f63f00eae0a033f3fae6faf3f8233043f852edeae0a033ea20343343fa52edea90a033f3fa273047faff00ea305633f3fa233047fafd00ea805433e7faff00ea00563309a343fad301ea806233f3fad30141a8ea906a33f18af3fae6fa41a8ea90963367fcfd0047fcc100ea30a033f3f84ae84981ea30a033f3f813fd67f88000ea20a033e117ea002634e6000400e6f3ff00f3f810304980ea20e8334981ea30c233f3f851fd6982ea203834ea00e8334982ea30d633f3f851fd6981ea203834ea00e8334984ea303834f3f850fd67f88000ea203834f3f6163047f63f00eae03834f3f81130f3fa1530e13749a0ea202e3441a8ea902e3443f8e6faeaf02e34218af3fae6fa41a8ea802e3443fa52edea902e34e7fdc100ea0038344972ea20a033e6f3ff00da03002f49e1ea205e34e7ffff0047fdc300ea305034f1f6be88f7f74ae8f7fd49e8ea008434e7ffc00047fdc300ea308434f3f849e847f8c300ea308434f3f84ae84187ea308434e7ffc300fcf3fcf6fcf5fcf4fc00f18ffcf7fc88db00"
+    }
+  ],
+  "revert_superseded": true,
+  "maturity": "Deprecated",
+  "validation": "Known defect",
+  "cal_defaults": {
+    "CUT_RETARD_RANGE": 6
+  },
+  "deprecated": true,
+  "superseded_by": "ignition_cut_v15_ms410"
+}

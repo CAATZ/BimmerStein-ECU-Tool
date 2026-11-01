@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from enum import Enum
 from hashlib import sha256
 import json
@@ -12,6 +12,9 @@ import time
 import uuid
 from typing import Iterable, Mapping
 
+from ms42_ms43_transmission_profiles import (
+    EGS_RELEASE_HISTORY, MS42_ZCS_DONORS, MS43_FA_DONORS, MS43_ZCS_DONORS,
+)
 from transmission_swap_journal import (
     ensure_directory_durable,
     write_new_file_durably,
@@ -521,8 +524,9 @@ def classify_dme_ident(identity: bytes) -> tuple[str, str]:
 
 
 def _require_ident(ds2, address: int, expected_length: int,
-                   supported_indexes: Iterable[int]) -> tuple[bytes, int]:
-    ident = _identify_c6(ds2, address)
+                   supported_indexes: Iterable[int], *, identity: bytes | None = None
+                   ) -> tuple[bytes, int]:
+    ident = _identify_c6(ds2, address) if identity is None else bytes(identity)
     if len(ident) != expected_length:
         raise ValueError(
             f"module 0x{address:02X} identification length {len(ident)} is not supported")
@@ -740,20 +744,19 @@ def read_ms41_cluster_store(ds2, chassis: str) -> ClusterStoreState:
     ident, coding_index = _require_ident(ds2, 0x80, 18, profiles)
     profile = "KMB"
     if chassis == "E39":
-        family_index = ident[9]
-        if 0x01 <= family_index <= 0x04:
+        family_index = _bcd(ident[9])
+        if 1 <= family_index <= 4:
             if coding_index != 5:
                 raise ValueError(
                     f"E39 IKE coding index {coding_index:02d} is not supported")
             profile = "IKE"
-        elif (0x1E <= family_index <= 0x1F
-              or 0x20 <= family_index <= 0x28):
+        elif 30 <= family_index <= 40:
             profile = "KMB"
-        elif 0x05 <= family_index <= 0x0E:
+        elif 5 <= family_index <= 14:
             raise ValueError("the fitted E39 IKI cluster profile is not supported")
         else:
             raise ValueError(
-                f"E39 cluster family 0x{family_index:02X} is not supported")
+                f"E39 cluster family 0x{ident[9]:02X} is not supported")
     first_word, last_word = ((0x6C, 0xBF) if chassis == "E36" else (0x2C, 0x7F))
     data = _read_words(ds2, first_word, last_word - first_word + 1)
     mask, manual, five_speed, _four_speed = profiles[coding_index]
@@ -762,7 +765,7 @@ def read_ms41_cluster_store(ds2, chassis: str) -> ClusterStoreState:
         268 if chassis == "E36" else 140,
         308 if chassis == "E36" else 180,
         mask, manual, five_speed, first_word,
-        first_word + 1, last_word, 0xD9 if chassis == "E36" else None, profile,
+        first_word + 1, last_word, 0xD9 if chassis == "E36" else 89, profile,
     )
 
 
@@ -863,7 +866,18 @@ def build_ms41_cluster_target(state: ClusterStoreState, raw_zcs: bytes,
     return bytes(output)
 
 
+def _validate_ms41_cluster_target(state: ClusterStoreState, target_data: bytes) -> None:
+    if state.chassis != "E39" or state.first_word != 0x2C:
+        return
+    _validate_cluster_checksum(replace(state, data=bytes(target_data)))
+    if target_data[0] != state.data[0]:
+        raise ValueError(
+            "instrument-cluster target changes preserved flags; "
+            "restore original coding and prepare a new conversion")
+
+
 def write_cluster_store(ds2, state: ClusterStoreState, target_data: bytes) -> ClusterStoreState:
+    _validate_ms41_cluster_target(state, target_data)
     current = read_ms41_cluster_store(ds2, state.chassis)
     if current != state:
         raise RuntimeError("instrument-cluster storage changed since preflight")
@@ -1037,17 +1051,6 @@ _E39_GS832_523_S204 = frozenset((1423118, 1423228))
 _E39_GS832_528 = frozenset((1422540, 1422615, 1422624, 1422784))
 _E39_GS832_528_S204 = frozenset((1423144,))
 
-_E46_EGS_ADMISSION = {
-    ("MS42", "AM51"): ("GS8600", frozenset((
-        1423390, 1423487, 1423678, 7504952,
-    ))),
-    ("MS43", "EV51"): ("GS8604", frozenset((
-        7507497, 7510270, 7511859, 7512065, 7514302,
-        7515453, 7516764, 7523484, 7529014, 7546090,
-    ))),
-}
-
-
 @dataclass(frozen=True)
 class Ms41ZcsTarget:
     chassis: str
@@ -1165,25 +1168,35 @@ def _e46_egs_admission(family: str, order_format: "OrderFormat",
     if family == "MS42":
         if order_format is not OrderFormat.ZCS or zcs is None:
             raise ValueError("MS42 automatic conversion requires an exact ZCS identity")
-        if zcs.gm[:2] != bytes.fromhex("6651"):
-            raise ValueError("MS42 automatic donor admission currently supports AM51 only")
-        if production is None or not (1997, 12) <= production <= (2000, 5):
-            raise ValueError("AM51 production date is outside the reviewed 12/97-05/00 range")
-        return _E46_EGS_ADMISSION[(family, "AM51")]
-
-    if family == "MS43":
-        if order_format is not OrderFormat.FA or fa is None:
-            raise ValueError("MS43 conversion requires an exact version-2 FA identity")
-        if fa.vehicle_type != "EV51":
-            raise ValueError("MS43 conversion currently supports EV51 only")
+        key = zcs.gm[:2].hex().upper()
+        profile = MS42_ZCS_DONORS.get(key)
+        egs_family = "GS8600"
+    elif family == "MS43":
+        if order_format is OrderFormat.ZCS and zcs is not None:
+            key = zcs.gm[:2].hex().upper()
+            profile = MS43_ZCS_DONORS.get(key)
+        elif order_format is OrderFormat.FA and fa is not None:
+            if fa.chassis != "E46_":
+                raise ValueError("MS43 conversion requires an exact E46 FA identity")
+            key = fa.vehicle_type
+            profile = MS43_FA_DONORS.get(key)
+        else:
+            raise ValueError("MS43 conversion requires an exact ZCS or version-2 FA identity")
+        egs_family = "GS8604"
+    else:
+        raise ValueError(f"automatic donor admission is not supported for {family}")
+    if profile is None:
+        raise ValueError(f"{family} E46 donor admission is not reviewed for {key}")
+    vehicle_type, first_month, last_month, standard_zb, short_axle_zb = profile
+    if production is None or not first_month <= production <= last_month:
+        raise ValueError(f"{vehicle_type} production date is outside the reviewed range")
+    if fa is not None:
         month, year = int(fa.date[:2]), int(fa.date[2:])
-        if not (2001, 9) <= (2000 + year, month) <= (2004, 11):
-            raise ValueError("EV51 production date is outside the reviewed 09/01-11/04 range")
-        if production is None or not (2001, 9) <= production <= (2004, 11):
-            raise ValueError("connected EV51 production date is outside the reviewed 09/01-11/04 range")
-        return _E46_EGS_ADMISSION[(family, "EV51")]
-
-    raise ValueError(f"automatic donor admission is not supported for {family}")
+        if not first_month <= (2000 + year, month) <= last_month:
+            raise ValueError(f"{vehicle_type} vehicle-order date is outside the reviewed range")
+        if "204" in fa.sa and short_axle_zb is not None:
+            standard_zb = short_axle_zb
+    return egs_family, EGS_RELEASE_HISTORY[standard_zb]
 
 
 def read_ews_production_month(ds2) -> tuple[int, int]:
@@ -1337,9 +1350,10 @@ def _write_cluster_target_words(ds2, state: ClusterStoreState,
         time.sleep(5.0)
 
 
-def read_e46_cluster_store(ds2, *, validate: bool = True) -> ClusterStoreState:
+def read_e46_cluster_store(ds2, *, validate: bool = True, identity: bytes | None = None
+                          ) -> ClusterStoreState:
     ident, coding_index = _require_ident(
-        ds2, 0x80, 18, _E46_KMB_EARLY | _E46_KMB_LATE)
+        ds2, 0x80, 18, _E46_KMB_EARLY | _E46_KMB_LATE, identity=identity)
     if coding_index in _E46_KMB_EARLY:
         first_word, last_word = 0x1F, 0xFF
         zcs_offset, transmission_offset = 104, 78
@@ -2317,11 +2331,11 @@ def _require_supported_connected_swap(session: ConnectedSwapSession) -> None:
     if session.chassis in {"E36", "E39"} and session.family in {
             "MS41.0", "MS41.1", "MS41.2", "MS41.3"}:
         return
-    if session.chassis == "E46" and session.family in {"MS42", "MS43"}:
+    if session.chassis in {"E39", "E46"} and session.family in {"MS42", "MS43"}:
         return
     raise ValueError(
         "this K-line build supports complete transmission conversion only on "
-        "reviewed K-line-accessible E36/E39 MS41 and E46 MS42/MS43 profiles")
+        "reviewed K-line-accessible E36/E39 MS41 and E39/E46 MS42/MS43 profiles")
 
 
 def _blocked_swap(target: Transmission, title: str, reason: str,
@@ -2551,8 +2565,10 @@ def _prepare_ms41_swap(ds2, dme_ident: bytes, program: str, family: str,
 
 
 def _prepare_e46_swap(ds2, dme_ident: bytes, program: str, family: str,
-                      target: Transmission) -> ConnectedSwapSession:
-    cluster = read_e46_cluster_store(ds2)
+                      target: Transmission, *, cluster_identity: bytes | None = None
+                      ) -> ConnectedSwapSession:
+    cluster = (read_e46_cluster_store(ds2) if cluster_identity is None else
+               read_e46_cluster_store(ds2, identity=cluster_identity))
     if cluster.coding_index >= 20:
         raise ValueError("M3 sequential-transmission profiles are not a manual/automatic swap path")
 
@@ -2621,7 +2637,9 @@ def _prepare_e46_swap(ds2, dme_ident: bytes, program: str, family: str,
         egs_family, egs_ident, egs_zb = read_egs_aif_zb(
             ds2, family=egs_family, ident=egs_ident)
         if egs_zb not in allowed_zb:
-            vehicle_type = fa.vehicle_type if fa is not None else "AM51"
+            vehicle_type = (fa.vehicle_type if fa is not None else
+                            (MS42_ZCS_DONORS if family == "MS42" else MS43_ZCS_DONORS)[
+                                zcs.gm[:2].hex().upper()][0])
             raise ValueError(
                 f"{egs_family} assembly {egs_zb} is not reviewed for {vehicle_type}")
 
@@ -2690,7 +2708,20 @@ def prepare_connected_swap(ds2, target: str | Transmission,
         if family.startswith("MS41"):
             return _prepare_ms41_swap(
                 ds2, dme_ident, program, family, target, eeprom_image)
-        return _prepare_e46_swap(ds2, dme_ident, program, family, target)
+        cluster_ident, ci = _require_ident(
+            ds2, 0x80, 18, _E46_KMB_EARLY | _E46_KMB_LATE
+            | _E39_CLUSTER_TRANSMISSION.keys() | {11, 12})
+        diagnostic_index = _bcd(cluster_ident[9])
+        e39_cluster = (ci in _E39_CLUSTER_TRANSMISSION and (
+            30 <= diagnostic_index <= 40
+            or ci == 5 and 1 <= diagnostic_index <= 4)
+            or ci in {11, 12} and 5 <= diagnostic_index <= 14)
+        if e39_cluster:
+            from ms42_ms43_transmission import prepare_e39_swap
+            return prepare_e39_swap(ds2, dme_ident, program, family, target,
+                                    read_ews_zcs(ds2), cluster_identity=cluster_ident)
+        return _prepare_e46_swap(ds2, dme_ident, program, family, target,
+                                 cluster_identity=cluster_ident)
     except Exception as error:
         return _blocked_swap(
             target, "This vehicle cannot be converted safely",
@@ -2803,6 +2834,15 @@ def deserialize_connected_swap(payload: dict) -> ConnectedSwapSession:
         }
         if session.eeprom_variant != family or lengths not in ({4}, {512}):
             raise ValueError("recovery DME EEPROM plan is incomplete")
+        cluster = session.cluster
+        if (session.chassis == "E39" and cluster is not None
+                and cluster.chassis == "E39" and cluster.profile in {"KMB", "IKE"}
+                and cluster.checksum_byte_offset is None
+                and (cluster.first_word, cluster.checksum_word,
+                     cluster.checksum_data_start, cluster.checksum_data_end,
+                     len(cluster.data)) == (0x2C, 0x2C, 0x2D, 0x7F, 0xA8)):
+            # Correct legacy metadata without changing archived original/target bytes.
+            session.cluster = replace(cluster, checksum_byte_offset=89)
     elif session.eeprom_before is not None or session.eeprom_target is not None:
         raise ValueError("unexpected DME EEPROM data in E46 recovery plan")
     return session
@@ -2901,9 +2941,11 @@ def _assert_egs_snapshot(ds2, session: ConnectedSwapSession,
 
 
 def _assert_session_fresh(ds2, session: ConnectedSwapSession) -> None:
+    if session.family in MS41_EEPROM_RECORD_ADDRESS and session.cluster is not None:
+        _validate_ms41_cluster_target(session.cluster, session.target_cluster)
     if bytes(ds2.identify()) != session.dme_ident:
         raise RuntimeError("engine-computer identity changed since compatibility checking")
-    if (session.chassis == "E46" and session.source is not None
+    if (session.family in {"MS42", "MS43"} and session.source is not None
             and read_e46_dme_transmission(ds2) is not session.source):
         raise RuntimeError(
             "engine-computer transmission configuration changed since compatibility checking")
@@ -2918,8 +2960,12 @@ def _assert_session_fresh(ds2, session: ConnectedSwapSession) -> None:
             and read_ews_transmission(ds2) != session.ews_coding):
         raise RuntimeError("immobilizer coding changed since compatibility checking")
     if session.cluster is not None:
-        current_cluster = (read_e46_cluster_store(ds2) if session.chassis == "E46"
-                           else read_ms41_cluster_store(ds2, session.chassis))
+        if session.chassis == "E39" and session.family in {"MS42", "MS43"}:
+            from ms42_ms43_transmission import read_e39_cluster
+            current_cluster = read_e39_cluster(ds2)
+        else:
+            current_cluster = (read_e46_cluster_store(ds2) if session.chassis == "E46"
+                               else read_ms41_cluster_store(ds2, session.chassis))
         if current_cluster != session.cluster:
             raise RuntimeError("instrument-cluster storage changed since compatibility checking")
     if session.akmb_fa is not None and read_akmb_fa(ds2) != session.akmb_fa:
@@ -2929,9 +2975,9 @@ def _assert_session_fresh(ds2, session: ConnectedSwapSession) -> None:
     if session.stability is not None:
         if isinstance(session.stability, Mk60State):
             current_stability = read_mk60_transmission(ds2)
-        elif session.stability.name == "ASC5":
+        elif session.stability.name in {"ASC5", "ASC57", "DSC57"}:
             current_stability = _read_addressed_coding(
-                ds2, "ASC5", (session.stability.coding_index,),
+                ds2, session.stability.name, (session.stability.coding_index,),
                 session.stability.address, len(session.stability.data))
         else:
             current_stability = read_mk20_transmission(ds2)
@@ -2986,11 +3032,17 @@ def _write_connected_owner(ds2, session: ConnectedSwapSession, name: str) -> Non
     elif name == "cluster":
         if session.chassis == "E46":
             write_e46_cluster_store(ds2, session.cluster, session.target_cluster)
+        elif session.chassis == "E39" and session.family in {"MS42", "MS43"}:
+            from ms42_ms43_transmission import write_e39_cluster
+            write_e39_cluster(ds2, session.cluster, session.target_cluster)
         else:
             write_cluster_store(ds2, session.cluster, session.target_cluster)
     elif name == "stability":
         if isinstance(session.stability, Mk60State):
             written = write_mk60_transmission(ds2, session.stability, session.target)
+        elif session.stability.name in {"ASC57", "DSC57"}:
+            from ms42_ms43_transmission import write_e39_stability
+            written = write_e39_stability(ds2, session.stability, session.target_stability)
         elif session.stability.name == "ASC5":
             written = write_asc5_transmission(ds2, session.stability, session.target)
         else:
@@ -3005,11 +3057,17 @@ def _restore_connected_owner(ds2, session: ConnectedSwapSession, name: str) -> N
     if name == "stability":
         if isinstance(session.stability, Mk60State):
             restore_mk60(ds2, session.stability)
+        elif session.stability.name in {"ASC57", "DSC57"}:
+            from ms42_ms43_transmission import write_e39_stability
+            write_e39_stability(ds2, session.stability, session.stability.data, restoring=True)
         else:
             restore_transmission_coding(ds2, session.stability)
     elif name == "cluster":
         if session.chassis == "E46":
             restore_e46_cluster_store(ds2, session.cluster)
+        elif session.chassis == "E39" and session.family in {"MS42", "MS43"}:
+            from ms42_ms43_transmission import write_e39_cluster
+            write_e39_cluster(ds2, session.cluster, session.cluster.data, restoring=True)
         else:
             restore_cluster_store(ds2, session.cluster)
     elif name == "alsz_fa":
@@ -3091,7 +3149,7 @@ def write_connected_modules(ds2, session: ConnectedSwapSession,
             _write_connected_owner(ds2, session, name)
             if journal is not None:
                 journal.mark_write_complete(operation_id, name)
-        if session.chassis == "E46":
+        if session.family in {"MS42", "MS43"}:
             if journal is not None:
                 journal.mark_write_intent(
                     operation_id, "dme_post_coding",
@@ -3178,9 +3236,11 @@ def verify_connected_swap(ds2, session: ConnectedSwapSession,
     """Verify every independent owner after the mandatory ignition cycle."""
     if session.phase != "awaiting_cycle":
         raise RuntimeError("conversion is not awaiting final verification")
+    if session.family in MS41_EEPROM_RECORD_ADDRESS and session.cluster is not None:
+        _validate_ms41_cluster_target(session.cluster, session.target_cluster)
     if bytes(ds2.identify()) != session.dme_ident:
         raise RuntimeError("engine-computer identity changed after coding")
-    if (session.chassis == "E46"
+    if (session.family in {"MS42", "MS43"}
             and read_e46_dme_transmission(ds2) is not session.target):
         raise RuntimeError("engine-computer active transmission mode is incorrect")
     for name in _connected_owner_names(session):
@@ -3274,6 +3334,12 @@ def load_connected_swap_journal(record) -> ConnectedSwapSession:
         if active_phase == "awaiting_cycle"
         else "recovery"
     )
+    if (session.phase == "awaiting_cycle" and session.cluster is not None
+            and session.family in MS41_EEPROM_RECORD_ADDRESS):
+        try:
+            _validate_ms41_cluster_target(session.cluster, session.target_cluster)
+        except ValueError:
+            session.phase = "recovery"
     session.status = "action_required"
     session.title = (
         "Ignition cycle and final verification are still required"
@@ -3328,9 +3394,13 @@ def _read_connected_owner_image(ds2, session: ConnectedSwapSession,
             raise RuntimeError("lighting-module identity differs from the recovery archive")
         return data
     if name == "cluster":
-        current = (read_e46_cluster_store(ds2, validate=False)
-                   if session.chassis == "E46"
-                   else read_ms41_cluster_store(ds2, session.chassis))
+        if session.chassis == "E39" and session.family in {"MS42", "MS43"}:
+            from ms42_ms43_transmission import read_e39_cluster
+            current = read_e39_cluster(ds2, validate=False)
+        else:
+            current = (read_e46_cluster_store(ds2, validate=False)
+                       if session.chassis == "E46"
+                       else read_ms41_cluster_store(ds2, session.chassis))
         expected = session.cluster
         if (current.ident != expected.ident
                 or current.coding_index != expected.coding_index):
@@ -3340,9 +3410,9 @@ def _read_connected_owner_image(ds2, session: ConnectedSwapSession,
         expected = session.stability
         if isinstance(expected, Mk60State):
             current = read_mk60_transmission(ds2, validate=False)
-        elif expected.name == "ASC5":
+        elif expected.name in {"ASC5", "ASC57", "DSC57"}:
             current = _read_addressed_coding(
-                ds2, "ASC5", (expected.coding_index,),
+                ds2, expected.name, (expected.coding_index,),
                 expected.address, len(expected.data))
         else:
             current = read_mk20_transmission(ds2)
@@ -3395,6 +3465,9 @@ def recover_connected_modules(ds2, session: ConnectedSwapSession, action: str,
     _require_supported_connected_swap(session)
     if action not in {"target", "original"}:
         raise ValueError("recovery action must be target or original")
+    if (action == "target" and session.family in MS41_EEPROM_RECORD_ADDRESS
+            and session.cluster is not None):
+        _validate_ms41_cluster_target(session.cluster, session.target_cluster)
     prior_chain = _recovery_chain(journal, supersedes, session.archive_path)
     if bytes(ds2.identify()) != session.dme_ident:
         raise RuntimeError("engine-computer identity differs from the recovery archive")
@@ -3430,7 +3503,7 @@ def recover_connected_modules(ds2, session: ConnectedSwapSession, action: str,
         "dme_post_coding", "target_dme_post_coding",
         "restore_dme_configuration",
     })
-    if session.chassis == "E46":
+    if session.family in {"MS42", "MS43"}:
         dme_mode = read_e46_dme_transmission(ds2)
         allowed_modes = ({session.source, session.target}
                          if dme_attempted else {session.source})
@@ -3524,7 +3597,7 @@ def recover_connected_modules(ds2, session: ConnectedSwapSession, action: str,
             next_phase = ("rollback_modules_written" if eeprom_attempted
                           else "rollback_awaiting_cycle")
 
-        if session.chassis == "E46":
+        if session.family in {"MS42", "MS43"}:
             frame = post_coding_frame(session.family)
             journal.mark_write_intent(
                 journal_id, dme_owner, {"frame": frame.hex().upper()})
@@ -3575,7 +3648,7 @@ def verify_connected_original(ds2, session: ConnectedSwapSession,
         raise RuntimeError("original coding is not awaiting final verification")
     if bytes(ds2.identify()) != session.dme_ident:
         raise RuntimeError("engine-computer identity changed after recovery")
-    if (session.chassis == "E46"
+    if (session.family in {"MS42", "MS43"}
             and read_e46_dme_transmission(ds2) is not session.source):
         raise RuntimeError("engine-computer original transmission mode was not restored")
     for name in _connected_owner_names(session):

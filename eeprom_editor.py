@@ -23,8 +23,14 @@ def _display(field):
 
 def comparison_rows(before, after, variant=None):
     """Present semantic changes plus every changed physical byte, without decoding twice."""
-    before = eeprom_ram.validate_image(before)
-    after = eeprom_ram.validate_image(after)
+    if len(before) in (2048, 16384) or len(after) in (2048, 16384):
+        if len(before) != len(after):
+            raise ValueError("Storage comparisons require images of the same size.")
+        before, after = bytes(before), bytes(after)
+        variant = None  # MS41 field meanings never apply to raw MS42/MS43 storage.
+    else:
+        before = eeprom_ram.validate_image(before)
+        after = eeprom_ram.validate_image(after)
     rows = []
     checks = set()
     if variant is not None:
@@ -45,8 +51,8 @@ def comparison_rows(before, after, variant=None):
                     rows.append(('Record check', record.label,
                                  before[offset:offset + 2].hex(' ').upper(),
                                  after[offset:offset + 2].hex(' ').upper(), f"0x{offset:03X}", 'Stored bytes'))
-    for offset in eeprom_ram.changed_offsets(before, after):
-        if offset not in checks:
+    for offset, (old, new) in enumerate(zip(before, after)):
+        if old != new and offset not in checks:
             rows.append(('Raw byte', f"Byte 0x{offset:03X}", f"{before[offset]:02X}",
                          f"{after[offset]:02X}", f"0x{offset:03X}", 'Exact bytes'))
     return rows
@@ -55,7 +61,7 @@ def comparison_rows(before, after, variant=None):
 def load_knock_axes(image, variant, definition_paths):
     """Read exact definition-backed axes using the existing desktop definition parser."""
     from ms41 import MS41ECU
-    from romraider_defs import load_definitions, read_scalar
+    from calibration_defs import load_definitions, read_scalar
 
     if len(image) not in (MS41ECU.TUNE_SIZE, MS41ECU.FULL_ROM_SIZE):
         raise ValueError('Choose a 24 KiB partial or 256 KiB full BIN.')
@@ -141,9 +147,10 @@ class EepromComparisonDialog(QDialog):
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.resize(940, 620)
         layout = QVBoxLayout(self)
+        rows = comparison_rows(before, after, variant)
         note = QLabel(f'{before_label} → {after_label}\n'
-                      f'{len(eeprom_ram.changed_offsets(before, after))} changed bytes. '
-                      + (f'Decoded layout: {variant}.' if variant else 'Raw comparison only; the layouts are not proven compatible.'))
+                      f'{sum(a != b for a, b in zip(before, after))} changed bytes. '
+                      + (f'Decoded layout: {variant}.' if variant and len(before) == 512 else 'Raw comparison only; the layouts are not proven compatible.'))
         note.setWordWrap(True)
         layout.addWidget(note)
         hashes = QLabel(f'A SHA-256: {hashlib.sha256(before).hexdigest()}\n'
@@ -157,7 +164,7 @@ class EepromComparisonDialog(QDialog):
             warning_label.setStyleSheet('color:#e8c46a;')
             layout.addWidget(warning_label)
         self.table = _table(('Category', 'Field', 'Before', 'After', 'Offset', 'Evidence'))
-        _fill(self.table, comparison_rows(before, after, variant), (2, 3, 4))
+        _fill(self.table, rows, (2, 3, 4))
         self.table.setColumnWidth(0, 130)
         self.table.setColumnWidth(1, 270)
         self.table.setColumnWidth(2, 130)

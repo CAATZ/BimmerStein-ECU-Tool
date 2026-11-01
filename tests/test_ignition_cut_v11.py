@@ -1,4 +1,4 @@
-"""MS41.3 V11 restores the native WBO instructions damaged by V10."""
+"""Retain the exact V11 WBO repair and verify its current compatible successor."""
 import pytest
 
 import patch_service
@@ -15,6 +15,7 @@ def test_v11_changes_only_the_ms413_invalid_splice_and_keeps_v10_detectable():
     patches = patch_ms41.load_patches()
     old, new = patches["ignition_cut_v10"], patches["ignition_cut_v11"]
     assert old["deprecated"] and old["superseded_by"] == new["id"]
+    assert new["deprecated"] and new["superseded_by"] == "ignition_cut_v12"
     assert new["family_id"] == "ignition_cut_v10" and new["target"] == "MS41.3"
     assert new["supersedes"] == old["supersedes"] + [old["id"]]
     assert new["conflicts"] == old["conflicts"] + [old["id"]]
@@ -32,19 +33,24 @@ def test_v11_changes_only_the_ms413_invalid_splice_and_keeps_v10_detectable():
             assert current == previous
     assert patches["launch_control_v7"]["requires"] == [new["id"]]
     assert patches["launch_control_v11"]["requires"] == [new["id"]]
+    assert patches["launch_control_v12"]["requires"] == ["ignition_cut_v12"]
     for suffix in ("_ms410", "_ms411", "_ms412"):
-        assert not patches["ignition_cut_v10" + suffix].get("deprecated")
+        prior = patches["ignition_cut_v10" + suffix]
+        assert prior["deprecated"] and prior["superseded_by"] == "ignition_cut_v11" + suffix
+        assert patches["ignition_cut_v11" + suffix]["superseded_by"] == "ignition_cut_v14" + suffix
         assert patches["launch_control_v7" + suffix]["requires"] == ["ignition_cut_v10" + suffix]
         assert patches["launch_control_v11" + suffix]["requires"] == ["ignition_cut_v10" + suffix]
+        assert patches["launch_control_v12" + suffix]["requires"] == ["ignition_cut_v11" + suffix]
 
 
 @pytest.mark.parametrize("with_launch", [False, True])
-def test_v11_fresh_install_and_removal_preserve_native_wbo(with_launch):
+@pytest.mark.parametrize("revision", (11, 12, 13))
+def test_fixed_splice_revisions_install_and_remove_preserving_native_wbo(with_launch, revision):
     patches = patch_ms41.load_patches()
-    ids = ["ignition_cut_v11"] + (["launch_control_v11"] if with_launch else [])
-    image, _ = patch_service.build_image(ref("MS41.3"), ids)
+    ids = [f"ignition_cut_v{revision}"] + ([f"launch_control_v{revision}"] if with_launch else [])
+    image, _ = patch_ms41.build(ref("MS41.3"), ids, allow_deprecated=True)
     assert image[BAD_SPLICE:BAD_SPLICE + 4] == ORIGINAL
-    assert patch_ms41.is_applied(image, patches["ignition_cut_v11"])
+    assert patch_ms41.is_applied(image, patches[ids[0]])
     assert not patch_ms41.is_applied(image, patches["ignition_cut_v10"])
     assert patch_ms41.checksum.verify_checksum(bytearray(image))[0]
     for patch_id in reversed(ids):
@@ -54,7 +60,7 @@ def test_v11_fresh_install_and_removal_preserve_native_wbo(with_launch):
 
 
 @pytest.mark.parametrize("with_launch", [False, True])
-def test_configured_exact_v10_upgrades_to_v11_without_losing_launch(with_launch):
+def test_configured_exact_v10_upgrades_to_v14_without_losing_launch(with_launch):
     patches = patch_ms41.load_patches()
     historical = dict(patches)
     historical["launch_control_v7"] = dict(patches["launch_control_v7"],
@@ -75,14 +81,17 @@ def test_configured_exact_v10_upgrades_to_v11_without_losing_launch(with_launch)
             configured_stock[address:address + len(payload)] = payload
     configured, _ = patch_ms41.checksum.correct_checksums(configured)
     assert patch_ms41.is_applied(configured, patches["ignition_cut_v10"])
-    upgraded, _ = patch_service.build_image(configured, ["ignition_cut_v11"])
-    ids = ["ignition_cut_v11"] + (["launch_control_v7"] if with_launch else [])
-    direct, _ = patch_ms41.build(configured_stock, ids, allow_deprecated=True)
+    upgraded, _ = patch_service.build_image(configured, ["ignition_cut_v18"])
+    ids = ["ignition_cut_v18"] + (["launch_control_v18"] if with_launch else [])
+    direct, _ = patch_service.build_image(configured_stock, ids)
     assert upgraded == direct
     assert not patch_ms41.is_applied(upgraded, patches["ignition_cut_v10"])
     for patch_id in reversed(ids):
         assert patch_ms41.is_applied(upgraded, patches[patch_id])
         upgraded = patch_service.revert_patch(upgraded, patch_id)
+    for patch_id in ids:
+        for name, value in patches[patch_id].get("cal_defaults", {}).items():
+            configured_stock[patches[patch_id]["cave"]["cals"][name]] = value
     expected, _ = patch_ms41.checksum.correct_checksums(configured_stock)
     assert upgraded == bytes(expected)
 

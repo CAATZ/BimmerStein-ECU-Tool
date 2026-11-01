@@ -158,15 +158,19 @@ def test_ident_and_aif_decode_exact_bmw_fields():
     record = bytearray(0x2E)
     record[0x0E:0x10] = bytes((0x39, 0xE1))  # 07.03.1997
     record[0x11:0x14] = (1407152).to_bytes(3, "big")
+    record[0x17:0x1A] = (1740493).to_bytes(3, "big")
     record[0x1B:0x1E] = (1407151).to_bytes(3, "big")
     aif = bytes(record) + b"\xFF" * (ei.AIF_LEN - len(record))
     assert ei.decode_aif_history(aif, "MS41.3") == {
         "recorded_zb_zusb": "1407151",
         "programming_date": "07.03.1997",
         "recorded_software_number": "1407152",
+        "recorded_authority_number": "1740493",
+        "aif_record_number": 1,
         "programming_count": 1,
     }
-    assert ei.decode_aif_history(aif, "MS41.1") == {}
+    assert ei.decode_aif_history(aif, "MS41.0") == ei.decode_aif_history(aif, "MS41.3")
+    assert ei.decode_aif_history(aif, "MS41.1") == ei.decode_aif_history(aif, "MS41.3")
     assert ei.format_daten_lineage("1407151", "1406464") == (
         "Type 1406680; program 1406464 C; calibration 1407152DA — "
         "matches live program"
@@ -177,6 +181,36 @@ def test_aif_rejects_noncontiguous_programming_history():
     occupied = bytes(0x2E)
     raw = occupied + b"\xFF" * 0x2E + occupied + b"\xFF" * (ei.AIF_LEN - 0x8A)
     assert ei.decode_aif_history(raw, "MS41.2") == {}
+
+
+def test_aif_rejects_impossible_record_date():
+    record = bytearray(0x2E)
+    record[0x0E:0x10] = bytes((0xF9, 0x61))  # 31.02.1997
+    record[0x11:0x14] = (1407152).to_bytes(3, "big")
+    record[0x1B:0x1E] = (1407151).to_bytes(3, "big")
+    raw = bytes(record) + b"\xFF" * (ei.AIF_LEN - len(record))
+    assert ei.decode_aif_history(raw, "MS41.2") == {}
+
+
+def test_aif_first_and_current_select_distinct_records_in_full_image():
+    first = bytearray(0x2E)
+    first[0x0E:0x10] = bytes((0x39, 0xE1))  # 07.03.1997
+    first[0x11:0x14] = (1407152).to_bytes(3, "big")
+    first[0x17:0x1A] = (1740493).to_bytes(3, "big")
+    first[0x1B:0x1E] = (1407151).to_bytes(3, "big")
+    current = bytearray(first)
+    current[0x11:0x14] = (1438068).to_bytes(3, "big")
+    current[0x1B:0x1E] = (1438067).to_bytes(3, "big")
+    image = bytearray(b"\xFF" * 0x40000)
+    image[ei.AIF_FILE_ADDR:ei.AIF_FILE_ADDR + 0x5C] = first + current
+    original = ei.decode_aif_history(image, "MS41.1", record="first")
+    latest = ei.decode_aif_history(image, "MS41.1")
+    assert original["aif_record_number"] == 1
+    assert original["recorded_software_number"] == "1407152"
+    assert latest["aif_record_number"] == 2
+    assert latest["programming_count"] == 2
+    assert latest["recorded_software_number"] == "1438068"
+    assert ei.decode_aif_history(image, "MS41.1", record="other") == {}
 
 
 def test_program_calibration_match_keeps_mismatch_visible():

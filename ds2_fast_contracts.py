@@ -77,9 +77,9 @@ class ProgramReadbackMismatch(FastDS2Error):
 class LinkRate(Enum):
     """ECU divisor-derived rates, rounded to integer host requests.
 
-    LOW remains 9600 in production because the qualified K-Line adapter does
-    not transmit/echo when D2XX is opened at 9615.  HIGH is exact and must not
-    be substituted with the capture decoder's conventional 192000 label.
+    Values describe the standard profile; sessions own their selected rates.
+    LOW remains 9600 because the qualified K-Line adapter does not transmit/echo
+    when D2XX is opened at 9615. HIGH is never the analyzer's 192000 label.
     """
 
     UNKNOWN = 0

@@ -1,0 +1,165 @@
+{
+  "id": "launch_control_v14_ms410",
+  "family_id": "launch_control_v14",
+  "version": "V14",
+  "status": "DEPRECATED - requires superseded Ignition Cut V14",
+  "tested": false,
+  "verification": "Exact installed-byte checks pass on all four canonical firmware images for both native final-timing paths and complete ISR return ABI, standalone and launch RPM-band boundaries independent of hysteresis, disabled and absent-Launch behavior, source ownership, retained fuel-launch episode/recovery behavior, and qualified combustion-observation recovery. MS41.3 event-time cut/release and native diagnostic regressions pass, retaining the V13 rev-drop fix and genuine self-test fault handling. Configured predecessor migration, dependent removal, erased-range defaults, tune preservation and final checksums pass across all four families. Execution-cost measurements use minimum CPU state times only and exclude external-bus waits. Bench and vehicle validation remain required; no physical timing, flames, aggressiveness or DTC outcome is claimed.",
+  "title": "Launch Control / 2-step",
+  "user_description": "Launch control with independent fuel thresholds and hysteresis, or shared ignition cut. Optional fixed fuel-cut ignition angle and independent ignition-cut RPM-region timing; native protection takes priority.",
+  "description": "MS41.0 Launch Control V14 requires the superseded Ignition Cut V14. Preserved for detection/removal; use Launch Control V15.",
+  "target": "MS41.0",
+  "recompute": [
+    "program",
+    "cal"
+  ],
+  "requires": [
+    "ignition_cut_v14_ms410"
+  ],
+  "conflicts": [
+    "launch_control_v4_ms410",
+    "launch_control_v6_ms410",
+    "launch_control_v7_ms410",
+    "launch_control_v8_ms410",
+    "launch_control_v9_ms410",
+    "launch_control_v10_ms410",
+    "launch_control_v11_ms410",
+    "launch_control_v12_ms410"
+  ],
+  "supersedes": [
+    "launch_control_v4_ms410",
+    "launch_control_v6_ms410",
+    "launch_control_v7_ms410",
+    "launch_control_v8_ms410",
+    "launch_control_v9_ms410",
+    "launch_control_v10_ms410",
+    "launch_control_v11_ms410",
+    "launch_control_v12_ms410"
+  ],
+  "cave": {
+    "region": "proghigh-tail",
+    "base": 224000,
+    "splice_off": 149286,
+    "splice_op": "jmps",
+    "relocatable": false,
+    "splices": [
+      {
+        "off": 149286,
+        "base": 224000,
+        "op": "jmps"
+      },
+      {
+        "off": 149448,
+        "base": 224448,
+        "op": "calls"
+      },
+      {
+        "off": 149608,
+        "base": 224448,
+        "op": "calls"
+      },
+      {
+        "off": 149298,
+        "base": 223648,
+        "op": "calls"
+      },
+      {
+        "off": 149332,
+        "base": 223584,
+        "op": "calls"
+      },
+      {
+        "off": 224384,
+        "base": 223392,
+        "op": "jmps"
+      }
+    ],
+    "cals": {
+      "LC_SW": 94240,
+      "LC_CUTTYPE": 94241,
+      "LC_CLUTCHPOL": 94242,
+      "LC_MAXRPM": 94243,
+      "LC_ARMSPEED": 94244,
+      "LC_MAXSPEED": 94245,
+      "LC_MINTPS": 94246,
+      "LC_HARDRPM": 94247,
+      "LC_HYST": 94248,
+      "LC_IPW": 94249,
+      "LC_FUEL_HYST_B": 94251,
+      "LC_FUEL_HYST_A": 94252,
+      "LC_IGN_ANGLE": 94253,
+      "LC_RETARD_RANGE": 94254,
+      "LC_CUT_IGN_ANGLE": 94255
+    }
+  },
+  "edits": [
+    {
+      "off": 149264,
+      "expect": "9a180940",
+      "data": "9a180940"
+    },
+    {
+      "off": 149286,
+      "expect": "8a0902f0",
+      "data": "fa03002b"
+    },
+    {
+      "off": 149298,
+      "expect": "c2fdd201",
+      "data": "da03a029"
+    },
+    {
+      "off": 149332,
+      "expect": "c2fdd101",
+      "data": "da036029"
+    },
+    {
+      "off": 149448,
+      "expect": "43f8d301",
+      "data": "da03c02c"
+    },
+    {
+      "off": 149608,
+      "expect": "43f8d301",
+      "data": "da03c02c"
+    },
+    {
+      "off": 223392,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4ecf5e6000400f3f847e867f8f00047f8a0003d288a0904f0e7f8f70065f847e89a401b60f3f8213049803d17f3f852ed43f82330fd08f3fae6fa41a89d0443fad3019d010d03e18a75fa47e8f3fa233041a89d08f7fa52ed0d059a0903f0e18a75fa47e8fcf5fcf4fc008a0902f0fa026408fa022e07ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0ef2"
+    },
+    {
+      "off": 223584,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ec00ecf4e6000400c2fdd1019a401160f3f8213049803d0df3f847e867f8f80047f8a0003d06c2f42b3046f4ff002d01f0d4fcf4fc00fc88f0dddb00ffff"
+    },
+    {
+      "off": 223648,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ec00ecf4e6000400c2fdd2019a401160f3f8213049803d0df3f847e867f8f80047f8a0003d06c2f42c3046f4ff002d01f0d4fcf4fc00fc88f0dddb00ffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 224000,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4ecf5ecf6e6000400f3fa47e867faf00047faa0002d04e7faa000f7fa47e8f3f8203047f8ff002d31f3f8f4ed43f825309d2cf3f8d0e843f826308d27f3f8f4ed43f824309d23f3f8203049802d1c49813d04f3f851fd69820d0c49823d04f3f851fd69810d0649843d10f3f850fd67f88000f3fa223049a02d0349802d040d0649803d010d036f400d016e40f3f880fd67f840002d42f3f8213049802d2c49813d3ce7f8fb0065f847e8f3f847e869822d14f3f8283047f8ff002d07f3fa233041a88d032d0221a80d03f3fa23300d00f3f8e6fa418a8d0a0d05f3f8e6fa43f823308d04e12875f847e80d1be7f8fd0065f847e80d16e7f8fd0065f847e8f3f813fd67f880002d04e14875f847e80d09e7f8fb0065f847e80d04e7f8f90065f847e8fcf6fcf5fcf4fc00fa03802c"
+    },
+    {
+      "off": 224384,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "fa03a028ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 224448,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf5e6000400f3fa80fd67fa40002d18f3fa213049a03d14f3fa273047faff003d0af3fa233047fafd008d03e7faff000d0209a30d0043fad3019d02418a0d0243f8d301fcf5fc00db00ffffffffffffffffffff"
+    }
+  ],
+  "revert_superseded": true,
+  "maturity": "Deprecated",
+  "validation": "Emulator verified",
+  "cal_defaults": {
+    "LC_RETARD_RANGE": 6
+  },
+  "deprecated": true,
+  "superseded_by": "launch_control_v15_ms410"
+}

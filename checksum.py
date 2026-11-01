@@ -17,10 +17,9 @@ swap), and all stored little-endian:
 
   2. Program checksum  (3 regions, CRC chained through them)
        initial : big-endian uint16 at file[0x6066]
-       region a: file[0x6100 : trim_ff(0x7FFF)]
-       region b: file[0x0000 : trim_ff(0x3FFF)]
-       region c: upper 128 KB rearranged into a linear buffer (adjacent 0x4000
-                 block pairs swapped), trimmed of trailing 0xFF
+       bounds  : three uint32 LE CPU endpoints at file[0x634E:0x635A]
+       regions : CPU[0x2100:end_a], [0x4000:end_b], [0x20000:end_c]
+                 with file_offset = CPU_address XOR 0x4000
        stored  : file[0x6050] (uint16 LE)
 
   3. Calibration checksum table  (the "4E 00 FF FF" block at the cal section)
@@ -80,11 +79,13 @@ def _crc(buf, init: int) -> int:
 def _u16le(d, a): return d[a] | (d[a + 1] << 8)
 def _be16(d, a):  return (d[a] << 8) | d[a + 1]
 
-def _find_end(buf, start: int) -> int:
-    """Scan downward from `start` while bytes are 0xFF; return first-kept index."""
-    while start > 0 and buf[start] == 0xFF:
-        start -= 1
-    return start + 1
+def _program_endpoints(d):
+    """Use the program descriptor's native scan bounds, including trailing FF."""
+    a, b, c = struct.unpack_from("<III", d, 0x634E)
+    if not (0x2100 < a <= 0x4000 and 0x4000 < b <= 0x8000
+            and 0x20000 < c <= FULL_ROM_SIZE):
+        raise ValueError("invalid program checksum bounds in the ROM header")
+    return a, b, c
 
 
 # ─────────────────────────── Individual checksums ─────────────────────────────
@@ -93,15 +94,17 @@ def _boot_calc(d) -> int:
     return _crc(d[_BOOT_REGION[0]:_BOOT_REGION[1]], _BOOT_INIT)
 
 def _prog_calc(d) -> int:
+    end_a, end_b, end_c = _program_endpoints(d)
     init = _be16(d, _PROG_INIT_AT)
-    s = _crc(d[0x6100:_find_end(d, 0x7FFF)], init)
-    s = _crc(d[0x0000:_find_end(d, 0x3FFF)], s)
+    s = _crc(d[0x6100:0x4000 + end_a], init)
+    s = _crc(d[:end_b - 0x4000], s)
     buf = bytearray(0x20000)
     for src, dst in ((0x24000, 0x00000), (0x20000, 0x04000), (0x2C000, 0x08000),
                      (0x28000, 0x0C000), (0x34000, 0x10000), (0x30000, 0x14000),
                      (0x3C000, 0x18000), (0x38000, 0x1C000)):
         buf[dst:dst + 0x4000] = d[src:src + 0x4000]
-    s = _crc(buf[0x00000:_find_end(buf, 0x1FFFF)], s)
+    # Added patch caves do not extend the ECU's native checksum scan.
+    s = _crc(buf[:end_c - 0x20000], s)
     return s
 
 def _cal_entries(d):
@@ -148,9 +151,13 @@ def checksum_status(data) -> dict:
     d = bytearray(data)
     if len(d) == FULL_ROM_SIZE:
         cal_ok, _, cal_count = _cal_verify(d)
+        try:
+            program_ok = _prog_calc(d) == _u16le(d, _PROG_STORE)
+        except ValueError:
+            program_ok = None
         return {
             "boot": _boot_calc(d) == _u16le(d, _BOOT_STORE),
-            "program": _prog_calc(d) == _u16le(d, _PROG_STORE),
+            "program": program_ok,
             "cal": cal_ok if cal_count else None,
             "prog_disabled": program_check_disabled(d),
             "cal_disabled": cal_check_disabled(d),
@@ -176,13 +183,17 @@ def verify_checksum(data: bytearray) -> Tuple[bool, List[str]]:
     d = bytearray(data)
 
     if size == FULL_ROM_SIZE:
+        try:
+            pc = _prog_calc(d)
+        except ValueError as exc:
+            return False, [f"Program checksum unavailable: {exc}."]
         details = []
         ok = True
         bc, bs = _boot_calc(d), _u16le(d, _BOOT_STORE)
         details.append(f"Boot-sector  : stored 0x{bs:04X} / calc 0x{bc:04X}  "
                        f"{'OK' if bc == bs else 'MISMATCH'}")
         ok &= (bc == bs)
-        pc, ps = _prog_calc(d), _u16le(d, _PROG_STORE)
+        ps = _u16le(d, _PROG_STORE)
         prog_disabled = program_check_disabled(d)
         if pc == ps:
             prog_result = "OK"
@@ -235,6 +246,11 @@ def correct_checksums(data: bytearray, correct_program: bool = True
     if size not in (FULL_ROM_SIZE, TUNE_SIZE):
         return out, [f"Checksum correction needs a 256 KB ROM or 24 KB partial "
                      f"(got {size:,} bytes)."]
+    if size == FULL_ROM_SIZE and correct_program:
+        try:
+            _program_endpoints(out)
+        except ValueError as exc:
+            return out, [f"Checksum correction refused: {exc}."]
     details = []
     fixed = 0
 

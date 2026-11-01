@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate PyInstaller Windows version metadata for BimmerStein ECU Tool."""
+"""Generate Windows version metadata for BimmerStein ECU Tool."""
 
 from __future__ import annotations
 

@@ -457,9 +457,12 @@ def startup_driver(data, patches):
     """Bind startup edits to a known Intel or AMD flash-driver signature."""
     driver = next(e for e in patches["amd_flash"]["edits"] if e["off"] == 0x423C)
     signature = bytes(data[0x423C:0x4244])
-    for kind, key in (("Intel", "expect"), ("AMD", "data")):
-        if signature == bytes.fromhex(driver[key])[:8]:
-            return kind
+    if signature == bytes.fromhex(driver["expect"])[:8]:
+        return "Intel"
+    for patch_id in ("amd_flash", *patches["amd_flash"].get("supersedes", [])):
+        prior = next(e for e in patches[patch_id]["edits"] if e["off"] == 0x423C)
+        if signature == bytes.fromhex(prior["data"])[:8]:
+            return "AMD"
     raise PatchError("unknown/unrecognized flash driver for CalGuard startup wait")
 
 
@@ -516,11 +519,29 @@ def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=F
     if len(matches) != 1:
         raise PatchError("BASE REJECTED: could not identify exactly one supported firmware version")
     target = matches[0]
-    resolved = with_startup_wait(data, patch_ids, patches)
+    resolved = list(patch_ids)
+    # Updating the shared ignition engine must retain an already installed
+    # launch feature. Migrate only exact predecessors with identical existing
+    # calibration addresses; relocated historical controls need explicit review.
+    for successor in patches.values():
+        if (successor.get("family_id") not in ("launch_control_v12", "launch_control_v14", "launch_control_v15", "launch_control_v16", "launch_control_v17", "launch_control_v18")
+                or successor["id"] in resolved
+                or not supports_target(successor, target)
+                or not any(required in resolved for required in successor.get("requires", []))):
+            continue
+        for old_id in successor.get("supersedes", []):
+            old = patches[old_id]
+            if (is_applied(data, old)
+                    and all(successor["cave"]["cals"].get(name) == address
+                            for name, address in old["cave"]["cals"].items())):
+                resolved.append(successor["id"])
+                break
+    resolved = with_startup_wait(data, resolved, patches)
     for pid in resolved:
         if pid not in patch_ids:
             chosen.append(patches[pid])
-            log.append(f"selected recovery dependency: {pid}")
+            purpose = "installed launch successor" if pid.startswith("launch_control_") else "recovery dependency"
+            log.append(f"selected {purpose}: {pid}")
     patch_ids = resolved
     delay = startup_wait_definition(patches)
     if delay and any(pid in patch_ids for pid in ("softbsl_loader", "cal_guard", "amd_flash")):
@@ -573,14 +594,20 @@ def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=F
         for old_id in supersedes:
             old = _all.get(old_id)
             if old and old_id not in patch_ids and is_applied(data, old):
-                for dependent in _all.values():
-                    if (dependent["id"] in patch_ids
-                            or old_id not in dependent.get("requires", [])):
-                        continue
-                    if is_applied(data, dependent):
-                        data[:] = revert(data, dependent)
-                        log.append(f"removed exact dependent {dependent['id']}")
-                    elif not is_absent(data, dependent):
+                dependents = [dependent for dependent in _all.values()
+                              if dependent["id"] not in patch_ids
+                              and supports_target(dependent, target)
+                              and old_id in dependent.get("requires", [])]
+                # Restore exact installed dependents before checking historical
+                # revisions which share their hooks. Otherwise a valid successor
+                # looks like a partial older dependency during an engine upgrade.
+                installed_dependents = [dependent for dependent in dependents
+                                        if is_applied(data, dependent)]
+                for dependent in installed_dependents:
+                    data[:] = revert(data, dependent)
+                    log.append(f"removed exact dependent {dependent['id']}")
+                for dependent in dependents:
+                    if not is_absent(data, dependent):
                         raise PatchError(
                             f"PARTIAL predecessor dependency '{dependent['id']}' must be "
                             "restored from a known-good backup before migration")
@@ -637,6 +664,7 @@ def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=F
     # broad bypass: only an exact listed prior payload may be replaced in place.
     recompute = {"program"} if target == "MS41.3" else set()
     for p in chosen:
+        newly_installed = not is_applied(base_data, p)
         if p is delay:
             startup = [e for e in p["edits"] if e["off"] in (0x4460, 0x4484)]
             if startup and not any(
@@ -669,6 +697,14 @@ def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=F
             if _matches_loader_bank_marker(p, off, dat, bytes(data[off:off + len(dat)])):
                 continue  # Preserve existing bank metadata; an explicit override follows below.
             data[off:off + len(dat)] = dat
+        # Defaults initialize only newly introduced controls in an erased tune.
+        # They are not revision signatures and never reset an installed setting.
+        if newly_installed:
+            for name, value in p.get("cal_defaults", {}).items():
+                address = p["cave"]["cals"][name]
+                if data[address] == 0xFF:
+                    data[address] = value
+                    recompute.add("cal")
         recompute |= recompute_flags(p, target)
         log.append(f"applied {p['id']}: {len(p['edits'])} edits")
 

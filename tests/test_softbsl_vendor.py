@@ -30,7 +30,7 @@ def test_softbsl_runtime_agents_are_packaged():
 def test_staged_entry_payload_matches_its_production_manifest():
     from engines.softbsl import softbsl_host
     payload = softbsl_host.load_stage_payload()
-    assert len(payload) == 464
+    assert len(payload) == 468
     assert payload[:4] == bytes.fromhex("be88e609")
 
 
@@ -41,7 +41,7 @@ def test_both_agents_finalize_marker0_before_hybrid_srst():
     finalize = bytes.fromhex(
         "e108f7f840e7da00621ae6d700ffa758a7a7b748b7b70dff")
     old_watchdog_finalize = bytes.fromhex("e108f7f840e7da00621a0dff")
-    for name, expected_size in (("agent.hex", 1416), ("agent_28f.hex", 1382)):
+    for name, expected_size in (("agent.hex", 1444), ("agent_28f.hex", 1382)):
         agent = softbsl_host.load_agent(os.path.join(pkg, name))
         assert len(agent) == expected_size
         assert agent.count(finalize) == 1
@@ -332,9 +332,11 @@ def test_enter_retry_forwards_the_bounded_ack_timeout(monkeypatch):
     ]
 
 
-def test_staged_entry_switches_after_stage_header_and_reaches_normal_agent(monkeypatch):
+@pytest.mark.parametrize("rate, divisor", [(187500, 1), (125000, 2)])
+def test_staged_entry_switches_after_stage_header_and_reaches_normal_agent(monkeypatch, rate, divisor):
     from engines.softbsl import softbsl_host as sh
 
+    monkeypatch.setattr(sh, "get_high_baud", lambda: rate)
     serial = types.SimpleNamespace(baudrate=9600, reset_input_buffer=lambda: None)
     ds2 = types.SimpleNamespace(_ser=serial, baud=9600, ecu_addr=0x12)
     sb = sh.SoftBSL(ds2, log=lambda _line: None)
@@ -342,7 +344,8 @@ def test_staged_entry_switches_after_stage_header_and_reaches_normal_agent(monke
     monkeypatch.setattr(sb, "_txs", lambda data: frames.append(bytes(data)))
     responses = iter((sh.ACK, sh.ACK, sh.STAGE_READY, sh.ACK, sh.ACK))
     monkeypatch.setattr(sb, "_rx", lambda _timeout=2.0: next(responses))
-    monkeypatch.setattr(sb, "_retune_staged_host", lambda tier: setattr(ds2, "baud", sh.BG[tier][1]))
+    monkeypatch.setattr(sh.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(sh, "get_high_baud", lambda: 187500 if rate == 125000 else 125000)
     handed_off = []
     monkeypatch.setattr(sb, "_stream_and_confirm", lambda agent: handed_off.append(agent))
 
@@ -350,11 +353,74 @@ def test_staged_entry_switches_after_stage_header_and_reaches_normal_agent(monke
 
     assert frames[0]  # DS2 loader trigger
     assert frames[1] == b"stage"
-    assert frames[2].startswith(b"S2\x01")
+    assert frames[2].startswith(b"S2" + bytes([divisor]))
     assert frames[3] == bytes([sh.STAGE_HANDSHAKE])
     assert handed_off == [b"agent"]
-    assert ds2.baud == 187500
+    assert ds2.baud == serial.baudrate == rate
     assert sb.staged_entry is True
+
+
+@pytest.mark.parametrize("rate, divisor", [(187500, 1), (125000, 2)])
+def test_running_agent_baud_keeps_session_preference_for_recovery(monkeypatch, rate, divisor):
+    from engines.softbsl import softbsl_host as sh
+
+    monkeypatch.setattr(sh, "get_high_baud", lambda: rate)
+    serial = types.SimpleNamespace(baudrate=9600, reset_input_buffer=lambda: None)
+    ds2 = types.SimpleNamespace(_ser=serial, baud=9600)
+    sb = sh.SoftBSL(ds2, log=lambda _line: None)
+    frames = []
+    monkeypatch.setattr(sb, "_txs", lambda data: frames.append(bytes(data)))
+    monkeypatch.setattr(sb, "_rx", lambda: sh.ACK)
+    monkeypatch.setattr(sh.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(sh, "get_high_baud", lambda: 187500 if rate == 125000 else 125000)
+
+    sb.set_baud("high")
+
+    assert frames == [bytes([sh.B, divisor])]
+    assert ds2.baud == serial.baudrate == rate
+
+
+@pytest.mark.parametrize("tier, rate, divisor", [("high", 125000, 2), ("mid", 93750, 3)])
+def test_flash_cleanup_uses_requested_session_rate_after_lost_baud_ack(
+        monkeypatch, tmp_path, tier, rate, divisor):
+    from engines.softbsl import softbsl_host as sh
+
+    image_path = tmp_path / "image.bin"
+    image_path.write_bytes(bytes(sh.IMAGE_SIZE))
+    monkeypatch.setattr(sh, "get_high_baud", lambda: 125000)
+    serial = types.SimpleNamespace(baudrate=9600, reset_input_buffer=lambda: None)
+    ds2 = types.SimpleNamespace(
+        _ser=serial, baud=9600, close=lambda: None, identify=lambda: b"alive")
+    sb = sh.SoftBSL(ds2, log=lambda _line: None)
+    frames, reset_rates = [], []
+    monkeypatch.setattr(sb, "_txs", lambda data: frames.append(bytes(data)))
+
+    def lose_ack():
+        # The agent has received B/divisor and switched, but the host never retunes.
+        assert ds2.baud == 9600
+        raise sh.SoftBSLError("lost baud ACK")
+
+    monkeypatch.setattr(sb, "_rx", lose_ack)
+    monkeypatch.setattr(sb, "reset", lambda: reset_rates.append(serial.baudrate))
+    monkeypatch.setattr(sb, "flash_image", lambda *_args, **_kwargs: sb.set_baud(tier))
+    monkeypatch.setattr(sh, "_resolve_chip", lambda _args: "29f400")
+    monkeypatch.setattr(sh, "_select_agent_for_chip", lambda *_args: None)
+    monkeypatch.setattr(sh, "_check_image_checksums", lambda _image: (True, []))
+    monkeypatch.setattr(sh, "_session", lambda _args: (ds2, sb))
+    monkeypatch.setattr(sh.time, "sleep", lambda _seconds: None)
+    # A later preference change must not alter recovery for this open session.
+    monkeypatch.setattr(sh, "get_high_baud", lambda: 187500)
+    args = types.SimpleNamespace(
+        image=str(image_path), scope="softbsl", dry_run=False, force=False,
+        yes=True, trigger="43", baud=tier, baud_fallback=False, no_verify=False,
+        write_bootloader=False, assume_half="B")
+
+    with pytest.raises(sh.SoftBSLError, match="lost baud ACK"):
+        sh.cmd_flash(args)
+
+    assert frames == [bytes([sh.B, divisor])]
+    assert reset_rates == [9600, 9600, rate, rate]
+    assert ds2.baud == serial.baudrate == 9600
 
 
 @pytest.mark.parametrize(

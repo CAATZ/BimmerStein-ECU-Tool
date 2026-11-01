@@ -32,11 +32,15 @@ def test_curated_module_scan_uses_exact_ident_frames_and_preserves_status():
                 return _response(resp_addr, 0xA1)
             raise DS2Timeout("simulated absent module")
 
+        def send_bmw_fast(self, body, target, timeout):
+            calls.append((bytes(body), target, timeout))
+            raise DS2Timeout("simulated absent module")
+
     results = scan_modules(FakeDS2(), pause=0)
 
     assert [call[0].hex(" ") for call in calls] == [
         "12 04 00 16", "32 04 00 36", "44 04 00 40",
-        "56 04 00 52", "5b 04 00 5f", "a6 04 00 a2",
+        "56 04 00 52", "5b 04 00 5f", "a6 04 00 a2", "b8 29 f1 02 1a 80",
     ]
     assert [call[1] for call in calls] == [p.address for p in MODULE_PROFILES]
     assert all(call[2] == 2.0 for call in calls)
@@ -61,8 +65,8 @@ def _call_frames(ds2):
 
 def test_fault_profiles_are_explicit_and_grouped_by_scanned_module():
     assert [profile.key for profile in FAULT_PROFILES] == [
-        "egs_gs832", "egs_gs855", "ews", "ihka",
-        "asc5", "dsc5", "abs_mk20", "asc_mk20",
+        "egs_gs832", "egs_gs855", "egs_gs8600", "egs_gs8604", "egs_gs20", "ews", "ihka",
+        "asc5", "dsc5", "dsc57", "dsc_mk60", "abs_mk20", "asc_mk20",
         "fgr", "fgr2", "gr2", "fgr2_5",
     ]
     assert PROFILE_BY_FAULT_KEY["asc5"].module_key == "abs"

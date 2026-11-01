@@ -1,0 +1,187 @@
+{
+  "id": "launch_control_v12_ms411",
+  "family_id": "launch_control_v12",
+  "version": "V12",
+  "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
+  "tested": false,
+  "verification": "Exact installed-byte software checks cover all four canonical firmware images, native ignition scheduling and return ABI, launch episode and protective eligibility, read-only diagnostic checks and accepted-sample recovery, unchanged fuel-stage behavior, configured predecessor upgrade/removal, checksums and full-stack composition. Bench and vehicle validation remain required; no physical timing or DTC result is claimed.",
+  "title": "Launch Control / 2-step",
+  "user_description": "Launch control with independent fuel thresholds and hysteresis, or shared ignition cut. Optional fixed ignition angle during fuel-cut launch and recovery; native protection takes priority.",
+  "description": "MS41.1 Launch Control V12. E847.1 is the launch-only spark-cut request, E847.2 records actual native launch fuel cut, and the launch-arm latch uses IRAM FDB6.6, certified free on the canonical 1437806 image. Vehicle speed reads F1BE. LC_HYST is RPM/32 (FF means zero hysteresis), and LC_IPW is uint16 x0.00534 ms (FFFF preserves stock injection); both apply only to launch ignition mode. Ignition mode never clears standalone E847.0, and LC_IPW wins while both spark requests are active. Fuel mode retains the native staged limiter and caps the independent explicit or automatic launch hard threshold at native hard RPM. Soft remains min(native soft, launch soft), independently of hard, including crossed thresholds. LC_FUEL_HYST_B/A select native taper/clear hysteresis in RPM/32; FF independently follows stock. E847.3 selects stock hysteresis for the rest of an active native episode when a native bound governs or is reached, or launch fuel disarms. Native stages, countdowns, saturating subtraction, and downstream inhibits remain unchanged. Always mode acts as an asserted input only after the shared speed and throttle gates; it cannot rearm at or above LC_ARMSPEED. V12 appends LC_IGN_ANGLE: raw0..63 encodes -23.625..0 degrees BTDC in 0.375-degree steps; FF disables it and other encodings fail off. E849 C0 is initialized inactive, C1 holds a launch-owned fuel episode, C3 qualifies actual optional timing. Starts at the first effective soft/hard threshold, holds through fuel recovery until FD12.15 clears AND RPM is below that entry threshold. Continuous switch assertion is required for timing even while the native limiter latch remains armed. Native limiter priority, critical-input FD30&007F, knock-bank FD32&C000, global and six-cylinder native knock histories retain normal timing. Both native final scheduling splits use the absolute angle; dwell, event buffers, charge and release remain native. P10/E989 stays native calculated-angle telemetry. Only the late timing owner publishes E849; diagnostics use a read-only fresh eligibility check.",
+  "target": "MS41.1",
+  "recompute": [
+    "program"
+  ],
+  "requires": [
+    "ignition_cut_v11_ms411"
+  ],
+  "conflicts": [
+    "launch_control_v4_ms411",
+    "launch_control_v6_ms411",
+    "launch_control_v7_ms411",
+    "launch_control_v8_ms411",
+    "launch_control_v9_ms411",
+    "launch_control_v10_ms411",
+    "launch_control_v11_ms411"
+  ],
+  "supersedes": [
+    "launch_control_v4_ms411",
+    "launch_control_v6_ms411",
+    "launch_control_v7_ms411",
+    "launch_control_v8_ms411",
+    "launch_control_v9_ms411",
+    "launch_control_v10_ms411",
+    "launch_control_v11_ms411"
+  ],
+  "cave": {
+    "region": "proghigh-gap",
+    "base": 244160,
+    "splice_off": 149484,
+    "splice_op": "jmps",
+    "relocatable": false,
+    "splices": [
+      {
+        "off": 149484,
+        "base": 244160,
+        "op": "jmps"
+      },
+      {
+        "off": 149646,
+        "base": 244466,
+        "op": "calls"
+      },
+      {
+        "off": 149806,
+        "base": 244466,
+        "op": "calls"
+      },
+      {
+        "off": 149496,
+        "base": 245632,
+        "op": "calls"
+      },
+      {
+        "off": 149530,
+        "base": 245696,
+        "op": "calls"
+      },
+      {
+        "off": 7512,
+        "base": 243648,
+        "op": "calls"
+      },
+      {
+        "off": 7724,
+        "base": 243648,
+        "op": "calls"
+      }
+    ],
+    "cals": {
+      "LC_SW": 96016,
+      "LC_CUTTYPE": 96017,
+      "LC_CLUTCHPOL": 96018,
+      "LC_MAXRPM": 96019,
+      "LC_ARMSPEED": 96020,
+      "LC_MAXSPEED": 96021,
+      "LC_MINTPS": 96022,
+      "LC_HARDRPM": 96023,
+      "LC_HYST": 96024,
+      "LC_IPW": 96025,
+      "LC_FUEL_HYST_B": 96027,
+      "LC_FUEL_HYST_A": 96028,
+      "LC_IGN_ANGLE": 96029
+    },
+    "retard_entries": {
+      "state": 245312,
+      "timing": 243648,
+      "qualification": 243712,
+      "ram": 59465,
+      "check": 245322
+    }
+  },
+  "edits": [
+    {
+      "off": 149462,
+      "expect": "9a180940",
+      "data": "9a180940"
+    },
+    {
+      "off": 149484,
+      "expect": "8a0902f0",
+      "data": "fa03c0f9"
+    },
+    {
+      "off": 149496,
+      "expect": "c2fdda02",
+      "data": "da0380ff"
+    },
+    {
+      "off": 149530,
+      "expect": "c2fdd902",
+      "data": "da03c0ff"
+    },
+    {
+      "off": 149646,
+      "expect": "43f8db02",
+      "data": "da03f2fa"
+    },
+    {
+      "off": 149806,
+      "expect": "43f8db02",
+      "data": "da03f2fa"
+    },
+    {
+      "off": 244160,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4ecf5ecf6e6000400f3fa47e867faf00047faa0002d04e7faa000f7fa47e8f3f8103747f8ff002d31f3f8bef143f815379d2cf3f8d0e843f816378d27f3f8bef143f814379d23f3f8103749802d1c49813d04f3f861fd69820d0c49823d04f3f861fd69810d0649843d10f3f860fd67f88000f3fa123749a02d0349802d040d0649803d010d036f5b0d016e5bf3f8b6fd67f840002d42f3f8113749802d2c49813d3ce7f8fb0065f847e8f3f847e869822d14f3f8183747f8ff002d07f3fa133741a88d032d0221a80d03f3fa13370d00f3f83cfc418a8d0a0d05f3f83cfc43f813378d04e12875f847e80d1be7f8fd0065f847e80d16e7f8fd0065f847e8f3f813fd67f880002d04e14875f847e80d09e7f8fb0065f847e80d04e7f8f90065f847e8fcf6fcf5fcf4fc00fa0340fb"
+    },
+    {
+      "off": 244466,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf5e6000400f3fab6fd67fa40002d18f3fa113749a03d14f3fa173747faff003d0af3fa133747fafd008d03e7faff000d0209a30d0043fadb029d02418a0d0243f8db02fcf5fc00db00"
+    },
+    {
+      "off": 244544,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf4ecf5e6000400f3f847e867f8f00047f8a0003d288a0904f0e7f8f70065f847e89a5b1b60f3f8113749803d17f3f82cf043f81337fd08f3fa3cfc41a89d0443fadb029d010d03e18a75fa47e8f3fa133741a89d08f7fa2cf00d059a0903f0e18a75fa47e8fcf5fcf4fc008a0902f0fa022a09fa02f407ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 245632,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ec00ecf4e6000400c2fdda029a5b1160f3f8113749803d0df3f847e867f8f80047f8a0003d06c2f41c3746f4ff002d01f0d4fcf4fc00fc88f0dddb00ffff"
+    },
+    {
+      "off": 245696,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ec00ecf4e6000400c2fdd9029a5b1160f3f8113749803d0df3f847e867f8f80047f8a0003d06c2f41b3746f4ff002d01f0d4fcf4fc00fc88f0dddb00ffff"
+    },
+    {
+      "off": 7512,
+      "expect": "f00267f00f00",
+      "data": "da03c0f7cc00"
+    },
+    {
+      "off": 7724,
+      "expect": "f00267f00f00",
+      "data": "da03c0f7cc00"
+    },
+    {
+      "off": 243648,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec00ecf5da0340fef3fa49e847fac3003d0ee6000400f3fa1d3747fa3f00ed07e6f2ff00214ae7fa1f0075fa48e8fcf5fc00f00267f00f00db00"
+    },
+    {
+      "off": 243712,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ecf4ecf5ecf747fdc1003d1af2f430fd66f47f003d15f2f432fd66f400c03d10f3f8d9e947f880008d0be6f4cce9e06799a447fa80008d0428713dfae7fdc300fcf7fcf5fcf4fc88db00"
+    },
+    {
+      "off": 245312,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ecf7e0070d04cc00ec88ecf7e017ec00ecf4ecf5ecf6e6000400f3fc49e8e7fdc000f3f847e867f8f80047f8a0003d65f3f81d3747f83f00ed609a5b5e60f3f8113749803d5af3f8bef143f815379d55f3f8d0e843f816378d50f3f8103749802d1b49813d04f3f861fd69820d0c49823d04f3f861fd69810d0649843d3ef3f860fd67f88000f3fa123749a02d0349803d340d0249802d31f3fa3cfc43fadb029d2cf3f8133743f82cf0ed272d0343fa2cf09d23f3fa173747faff003d09f3fa133747fafd008d03e7faff000d0109a343fadb028d02f3fadb0241a89d01f18af3fa3cfc41a89d0767fcfd0047fcc1003d049a0902f0e7fdc100da0300f849e03d03f7fd49e80d0ce7ffc00047fdc3003d07f3f849e847f8c3003d02e7ffc300fcf6fcf5fcf4fc0049e13d01f18ffcf7fc88db00"
+    }
+  ],
+  "revert_superseded": true,
+  "deprecated": true,
+  "superseded_by": "launch_control_v14_ms411"
+}

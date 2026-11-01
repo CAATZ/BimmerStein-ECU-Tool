@@ -1,4 +1,4 @@
-"""Small, safe reader for the RomRaider DS2 logger-definition subset we use."""
+"""Small, safe reader for the XML DS2 logger-definition subset we use."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ _NOT = re.compile(r"(?<![<>=!])!(?!=)")
 
 
 class LoggerDefinitionError(ValueError):
-    """The selected file is not a supported RomRaider DS2 logger definition."""
+    """The selected file is not a supported XML DS2 logger definition."""
 
 
 def bundled_logger_definition_path() -> Path:
@@ -94,7 +94,7 @@ def _compile_expression(source: str) -> Callable[[float], float]:
             if isinstance(node.op, ast.Not):
                 return float(not value)
         if isinstance(node, ast.BoolOp) and isinstance(node.op, (ast.And, ast.Or)):
-            values = [bool(evaluate(item, x)) for item in node.values]
+            values = (bool(evaluate(item, x)) for item in node.values)
             return float(all(values) if isinstance(node.op, ast.And) else any(values))
         if isinstance(node, ast.Compare):
             left = evaluate(node.left, x)
@@ -121,12 +121,6 @@ def _compile_expression(source: str) -> Callable[[float], float]:
                 return max(args)
         raise LoggerDefinitionError(f"unsupported conversion expression {source!r}")
 
-    # Validate the complete AST now; no definition-supplied code reaches eval().
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Attribute, ast.Subscript, ast.Lambda, ast.Dict,
-                             ast.List, ast.Set, ast.Tuple, ast.NamedExpr)):
-            raise LoggerDefinitionError(f"unsupported conversion expression {source!r}")
-
     def convert(x: float) -> float:
         try:
             return float(evaluate(tree.body, float(x)))
@@ -135,8 +129,7 @@ def _compile_expression(source: str) -> Callable[[float], float]:
         except (ArithmeticError, TypeError, ValueError) as exc:
             raise LoggerDefinitionError(f"conversion {source!r} failed: {exc}") from exc
 
-    # Walking through every node catches unknown names/calls without evaluating
-    # expressions whose valid domain excludes zero.
+    # Validate every branch without evaluating expressions whose domain excludes zero.
     def validate(node: ast.AST) -> None:
         if isinstance(node, ast.Expression):
             validate(node.body)
@@ -315,7 +308,7 @@ def _number(value: str | None, name: str) -> float | None:
 
 
 def _hex_number(value: str, name: str) -> int:
-    """Match RomRaider's hex parser: the ``0x`` prefix is optional."""
+    """Parse hexadecimal values: the ``0x`` prefix is optional."""
     try:
         return int(value.replace(" ", ""), 16)
     except ValueError as exc:
@@ -416,7 +409,7 @@ def _parse_content(raw: bytes) -> LoggerDefinition:
         seen_ecus = set()
         for ecu in element.findall("ecu"):
             ids_text = _required(ecu, "id", f"ecu mapping {parameter_id}")
-            ids = tuple(ids_text.split(","))  # RomRaider membership is exact and does not trim.
+            ids = tuple(ids_text.split(","))  # Definition membership is exact and does not trim.
             if any(not item for item in ids):
                 raise LoggerDefinitionError(f"ecuparam {parameter_id!r} has an empty ECU id")
             duplicate = seen_ecus.intersection(ids)

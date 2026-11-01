@@ -130,6 +130,10 @@ PROGRAM_ERASE_STEP_DELAY  = 0.45   # between poll/poll/erase for the program-arr
 POST_PROGRAM_ERASE_DELAY  = 2.70   # settle after the program-array erase (> max 2.6 s seen)
 ERASE_TIMEOUT             = 20.0   # max wait for an erase ACK (generous safety margin)
 
+# Native setup allows 50 descriptors, but 6 + 5*N must fit the frame length byte.
+MAX_TELEGRAM_ENTRIES = 49
+MAX_TELEGRAM_ADDRESS = 0x1FFFF
+
 
 class DS2Commands(IntEnum):
     IDENTIFY      = 0x00
@@ -139,9 +143,14 @@ class DS2Commands(IntEnum):
     READ_MEM      = 0x06
     FLASH_OP      = 0x07
     TELEGRAM      = 0x0B
+    ACTUATOR_TEST = 0x0C
     STATUS        = 0x0D
+    START_SYSTEMCHECK = 0x22
+    STOP_SYSTEMCHECK = 0x23
+    READ_SYSTEMCHECK = 0x2B
     CLEAR_ADAPT   = 0x43
     SEED_KEY      = 0x90
+    DIAGNOSE_END  = 0x9F
     PREPARE       = 0xA2
 
 
@@ -266,13 +275,16 @@ class DS2Interface:
     """DS2 over an FTDI D2XX or pyserial K-Line transport. 9600 8E2, no init."""
 
     def __init__(self, port: str, ecu_addr: int = ECU_ADDR, baud: int = 9600,
-                 verbose: bool = False, echo: bool = True, serial_factory=None):
+                 verbose: bool = False, echo: bool = True, serial_factory=None,
+                 two_stop: bool = True):
         self.port     = port
         self.baud     = baud
         self.ecu_addr = ecu_addr
         self.verbose  = verbose
         self.echo     = echo
         self.serial_factory = serial_factory
+        self.two_stop = bool(two_stop)
+        self._BITS_PER_CHAR = 12 if self.two_stop else 11
         self._ser     = None
         self.transport_name = None
         self.diagnostic_fn = None
@@ -300,21 +312,22 @@ class DS2Interface:
         if self.serial_factory is not None:
             self._ser = self.serial_factory(
                 port=self.port, baudrate=self.baud,
-                timeout=READ_TIMEOUT, write_timeout=3.0, two_stop=True)
+                timeout=READ_TIMEOUT, write_timeout=3.0, two_stop=self.two_stop)
             if self._ser is None:
                 raise DS2Error("injected serial factory returned no transport")
             self.transport_name = getattr(
                 self._ser, "transport_name", None) or "injected"
             log.debug(
-                "DS2 port %s open via %s (%d 8E2)",
-                self.port, self.transport_name, self.baud)
+                "DS2 port %s open via %s (%d 8E%d)",
+                self.port, self.transport_name, self.baud, 2 if self.two_stop else 1)
         elif d2xx_pref:
             try:
                 D2XXSerial = _import_d2xx_serial()
                 self._ser = D2XXSerial(port=self.port, baudrate=self.baud,
-                                       timeout=READ_TIMEOUT, write_timeout=3.0, two_stop=True)
+                                       timeout=READ_TIMEOUT, write_timeout=3.0, two_stop=self.two_stop)
                 self.transport_name = "d2xx"
-                log.debug("DS2 port %s open via D2XX (%d 8E2)", self.port, self.baud)
+                log.debug("DS2 port %s open via D2XX (%d 8E%d)", self.port, self.baud,
+                          2 if self.two_stop else 1)
             except Exception as e:
                 d2xx_error = e
                 log.debug("D2XX transport unavailable (%s); falling back to pyserial", e)
@@ -331,14 +344,15 @@ class DS2Interface:
                 baudrate      = self.baud,
                 bytesize      = serial.EIGHTBITS,
                 parity        = serial.PARITY_EVEN,
-                stopbits      = serial.STOPBITS_TWO,
+                stopbits      = serial.STOPBITS_TWO if self.two_stop else serial.STOPBITS_ONE,
                 timeout       = READ_TIMEOUT,
                 write_timeout = 3.0,   # prevent write() blocking forever on broken adapters
                 dsrdtr        = False, # disable DSR/DTR flow control — can cause OS-level hangs
                 rtscts        = False, # disable RTS/CTS hardware flow control
             )
             self.transport_name = "pyserial"
-            log.debug("DS2 port %s open via pyserial (%d 8E2)", self.port, self.baud)
+            log.debug("DS2 port %s open via pyserial (%d 8E%d)", self.port, self.baud,
+                      2 if self.two_stop else 1)
         self._check_operation()
         try:
             self._ser.setDTR(False)
@@ -356,6 +370,15 @@ class DS2Interface:
         # Cleanup must remain possible after operation_check starts raising.
         if self._ser and self._ser.is_open:
             self._ser.close()
+
+    def set_stopbits(self, two_stop: bool):
+        """Change host framing on the existing handle before family detection."""
+        self._check_operation()
+        if not self.is_open:
+            raise DS2Error("port not open")
+        self._checked_io(setattr, self._ser, "stopbits", 2 if two_stop else 1)
+        self.two_stop = bool(two_stop)
+        self._BITS_PER_CHAR = 12 if self.two_stop else 11
 
     @property
     def is_open(self) -> bool:
@@ -622,7 +645,11 @@ class DS2Interface:
         # anything else is a NAK from the ECU
         status = resp[2]
         context["status"] = status
-        if status not in ((0xA0,) if command == DS2Commands.FLASH_OP else (0xA0, 0xFF)):
+        if status not in ((0xA0,) if command in (
+                DS2Commands.FLASH_OP, DS2Commands.ACTUATOR_TEST, DS2Commands.DIAGNOSE_END,
+                DS2Commands.START_SYSTEMCHECK, DS2Commands.STOP_SYSTEMCHECK,
+                DS2Commands.READ_SYSTEMCHECK)
+                          else (0xA0, 0xFF)):
             raise DS2NegativeResponse(
                 f"ECU NAK on cmd 0x{command:02X}: status=0x{status:02X}  "
                 f"frame={resp.hex(' ')}",
@@ -652,7 +679,13 @@ class DS2Interface:
         """Read the 4-digit ISN live over DS2 (identification cmd 0x00, last 4 digits)."""
         return _isn_from_identify(self.identify())
 
-    def send_frame(self, frame: bytes, resp_addr: int, timeout: float = None) -> bytes:
+    def execute_frame(self, command: int, args: bytes = b"", timeout: float = None) -> bytes:
+        """Return the complete checked reply; the family service interprets its status."""
+        return self.send_frame(self._command_frame(command, args), self.ecu_addr,
+                               timeout, strict_echo=True)
+
+    def send_frame(self, frame: bytes, resp_addr: int, timeout: float = None,
+                   *, strict_echo: bool = False) -> bytes:
         """Put a COMPLETE pre-built DS2 frame on the wire (e.g. an EWS 0x44/0x61
         write built by identity.ews_frames) and return the validated response frame
         from module `resp_addr`. Unlike execute() (DME 0x12), this targets an
@@ -673,7 +706,9 @@ class DS2Interface:
                 f"short write to module 0x{resp_addr:02X}: "
                 f"{written}/{len(frame)} bytes")
         self._flush_output()
-        self._discard_echo(frame)
+        echo = self._discard_echo(frame)
+        if strict_echo and self.echo and echo != frame:
+            raise DS2Error(f"K-line echo mismatch for module 0x{resp_addr:02X}")
 
         head = self._read_exact(2, timeout)
         if len(head) < 2:
@@ -747,26 +782,13 @@ class DS2Interface:
 
     # ── DS2 0x0B/0x01 batch telegram (MS41-specific) ─────────────────────────
     #
-    # Wire format verified from serial capture ("Capture Live Data Telegram.csv"):
-    #
-    # Setup frame (136 bytes, sent ONCE to register 24 parameters in 2 groups):
-    #   [0x12][0x88][0x0B][0x01][session_id=0x1A]
-    #   [grp1_hdr: 02 0E 00 00 07][20 entries × 5 bytes]
-    #   [grp2_hdr: 02 0E 00 00 06][ 4 entries × 5 bytes]
-    #   [XOR checksum]
-    #
-    # Entry format (5 bytes): [SIZE_FLAG][0x00][0x00][ADDR_HI][ADDR_LO]
-    #   SIZE_FLAG 0x00 → 1-byte response | SIZE_FLAG 0x01 → 2-byte response
-    #
-    # Poll frame (6 bytes, repeated ~112 ms apart):
-    #   [0x12][0x06][0x0B][0x00][session_id=0x1A][XOR]
-    #
-    # Response (42 bytes):
-    #   [0x12][0x2A][0xA0]
-    #   [2 bytes grp1 status][26 bytes grp1 param data]
-    #   [2 bytes grp2 status][ 8 bytes grp2 param data]
-    #   [XOR]
-    #   → payload returned by poll: 38 bytes (data[3:-1])
+    # Setup: [0x12][6 + 5*N][0x0B][0x01][N][N descriptors][XOR].
+    # The historical 0x1A was a descriptor count, not a session ID. Its two
+    # type-2 service descriptors are omitted from ordinary memory acquisition.
+    # Each descriptor is [type][32-bit big-endian address], with type 0=byte,
+    # type 1=word. Native handlers accept 17-bit addresses and aligned words.
+    # Poll: [0x12][0x05][0x0B][0x00][XOR]. The payload concatenates the registered
+    # values in descriptor order, with words serialized big-endian and no headers.
 
     # Per-ECU-family addresses for entries that vary across MS41 variants.
     # Entries 0-4, 6-13, 18-23 are shared (same address on every MS41).
@@ -792,104 +814,68 @@ class DS2Interface:
     }
     _BATCH_ECU_DEFAULT = (0xE8D0, 0xF048, 0xF104, 0xF037, 0xF0F3, 0xEF96, 0xFC52, 0xFC9D)
 
-    # Session ID used in both setup and poll frames
-    _BATCH_SESSION_ID = 0x1A
-
     @classmethod
     def _build_batch_setup(cls, ecu_id: str = "", entries=None) -> bytes:
-        """Build the 132-byte default or caller-supplied batch setup payload."""
+        """Build a memory-only setup, defaulting to the legacy 24 addresses."""
         if entries is not None:
             return cls._build_custom_batch_setup(entries)
         key = str(ecu_id)[:7].strip() if ecu_id else ""
         tps, lt1, lt2, st1, st2, inj, load, battery = cls._BATCH_ECU_ADDRS.get(
             key, cls._BATCH_ECU_DEFAULT)
-        return bytes.fromhex(
-            "011A"                  # subcmd=0x01, session_id=0x1A
-            "020E000007"            # group 1 header (5 bytes)
-            "010000DA36"            # entry  0: 2b Idle Valve Position
-            f"010000{inj:04X}"       # entry  1: 2b Injector Pulse Width
-            "000000E989"            # entry  2: 1b @ 0xE989  Ignition Advance
-            "000000E98D"            # entry  3: 1b @ 0xE98D  Knock Retard
-            "000000DA63"            # entry  4: 1b Vehicle Speed
-            f"000000{tps:04X}"       # entry  5: 1b @ tps     Throttle Position
-            "010000DA2A"            # entry  6: 2b @ 0xDA2A  Engine RPM
-            "010000DA34"            # entry  7: 2b @ 0xDA34  Mass Air Flow
-            "000000DA5A"            # entry  8: 1b @ 0xDA5A  Coolant Temp
-            "000000DA50"            # entry  9: 1b @ 0xDA50  Intake Air Temp
-            f"000000{battery:04X}"   # entry 10: 1b Battery Voltage
-            "000000E9D9"            # entry 11: 1b Global Knock Retard
-            "000000E9E6"            # entry 12: 1b VANOS measured angle
-            "000000DA56"            # entry 13: 1b @ 0xDA56  CPV Duty Cycle
-            f"010000{lt1:04X}"      # entry 14: 2b @ lt1    Fuel Trim LT B1
-            f"010000{lt2:04X}"      # entry 15: 2b @ lt2    Fuel Trim LT B2
-            f"000000{st1:04X}"      # entry 16: 1b @ st1    Fuel Trim ST B1
-            f"000000{st2:04X}"      # entry 17: 1b @ st2    Fuel Trim ST B2
-            "000000FD24"            # entry 18: 1b engine-state byte
-            "000000FD14"            # entry 19: 1b operating-state byte
-            "020E000006"            # group 2 header (5 bytes)
-            f"010000{load:04X}"      # entry 20: 2b Engine Load
-            "010000FA9A"            # entry 21: 2b Front O2 Bank 1 ADC
-            "010000FA98"            # entry 22: 2b Front O2 Bank 2 ADC
-            "010000FA9E"            # entry 23: 2b MAF ADC
-        )
+        return cls._build_custom_batch_setup((
+            (0xDA36, 2), (inj, 2), (0xE989, 1), (0xE98D, 1),
+            (0xDA63, 1), (tps, 1), (0xDA2A, 2), (0xDA34, 2),
+            (0xDA5A, 1), (0xDA50, 1), (battery, 1), (0xE9D9, 1),
+            (0xE9E6, 1), (0xDA56, 1), (lt1, 2), (lt2, 2),
+            (st1, 1), (st2, 1), (0xFD24, 1), (0xFD14, 1),
+            (load, 2), (0xFA9A, 2), (0xFA98, 2), (0xFA9E, 2),
+        ))
 
     @classmethod
     def _build_custom_batch_setup(cls, entries) -> bytes:
-        """Serialize and validate an ordered 24-entry live-data profile."""
+        """Serialize 1–49 byte/word descriptors without type-2 service requests."""
         plan = tuple(entries)
-        if len(plan) != 24:
-            raise ValueError(f"DS2 batch setup requires 24 entries, got {len(plan)}")
+        if not 1 <= len(plan) <= MAX_TELEGRAM_ENTRIES:
+            raise ValueError(
+                f"DS2 batch setup requires 1–{MAX_TELEGRAM_ENTRIES} entries, got {len(plan)}")
 
-        normalized = []
+        payload = bytearray((0x01, len(plan)))
         for address, length in plan:
             address = int(address)
             length = int(length)
             if length not in (1, 2):
                 raise ValueError(f"unsupported DS2 batch entry length {length}")
-            if not 0 <= address <= 0xFFFF:
-                raise ValueError(f"DS2 batch address outside 16-bit RAM: 0x{address:X}")
-            normalized.append((address, length))
-        if sum(length for _address, length in normalized[:20]) != 26:
-            raise ValueError("DS2 batch group 1 must return exactly 26 data bytes")
-        if sum(length for _address, length in normalized[20:]) != 8:
-            raise ValueError("DS2 batch group 2 must return exactly 8 data bytes")
-
-        payload = bytearray((0x01, cls._BATCH_SESSION_ID))
-        payload.extend(bytes.fromhex("020E000007"))
-        for address, length in normalized[:20]:
-            payload.extend((length - 1, 0x00, 0x00, address >> 8, address & 0xFF))
-        payload.extend(bytes.fromhex("020E000006"))
-        for address, length in normalized[20:]:
-            payload.extend((length - 1, 0x00, 0x00, address >> 8, address & 0xFF))
+            if not 0 <= address <= MAX_TELEGRAM_ADDRESS:
+                raise ValueError(f"DS2 batch address outside 17-bit memory: 0x{address:X}")
+            if length == 2 and address & 1:
+                raise ValueError(f"DS2 batch word address must be even: 0x{address:X}")
+            payload.append(length - 1)
+            payload.extend(address.to_bytes(4, "big"))
         return bytes(payload)
 
     def setup_telegram_batch(self, ecu_id: str = "", entries=None) -> None:
-        """Send the one-time 0x0B/0x01 setup frame to register 24 batch parameters.
+        """Send the one-time 0x0B/0x01 setup frame to register memory descriptors.
 
         ecu_id — ECU part-number string (first 7 chars of identify() response).
                  Selects the correct RAM addresses for TPS and fuel trims.
         Must be called once before polling with poll_telegram_batch().
         The ECU responds with a 4-byte ACK (empty payload).
 
-        ``entries`` may supply an ordered profile as ``(address, byte_length)``
-        pairs. Group data lengths remain fixed at 26 and 8 bytes.
+        ``entries`` supplies 1–49 ordered ``(address, byte_length)`` pairs;
+        omitting it keeps the legacy 24 memory addresses, without service entries.
         """
         self.execute(DS2Commands.TELEGRAM, self._build_batch_setup(ecu_id, entries))
 
     def poll_telegram_batch(self) -> bytes:
         """Poll the registered batch parameters via cmd 0x0B/0x00.
 
-        Returns the 38-byte data payload:
-          bytes  0- 1: group 1 status (skip)
-          bytes  2-27: 20 parameter values (group 1)
-          bytes 28-29: group 2 status (skip)
-          bytes 30-37:  4 parameter values (group 2)
+        Returns concatenated registered values: bytes unchanged, words big-endian.
+        The caller validates the payload length against its registered plan.
 
         Raises DS2Error / DS2Timeout on communication failure.
         Call setup_telegram_batch() once before the poll loop.
         """
-        return self.execute(DS2Commands.TELEGRAM,
-                            bytes([0x00, self._BATCH_SESSION_ID]))
+        return self.execute(DS2Commands.TELEGRAM, b"\x00")
 
     # Adaptation-clear sub-byte values:
     #   sub1=0xFF sub2=0xFF → clear all adaptations
@@ -928,7 +914,7 @@ class DS2Interface:
                 f"unexpected battery-voltage payload length {len(payload)}")
         return int.from_bytes(payload, "big") * 0.101
 
-    # VIN encoding: BMW MS4x stores the VIN as 13 bytes using 6-bit packing
+    # VIN encoding: BMW stores the VIN as 13 bytes using 6-bit packing
     # (4 VIN chars per 3 bytes, CHAR_MAP = digits + uppercase).
     # Source: mscoder project (github.com/sprytnyk/mscoder), confirmed against
     # live ECU reads without retaining any per-unit identity in this repository.

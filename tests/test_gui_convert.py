@@ -886,6 +886,7 @@ def test_full_writer_reuses_archived_prewrite_image_without_duplicate_read(monke
 class _FakeDS2:
     def __init__(self, data):
         self._data = data
+        self.baud = 9600
 
     def read_full(self, progress_cb=None, log_fn=None):
         return self._data

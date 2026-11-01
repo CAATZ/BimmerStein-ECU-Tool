@@ -1,7 +1,7 @@
 """Native-fast full writable-image state machine for stock MS41 ECUs.
 
 The stock ECU remains unmodified.  Entry is direct from normal 9600-host DS2
-to the ECU-exact 187500 tier.  A token read proves the selected rate before
+to the selected ECU-exact high rate. A token read proves the selected rate before
 the program-array erase. After erase, uncertain program replies use readback
 and bounded packet or phase recovery. No automatic baud fallback, reset, cleanup,
 or port close is allowed; the caller retains the session for controlled recovery.
@@ -30,7 +30,6 @@ from ds2_fast_partial_write import (
     PartialWriteError,
     PREPARE_COMMAND,
     SEED_KEY_COMMAND,
-    SELECTOR_HIGH,
     SELECTOR_LOW,
     STATUS_COMMAND,
     TOKEN_ADDRESS,
@@ -190,7 +189,9 @@ class NativeFastFullWriteSession(NativeFastPartialWriteSession):
             raise ContractViolation("authorized full-write arm payload is not 00")
         self.fast_write_armed = True
         self._set_state(state=SessionState.ARMED_LOW, reason="full write armed")
-        self._switch_up(SELECTOR_HIGH, LinkRate.HIGH, SessionState.HIGH_FULL_PROGRAM)
+        self._switch_up(
+            self.rates.high_selector, LinkRate.HIGH, SessionState.HIGH_FULL_PROGRAM
+        )
 
         actual = self._read_mem(
             TOKEN_ADDRESS,

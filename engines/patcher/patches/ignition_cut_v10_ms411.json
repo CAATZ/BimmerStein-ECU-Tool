@@ -358,5 +358,7 @@
       ],
       "data": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     }
-  ]
+  ],
+  "deprecated": true,
+  "superseded_by": "ignition_cut_v11_ms411"
 }

@@ -1,7 +1,7 @@
 """
 rom_analyzer.py — Offline BMW MS41 ROM/tune analyzer.
 
-Data-driven: it loads a user-selected RomRaider-format MS41 ECU definition,
+Data-driven: it loads a user-selected XML MS41 ECU definition,
 matches the loaded .bin to the correct rom (FULL 256 KB vs PARTIAL 24 KB, and the
 right variant incl. MS41.3) by internalidaddress + internalidstring + filesize,
 resolves the inheritance chain, and lists every table — computing scalar values.
@@ -12,10 +12,12 @@ and checksum, just without the table list.
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, List, Tuple
 from checksum import checksum_state, verify_checksum, bootloader_checksum_ok
 from ms41 import MS41ECU
-import romraider_defs as rrd
+import ms42_ms43_image as images
+import calibration_defs as rrd
 
 FULL_ROM_SIZE = 256 * 1024
 TUNE_SIZE     = 24  * 1024
@@ -64,6 +66,7 @@ class AnalysisResult:
     n_scalars:     int
     n_maps:        int
     warnings:      List[str]
+    identity:      Optional[dict] = None
 
     @property
     def cs_ok(self) -> bool:
@@ -75,7 +78,43 @@ class AnalysisResult:
         return [(name, val, unit, cat) for (cat, name, val, unit) in self.params]
 
 
-def analyze(data: bytes, definition_path=None) -> AnalysisResult:
+def analyze(data: bytes, definition_path=None, *, checksum_context=None) -> AnalysisResult:
+    profile = images.image_profile(data)
+    if profile:
+        info = images.image_identity(data)
+        status = images.checksum_status(data, context=checksum_context)
+        full = len(data) == images.FULL_SIZE
+        required = ("boot", "program", "cal") if full else ("cal",)
+        values = [status[key] for key in required]
+        state = "mismatch" if False in values else "unknown" if None in values else "enabled"
+        from ms42_ms43_offline import decode_identity
+        recorded = decode_identity(data)
+        warnings = list(recorded["warnings"])
+        params, n_scalars, n_maps, matched = [], 0, 0, None
+        if definition_path is None:
+            warnings.append("Select a matching MS42/MS43 XDF to inspect its parameters.")
+        elif Path(definition_path).suffix.lower() != ".xdf":
+            warnings.append("Select a matching MS42/MS43 XDF; the selected XML is an MS41 definition.")
+        else:
+            from ms42_ms43_xdf import load_definitions
+            try:
+                definitions = load_definitions(definition_path)
+                params, n_scalars, n_maps, notices = definitions.analyze(data)
+                warnings.extend(notices)
+                matched = definitions.title if params else None
+            except rrd.DefinitionError as error:
+                warnings.append(f"The selected XDF could not be loaded: {error}")
+        if full:
+            warnings.append("A diagnostic read can contain masked protected bytes; size alone does not establish a cloning backup.")
+            try:
+                images.extract_calibration(data)
+            except ValueError as error:
+                warnings.append(f"Program/calibration identity mismatch: {error}")
+        return AnalysisResult(
+            f"{'Full ROM' if full else 'Tune Region'} ({len(data) // 1024} KB)",
+            profile.name, info["software_id"], info["hardware_id"], matched,
+            state, status["boot"],
+            status["details"], params, n_scalars, n_maps, warnings, recorded)
     data  = bytearray(data)
     size  = len(data)
     warns: List[str] = []
@@ -121,7 +160,7 @@ def analyze(data: bytes, definition_path=None) -> AnalysisResult:
     bl_ok    = bootloader_checksum_ok(data)
     _, cs_details = verify_checksum(data)
 
-    # ── RomRaider definition match + table extraction ─────────────────────────
+    # ── XML definition match + table extraction ─────────────────────────
     matched_label = None
     try:
         defs = rrd.get_definitions(definition_path)
@@ -173,7 +212,7 @@ def analyze(data: bytes, definition_path=None) -> AnalysisResult:
                 if rom is not None and rom.xmlid != trom.xmlid:
                     if prog_variant == "MS41.3" or prog_variant is None:
                         # Normal MS41.3 full ROM: program is also MS41.3 but has no
-                        # dedicated 256KB RomRaider def (falls back to MS41.2's ID12).
+                        # dedicated 256KB definition (falls back to MS41.2's ID12).
                         matched_label += "  +  MS41.3 (256 KB) [definition unavailable]"
                     else:
                         # Hybrid: defs.match() is unreliable here because all 256KB
@@ -203,7 +242,7 @@ def analyze(data: bytes, definition_path=None) -> AnalysisResult:
                 matched_label = _def_str(trom)
 
         if rom is None and size != FULL_ROM_SIZE:
-            warns.append("No matching RomRaider definition for this file "
+            warns.append("No matching XML definition for this file "
                          "(unknown CAL ID or size).")
         params = sorted(rows, key=lambda r: (r[0].lower(), r[1].lower()))
 

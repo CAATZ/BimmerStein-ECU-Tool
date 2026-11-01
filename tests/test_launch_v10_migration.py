@@ -1,4 +1,4 @@
-"""Launch V11 delivery preserves V7/V8/V9/V10 tuning and independent fuel hysteresis."""
+"""Launch V14 delivery preserves V7/V8/V9/V10/V11 tuning and independent fuel hysteresis."""
 import pytest
 
 import checksum
@@ -8,10 +8,10 @@ from tests.conftest import ref
 
 
 VARIANTS = (
-    ("MS41.0", "_ms410", "ignition_cut_v10_ms410"),
-    ("MS41.1", "_ms411", "ignition_cut_v10_ms411"),
-    ("MS41.2", "_ms412", "ignition_cut_v10_ms412"),
-    ("MS41.3", "", "ignition_cut_v11"),
+    ("MS41.0", "_ms410", "ignition_cut_v18_ms410"),
+    ("MS41.1", "_ms411", "ignition_cut_v18_ms411"),
+    ("MS41.2", "_ms412", "ignition_cut_v18_ms412"),
+    ("MS41.3", "", "ignition_cut_v18"),
 )
 
 
@@ -20,7 +20,8 @@ def _configured(image, patch, switch, ipw):
         "LC_SW": switch, "LC_CUTTYPE": 1, "LC_CLUTCHPOL": 1,
         "LC_MAXRPM": 100, "LC_ARMSPEED": 5, "LC_MAXSPEED": 10,
         "LC_MINTPS": 106, "LC_HARDRPM": 105, "LC_HYST": 7, "LC_IPW": ipw,
-        "LC_FUEL_HYST_B": 0xFF, "LC_FUEL_HYST_A": 0xFF,
+        "LC_FUEL_HYST_B": 0xFF, "LC_FUEL_HYST_A": 0xFF, "LC_IGN_ANGLE": 0xFF,
+        "LC_RETARD_RANGE": 6, "LC_CUT_IGN_ANGLE": 0xFF,
     }
     configured = bytearray(image)
     for name, address in patch["cave"]["cals"].items():
@@ -35,18 +36,19 @@ def _valid_checksums(image):
 
 
 @pytest.mark.parametrize("variant,suffix,ignition_id", VARIANTS)
-def test_launch_v11_clean_install_and_dependency_contract(variant, suffix, ignition_id):
+def test_launch_v14_clean_install_and_dependency_contract(variant, suffix, ignition_id):
     patches = patch_ms41.load_patches()
-    old_id, new_id = "launch_control_v7" + suffix, "launch_control_v11" + suffix
+    old_id, new_id = "launch_control_v7" + suffix, ignition_id.replace("ignition_cut", "launch_control")
     old, new = patches[old_id], patches[new_id]
     assert old["deprecated"]
-    assert patches["launch_control_v10" + suffix]["superseded_by"] == new_id
-    assert not new.get("deprecated") and new["version"] == "V11"
+    assert patches["launch_control_v11" + suffix]["superseded_by"] == "launch_control_v12" + suffix
+    assert not new.get("deprecated") and new["version"] == ("V18")
     assert old_id in new["supersedes"]
-    assert new["requires"] == old["requires"] == [ignition_id]
+    assert new["requires"] == [ignition_id]
     assert {name: new["cave"]["cals"][name] for name in old["cave"]["cals"]} == old["cave"]["cals"]
     assert set(new["cave"]["cals"]) - set(old["cave"]["cals"]) == {
-        "LC_FUEL_HYST_B", "LC_FUEL_HYST_A",
+        "LC_FUEL_HYST_B", "LC_FUEL_HYST_A", "LC_IGN_ANGLE",
+        "LC_RETARD_RANGE", "LC_CUT_IGN_ANGLE",
     }
     assert patch_ms41.validate_splices(new) == []
 
@@ -64,34 +66,39 @@ def test_launch_v11_clean_install_and_dependency_contract(variant, suffix, ignit
     assert installed[0x4000:0x6000] == stock[0x4000:0x6000]
     for name, address in new["cave"]["cals"].items():
         width = 2 if name == "LC_IPW" else 1
-        assert installed[address:address + width] == stock[address:address + width]
+        expected = new.get("cal_defaults", {}).get(name)
+        assert installed[address:address + width] == (bytes([expected]) if expected is not None
+                                                       else stock[address:address + width])
     _valid_checksums(installed)
     with pytest.raises(patch_service.PatchError, match="remove the dependent patch"):
         patch_service.revert_patch(installed, ignition_id)
     ignition_only = patch_service.revert_patch(installed, new_id)
-    assert ignition_only == patch_service.build_image(stock, [ignition_id])[0]
+    expected = bytearray(patch_service.build_image(stock, [ignition_id])[0])
+    expected[new["cave"]["cals"]["LC_RETARD_RANGE"]] = 6
+    assert ignition_only == bytes(checksum.correct_checksums(expected)[0])
 
 
 @pytest.mark.parametrize("variant,suffix,ignition_id", VARIANTS)
-@pytest.mark.parametrize("predecessor", ["v7", "v8", "v9", "v10"])
+@pytest.mark.parametrize("predecessor", ["v7", "v8", "v9", "v10", "v11"])
 @pytest.mark.parametrize("switch,ipw", [(0, 2247), (2, 0xFFFF)])
 def test_configured_launch_upgrade_and_both_removals_preserve_tuning(
         variant, suffix, ignition_id, predecessor, switch, ipw):
     patches = patch_ms41.load_patches()
-    old_id, new_id = "launch_control_" + predecessor + suffix, "launch_control_v11" + suffix
+    old_id, new_id = "launch_control_" + predecessor + suffix, ignition_id.replace("ignition_cut", "launch_control")
     old, new = patches[old_id], patches[new_id]
     stock = ref(variant)
-    historical, _ = patch_ms41.build(stock, [ignition_id, old_id], allow_deprecated=True)
+    historical, _ = patch_ms41.build(stock, old["requires"] + [old_id], allow_deprecated=True)
     source = _configured(historical, old, switch, ipw)
     assert patch_ms41.is_applied(source, old)
 
     catalogue = {row["id"]: row for row in patch_service.available_patches(source)}
     assert catalogue[old_id]["deprecated"] and catalogue[old_id]["removable"]
     assert [item["id"] for item in catalogue[new_id]["legacy"]] == [old_id]
-    ignition_only = _configured(patch_service.build_image(stock, [ignition_id])[0], old, switch, ipw)
-    assert patch_service.revert_patch(source, old_id) == ignition_only
+    ignition_only = _configured(patch_service.build_image(stock, [ignition_id])[0], new, switch, ipw)
+    historical_engine = _configured(patch_ms41.build(stock, old["requires"], allow_deprecated=True)[0], old, switch, ipw)
+    assert patch_service.revert_patch(source, old_id) == historical_engine
 
-    upgraded, _ = patch_service.build_image(source, [new_id])
+    upgraded, _ = patch_service.build_image(source, [ignition_id, new_id])
     clean, _ = patch_service.build_image(stock, [ignition_id, new_id])
     assert upgraded == _configured(clean, new, switch, ipw)
     assert patch_ms41.is_applied(upgraded, new)
@@ -109,16 +116,16 @@ def test_configured_launch_upgrade_and_both_removals_preserve_tuning(
 
 
 @pytest.mark.parametrize("variant,suffix,ignition_id", VARIANTS)
-@pytest.mark.parametrize("predecessor", ["v7", "v8", "v9", "v10"])
-def test_launch_v11_rejects_corrupted_predecessor_cave(variant, suffix, ignition_id, predecessor):
+@pytest.mark.parametrize("predecessor", ["v7", "v8", "v9", "v10", "v11"])
+def test_launch_v14_rejects_corrupted_predecessor_cave(variant, suffix, ignition_id, predecessor):
     patches = patch_ms41.load_patches()
-    old_id, new_id = "launch_control_" + predecessor + suffix, "launch_control_v11" + suffix
-    historical, _ = patch_ms41.build(ref(variant), [ignition_id, old_id], allow_deprecated=True)
+    old_id, new_id = "launch_control_" + predecessor + suffix, ignition_id.replace("ignition_cut", "launch_control")
+    historical, _ = patch_ms41.build(ref(variant), patches[old_id]["requires"] + [old_id], allow_deprecated=True)
     source = bytearray(historical)
     source[patches[old_id]["cave"]["base"] + 20] ^= 1
     before = bytes(source)
     with pytest.raises(patch_service.PatchError):
-        patch_service.build_image(source, [new_id])
+        patch_service.build_image(source, [ignition_id, new_id])
     assert bytes(source) == before
 
 
@@ -126,7 +133,7 @@ def test_launch_v11_rejects_corrupted_predecessor_cave(variant, suffix, ignition
 @pytest.mark.parametrize("fuel_b,fuel_a", [(0xFF, 0xFF), (0, 0xFE), (2, 1)])
 def test_launch_fuel_hysteresis_survives_initial_install_remove_and_reinstall(
         variant, suffix, ignition_id, fuel_b, fuel_a):
-    patch_id = "launch_control_v11" + suffix
+    patch_id = ignition_id.replace("ignition_cut", "launch_control")
     patch = patch_ms41.load_patches()[patch_id]
     cals = patch["cave"]["cals"]
     source = bytearray(ref(variant))

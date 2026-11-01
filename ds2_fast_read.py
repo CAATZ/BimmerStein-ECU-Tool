@@ -53,6 +53,7 @@ from ds2_write_authorization import (
     NATIVE_FAST_REENTRY_TIMEOUT,
     WRONG_KEY_COUNTER_ADDRESS,
 )
+from transfer_rates import COMPATIBILITY_HIGH_BAUD, get_high_baud
 
 
 IDENTIFY_COMMAND = 0x00
@@ -62,7 +63,10 @@ SELECTOR_COMMAND = 0x90
 SELECTOR_LOW = 0x26
 SELECTOR_MID = 0x12
 SELECTOR_HIGH = 0x01
-SELECTORS = frozenset((SELECTOR_LOW, SELECTOR_MID, SELECTOR_HIGH))
+SELECTOR_COMPATIBILITY = 0x02
+SELECTORS = frozenset(
+    (SELECTOR_LOW, SELECTOR_MID, SELECTOR_HIGH, SELECTOR_COMPATIBILITY)
+)
 
 TOKEN_ADDRESS = 0x205E
 TOKEN_LENGTH = 10
@@ -108,6 +112,7 @@ class RateProfile:
     mid: int
     high: int
     direct_low_to_high: bool = False
+    high_selector: int = SELECTOR_HIGH
 
     def for_link(self, link: LinkRate) -> int:
         if link is LinkRate.LOW:
@@ -136,6 +141,21 @@ PRODUCTION_RATE_PROFILE = RateProfile(
     high=187_500,
     direct_low_to_high=True,
 )
+COMPATIBILITY_RATE_PROFILE = RateProfile(
+    "direct_compatibility_high",
+    low=9_600,
+    mid=19_737,
+    high=COMPATIBILITY_HIGH_BAUD,
+    direct_low_to_high=True,
+    high_selector=SELECTOR_COMPATIBILITY,
+)
+
+
+def selected_rate_profile() -> RateProfile:
+    return (
+        COMPATIBILITY_RATE_PROFILE if get_high_baud() == COMPATIBILITY_HIGH_BAUD
+        else PRODUCTION_RATE_PROFILE
+    )
 
 
 @dataclass(frozen=True)
@@ -415,7 +435,7 @@ class NativeFastReadSession:
         self,
         transport: NativeFastReadTransport,
         *,
-        rates: RateProfile = PRODUCTION_RATE_PROFILE,
+        rates: Optional[RateProfile] = None,
         post_cleanup_delay: float = 0.25,
         post_cleanup_timeout: float = 15.0,
         post_cleanup_poll: float = 1.0,
@@ -429,6 +449,7 @@ class NativeFastReadSession:
         sleeper: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
     ):
+        rates = selected_rate_profile() if rates is None else rates
         if transport.baud != rates.low:
             raise FastReadStateError(
                 f"transport starts at {transport.baud}, expected low rate {rates.low}"
@@ -727,8 +748,8 @@ class NativeFastReadSession:
     ) -> None:
         allowed = {
             (LinkRate.LOW, SELECTOR_MID, LinkRate.MID),
-            (LinkRate.LOW, SELECTOR_HIGH, LinkRate.HIGH),
-            (LinkRate.MID, SELECTOR_HIGH, LinkRate.HIGH),
+            (LinkRate.LOW, self.rates.high_selector, LinkRate.HIGH),
+            (LinkRate.MID, self.rates.high_selector, LinkRate.HIGH),
         }
         old = self.link
         if (old, selector, target) not in allowed:
@@ -785,7 +806,7 @@ class NativeFastReadSession:
                 target_state=SessionState.MID,
             )
         self._switch_up(
-            selector=SELECTOR_HIGH,
+            selector=self.rates.high_selector,
             target=LinkRate.HIGH,
             target_state=SessionState.HIGH_READ,
         )

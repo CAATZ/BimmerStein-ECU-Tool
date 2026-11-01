@@ -65,7 +65,10 @@ _EDITABLE_PARAMETER_FAMILIES = {
             "codec": "rpm_hysteresis_u8", "units": "RPM", "minimum": "0",
             "maximum": "8128", "step": "32", "decimals": 0,
             "specials": (("@legacy_zero", "Legacy zero hysteresis", 0xFF),),
-            "description": "Spark resumes below the cut RPM by this amount.",
+            "description": (
+                "Spark resumes strictly below cut RPM minus this amount. A value at or "
+                "above cut RPM uses zero hysteresis. This does not change the timing range."
+            ),
         },
         {
             "id": "CUT_IPW", "label": "Fixed injector pulse width",
@@ -76,8 +79,9 @@ _EDITABLE_PARAMETER_FAMILIES = {
             "description": (
                 "Injector base pulse width while standalone spark cut is active. Zero is "
                 "a valid zero base pulse, not Preserve stock injection; native scheduling "
-                "and injector corrections still apply. Preserve stock injection uses the "
-                "ECU's normally calculated pulse width."
+                "and injector corrections still apply. Native fuel cuts can still stop injection. "
+                "This does not set fueling throughout the timing range. Preserve stock injection "
+                "uses the ECU's normally calculated pulse width."
             ),
         },
     ),
@@ -191,8 +195,9 @@ _EDITABLE_PARAMETER_FAMILIES = {
             "description": (
                 "Injector base pulse width while launch spark cut is active. Zero is "
                 "a valid zero base pulse, not Preserve stock injection; native scheduling "
-                "and injector corrections still apply. Preserve stock injection uses the "
-                "ECU's normally calculated pulse width. Fuel mode ignores this setting."
+                "and injector corrections still apply. Native fuel cuts can still stop injection. "
+                "This does not set fueling throughout the timing range. Preserve stock injection "
+                "uses the ECU's normally calculated pulse width. Fuel mode ignores this setting."
             ),
         },
     ),
@@ -206,6 +211,78 @@ _EDITABLE_PARAMETER_FAMILIES = {
         },
     ),
 }
+
+
+_EDITABLE_PARAMETER_FAMILIES["launch_control_v12"] = (
+    _EDITABLE_PARAMETER_FAMILIES["launch_control_v11"] + ({
+        "id": "LC_IGN_ANGLE", "label": "Fuel-cut ignition angle",
+        "kind": "number", "codec": "launch_angle_u8", "units": "° BTDC",
+        "minimum": "-23.625", "maximum": "0", "step": "0.375",
+        "offset": "-23.625", "decimals": 3,
+        "specials": (("@off", "Off", 0xFF),),
+        "description": (
+            "Optional fixed ignition angle in fuel-cut mode. Negative values are after TDC; "
+            "0 is TDC. Starts at the first launch fuel-cut threshold and holds through fuel "
+            "recovery until fuel is fully restored and RPM is below that threshold. "
+            "Input release, speed/throttle release, native limiter priority, and native "
+            "fault or knock protection restore normal timing. Off keeps normal ECU timing. "
+            "Ignition-cut mode ignores this setting."
+        ),
+    },)
+)
+
+for _family, _parent, _range_id, _angle_id, _limit in (
+        ("ignition_cut_v14", "ignition_cut_v10", "CUT_RETARD_RANGE", "CUT_IGN_ANGLE", "RPM limit"),
+        ("launch_control_v14", "launch_control_v12", "LC_RETARD_RANGE", "LC_CUT_IGN_ANGLE", "Soft cut RPM")):
+    _EDITABLE_PARAMETER_FAMILIES[_family] = _EDITABLE_PARAMETER_FAMILIES[_parent] + (
+        {
+            "id": _range_id, "label": "Ignition retard range", "kind": "number",
+            "codec": "rpm_u8", "units": "RPM", "minimum": "0", "maximum": "8128",
+            "step": "32", "decimals": 0,
+            "description": (
+                f"Fixed timing starts at {_limit} minus this range. Uses 32 RPM steps; "
+                "192 RPM is the initial range. With the angle enabled, the range must be "
+                "positive and smaller than the cut RPM. This does not change cut hysteresis."
+            ),
+        },
+        {
+            "id": _angle_id, "label": "Ignition-cut fixed angle", "kind": "number",
+            "codec": "launch_angle_u8", "units": "° BTDC", "minimum": "-23.625",
+            "maximum": "0", "step": "0.375", "offset": "-23.625", "decimals": 3,
+            "specials": (("@off", "Off", 0xFF),),
+            "description": (
+                "Optional absolute ignition angle in the retard range, including firing "
+                "between spark cuts. Negative values mean after TDC; 0 is TDC. This is "
+                "a fixed angle, not a degree subtraction. Off retains normal timing. "
+                "Native protection takes priority."
+                + (" Launch fuel mode ignores this control." if _angle_id.startswith("LC_") else "")
+            ),
+        },
+    )
+
+_EDITABLE_PARAMETER_FAMILIES["ignition_cut_v15"] = _EDITABLE_PARAMETER_FAMILIES["ignition_cut_v14"]
+_EDITABLE_PARAMETER_FAMILIES["launch_control_v15"] = _EDITABLE_PARAMETER_FAMILIES["launch_control_v14"]
+_EDITABLE_PARAMETER_FAMILIES["ignition_cut_v16"] = _EDITABLE_PARAMETER_FAMILIES["ignition_cut_v14"]
+_EDITABLE_PARAMETER_FAMILIES["launch_control_v16"] = _EDITABLE_PARAMETER_FAMILIES["launch_control_v14"]
+_EDITABLE_PARAMETER_FAMILIES["ignition_cut_v17"] = _EDITABLE_PARAMETER_FAMILIES["ignition_cut_v14"]
+_EDITABLE_PARAMETER_FAMILIES["launch_control_v17"] = _EDITABLE_PARAMETER_FAMILIES["launch_control_v14"]
+_EDITABLE_PARAMETER_FAMILIES["ignition_cut_v18"] = _EDITABLE_PARAMETER_FAMILIES["ignition_cut_v14"]
+_EDITABLE_PARAMETER_FAMILIES["launch_control_v18"] = _EDITABLE_PARAMETER_FAMILIES["launch_control_v14"]
+for _family in ("ignition_cut_v17", "launch_control_v17", "ignition_cut_v18", "launch_control_v18"):
+    _EDITABLE_PARAMETER_FAMILIES[_family] = tuple(
+        {**parameter, "description": parameter["description"].replace(
+            "fault or knock protection restore normal timing.", "faults restore normal timing.")
+         + " The final angle is the later of this setting and native protected timing."
+         + " Knock learning waits through cut/retard activity and fresh-sample recovery."}
+        if parameter["id"] in ("CUT_IGN_ANGLE", "LC_IGN_ANGLE", "LC_CUT_IGN_ANGLE") else parameter
+        for parameter in _EDITABLE_PARAMETER_FAMILIES[_family])
+
+for _family in ("ignition_cut_v18", "launch_control_v18"):
+    _EDITABLE_PARAMETER_FAMILIES[_family] = tuple(
+        {**parameter, "description": parameter["description"]
+         + " Uses native fueling if the requested pulse cannot fit the validated timing interval."}
+        if parameter["id"] in ("CUT_IPW", "LC_IPW") else parameter
+        for parameter in _EDITABLE_PARAMETER_FAMILIES[_family])
 
 
 def definitions():
@@ -233,12 +310,22 @@ def _parameter_family(patch):
     return str(patch.get("family_id") or patch.get("id") or "")
 
 
+def _parameter_specs(patch):
+    specs = _EDITABLE_PARAMETER_FAMILIES.get(_parameter_family(patch), ())
+    if patch.get("target") == "MS41.0":
+        # Exact ID41 E8D0 and its threshold are degrees throttle, not percent.
+        return tuple({**spec, "units": "° throttle", "maximum": "119.5",
+                      "step": "0.46862745098039",
+                      "description": "Clears the launch latch below this throttle angle."}
+                     if spec["id"] == "LC_MINTPS" else spec for spec in specs)
+    return specs
+
+
 def _descriptor_token(patch):
     payload = json.dumps(
         {
             "patch": patch,
-            "parameters": _EDITABLE_PARAMETER_FAMILIES.get(
-                _parameter_family(patch), ()),
+            "parameters": _parameter_specs(patch),
         },
         sort_keys=True, separators=(",", ":"), ensure_ascii=True,
     ).encode("ascii")
@@ -309,7 +396,11 @@ def _decode_parameter(spec, raw):
         return special
 
     codec = spec["codec"]
-    if codec.startswith("rpm_") or codec in ("u8", "tps_u8", "ipw_u16le"):
+    if codec == "launch_angle_u8":
+        if raw > 63:
+            return f"@raw:{raw:02X}", f"Unknown (0x{raw:02X}; timing override disabled)"
+        value = Decimal(raw) * Decimal(spec["step"]) + Decimal(spec["offset"])
+    elif codec.startswith("rpm_") or codec in ("u8", "tps_u8", "ipw_u16le"):
         value = Decimal(raw) * Decimal(spec["step"])
     else:
         raise PatchError(f"unsupported patch parameter codec: {codec}")
@@ -349,6 +440,101 @@ def normalize_parameter_value(parameter, value):
                            int(parameter.get("decimals", 0)))
 
 
+def parameter_feedback(parameters, values=None, *, revision=None):
+    """Explain draft control relationships without changing or saving any values."""
+    specs = {parameter["id"]: parameter for parameter in parameters}
+    drafts = values or {}
+
+    def selected(parameter_id):
+        return drafts.get(parameter_id, specs[parameter_id]["current"])
+
+    def number(parameter_id):
+        return Decimal(normalize_parameter_value(specs[parameter_id], selected(parameter_id)))
+
+    feedback = {}
+    if all(key in specs for key in ("LC_SW", "LC_ARMSPEED", "LC_MAXSPEED", "LC_MINTPS")):
+        if selected("LC_SW") == "off":
+            feedback["LC_ARMSPEED"] = "Launch is off; arming and release settings are retained."
+        elif selected("LC_SW") not in ("always", "pin80", "pin81", "pin82"):
+            feedback["LC_ARMSPEED"] = "Choose Always or a supported switch input before enabling launch."
+        elif "LC_CUTTYPE" in specs and selected("LC_CUTTYPE") not in ("fuel", "ignition"):
+            feedback["LC_ARMSPEED"] = "Choose Fuel cut or Ignition cut before enabling launch."
+        elif (selected("LC_SW") != "always" and "LC_CLUTCHPOL" in specs
+              and selected("LC_CLUTCHPOL") not in ("active_high", "active_low")):
+            feedback["LC_ARMSPEED"] = "Choose Active-high or Active-low for the selected switch input."
+        else:
+            try:
+                arm, release, throttle = (number(key) for key in
+                                          ("LC_ARMSPEED", "LC_MAXSPEED", "LC_MINTPS"))
+                if release <= arm:
+                    raise ValueError
+                feedback["LC_ARMSPEED"] = (
+                    f"Arms below {arm:.0f} km/h with throttle at least {throttle} {specs['LC_MINTPS']['units']}. "
+                    f"Releases at {release:.0f} km/h or below that throttle. "
+                    f"After release, rearming requires speed below {arm:.0f} km/h. "
+                    + ("Always skips the switch only." if selected("LC_SW") == "always" else
+                       "The switch must be asserted to arm. Switch release keeps the limiter latch but ends optional fixed timing.")
+                )
+            except (PatchError, InvalidOperation, ValueError):
+                feedback["LC_ARMSPEED"] = "Choose valid throttle and speeds, with maximum speed above arm speed, to preview launch arming."
+    for prefix, limit_id, angle_id in (("CUT", "CUTRPM", "CUT_IGN_ANGLE"),
+                                      ("LC", "LC_MAXRPM", "LC_CUT_IGN_ANGLE")):
+        hyst_id, range_id, ipw_id = (prefix + suffix for suffix in ("_HYST", "_RETARD_RANGE", "_IPW"))
+        if limit_id not in specs or hyst_id not in specs:
+            continue
+        inactive = prefix == "LC" and "LC_CUTTYPE" in specs and selected("LC_CUTTYPE") != "ignition"
+        try:
+            limit = number(limit_id)
+        except (PatchError, InvalidOperation):
+            limit = None
+        try:
+            if limit is None:
+                raise PatchError("invalid cut RPM")
+            hyst = Decimal(0) if selected(hyst_id) == "@legacy_zero" else number(hyst_id)
+            effective_hyst = hyst if hyst < limit else Decimal(0)
+            fallback = "Hysteresis at or above cut RPM uses zero hysteresis. " if hyst >= limit and hyst else ""
+            feedback[hyst_id] = (
+                f"{fallback}Spark cut starts at {limit:.0f} RPM when armed. "
+                + (f"Spark resumes below {limit - effective_hyst:.0f} RPM." if limit else
+                   "RPM alone cannot release spark cut at a zero cut RPM.")
+            )
+            if inactive:
+                feedback[hyst_id] = "Ignition mode only. " + feedback[hyst_id]
+        except (PatchError, InvalidOperation):
+            feedback[hyst_id] = "Enter valid cut RPM and hysteresis values to preview spark release."
+            effective_hyst = None
+        if range_id in specs and angle_id in specs:
+            angle = selected(angle_id)
+            try:
+                width = number(range_id)
+                if limit is None or not 0 < width < limit:
+                    raise ValueError
+                text = f"Timing range: {limit - width:.0f} RPM to below {limit:.0f} RPM when enabled."
+                if angle.startswith("@"):
+                    text += " Fixed angle is off." if angle == "@off" else " Fixed angle is disabled."
+                else:
+                    number(angle_id)
+                    if not inactive and effective_hyst is not None and effective_hyst >= width:
+                        text += " As RPM falls, spark stays cut through this range and resumes below it."
+                if inactive:
+                    text += " Inactive for the selected cut type."
+                text += " Native fuel limits and fault protection can suspend this timing range."
+            except (PatchError, InvalidOperation, ValueError):
+                text = ("Fixed angle is off. To preview its unused range, choose valid cut RPM "
+                        "and a positive timing range smaller than cut RPM." if angle == "@off" else
+                        "Choose valid cut RPM and a positive timing range smaller than cut RPM.")
+            feedback[range_id] = text
+        if ipw_id in specs and not inactive and not selected(ipw_id).startswith("@"):
+            feedback[ipw_id] = (
+                "Fixed base pulse applies only during spark cut, not throughout the timing range. "
+                "ECU injector corrections still apply; native fuel cuts can still stop injection. "
+                "0 ms is a zero base pulse, not a command to switch injection off."
+            )
+            if revision == "V18":
+                feedback[ipw_id] += " Uses native fueling if the requested pulse cannot fit the validated timing interval."
+    return feedback
+
+
 def _encode_parameter(spec, value):
     token = str(value).strip()
     if spec["kind"] == "choice":
@@ -365,7 +551,9 @@ def _encode_parameter(spec, value):
 
     number = _decimal_value(normalize_parameter_value(spec, token), spec["id"])
     codec = spec["codec"]
-    if codec.startswith("rpm_") or codec in ("u8", "tps_u8", "ipw_u16le"):
+    if codec == "launch_angle_u8":
+        raw = _rounded_raw(number - Decimal(spec["offset"]), Decimal(spec["step"]))
+    elif codec.startswith("rpm_") or codec in ("u8", "tps_u8", "ipw_u16le"):
         raw = _rounded_raw(number, Decimal(spec["step"]))
     else:
         raise PatchError(f"unsupported patch parameter codec: {codec}")
@@ -395,6 +583,8 @@ def _public_parameter(image, patch, spec):
             option.update(display_value="0", display_text="Zero hysteresis")
         elif token == "@auto":
             option["display_text"] = "Soft cut + 96 RPM, capped by native hard cut"
+        elif token == "@off":
+            option["display_text"] = "Normal ECU timing"
         specials.append(option)
     return {
         "id": spec["id"],
@@ -437,7 +627,7 @@ def editable_parameters(data):
     result = []
     for patch_id, entry in available.items():
         patch = all_patches[patch_id]
-        specs = _EDITABLE_PARAMETER_FAMILIES.get(_parameter_family(patch))
+        specs = _parameter_specs(patch)
         if not specs or entry.get("deprecated"):
             continue
         editable = bool(entry.get("ok") and (checksum_ok or not entry["installed"]))
@@ -459,19 +649,29 @@ def editable_parameters(data):
 
 
 def _validate_parameter_relationships(image, patch, specs):
-    if _parameter_family(patch) != "launch_control_v11":
-        return
     by_id = {spec["id"]: spec for spec in specs}
 
     def raw(parameter_id):
         return _raw_parameter_value(image, patch, by_id[parameter_id])[0]
 
+    for angle, width, limit in (("CUT_IGN_ANGLE", "CUT_RETARD_RANGE", "CUTRPM"),
+                                ("LC_CUT_IGN_ANGLE", "LC_RETARD_RANGE", "LC_MAXRPM")):
+        if angle in by_id and raw(angle) <= 63 and not 0 < raw(width) < raw(limit):
+            raise PatchError(f"{width} must be positive and smaller than {limit} when the fixed angle is enabled")
+    if "LC_SW" not in by_id:
+        return
     if raw("LC_SW") == 0xFF:
         return
     if raw("LC_ARMSPEED") == 0:
         raise PatchError("LC_ARMSPEED must be at least 1 km/h when Launch Control is enabled")
     if raw("LC_MAXSPEED") <= raw("LC_ARMSPEED"):
         raise PatchError("LC_MAXSPEED must be greater than LC_ARMSPEED")
+    if raw("LC_SW") not in (0, 1, 2, 4):
+        raise PatchError("LC_SW must be Always or a supported switch input when Launch Control is enabled")
+    if raw("LC_CUTTYPE") not in (0, 1):
+        raise PatchError("LC_CUTTYPE must be Fuel cut or Ignition cut when Launch Control is enabled")
+    if raw("LC_SW") != 0 and raw("LC_CLUTCHPOL") not in (0, 1):
+        raise PatchError("LC_CLUTCHPOL must be Active-high or Active-low for a switch input")
 
 
 def apply_parameter_changes(
@@ -511,7 +711,7 @@ def apply_parameter_changes(
     if not group["editable"]:
         raise PatchError(group["blocked_reason"] or "patch parameters are not editable")
 
-    specs = _EDITABLE_PARAMETER_FAMILIES[_parameter_family(patch)]
+    specs = _parameter_specs(patch)
     by_id = {spec["id"]: spec for spec in specs}
     unknown = sorted(set(changes) - set(by_id))
     if unknown:
@@ -652,6 +852,28 @@ def installed_dependents(data, patch_id):
     return _dependent_ids(all_patches, effective_ids, patch_id)
 
 
+def _display_metadata(patch):
+    maturity = "Deprecated" if patch.get("deprecated") else (
+        patch.get("maturity") or (
+            "Experimental" if patch.get("status") == "EXPERIMENTAL" else "—"))
+    if (not patch.get("deprecated") and
+            str(patch.get("family_id") or patch.get("id", "")).startswith(
+                ("ignition_cut", "launch_control"))):
+        maturity = "HIGHLY EXPERIMENTAL"
+    validation = patch.get("validation")
+    if not validation:
+        if patch.get("status") == "BENCH PROVEN":
+            validation = "Bench tested"
+        elif patch.get("tested") is True:
+            validation = "Tested"
+        elif patch.get("tested") is False:
+            validation = "Untested"
+        else:
+            validation = "—"
+    return {"maturity": maturity, "validation": validation,
+            "verification": patch.get("verification", "")}
+
+
 def available_patches(data):
     """Selectable patches whose target matches the base's program version, each with a
     health badge. Patches flagged "deprecated" (e.g. a superseded patch version) are never
@@ -681,6 +903,7 @@ def available_patches(data):
                 "target": ver, "version": p.get("version", ""),
                 "status": p.get("status", "DEPRECATED"),
                 "tested": p.get("tested"),
+                **_display_metadata(p),
                 "requires": [], "conflicts": p.get("conflicts", []),
                 "ok": False, "badge": "DEPRECATED - installed; remove recommended",
                 "installed": True, "needs_boot": patch_ms41.needs_boot_write(p),
@@ -714,6 +937,7 @@ def available_patches(data):
             "version": p.get("version", ""),
             "status": p.get("status", ""),
             "tested": p.get("tested", False),
+            **_display_metadata(p),
             "requires": p.get("requires", []),
             "conflicts": p.get("conflicts", []),
             "ok": len(errs) == 0,
@@ -775,7 +999,7 @@ def revert_patch(base_data, patch_id):
         )
     result = patch_ms41.revert(bytes(base_data), p)
     if (patch_id == "cal_guard" or patch_id.startswith("cal_guard_v")
-            or patch_id in ("softbsl_loader", "amd_flash", "amd_flash_v3")):
+            or patch_id in ("softbsl_loader", "amd_flash", "amd_flash_v3", "amd_flash_v4")):
         delay = patch_ms41.startup_wait_definition(patches)
         if delay:
             patch_ms41.startup_driver(base_data, patches)
@@ -843,13 +1067,17 @@ SA1_LEN = SA1_HI - SA1_LO              # 0x2000
 def _boot_patch_definitions(image):
     """Track CalGuard's wait and residue from earlier AMD/standalone-loader builds."""
     patches = patch_ms41.load_patches()
-    if patch_ms41.is_applied(image, patches["amd_flash"]):
-        # The old V3 fixture's native startup anchors are not driver requirements.
-        patches.pop("amd_flash_v3", None)
+    for driver_id in ("amd_flash", "amd_flash_v4"):
+        if driver_id in patches and patch_ms41.is_applied(image, patches[driver_id]):
+            # Historical startup anchors are not driver requirements.
+            for prior_id in patches[driver_id].get("supersedes", []):
+                patches.pop(prior_id, None)
     delay = patch_ms41.startup_wait_definition(patches)
     if delay and patch_ms41.is_applied(image, delay):
         guard = patch_ms41.installed_calguard(image, patches)
-        for owner in ([guard] if guard else []) + ["softbsl_loader", "amd_flash"]:
+        for owner in ([guard] if guard else []) + ["softbsl_loader", "amd_flash", "amd_flash_v4", "amd_flash_v3"]:
+            if owner not in patches:
+                continue
             patch = patches[owner]
             if patch_ms41.is_applied(image, patch):
                 patches[owner] = {**patch, "edits": [*patch["edits"], *delay["edits"]]}

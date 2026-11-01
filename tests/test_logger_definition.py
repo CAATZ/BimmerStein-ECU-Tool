@@ -39,10 +39,10 @@ def test_bundled_definition_owns_corrected_core_profile_and_cut_maps():
     assert definition.protocol_id == "DS2"
     assert definition.baud == 9600
     assert definition.module_address == 0x12
-    assert len(definition.parameters) == 70
+    assert len(definition.parameters) == 95
     assert sum(parameter.id.startswith("BS_STD_") for parameter in definition.parameters) == 3
     assert sum(parameter.id.startswith("BS_WB_") for parameter in definition.parameters) == 3
-    assert sum(parameter.id.startswith("BS_CUT_") for parameter in definition.parameters) == 40
+    assert sum(parameter.id.startswith("BS_CUT_") for parameter in definition.parameters) == 54
 
     old = _by_id(definition, "1429861")
     ms411 = _by_id(definition, "1437806")
@@ -57,6 +57,58 @@ def test_bundled_definition_owns_corrected_core_profile_and_cut_maps():
     assert ms413["BS_CUT_LAUNCH_SWITCH"].address == 0x147E0
     assert "BS_WB_AFR" not in old and ms413["BS_WB_AFR"].address == 0xE800
     assert definition.parameters_for("1438137") == ()
+
+
+@pytest.mark.parametrize("ecu_id", ["1429861", "1437806", "1406464", "SHINDE1"])
+def test_native_roughness_channels_preserve_signed_little_endian_words(ecu_id):
+    definition = parse_logger_definition(bundled_logger_definition_path())
+    params = _by_id(definition, ecu_id)
+    for index in range(6):
+        parameter = params[f"BS_ROUGHNESS_CYL{index + 1}"]
+        assert parameter.name == f"Cylinder {index + 1} Roughness"
+        assert (parameter.address, parameter.length, parameter.signed, parameter.endian) == (
+            0xE854 + 2 * index, 2, True, "little")
+        for value in (-32768, -256, -1, 0, 1, 32767):
+            raw = value.to_bytes(2, "little", signed=True)
+            assert parameter.display(parameter.parse(raw, parameter.address)) == str(value)
+    for unverified_id in ("1405854", "1429373", "1432401", "1440176", "unknown"):
+        assert not any(p.id.startswith("BS_ROUGHNESS_")
+                       for p in definition.parameters_for(unverified_id))
+
+
+@pytest.mark.parametrize("ecu_id,cut,launch", [
+    ("1429861", 0x13015, 0x1302B), ("1437806", 0x13705, 0x1371B),
+    ("1406464", 0x12A6A, 0x13537), ("SHINDE1", 0x12A6A, 0x147EB),
+])
+def test_v16_timing_and_recovery_channels_match_native_encoding(ecu_id, cut, launch):
+    params = _by_id(parse_logger_definition(bundled_logger_definition_path()), ecu_id)
+    offsets = {
+        "RETARD_RANGE": cut, "IGN_ANGLE": cut + 1,
+        "LAUNCH_FUEL_HYST_B": launch, "LAUNCH_FUEL_HYST_A": launch + 1,
+        "LAUNCH_IGN_ANGLE": launch + 2, "LAUNCH_RETARD_RANGE": launch + 3,
+        "LAUNCH_CUT_IGN_ANGLE": launch + 4,
+        "RECOVERY_PENDING": 0xD802, "TIMING_STATE": 0xD803, "TIMING_SOURCE": 0xD804,
+    }
+    for suffix, address in offsets.items():
+        assert params["BS_CUT_" + suffix].address == address
+    for suffix in ("IGN_ANGLE", "LAUNCH_IGN_ANGLE", "LAUNCH_CUT_IGN_ANGLE"):
+        parameter = params["BS_CUT_" + suffix]
+        for raw, expected in ((0, "-23.625"), (63, "0.000"),
+                              (64, "Invalid / disabled"), (255, "Off")):
+            assert parameter.display(parameter.parse(bytes((raw,)), parameter.address)) == expected
+    for suffix in ("RETARD_RANGE", "LAUNCH_RETARD_RANGE"):
+        parameter = params["BS_CUT_" + suffix]
+        assert parameter.display(parameter.convert(10)) == "320"
+    for suffix in ("LAUNCH_FUEL_HYST_B", "LAUNCH_FUEL_HYST_A"):
+        parameter = params["BS_CUT_" + suffix]
+        assert parameter.display(parameter.convert(255)) == "Follow stock"
+        assert parameter.display(parameter.convert(10)) == "320"
+    state = params["BS_CUT_TIMING_STATE"]
+    assert [state.display(state.convert(raw)) for raw in (0xC0, 0xC1, 0xC3)] == [
+        "Inactive", "Eligible / inhibited", "Timing constraint active"]
+    source = params["BS_CUT_TIMING_SOURCE"]
+    assert [source.display(source.convert(raw)) for raw in range(4)] == [
+        "None", "Fuel launch", "Ignition launch", "Standalone cut"]
 
 
 def test_bundled_conversion_parse_format_replace_and_runtime_address_override():
@@ -107,7 +159,7 @@ def test_parser_uses_exact_untrimmed_ecu_membership_and_never_fetches_dtd(tmp_pa
     assert len(definition.parameters_for(" 1437806")) == 1
 
 
-def test_unspecified_endian_matches_romraider_big_endian_default(tmp_path):
+def test_unspecified_endian_matches_xml_definition_big_endian_default(tmp_path):
     path = tmp_path / "default-endian.xml"
     path.write_text(
         _minimal_xml().replace('storagetype="uint8"', 'storagetype="uint16"'),
@@ -119,7 +171,7 @@ def test_unspecified_endian_matches_romraider_big_endian_default(tmp_path):
     assert parameter.parse(b"\x12\x34", parameter.address) == 0x1234
 
 
-def test_romraider_bare_hex_addresses_are_not_read_as_decimal(tmp_path):
+def test_xml_definition_bare_hex_addresses_are_not_read_as_decimal(tmp_path):
     path = tmp_path / "bare-hex.xml"
     path.write_text(
         _minimal_xml(address="DA2A").replace('address="0x12"', 'address="12"'),
@@ -131,12 +183,38 @@ def test_romraider_bare_hex_addresses_are_not_read_as_decimal(tmp_path):
     assert definition.parameters_for("1429861")[0].address == 0xDA2A
 
 
-def test_romraider_bitwise_operation_selector_is_honored(tmp_path):
+def test_xml_definition_bitwise_operation_selector_is_honored(tmp_path):
     path = tmp_path / "bitwise.xml"
     path.write_text(_minimal_xml(expression="BitWise(1,x,2)"), encoding="utf-8")
     parameter = parse_logger_definition(path).parameters_for("1429861")[0]
 
     assert parameter.parse(b"\x02", parameter.address) == 3
+
+
+@pytest.mark.parametrize("expression,raw,expected", [
+    ("x != 0 && 100/x > 1", 0, 0),
+    ("x != 0 && 100/x > 1", 2, 1),
+    ("x == 0 || 100/x > 1", 0, 1),
+    ("x == 0 || 100/x > 1", 200, 0),
+    ("if(x != 0 && 10/x > 1,10/x,0)", 0, 0),
+    ("if(x != 0 && 10/x > 1,10/x,0)", 2, 5),
+])
+def test_conversion_boolean_guards_skip_undefined_branches(tmp_path, expression, raw, expected):
+    path = tmp_path / "guarded.xml"
+    path.write_text(_minimal_xml(expression=expression.replace("&", "&amp;")), encoding="utf-8")
+    parameter = parse_logger_definition(path).parameters_for("1429861")[0]
+
+    assert parameter.parse(bytes((raw,)), parameter.address) == expected
+
+
+@pytest.mark.parametrize("expression", [
+    "0 && __import__('os')", "1 || x.real", "if(1,0,[x])",
+])
+def test_conversion_validates_even_unreachable_branches(tmp_path, expression):
+    path = tmp_path / "unsafe-branch.xml"
+    path.write_text(_minimal_xml(expression=expression.replace("&", "&amp;")), encoding="utf-8")
+    with pytest.raises(LoggerDefinitionError, match="unsupported conversion"):
+        parse_logger_definition(path)
 
 
 @pytest.mark.parametrize(
