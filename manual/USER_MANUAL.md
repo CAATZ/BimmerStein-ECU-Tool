@@ -4,6 +4,8 @@
 
 Version 0.1.0b19 - Windows x64/x86 and Windows 7 x64/x86
 
+Documentation updated 1 November 2026.
+
 BimmerStein ECU Tool combines flashing, diagnostics, live data, ECU configuration
 and offline files in one desktop application. MS42/MS43 use temporary RAM agents
 for supported fast reads and writes. MS41 also offers persistent Soft-BSL,
@@ -110,8 +112,9 @@ An update keeps the existing installation location.
 Keep the complete extracted folder together. Application runtimes, protocol resources, patch
 descriptors, and RAM-agent payloads are required beside the executable.
 
-The executable may not be code-signed. Windows can show an unknown-publisher warning. Confirm the
-release filename and matching `.zip.sha256` value before continuing.
+The executable may not be code-signed. Windows can show an unknown-publisher warning.
+Verify the exact downloaded installer or ZIP against its corresponding `.exe.sha256`
+or `.zip.sha256` file, or its entry in `SHA256SUMS.txt`, before continuing.
 
 ### Interface driver
 
@@ -174,7 +177,7 @@ to normal identification; active writes and retained recovery keep their existin
 | Bins | Catalog reads, backups, generated images, and notes. |
 | Patches | Compose, detect, migrate, or remove supported MS41 firmware patches. |
 | ECU Config | Inspect and modify supported calibration configuration switches. |
-| VIN / EWS | Separate VIN editing and EWS2 alignment workflows. |
+| VIN / EWS | VIN editing and family-specific EWS alignment or synchronization. |
 | ROM Analyzer | Inspect a BIN offline without connecting to an ECU. |
 | Soft-BSL | Install and operate the persistent MS41 Soft-BSL loader. |
 | BSL-Unbricker | MS41 hardware bootstrap reads, erase, program, and recovery. |
@@ -193,6 +196,12 @@ The Flash tab is the normal starting point for ECU reads and writes.
 - **Read Tune** saves 24 KiB for MS41, 32 KiB for MS42 or 64 KiB for MS43.
 - **Write Full** programs the supported full-image regions while respecting boot-write controls.
 - **Write Tune** programs the calibration region.
+
+On MS42/MS43, a stock DS2 full read is a diagnostic image: protected or reserved
+regions can contain FF bytes rather than the physical flash contents. Its
+512 KiB file size does not make it a complete boot/identity backup. Use the RAM
+agent for a complete flash capture when available, and check the read source
+recorded in Bins. Separate EEPROM storage requires its own backup operation.
 
 ### Automatic transfer selection
 
@@ -294,8 +303,9 @@ this application's BSL tab; use an appropriate separate recovery method.
 
 > [!DANGER]
 > Do not experiment with reset lines, ignition cycles, VPP, or chip-family selections during a
-> retained recovery session. Preserve the session first; use hardware BSL only when the retained
-> path is no longer available or cannot recover the target.
+> retained recovery session. Preserve the session first. For MS41, use hardware BSL only when
+> the retained path is no longer available or cannot recover the target. MS42/MS43 requires a
+> separate hardware recovery method if its software recovery path cannot restore operation.
 
 <!-- pagebreak -->
 
@@ -338,9 +348,9 @@ the actuator target. Both views retain the application's normal font and display
    shadow memory also includes faults before they meet the ECU's logging threshold.
    Supported records include frequency, conditions and decoded freeze-frame values.
 5. Select **Export to Text** when a service record is required.
-6. Record the faults and correct their cause before selecting **Clear Faults**. DME clearing
-   automatically re-reads stored memory and distinguishes remaining faults from a failed
-   confirmation read. Read the module again after a non-engine clear request to confirm it.
+6. Save the fault report and correct the cause before **Clear Faults**. DME clearing
+   automatically re-reads stored memory, distinguishing remaining faults from a failed
+   confirmation read. For other modules, read faults again to confirm clearing.
 
 **Copy ECU Info** and **Export ECU Info…** in the ECU Info tab export the displayed identity
 fields and raw identification response with a UTC report timestamp.
@@ -404,21 +414,26 @@ The top row groups logger/file controls, Interval and Mode, and **Log to CSV**.
 **Start Polling** and **Stop** stay on the right. Open **Logger: Bundled / Imported**
 to inspect the current definition, **Import XML…**, or **Use Bundled**. The full
 definition name and path are available on hover. Change definitions while polling is stopped.
-Both read modes use the active definition's channel addresses, widths and scaling;
-the bundled definition includes the current firmware and patch corrections.
+The active logger supplies the supported channels, decoding and scaling;
+the bundled profiles include the current firmware and patch corrections.
 **Maximum rate** (0 ms) is the default and adds no artificial delay; the interval is saved
 between sessions. You can instead set 100-5000 ms. The displayed samples/s uses exact
 completion times from the latest three seconds, excluding initial setup. It remains zero
 until two samples complete and falls back toward zero if acquisition stalls or stops.
 
-**Telegram** builds a variable batch from the selected channels and their required validity
-data. Overlapping RAM bytes are read once; adjacent bytes are packed into aligned word
-reads where possible. Each ordinary DS2 setup packet holds up to 49 byte/word entries.
-Any remaining data uses grouped RAM reads in the same acquisition cycle. **Standard DS2**
-uses grouped RAM reads for the complete selection. **Auto** compares these actual plans,
-choosing fewer recurring transactions, then fewer bytes, and permits standard DS2 fallback
-if telegram setup fails. Clients that do not supply a channel selection continue to read
-the full available catalog; the desktop **None** button is an explicit empty selection.
+On **MS41**, Telegram batches the selected channels and their required validity
+data. Overlapping RAM bytes are read once; adjacent bytes are packed into aligned
+word reads where possible. A setup packet holds up to 49 byte/word entries.
+Remaining data uses grouped RAM reads in the same cycle. Standard DS2 uses
+grouped RAM reads for the selection. Auto compares the plans, choosing fewer
+recurring transactions, then fewer bytes, and allows Standard fallback if setup fails.
+
+On **MS42/MS43**, a configured telegram holds up to 24 supported measurement
+descriptors. Remaining channels use the ECU's fixed measurement groups; Standard
+uses those groups for the selection. Auto compares transaction counts and uses
+the fixed groups when they are more efficient or telegram setup fails.
+Telegram availability depends on the selected channels and a matching profile.
+The **None** button selects no channels on either family.
 
 Actual sample rate depends on the ECU, adapter and selected channels. The
 displayed rate describes completed samples rather than a promised transfer rate.
@@ -742,6 +757,8 @@ code and calibration from different MS41 variants and is blocked from normal fla
 - Variant conversions preserve or replace identity only according to the explicit workflow. The
   same conversion policy applies to MS41.0, MS41.1, MS41.2, and MS41.3.
 
+<!-- pagebreak -->
+
 ### Bins
 
 Bins catalogs files created by reads, backups, and patch composition. Entries include available
@@ -793,16 +810,15 @@ The Patches tab loads a compatible base image, checks which patches apply, detec
 and deprecated revisions, validates dependencies and byte collisions, recomputes required
 checksums, and archives the composed image into Bins.
 
-While Patches is idle, the application footer shows the loaded base filename, program
-and calibration identity. Hover for its full path and details. Hybrid warnings remain
-visible at the start of the summary. Active operation progress takes priority in this
-same footer, leaving more space for the patch list and build controls.
+The footer shows the base filename and program/calibration identity; hover for
+the full path and details. Operation progress temporarily takes priority.
+Hybrid warnings stay at the start of the summary.
 
-Select a patch to enable **Configure** when it has editable settings. Settings stay pending until
-**Build Patched Image** saves the patches and settings together; no intermediate patched BIN or
-ECU readback is needed. **Configure \*** marks pending settings. Deselecting a patch discards its
-pending settings, and loading another base clears all pending changes. After a successful build,
-the saved image becomes the working base for further changes.
+Select an editable patch and choose **Configure**. **Configure \*** marks pending
+settings; **Build Patched Image** saves them with the patches and makes the saved
+image the working base. No intermediate BIN or ECU readback is needed.
+Deselecting a patch discards its pending settings; loading another base clears
+all pending changes.
 
 Numeric settings use number controls. You can type an in-range value; **Review Changes**
 shows its rounded build value. The selected **Follow stock**, **Automatic**, or **Legacy zero**
@@ -810,28 +826,29 @@ button preserves that mode. Follow stock shows the loaded calibration's value wh
 fixed scalar; injection and original VANOS logic are calculated by the ECU. Toggle the mode
 off to enter a custom value.
 
-The desktop patch list has **Patch**, **Version**, **Maturity**, **State**, **Validation**, and **Actions**
-columns. **Details** opens a popover with the description, internal ID, dependencies, and
-boot-write requirements without expanding the row. Press **Escape** or click outside to close it.
-Installation state, validation, and blocking warnings stay visible in the list. **Configure**,
-**Remove**, and **Details** keep the same positions in every row; unavailable actions are greyed out.
+The list shows each patch's version, maturity, installation state, validation and
+blocking warnings. **Details** adds the description, ID, dependencies and boot-write
+requirements; press **Escape** or click outside to close it. **Configure**, **Remove**
+and **Details** stay in the same position in every row; unavailable actions are greyed out.
 
 ### Status and migration
 
-- **Installed** means the patch signature is present in the loaded image.
-- **Not installed** means that revision is absent from the loaded image.
-- **Maturity** records Experimental, Beta, Stable, or Deprecated; **-** means no maturity was assigned.
+- **Installed / Not installed** identifies whether that revision's signature is
+  present in the loaded image.
+- **Maturity** records the patch's stage, including Experimental, Beta, Stable or
+  Deprecated. Ignition Cut and Launch Control show **HIGHLY EXPERIMENTAL**;
+  **-** means no maturity was assigned.
 - **Deprecated - remove only** identifies a historical revision retained for safe detection and
   removal. Deprecated descriptors are not offered for a new installation.
-- **Untested** means physical vehicle testing has not been completed.
-- **Needs testing** marks revisions awaiting the required physical validation.
-- **Tested** records confirmed testing; use **Details** to check its scope.
+- **Untested / Needs testing** marks incomplete vehicle testing or required
+  physical validation. **Tested** records confirmed testing within the scope in **Details**.
 - **Emulator verified**, **Bench tested**, and **Vehicle tested** identify the recorded test scope.
   Emulator or bench results do not imply vehicle validation; **Details** retains the full proof notes.
 - Boot-region patches require a transfer path that can actually deliver their bytes.
 
 Ignition Cut V18 and Launch Control V18 are current for MS41.0, MS41.1,
-MS41.2 and MS41.3. Launch Control requires the matching ignition-cut revision.
+MS41.2 and MS41.3. Launch Control requires the matching ignition-cut revision,
+but the standalone Ignition Cut switch may remain Off.
 They retain compatible configured controls during upgrade and include the later
 timing and injection-recovery corrections. These revisions are **HIGHLY
 EXPERIMENTAL** and require vehicle testing. Offline verification does not
@@ -840,28 +857,26 @@ AlphaN MAF-failsafe V3 is **Tested**. AMD 29F Flash Driver V5, CalGuard V6,
 Soft-BSL entry V2 and loader V12 have **Tested** validation status following owner
 confirmation. This status applies to the recorded configurations; check **Details**
 for the test scope. Ignition Cut and Launch Control V18 still require testing.
-Earlier bench images with the unchanged recovery wait bytes passed three cold-recovery trials each
-on Intel MS41.3 / 28F200 and AMD MS41.0 / 29F400BB lower bank. These results apply to those
-bench configurations. The current AMD MS41.0 / 29F400BB TOP image also passed a verified full
-installation, three cold recovery trials with exact full readbacks, and normal cold boots.
-Removal and standalone-update behavior has offline application-test coverage.
-On Intel and AMD, removing CalGuard also removes its
-40 ms wait while preserving Soft-BSL and the flash driver.
+Bench results are specific to the tested ECU, flash device and bank; **Details**
+records that scope. Removing CalGuard also removes its startup wait while
+preserving Soft-BSL and the flash driver.
 
-The current ignition-cut revisions correct the V8/V9 return-stack defect. MS41.3 V11 also repairs
-the V10 modification that could disable K-line communication even with cut disabled. Deprecated
-revisions, including faulty MS41.3 V10, remain detectable for upgrade or removal. Review the
-finished image and its dependencies before writing it to the ECU; updating this application alone
-does not change installed firmware.
+### Upgrading existing patches
 
-MS41.3 Ignition Cut V13 checks standalone RPM and hysteresis at each native coil-charge event,
-removing V12's extra delay through the late fuel task. Launch Control V13 keeps V12's launch
-behavior and settings. Upgrading an installed ignition/launch pair preserves both configurations.
+Compatible, exactly recognized predecessors can upgrade to the matching current
+ignition/launch pair while retaining their configured settings. Review both
+configurations, new controls and dependencies before flashing. A partial or
+mismatched installation must follow the application's removal or recovery
+instructions; do not combine incompatible revisions.
 
-During a cut, affected fuel learning and oxygen/catalyst observations are held until native
-recovery conditions and fresh samples permit them to resume. Genuine electrical faults, fallback
-behavior, DTC100/DTC214, previous misfire/shutdown evidence, and completed valid catalyst results
-remain effective. A DTC100 number alone does not identify which internal check produced it.
+Deprecated revisions remain detectable for upgrade or removal. Historical
+instructions are not the installation procedure for the current pair. Updating
+the application alone does not change firmware already installed in an ECU.
+
+Affected learning and observations wait for native recovery conditions and fresh
+samples. Electrical faults, fallback behavior, DTC100/DTC214, prior misfire or
+shutdown evidence and completed catalyst results remain effective. A DTC number
+alone does not identify its cause.
 
 Applying an experimental patch requires explicit confirmation. Offline validation does not prove
 safe behavior on an engine.
@@ -878,23 +893,23 @@ The release includes `BimmerStein MS41 Patch Definitions.xml` beside the executa
 a compatible calibration editor to configure items added by the matching patches.
 Install the firmware patch first and verify the ECU variant, calibration ID, and patch revision. A
 mismatched definition can expose incorrect tables or write to the wrong calibration addresses.
-Standalone Ignition Cut and Launch ignition mode have separate RPM hysteresis
-and fixed injector-pulse-width settings. Launch fuel mode ignores the Launch
-ignition-only settings and continues to use the native staged fuel limiter.
-**Preserve stock injection** uses the ECU's calculated injection. A custom **0 ms**
-is a valid zero base pulse; native scheduling and injector corrections still apply,
-so it does not guarantee that every scheduled injector pulse is zero.
-Launch V12 **Always (no switch)** treats the input as active while retaining the
+
+### Launch arming and release
+
+**Always (no switch)** treats the input as active while retaining the
 speed and throttle gates. It arms only below Arm Speed with TPS at or above Min TPS.
 An armed latch remains active during rollout until speed reaches Max Speed or TPS
 drops below Min TPS; releasing the clutch preserves this latch for the rollout.
+Releasing a physical switch ends optional fixed timing even while the limiter
+latch remains active.
 After release, it can rearm only below Arm Speed. Arm Speed must be at least
 1 km/h; set it to 1 to allow arming at a reported speed of zero. Clutch polarity
-applies only to physical switch modes. V7/V8/V9/V10/V11-to-V12 upgrades preserve calibration
-addresses and settings; a saved zero Arm Speed must be corrected before enabling
-or updating an enabled configuration. V7 users must also review the Always-mode
-speed and throttle limits, which V8 and later enforce.
-In fuel mode, V12 uses the lower of the launch hard setting and the native hard
+applies only to physical switch modes. A saved zero Arm Speed in an older
+configuration must be corrected before enabling or updating an enabled setup.
+
+### Fuel-cut launch mode
+
+Fuel mode uses the lower of the launch hard setting and the native hard
 threshold. Automatic still requests soft cut + 96 RPM, capped at that native
 threshold. Soft RPM independently uses the lower of native soft and launch soft.
 Hard RPM may be below, equal to, or above soft RPM; setting it lower does not
@@ -902,7 +917,7 @@ change soft RPM. The hard path accelerates the native staged cut rather than
 instantly cutting every cylinder. Stock behavior can begin restoring fuel while
 RPM is still above a lower hard setting.
 
-V11 adds two fuel-only settings, each defaulting to **Follow stock**:
+Two fuel-only settings default to **Follow stock**:
 
 - **Fuel hysteresis B:** staged restoration begins strictly
   below effective soft RPM minus this value.
@@ -918,24 +933,54 @@ until that cut episode ends. Rearming during that episode does not reset the
 native counters or replace stock hysteresis. The ignition-only settings are
 ignored in fuel mode.
 
-In ignition mode, hard RPM is ignored. Spark cut starts at or above launch soft
+### Ignition-cut mode and fueling
+
+In launch ignition mode, hard RPM is ignored. Spark cut starts at or above launch soft
 RPM and releases strictly below soft RPM minus Ignition RPM hysteresis, unless
 the speed or throttle gates release launch first. All RPM values use 32 RPM steps.
-MS41.3 Launch Control V13 uses its dedicated `0x47E0-0x47ED` block and can be
-configured with boost control. Only deprecated MS41.3 V4 overlapped boost
-knock-compensation cells; remove V4 before installing and configuring V12.
-Exact V7/V8/V9/V10/V11 installations can upgrade directly as described above.
+The current MS41.3 Launch Control uses dedicated calibration storage and can be
+configured with boost control. Follow any removal prompt for a historical
+installation that overlaps other calibration data.
 
-Launch V12 adds **Fuel-cut ignition angle**, default **Off**. A custom value is an absolute
-scheduled angle from -23.625 to 0 degrees BTDC, in 0.375-degree steps; negative values mean
-after top dead center. Zero selects top dead center and is separate from Off.
+Standalone Ignition Cut and Launch ignition mode have separate RPM hysteresis
+and fixed injector-pulse-width settings. Fixed width applies while the respective
+spark-cut request is active; selecting an ignition retard range does not enable it.
+**Preserve stock injection** uses the ECU's calculated injection. A custom **0 ms**
+is a valid zero base pulse, not a guaranteed injector shutoff. Native cylinder
+and battery corrections, scheduling and fuel shutoffs still apply. If the
+corrected pulse cannot fit the validated timing interval, V18 returns to native
+fueling. Launch fuel mode ignores these ignition-only settings and uses the
+native staged fuel limiter.
+
+### Optional ignition timing
+
+Standalone Ignition Cut and Launch ignition mode each have **Ignition retard
+range** and **Ignition-cut fixed angle** settings. The range defines an RPM
+region below the corresponding spark-cut threshold; it is separate from RPM
+hysteresis and does not set fueling. Its initial value is **192 RPM**. An enabled
+angle requires a positive range smaller than the cut RPM.
+
+**Ignition-cut fixed angle** defaults to **Off**. A custom angle is absolute,
+from -23.625 to 0 degrees BTDC in 0.375-degree steps. Negative values mean after
+top dead center. Zero selects top dead center; it is not the same as Off.
+
+Launch fuel mode has its own **Fuel-cut ignition angle**, default **Off**, with
+the same absolute-angle range and steps described above.
 The override begins when an eligible fuel-mode launch reaches its first soft or hard threshold.
 It continues through fuel restoration until all fuel returns and RPM is below that threshold.
-Releasing the selected physical switch, leaving the speed/throttle gates, or native limiter,
-critical-input or knock intervention returns control to normal ECU timing. Arming alone does
-not change timing. Ignition-cut mode ignores this setting; normal dwell and injection remain
-under their existing controls. Ordinary requested-angle telemetry does not show this final
-scheduling override. Software checks do not replace bench and vehicle validation.
+Releasing the selected physical switch, leaving the speed/throttle gates or
+native limiter intervention ends the optional fuel-mode timing request. Arming
+alone does not change timing. Ignition-cut mode ignores this fuel-mode setting;
+normal dwell and injection remain under their existing controls.
+
+For active optional timing, V18 uses the later of the selected angle and the
+ECU's native protected timing: it does not advance timing past that protection.
+Native input and knock-sensor faults retain their veto. Learned knock
+corrections are preserved; affected learning waits through actual spark cuts or
+timing changes and the required fresh-sample recovery.
+
+Ordinary requested-angle telemetry does not show this final scheduling
+override. Software checks do not replace bench and vehicle validation.
 
 ### Safe composition
 
@@ -997,11 +1042,22 @@ loader, detected flash family, D2XX connection, and a live identity-sector cache
 connection. The application changes only the packed VIN field and preserves the rest of the owning
 erase sector.
 
-### EWS2 alignment
+### MS41 EWS2 alignment
 
 EWS alignment is separate from VIN editing. It reads a fresh live DME ISN, applies the validated
 EWS2 encoding, rechecks the value immediately before transmission, and requires the expected EWS
 acknowledgement.
+
+### MS42/MS43 EWS synchronization
+
+MS42/MS43 provides **Synchronize EWS...** and **Reset Start Value...** for its
+EWS3.3 workflow. Both use the connected DME and EWS module and require explicit
+confirmation. Read the returned result: a mismatch or an unavailable start
+value is not successful synchronization.
+
+These are separate from MS41's EWS2 ISN-transfer procedure, VIN editing and
+virginizing. Virginizing does not automatically run either action; pairing
+remains a separate user choice.
 
 > [!WARNING]
 > Do not assume that a cached VIN/identity read proves the current EWS state. VIN and EWS use
@@ -1016,27 +1072,22 @@ acknowledgement.
 Soft-BSL installs a small persistent loader in ECU flash. The loader accepts an agent over DS2,
 loads it into RAM, and transfers control to that agent for higher-speed reads and writes.
 
-### Installation
-
-Use the guided installer. It identifies the target, prepares the temporary entry path, validates
-the current image and flash family, installs the persistent loader, and confirms normal DS2
-communication after the required ignition sequence.
-
-If the temporary Phase 1 write cannot observe the ECU-owned `E659=0xCC` readiness marker, the
-application closes and releases the adapter before asking for an ignition cycle and an explicit
-**Retry** or **Cancel**. Cancellation at this prompt is pre-erase: no challenge, selector, erase, or
-flash command was sent. Each repeated marker timeout requires a new decision; the retry reopens a
-fresh native-fast transport and never silently changes to the legacy writer.
-
-The temporary installation entry is removed after the persistent loader is written. Subsequent
-daily operations use the persistent loader and current RAM agents.
-
-### Normal operation
-
 - Full and tune reads use the same optimized RAM-agent path.
 - Intel and AMD/JEDEC devices use their matching agent and command set.
 - Program writes on MS41.2 include the checksum storage required by its enabled program CRC.
 - Successful writes finalize the marker independently of optional host read-back verification.
+
+### Installation
+
+The guided installer identifies the ECU, validates its image and flash family,
+prepares temporary entry, installs the persistent loader and confirms normal DS2
+after the required ignition sequence. It removes the temporary entry afterward;
+daily operations use the persistent loader and current RAM agents.
+
+If the `E659=0xCC` readiness check times out, the application releases the adapter
+and asks for an ignition cycle followed by **Retry** or **Cancel**. No authorization,
+erase or programming request has been sent. Retry opens a fresh native-fast session;
+each repeated timeout requires a new decision.
 
 ### Cross-bank and boot writes
 
@@ -1046,15 +1097,13 @@ halves and manage each bank's patches and Soft-BSL.
 New AMD TOP images automatically include a resident DS2 guard. It rejects full/program writes
 before erase while allowing normal 24 KB calibration writes. Soft-BSL full and partial writes
 remain available through the existing workflow. BOTTOM images retain normal DS2 behavior.
-The guard requires installing the newly prepared TOP image; an application update alone does
-not modify the ECU. The current TOP image passed installation, three cold initial-token recovery
-trials with exact full readbacks, and normal cold boots on one MS41.0 / AM29F400BB bench ECU.
-The resident DS2 guard remains qualified by exact-byte emulator checks; destructive stock-DS2
-program writes against that guard were not attempted on hardware.
+The guard requires installing the prepared TOP image; an application update alone
+does not modify the ECU. Installation, cold recovery and normal startup were
+tested on one MS41.0 / AM29F400BB bench ECU. The DS2 guard has offline coverage;
+destructive stock-DS2 writes against it were not tested on hardware.
 
-Golden-bank and boot-region workflows are advanced, recovery-sensitive operations. Follow the
-displayed A17/bank instructions and verify the selected physical half. Do not use them as a routine
-replacement for normal tune or program writes.
+For advanced golden-bank or boot writes, follow the displayed A17/bank instructions
+and verify the physical half. Keep normal tune/program writes on their usual route.
 
 <!-- pagebreak -->
 
@@ -1123,7 +1172,9 @@ integrity before retrying.
 
 - If the UI says erase did not start, correct the reported connection or file problem and retry.
 - If the UI says recovery is active, keep ignition ON and use **Retry Flash Recovery**.
-- If the ECU no longer boots and no retained session exists, prepare the hardware-BSL connection.
+- If an MS41 no longer boots and no retained session exists, prepare its hardware-BSL connection.
+- For MS42/MS43 in that state, use a suitable separate hardware recovery method; the app's
+  BSL-Unbricker is MS41-specific.
 
 ### The ROM Analyzer cannot load definitions
 
@@ -1169,7 +1220,7 @@ identifiers are excluded from the default metadata, and generic ZIP member names
 - [ ] Stable power and hardware recovery are available.
 - [ ] No other software owns the COM port.
 
-### Before hardware BSL programming
+### Before MS41 hardware BSL programming
 
 - [ ] Direct ASC0 wiring and bootstrap straps are correct.
 - [ ] Chip family and 29F400 half are correct.
