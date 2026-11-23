@@ -7,11 +7,29 @@ shared by BimmerStein applications.
 
 ## [0.1.0b20]
 
-- **Community patch lists.** Import a compatible MS42/MS43 XDF in Patches, configure its settings and keep a rollback record. The built-in MS41 catalog remains available.
-- **Edited BINs.** Give a patched or configured image a name, export it directly, or review it for flashing without saving a library copy.
-- **Live Data and CSV.** Missed readings leave gaps. Long recordings open in pages, and new logs preserve the units needed to interpret their values. MS41.3 patch channels now appear when the ECU reports a stock firmware number and its program signature confirms MS41.3.
-- **MS41 patches.** Ignition Cut and Launch Control advance to V20. Original VANOS logic is corrected for MS41.0 1429861 and MS41.1 1437806. MS41.3 gains AlphaN MAF-failsafe V4.
-- **Coding recovery.** Supported clusters can restore the saved original settings after an interrupted write. Guided transmission conversion preserves independently changed coding when it detects a mismatch.
+### Patches and edited files
+
+- Support 22 patch entries in MS42 v1.7.1, 27 in MS43 430069 v2.9.2 and 28 in its Extended Load edition. The native patch layout supports settings, prerequisites, compatible presets and tables, selective removal and whole-build undo. Recognized features remain associated across compatible list updates. Older rollback records continue to use their original XDF.
+- Configure settings before installing their patch. Edit compatible CAN initialization and message-ID tables. BIN comparisons can show installed patches from an imported list.
+- Name patched and configured BINs in their own folders. Open the saved result directly in Bins, export immediately, or review a temporary image for flashing. XDF records are kept for exported or submitted temporary images.
+- Ignition Cut and Launch Control V20 improve cut timing and recovery on supported MS41.0/.1/.2/.3 firmware. Launch releases on a diagnosed speed fault. Compatible V18/V19 settings carry over. Very closely spaced crank events during coil activity remain a timing limitation in software tests. Physical timing and on-car behavior still need testing.
+- MS41.3 AlphaN MAF-failsafe V4 uses measured airflow to detect MAF recovery, corrects the RPM lookup during a simultaneous throttle-sensor fault and preserves Speed Density transient fueling. Exact V1 through V3 installations can upgrade. MS41.3 Soft-BSL installation detects an incomplete AlphaN installation that still has an active hook.
+- The VANOS minimum RPM patch now follows the stock solenoid command with **Original VANOS logic** through the 8,160 RPM bin on MS41.0 1429861 (V3) and MS41.1 1437806 (V2). Upgrades preserve the numeric setting and support removal.
+
+### Recovery, coding and files
+
+- MS42/MS43 gain a separate hardware BSL recovery workflow for full flash and tune reads and writes. It backs up the original, preserves existing identity by default and checks the write by readback. Physical ECU recovery awaits qualification.
+- With backup enabled, MS42/MS43 boot writes through the normal RAM agent save the raw original before erase and stop if saving fails. Unsaved storage edits survive a cancelled or unsuccessful save. MS41 offline checksum correction refuses to report success when the calibration checksum cannot be verified.
+- Corrected E38/E39 cluster coding flags and checksums, and E46 automatic/manual climate-module identification. Supported clusters verify requested settings by readback and offer original-coding recovery after an interrupted write.
+- Guided transmission conversion protects independent coding changes during rollback. MS41 rechecks the automatic/manual selector when starting or finishing a conversion. Restoring original coding can be verified with either physical transmission-controller layout.
+- Bins keeps older MS42/MS43 entries visible and preserves changes across two open library instances. Completed ECU reads can be saved separately if archiving fails. The library shows filename endings and searches the full name.
+
+### Live Data, diagnostics and display
+
+- Unavailable selected channels show a reason and are checked again on the next capture. MS41.3 patch channels are recognized even when the ECU reports the stock software number. Live Data can identify AlphaN failsafe V3 or V4 and show extended model-load channels on supported configurations. An unreadable wideband selector leaves its voltage unavailable.
+- Failed readings leave gaps. Graphs and instruments keep channel colors after filtering. Long CSVs page through every original sample. Playback uses the captured units, including the MS42/MS43 fan request, and leaves ambiguous units blank in older logs.
+- ROM Analyzer recognizes matching MS43 43X001 XDF definitions. Smaller windows keep review actions accessible, and scrolling patch or polling controls no longer changes a setting by accident.
+- Support bundles include more information about transfer timing and failures. Exported diagnostic and native-fast journals omit raw message payloads.
 
 Coding and guided transmission conversion remain highly experimental and are not recommended until further vehicle testing.
 

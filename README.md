@@ -51,10 +51,13 @@ the [MS42/MS43 guide](docs/MS42_MS43.md) lists revision coverage and current lim
 ### Current release
 
 [**Beta 20 — 0.1.0b20**](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b20)
-adds community XDF patch lists for MS42/MS43 and makes it easier to save, export
-or flash an edited BIN. Live Data now shows missed readings as gaps and opens
-long CSV logs in pages. MS41 updates include Ignition Cut and Launch Control V20
-and corrected original VANOS behavior on supported firmware.
+adds configurable community XDF patches and rollback for MS42/MS43, direct BIN
+export from Patches and ECU Config, and a hardware BSL recovery workflow for
+MS42/MS43 that still awaits physical testing. MS41 gains V20 limiter updates,
+a corrected AlphaN MAF failsafe and stock VANOS behavior at high RPM.
+Live Data identifies unavailable channels, and long CSV logs preserve gaps
+and units. Cluster coding and transmission-conversion recovery also received
+fixes. Coding and guided conversion remain highly experimental and are not recommended.
 See the [release notes](RELEASE_NOTES.md) for details and use limits.
 
 
