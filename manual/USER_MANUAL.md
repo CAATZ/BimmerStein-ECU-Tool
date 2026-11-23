@@ -513,13 +513,10 @@ duty, not ignition-coil dwell.
 Rear-heater and raw lambda-monitor fields are omitted on firmware versions
 where the logger definitions do not provide a valid address.
 
-On MS41.3, the logger also exposes native MAF-fault, manual AlphaN and Speed
-Density mode flags. **AlphaN Failsafe Revision** identifies a complete V3 or V4
+On MS41.3, the logger also shows the native MAF-fault and manual AlphaN flags. **AlphaN Failsafe Revision** identifies a complete V3 or V4
 installation. When either revision is identified,
-extended engine load and MAF/model channels are available with their required
-load scaling. They remain unavailable in Speed Density mode or when the scaling
-does not match, because those RAM mirrors are not established as current values
-in that mode. A MAF-fault flag alone does not prove that the failsafe patch is active.
+extended engine load and MAF/model channels are available on configurations
+that provide valid readings with the required load scaling. A MAF-fault flag alone does not prove that the failsafe patch is active.
 
 Cut-active diagnostic coverage follows the monitor paths present in each
 firmware: MS41.0 guards lambda regulation, upstream O2 voltage, and the shared
@@ -810,7 +807,7 @@ The Patches tab loads a compatible base image, checks which patches apply, detec
 and deprecated revisions, validates dependencies and byte collisions, and recomputes required
 checksums. Windows offers the same output actions for MS41 patches and imported MS42/MS43 XDF lists.
 
-For MS42/MS43, load your base BIN, choose **Import patch list…** and select a compatible XDF for its software version. Select the imported list to see its patches. Use **Configure** on a patch or **All XDF settings…** for the full list. **Rollback / files…** lets you undo a recorded build or export its rollback record. Keep the record with the BIN when moving it to another PC.
+MS42/MS43 community XDF patch lists are not supplied with the tool. To import your own list, load your base BIN, choose **Import patch list…** and select a compatible XDF for its software version. Select the imported list to see its patches. Use **Configure** on a patch or **All XDF settings…** for the full list. **Rollback / files…** lets you undo a recorded build or export its rollback record. Keep the record with the BIN when moving it to another PC.
 
 The footer shows the base filename and program/calibration identity; hover for
 the full path and details. Operation progress temporarily takes priority.
@@ -866,8 +863,7 @@ remain unverified.
 
 AlphaN MAF-failsafe V4 is available for MS41.3. During a confirmed MAF fault,
 the engine uses modeled load while the diagnostic continues to evaluate the
-MAF measurement. V4 also uses the TPS-fault curve's own RPM axis and preserves
-Speed Density transient fueling. V4 has focused emulator coverage. Bench and
+MAF measurement. V4 also uses the TPS-fault curve's own RPM axis. V4 has focused emulator coverage. Bench and
 on-car validation remain open. Exact V1, V2 and V3 installations can upgrade
 to V4. The patcher rejects partial or mixed installations.
 

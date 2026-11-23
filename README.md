@@ -38,7 +38,7 @@ backups and logs.
 - **Offline calibration tools:** ROM analysis with user-managed definitions,
   file comparisons, calibration extraction and a Bins library for organizing
   reads, imports and prepared images.
-- **Community patches:** import a compatible MS42/MS43 XDF, configure its available settings and roll back edits using the saved record.
+- **Community XDF compatibility:** import your own MS42/MS43 patch list, configure its settings and roll back edits using the saved record. Community XDF files are not bundled.
 - **MS41 firmware patches:** inspect installed revisions, configure supported
   features and compose images with dependency, collision and checksum checks.
 - **MS41 recovery tools:** guided Soft-BSL installation and a separate hardware
@@ -51,7 +51,7 @@ the [MS42/MS43 guide](docs/MS42_MS43.md) lists revision coverage and current lim
 ### Current release
 
 [**Beta 20 — 0.1.0b20**](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b20)
-adds configurable community XDF patches and rollback for MS42/MS43, direct BIN
+adds support for importing compatible MS42/MS43 community XDF patch lists, direct BIN
 export from Patches and ECU Config, and a hardware BSL recovery workflow for
 MS42/MS43 that still awaits physical testing. MS41 gains V20 limiter updates,
 a corrected AlphaN MAF failsafe and stock VANOS behavior at high RPM.

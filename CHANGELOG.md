@@ -9,11 +9,11 @@ shared by BimmerStein applications.
 
 ### Patches and edited files
 
-- Support 22 patch entries in MS42 v1.7.1, 27 in MS43 430069 v2.9.2 and 28 in its Extended Load edition. The native patch layout supports settings, prerequisites, compatible presets and tables, selective removal and whole-build undo. Recognized features remain associated across compatible list updates. Older rollback records continue to use their original XDF.
+- Import separately distributed community XDFs. Compatible lists contain 22 patch entries in MS42 v1.7.1, 27 in MS43 430069 v2.9.2 and 28 in its Extended Load edition. The native patch layout supports settings, prerequisites, compatible presets and tables, selective removal and whole-build undo. Recognized features remain associated across compatible list updates. Older rollback records continue to use their original XDF.
 - Configure settings before installing their patch. Edit compatible CAN initialization and message-ID tables. BIN comparisons can show installed patches from an imported list.
 - Name patched and configured BINs in their own folders. Open the saved result directly in Bins, export immediately, or review a temporary image for flashing. XDF records are kept for exported or submitted temporary images.
 - Ignition Cut and Launch Control V20 improve cut timing and recovery on supported MS41.0/.1/.2/.3 firmware. Launch releases on a diagnosed speed fault. Compatible V18/V19 settings carry over. Very closely spaced crank events during coil activity remain a timing limitation in software tests. Physical timing and on-car behavior still need testing.
-- MS41.3 AlphaN MAF-failsafe V4 uses measured airflow to detect MAF recovery, corrects the RPM lookup during a simultaneous throttle-sensor fault and preserves Speed Density transient fueling. Exact V1 through V3 installations can upgrade. MS41.3 Soft-BSL installation detects an incomplete AlphaN installation that still has an active hook.
+- MS41.3 AlphaN MAF-failsafe V4 uses measured airflow to detect MAF recovery and corrects the RPM lookup during a simultaneous throttle-sensor fault. Exact V1 through V3 installations can upgrade. MS41.3 Soft-BSL installation detects an incomplete AlphaN installation that still has an active hook.
 - The VANOS minimum RPM patch now follows the stock solenoid command with **Original VANOS logic** through the 8,160 RPM bin on MS41.0 1429861 (V3) and MS41.1 1437806 (V2). Upgrades preserve the numeric setting and support removal.
 
 ### Recovery, coding and files
