@@ -215,8 +215,8 @@ def verify_native_soft_publication(gate, version, installed_image):
     state_entry, _, soft, rpm, *_ = LAYOUTS[variant]
     (_, isr, context, hooks, _, inverse, dwell, factors,
      offsets, flags, crank, _) = TIMING_LAYOUTS[variant]
-    patch_id = {"MS41.0": "launch_control_v18_ms410", "MS41.1": "launch_control_v18_ms411",
-                "MS41.2": "launch_control_v18_ms412", "MS41.3": "launch_control_v18"}[version]
+    patch_id = {"MS41.0": "launch_control_v19_ms410", "MS41.1": "launch_control_v19_ms411",
+                "MS41.2": "launch_control_v19_ms412", "MS41.3": "launch_control_v19"}[version]
     descriptor = gate.PATCHES[patch_id]
     publication_gap = {"1429861": 0x20726, "1437806": 0x207EC,
                        "1406464": 0x207E8, "SS1v2": 0x207E8}[variant]

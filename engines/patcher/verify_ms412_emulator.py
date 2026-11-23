@@ -20,7 +20,7 @@ _GROUP_NAMES = (
     "cal-guard", "loader-doors", "intel-flash", "amd-flash", "top-ds2",
     "st9030-proxy",
     "features-ms410", "features-ms411", "features-ms412", "features-ms413",
-    "launch-retard",
+    "launch-retard", "limiter-v20",
 )
 
 
@@ -62,6 +62,7 @@ from dtc import parse_ds2_dtc_response  # noqa: E402
 from engines.patcher import patch_ms41  # noqa: E402
 from engines.patcher.verify_patch_ram import verify_patch_ram  # noqa: E402
 from engines.patcher.verify_knock_guard import verify_knock_guard  # noqa: E402
+from engines.patcher.verify_cel_interaction import verify_cel_interaction  # noqa: E402
 from engines.patcher.verify_fixed_ipw import verify_fixed_ipw, LAYOUTS as FIXED_IPW_LAYOUTS  # noqa: E402
 from engines.patcher.verify_launch_retard_state import (  # noqa: E402
     CUT_STATE_ADDR as _CUT_STATE_ADDR, CUT_RECOVERY_ADDR, CUT_TIMING_ADDR,
@@ -88,6 +89,13 @@ RECOVER_EXIT = 0x094A
 
 
 _ADMISSION_EMULATORS = []
+_EXECUTED_OPCODES = set()
+
+
+def _collect_executed_opcodes():
+    for emu in _ADMISSION_EMULATORS:
+        _EXECUTED_OPCODES.update(emu.cpu.executed_opcodes)
+    _ADMISSION_EMULATORS.clear()
 
 
 def _load_emulator(*args, **kwargs):
@@ -164,19 +172,19 @@ _ASC0_RX_HANDLERS = {
 _FULL_STACK_PATCH_IDS = {
     "1429861": (
         "amd_flash", "softbsl_loader", "cal_guard", "door_magic_ms410",
-        "ignition_cut_v18_ms410", "launch_control_v18_ms410",
+        "ignition_cut_v19_ms410", "launch_control_v19_ms410",
     ),
     "1437806": (
         "amd_flash", "softbsl_loader", "cal_guard", "door_magic_ms411",
-        "ignition_cut_v18_ms411", "launch_control_v18_ms411",
+        "ignition_cut_v19_ms411", "launch_control_v19_ms411",
     ),
     "1406464": (
         "amd_flash", "softbsl_loader", "cal_guard", "door_magic",
-        "ignition_cut_v18_ms412", "launch_control_v18_ms412",
+        "ignition_cut_v19_ms412", "launch_control_v19_ms412",
     ),
     "SS1v2": (
         "amd_flash", "softbsl_loader", "cal_guard", "door_magic",
-        "ignition_cut_v18", "launch_control_v18",
+        "ignition_cut_v19", "launch_control_v19",
     ),
 }
 assert set(_FULL_STACK_PATCH_IDS) == set(_WATCHDOG_LAYOUTS)
@@ -207,7 +215,7 @@ def _launch_latch(image):
 PATCHES = patch_ms41.load_patches()
 LATEST = [
     "amd_flash", "softbsl_loader", "cal_guard", "door_magic",
-    "ignition_cut_v18_ms412", "launch_control_v18_ms412",
+    "ignition_cut_v19_ms412", "launch_control_v19_ms412",
 ]
 
 
@@ -215,9 +223,11 @@ def _build(ids):
     return _build_from(STOCK_PATH, ids)
 
 
-def _build_from(stock_path, ids):
+def _build_from(stock_path, ids, *, marker="B"):
     stock = stock_path.read_bytes()
-    image, _log = patch_ms41.build(stock, ids, marker="B")
+    # Older hardware/caller fixtures exercise the V19 byte layout explicitly.
+    historical = any(pid.startswith(("ignition_cut_v19", "launch_control_v19")) for pid in ids)
+    image, _log = patch_ms41.build(stock, ids, marker=marker, allow_deprecated=historical)
     status = checksum.checksum_status(image)
     assert status["boot"] and status["program"] and status["cal"], status
     return _bind_image(image, _REFERENCE_VARIANTS[stock_path.resolve()])
@@ -286,8 +296,8 @@ def _build_413():
     stock = STOCK_413_PATH.read_bytes()
     image, _log = patch_ms41.build(
         stock,
-        ["alphan_failsafe", "ignition_cut_v18", "launch_control_v18"],
-        marker="B",
+        ["alphan_failsafe_v3", "ignition_cut_v19", "launch_control_v19"],
+        marker="B", allow_deprecated=True,
     )
     status = checksum.checksum_status(image)
     assert status["boot"] and status["program"] and status["cal"], status
@@ -397,13 +407,15 @@ OLDER_FEATURE_LAYOUTS = {
     "MS41.0": {
         "stock_path": STOCK_410_PATH,
         "patch_ids": (
-            "ignition_cut_v18_ms410",
-            "launch_control_v18_ms410",
-            "vanos_minrpm_v2_ms410",
+            "ignition_cut_v19_ms410",
+            "launch_control_v19_ms410",
+            "vanos_minrpm_v3_ms410",
         ),
-        "ignition_id": "ignition_cut_v18_ms410",
-        "launch_id": "launch_control_v18_ms410",
-        "vanos_id": "vanos_minrpm_v2_ms410",
+        "ignition_id": "ignition_cut_v19_ms410",
+        "launch_id": "launch_control_v19_ms410",
+        "vanos_id": "vanos_minrpm_v3_ms410",
+        "vanos_hook": 0x2F7FA,
+        "vanos_outcomes": (0x2F802, 0x2F80A),
         "ignition_hooks": (0x26F8, 0x275C),
         "ignition_entry": 0x26E8,
         "ignition_cave_cpu": 0x32820,
@@ -428,13 +440,13 @@ OLDER_FEATURE_LAYOUTS = {
     "MS41.1": {
         "stock_path": STOCK_411_PATH,
         "patch_ids": (
-            "ignition_cut_v18_ms411",
-            "launch_control_v18_ms411",
-            "vanos_minrpm_ms411",
+            "ignition_cut_v19_ms411",
+            "launch_control_v19_ms411",
+            "vanos_minrpm_v2_ms411",
         ),
-        "ignition_id": "ignition_cut_v18_ms411",
-        "launch_id": "launch_control_v18_ms411",
-        "vanos_id": "vanos_minrpm_ms411",
+        "ignition_id": "ignition_cut_v19_ms411",
+        "launch_id": "launch_control_v19_ms411",
+        "vanos_id": "vanos_minrpm_v2_ms411",
         "ignition_hooks": (0xF466, 0xF4CA),
         "ignition_entry": 0xF456,
         "ignition_cave_cpu": 0x3F680,
@@ -454,8 +466,8 @@ OLDER_FEATURE_LAYOUTS = {
             (0x088A, (0x0894, 0x08E4)),
             (0x092A, (0x0946, 0x0934)),
         ),
-        "vanos_hook": 0xBBC0,
-        "vanos_outcomes": (0xBBC8, 0xBBCE),
+        "vanos_hook": 0x3BBC0,
+        "vanos_outcomes": (0x3BBC8, 0x3BBCE),
     },
 }
 
@@ -468,7 +480,7 @@ def _case_image(values):
     """Set patch calibration bytes, then restore all MS41.2 checksums."""
     image = bytearray(FULL_IMAGE)
     cal_offsets = {}
-    for patch_id in ("ignition_cut_v18_ms412", "launch_control_v18_ms412"):
+    for patch_id in ("ignition_cut_v19_ms412", "launch_control_v19_ms412"):
         cal_offsets.update(PATCHES[patch_id]["cave"]["cals"])
     for name, value in values.items():
         offset = cal_offsets[name]
@@ -486,7 +498,7 @@ def _case_image_413(values):
     """Set the MS41.3 patch controls and restore its active checksums."""
     image = bytearray(FULL_413_IMAGE)
     cal_offsets = {}
-    for patch_id in ("ignition_cut_v18", "launch_control_v18"):
+    for patch_id in ("ignition_cut_v19", "launch_control_v19"):
         cal_offsets.update(PATCHES[patch_id]["cave"]["cals"])
     for name, value in values.items():
         offset = cal_offsets[name]
@@ -574,10 +586,16 @@ def _call_native(emu, entry, *, max_steps=10000):
 
 
 def verify_alphan_failsafe():
-    patch = PATCHES["alphan_failsafe"]
-    assert patch_ms41.is_applied(FULL_413_IMAGE, patch)
+    from engines.patcher.verify_alphan_v4 import verify
+
+    verify(sys.modules[__name__])
+
+
+def verify_alphan_failsafe_v3():
+    patch = PATCHES["alphan_failsafe_v3"]
     stock = STOCK_413_PATH.read_bytes()
-    v3, _log = patch_ms41.build(stock, ["alphan_failsafe"])
+    v3, _log = patch_ms41.build(stock, [patch["id"]], allow_deprecated=True)
+    assert patch_ms41.is_applied(v3, patch)
     stock = _bind_image(stock, "SS1v2")
     v3 = _bind_image(v3, "SS1v2")
     load_words = (0xFC52, 0xFC54, 0xE80A, 0xE80C, 0xE8E4, 0xE8E8)
@@ -1215,7 +1233,7 @@ def _st9030_target_image():
     captured, _log = patch_ms41.build(
         STOCK_413_PATH.read_bytes(),
         ("amd_flash_v3", "softbsl_loader_v11", "door_magic", "cal_guard_v5",
-         "alphan_failsafe"),
+         "alphan_failsafe_v3"),
         patches=historical, marker="B", allow_deprecated=True)
     # This captured fixture predates firmware-directed checksum bounds. Restore
     # its historical stored program CRC; the full SHA below binds every byte.
@@ -1960,7 +1978,7 @@ def _execute_control(
     for address in range(0xDC28, 0xDC2E):
         emu.write_byte(address, 128)
     if prime_ignition and patch_ms41.is_applied(
-            bytes(emu.mem.image), PATCHES["ignition_cut_v18"]):
+            bytes(emu.mem.image), PATCHES["ignition_cut_v19"]):
         # Existing calibration fixtures request a complete cut/IPW cycle.
         # The dedicated timing regression below deliberately bypasses this.
         emu.cpu.csp = 3
@@ -2071,7 +2089,7 @@ def _run_ignition(
         max_steps=300,
     )
     replay_cpu = (IGNITION_V13_STOCK_REPLAY_CPU if patch_ms41.is_applied(
-        image, PATCHES["ignition_cut_v18"]) else IGNITION_STOCK_REPLAY_CPU)
+        image, PATCHES["ignition_cut_v19"]) else IGNITION_STOCK_REPLAY_CPU)
     replayed = replay_cpu in visited
     p1l = emu.read_byte(0xFF04)
     cut = not replayed and p1l == 0xFF
@@ -2115,7 +2133,7 @@ def _verify_native_cc6_mask_matrix(cut_image, stock_image):
                 architectural = (emu.reg.sp, emu.reg.cp, tuple(emu.reg.dpp))
                 res = _run(emu, entry, stop_at=(hook + 4,), max_steps=300)
                 replay_cpu = (IGNITION_V13_STOCK_REPLAY_CPU if patch_ms41.is_applied(
-                    image, PATCHES["ignition_cut_v18"]) else IGNITION_STOCK_REPLAY_CPU)
+                    image, PATCHES["ignition_cut_v19"]) else IGNITION_STOCK_REPLAY_CPU)
                 replayed = replay_cpu in visited
                 expected_p1l = 0xFF if wants_cut else mask
                 assert (
@@ -2614,8 +2632,65 @@ def _native_fuel_step(emu, context, rpm):
     return state, selected
 
 
+def verify_launch_v19_interlocks(case_image):
+    values = {**A_THRESHOLDS, "LC_SW": 1, "LC_CUTTYPE": 1, "LC_MAXRPM": 125}
+
+    def step(emu, ctx, rpm, speed=0):
+        variant, _, rpm_address, *_ = ctx
+        _, _, speed_entry, delta, speed_address, *_ = _NATIVE_FUEL_LAYOUTS[variant]
+        divisor = emu.read({"1429861": 0xE2, "1437806": 0x17C,
+                            "1406464": 0x166, "SS1v2": 0x166}[variant])
+        emu.write(delta, (speed * divisor + 3599) // 3600)
+        emu.write_byte(rpm_address, rpm)
+        _call_native(emu, speed_entry)
+        assert emu.read_byte(speed_address) == speed
+        return _native_fuel_step(emu, ctx, rpm)[0]
+
+    for polarity, pressed, wanted in (
+            (0, True, True), (1, False, True), (2, False, False), (255, True, False)):
+        emu, ctx = _native_fuel_fixture(case_image, values | {"LC_CLUTCHPOL": polarity})
+        latch = _LAUNCH_LATCH_BY_VARIANT[ctx[0]]
+        emu.write(0xFD50 if ctx[0] == "1429861" else 0xFD60, 0x0200 if pressed else 0)
+        emu.write_byte(latch, 0)
+        step(emu, ctx, 125)
+        assert bool(emu.read_byte(latch) & 0x40) == wanted
+        assert bool(emu.read_byte(_CUT_STATE_ADDR) & 2) == wanted
+        emu.write_byte(latch, 0x40)
+        step(emu, ctx, 125, speed=10)
+        assert bool(emu.read_byte(latch) & 0x40) == wanted
+
+    emu, ctx = _native_fuel_fixture(case_image, values | {"LC_SW": 0, "LC_CLUTCHPOL": 255})
+    step(emu, ctx, 125)
+    assert emu.read_byte(_CUT_STATE_ADDR) & 2
+    if ctx[0] != "SS1v2":
+        emu.write(0xFD30, 0x10)
+        step(emu, ctx, 125)
+        assert not emu.read_byte(_LAUNCH_LATCH_BY_VARIANT[ctx[0]]) & 0x40
+        assert not emu.read_byte(_CUT_STATE_ADDR) & 2
+        emu.write(0xFD30, 0)
+        step(emu, ctx, 125)
+        assert emu.read_byte(_CUT_STATE_ADDR) & 2
+
+    for soft, a, b, stock_a, stock_b, armed in (
+            (0, 0, 0, 1, 0, False), (125, 125, 125, 1, 0, False),
+            (125, 255, 130, 125, 0, False), (125, 130, 255, 1, 125, False),
+            (125, 130, 255, 1, 0, True), (125, 255, 130, 1, 0, True)):
+        emu, ctx = _native_fuel_fixture(case_image, values | {
+            "LC_SW": 0, "LC_CUTTYPE": 0, "LC_MAXRPM": soft, "LC_HARDRPM": 128,
+            "LC_FUEL_HYST_A": a, "LC_FUEL_HYST_B": b}, stock_a=stock_a, stock_b=stock_b)
+        for _ in range(8):
+            state = step(emu, ctx, 130)
+        assert bool(emu.read_byte(_LAUNCH_LATCH_BY_VARIANT[ctx[0]]) & 0x40) == armed
+        assert (state[0], state[1]) == ((6, True) if armed else (0, False))
+        for _ in range(6 * 256):  # Six stages, each with its native byte delay.
+            state = _native_fuel_step(emu, ctx, 60)[0]
+            if not state[1]:
+                break
+        assert (state[0], state[1]) == (0, False), (ctx[0], a, b, state)
+
+
 def verify_launch_native_fuel_recovery(case_image=_case_image, layout=None):
-    """Compare V11 against ORIGINAL native code, including crossed S/H.
+    """Compare fuel staging against original native code, including crossed S/H.
 
     Each controller receives matched effective S/H and recovery values. Stock
     thresholds in the patched image remain higher unless a priority tie/lower
@@ -2630,7 +2705,7 @@ def verify_launch_native_fuel_recovery(case_image=_case_image, layout=None):
         ("inherit B", 125, 128, 3, 255, 203),
         ("inherit A", 125, 128, 255, 2, 203),
         ("custom zero", 125, 128, 0, 0, 203),
-        ("subtract underflow", 10, 12, 20, 20, 203),
+        ("one release threshold saturates", 10, 12, 20, 2, 203),
         ("stock soft tie", 125, 128, 6, 2, 125),
         ("stock soft lower", 125, 128, 6, 2, 120),
     )
@@ -2658,6 +2733,7 @@ def verify_launch_native_fuel_recovery(case_image=_case_image, layout=None):
             assert actual == expected, (context[0], name, rpm, actual, expected)
             assert selected == native_selected, (context[0], name, rpm, selected, native_selected)
             assert bool(emu.read_byte(_CUT_STATE_ADDR) & 8) == priority, (context[0], name, rpm)
+    verify_launch_v19_interlocks(case_image)
 
 
 def verify_launch_hysteresis_priority(case_image=_case_image, layout=None):
@@ -2703,9 +2779,13 @@ def verify_launch_hysteresis_priority(case_image=_case_image, layout=None):
         if cap and ctx[0] == "SS1v2":
             continue  # SS1v2 replaced this stock speed-fault cap with SIR logic.
         emu.write(0xFD30, 3 if fault else 0x10)
+        _call_native(emu, _NATIVE_FUEL_LAYOUTS[ctx[0]][2])
         state, _ = _native_fuel_step(emu, ctx, 125)
         assert state[3] == (110 if fault else 112), (ctx[0], fault, state)
-        assert emu.read_byte(_CUT_STATE_ADDR) & 8
+        if cap:
+            assert not emu.read_byte(_LAUNCH_LATCH_BY_VARIANT[ctx[0]]) & 0x40
+        else:
+            assert emu.read_byte(_CUT_STATE_ADDR) & 8
         _, selected = _native_fuel_step(emu, ctx, 125)
         assert selected == {"A": 1, "B": 0}, (ctx[0], fault, selected)
 
@@ -3687,12 +3767,15 @@ def _verify_older_launch(layout):
     )
 
 
-def _verify_ms411_vanos(layout):
+def _verify_older_vanos(layout, *, entry, enable_address, enable_value, coolant_address):
     cases = [
         ("fd14.4 below", 0x10, 0x7D, 0x64, 0),
         ("fd14.4 equal", 0x10, 0x7D, 0x7D, 1),
         ("fd14.5 below", 0x20, 0x7D, 0x64, 0),
         ("fd14.5 above", 0x20, 0x7D, 0xC8, 1),
+        ("zero numeric setting", 0x10, 0x00, 0x00, 1),
+        ("highest numeric setting", 0x20, 0xFE, 0xFF, 1),
+        ("original at maximum rpm", 0x10, 0xFF, 0xFF, 0),
         ("neither preserves engage", 0x00, 0xFF, 0x00, 1),
     ]
     for name, fd14, threshold, rpm, outcome_index in cases:
@@ -3700,17 +3783,52 @@ def _verify_ms411_vanos(layout):
         emu = _emu(image, dpp0=4)
         emu.write(0xFD14, fd14)
         emu.write_byte(0xE9E2, rpm)
-        emu.cpu.csp = 3
-        res = _run(emu,
+        res = emu.run_from(
             layout["vanos_hook"],
             stop_at=layout["vanos_outcomes"],
             max_steps=100,
         )
         assert (
-            res.final_ip == layout["vanos_outcomes"][outcome_index]
+            res.final_pc == layout["vanos_outcomes"][outcome_index]
             and res.exit_reason == "stop_at"
             and res.regs["dpp"][0] == 4
         ), (name, res)
+
+    # At these native settings 240 is the first map load that commands on.
+    variant = _REFERENCE_VARIANTS[layout["stock_path"].resolve()]
+    stock = _bind_image(layout["stock_path"].read_bytes(), variant)
+    default = _build_from(layout["stock_path"], [layout["vanos_id"]])
+    for mode in (0x10, 0x20, 0):
+        commands = []
+        for image in (stock, default):
+            emu = _emu(image, dpp0=4)
+            emu.write(enable_address, enable_value)
+            emu.write(0xFD2E, 0x240)
+            emu.write(0xFD14, mode)
+            emu.write(0xFFC2, 0x1000)  # DP2.12 output
+            emu.write(0xFFC0, 0x1000)  # P2.12 high = initially off
+            emu.write_byte(layout["rpm_address"], 0xFF)
+            emu.write_byte(coolant_address, 170)
+            emu.write_byte(layout["speed_address"], 50)
+            levels = []
+            for load in (239, 240):
+                emu.write_byte(0xE8E5, load)
+                _call_native(emu, entry)
+                assert emu.read_byte(0xE9E2) == 0xFF
+                levels.append((emu.read(0xFFC0) >> 12) & 1)
+            commands.append(levels)
+        expected = [1, 1] if mode else [1, 0]
+        assert commands == [expected, expected], (mode, commands)
+
+
+def _verify_ms411_vanos(layout):
+    _verify_older_vanos(layout, entry=0x3BB2C, enable_address=0xFD5C,
+                        enable_value=1, coolant_address=0xF68A)
+
+
+def _verify_ms410_vanos(layout):
+    _verify_older_vanos(layout, entry=0x2F766, enable_address=0xFD4C,
+                        enable_value=0x8001, coolant_address=0xF0F0)
 
 
 # Both firmware families dispatch cylinders in the order 1, 5, 3, 6, 2, 4.
@@ -4054,8 +4172,8 @@ def verify_ms413_wbo_scheduler():
     # The retired V10 is an exact negative fixture, never an installable choice.
     legacy, _log = patch_ms41.build(
         stock, ["ignition_cut_v10"], marker="B", allow_deprecated=True)
-    clean = _build_from(STOCK_413_PATH, ["ignition_cut_v18"])
-    upgraded, _log = patch_ms41.build(legacy, ["ignition_cut_v18"], marker="B")
+    clean = _build_from(STOCK_413_PATH, ["ignition_cut_v19"])
+    upgraded, _log = patch_ms41.build(legacy, ["ignition_cut_v19"], marker="B", allow_deprecated=True)
     assert upgraded == clean, "V10-to-V11 must produce the clean V11 image"
     images = {
         "canonical SS1v2": stock,
@@ -4957,17 +5075,17 @@ ADMISSION_REGISTRY = {
     "door_magic": "loader-doors",
     "door_magic_ms410": "loader-doors",
     "door_magic_ms411": "loader-doors",
-    "ignition_cut_v18": "features-ms413",
-    "ignition_cut_v18_ms410": "features-ms410",
-    "ignition_cut_v18_ms411": "features-ms411",
-    "ignition_cut_v18_ms412": "features-ms412",
-    "launch_control_v18": "features-ms413",
-    "launch_control_v18_ms410": "features-ms410",
-    "launch_control_v18_ms411": "features-ms411",
-    "launch_control_v18_ms412": "features-ms412",
+    "ignition_cut_v20": "limiter-v20",
+    "ignition_cut_v20_ms410": "limiter-v20",
+    "ignition_cut_v20_ms411": "limiter-v20",
+    "ignition_cut_v20_ms412": "limiter-v20",
+    "launch_control_v20": "limiter-v20",
+    "launch_control_v20_ms410": "limiter-v20",
+    "launch_control_v20_ms411": "limiter-v20",
+    "launch_control_v20_ms412": "limiter-v20",
     "softbsl_loader": "loader-doors",
-    "vanos_minrpm_ms411": "features-ms411",
-    "vanos_minrpm_v2_ms410": "features-ms410",
+    "vanos_minrpm_v2_ms411": "features-ms411",
+    "vanos_minrpm_v3_ms410": "features-ms410",
 }
 
 
@@ -5011,16 +5129,23 @@ def _admission_fingerprint():
         ROOT / "engines" / "patcher" / "verify_patch_ram.py",
         ROOT / "engines" / "patcher" / "verify_knock_guard.py",
         ROOT / "engines" / "patcher" / "verify_knock_timing_episode.py",
+        ROOT / "engines" / "patcher" / "verify_cel_interaction.py",
+        ROOT / "engines" / "patcher" / "verify_alphan_v4.py",
         ROOT / "engines" / "patcher" / "verify_fixed_ipw.py",
+        ROOT / "engines" / "patcher" / "verify_v20_diagnostics.py",
+        ROOT / "engines" / "patcher" / "verify_v20_knock.py",
+        ROOT / "engines" / "patcher" / "verify_v20_recovery.py",
+        ROOT / "engines" / "patcher" / "verify_launch_v20.py",
     ):
         add(path.relative_to(ROOT).as_posix(), path)
     for path in sorted(
             (ROOT / "engines" / "patcher" / "patches").glob("*.json")):
         add(path.relative_to(ROOT).as_posix(), path)
-    for pattern in ("launch_control_v12_ms41*.*", "ignition_cut_v11_ms41[012]_*.*",
+    for pattern in ("alphan_failsafe_v4*.*", "launch_control_v12_ms41*.*", "ignition_cut_v11_ms41[012]_*.*",
                     "ignition_cut_v14_ms41*.*", "ignition_cut_v15_ms410_*.*",
                     "ignition_cut_v16_ms41*.*", "launch_control_v16_ms41*.*",
-                    "ignition_cut_v18_ms41*.*", "launch_control_v18_ms41*.*",
+                    "ignition_cut_v1[89]_ms41*.*", "launch_control_v1[89]_ms41*.*",
+                    "ignition_cut_v20_ms41*.*", "launch_control_v20_ms41*.*",
                     "ignition_cut_v12_ms413_*.*", "ignition_cut_v13_ms413_*.*"):
         for path in sorted((ROOT / "engines" / "patcher").glob(pattern)):
             if path.suffix in (".asm", ".hex"):
@@ -5078,12 +5203,12 @@ def _group_features_412():
     count = verify_knock_guard(sys.modules[__name__], "MS41.2", CUT_GUARD_LAYOUTS["MS41.2"]["image"]())
     print(f"[PASS] MS41.2 knock guard ({count} cases)", flush=True)
     checks = [
-        ("ignition cut V18", verify_ignition_cut_v10),
+        ("ignition cut V19", verify_ignition_cut_v10),
         ("cut side effects", lambda: verify_cut_side_effect_guards("MS41.2")),
-        ("launch V18 state", verify_launch_brain),
-        ("launch V18 Always speed/TPS envelope", verify_launch_always_gates),
-        ("launch V18 soft limiter", verify_launch_fuel_soft_cave),
-        ("launch V18 hard comparator", verify_launch_fuel_hard_comparator),
+        ("launch V19 state", verify_launch_brain),
+        ("launch V19 Always speed/TPS envelope", verify_launch_always_gates),
+        ("launch V19 soft limiter", verify_launch_fuel_soft_cave),
+        ("launch V19 hard comparator", verify_launch_fuel_hard_comparator),
         ("launch native hard ceiling", verify_launch_native_hard_ceiling),
         ("launch native fuel recovery", verify_launch_native_fuel_recovery),
         ("launch hysteresis priority", verify_launch_hysteresis_priority),
@@ -5095,27 +5220,30 @@ def _group_features_412():
         check()
         print(f"[PASS] MS41.2 {label}")
     _verify_watchdog_liveness(
-        STOCK_PATH, "ignition_cut_v18_ms412", "launch_control_v18_ms412")
-    print("[PASS] MS41.2 stock/V18/V18+V18/full-stack boot-reset liveness")
+        STOCK_PATH, "ignition_cut_v19_ms412", "launch_control_v19_ms412")
+    print("[PASS] MS41.2 stock/V19/V19+V19/full-stack boot-reset liveness")
 
 
 def _group_features_413():
     verify_patch_ram(sys.modules[__name__], "MS41.3")
+    cases = verify_cel_interaction(sys.modules[__name__], FULL_413_IMAGE)
+    print(f"[PASS] MS41.3 CEL interactions ({cases})", flush=True)
     count = verify_fixed_ipw(sys.modules[__name__], "MS41.3", CUT_GUARD_LAYOUTS["MS41.3"]["image"]())
     print(f"[PASS] MS41.3 fixed-IPW protection ({count} cases)", flush=True)
     count = verify_knock_guard(sys.modules[__name__], "MS41.3", CUT_GUARD_LAYOUTS["MS41.3"]["image"]())
     print(f"[PASS] MS41.3 knock guard ({count} cases)", flush=True)
     checks = [
-        ("AlphaN V3 fallback", verify_alphan_failsafe),
-        ("ignition cut V18", lambda: verify_ignition_cut_v10(_case_image_413)),
+        ("AlphaN V3 historical fallback", verify_alphan_failsafe_v3),
+        ("AlphaN V4 fallback", verify_alphan_failsafe),
+        ("ignition cut V19", lambda: verify_ignition_cut_v10(_case_image_413)),
         ("CC6 request timing and IPW interleavings", verify_ignition_event_timing),
         ("native WBO caller preserves P3", verify_ms413_wbo_scheduler),
         ("cut side effects", lambda: verify_cut_side_effect_guards("MS41.3")),
-        ("launch V18 state", lambda: verify_launch_brain(_case_image_413)),
-        ("launch V18 Always speed/TPS envelope",
+        ("launch V19 state", lambda: verify_launch_brain(_case_image_413)),
+        ("launch V19 Always speed/TPS envelope",
          lambda: verify_launch_always_gates(_case_image_413)),
-        ("launch V18 soft limiter", verify_launch_fuel_soft_cave_ms413),
-        ("launch V18 hard comparator",
+        ("launch V19 soft limiter", verify_launch_fuel_soft_cave_ms413),
+        ("launch V19 hard comparator",
          lambda: verify_launch_fuel_hard_comparator(_case_image_413)),
         ("launch native hard ceiling",
          lambda: verify_launch_native_hard_ceiling(_case_image_413)),
@@ -5135,8 +5263,8 @@ def _group_features_413():
         check()
         print(f"[PASS] MS41.3 {label}")
     _verify_watchdog_liveness(
-        STOCK_413_PATH, "ignition_cut_v18", "launch_control_v18")
-    print("[PASS] MS41.3 stock/V18/V18+V18/full-stack boot-reset liveness")
+        STOCK_413_PATH, "ignition_cut_v19", "launch_control_v19")
+    print("[PASS] MS41.3 stock/V19/V19+V19/full-stack boot-reset liveness")
 
 
 def _full_stack_calibrations(image, variant, values):
@@ -5707,10 +5835,11 @@ def _group_older(version):
         layout["stock_path"], layout["ignition_id"], layout["launch_id"])
     if version == "MS41.0":
         verify_ms410_limiter_diagnostics(layout)
-    if version == "MS41.1":
+        _verify_ms410_vanos(layout)
+    else:
         _verify_ms411_vanos(layout)
     suffix = (
-        "/watchdog/full-stack-boot-reset/limiter-diagnostics"
+        "/VANOS/watchdog/full-stack-boot-reset/limiter-diagnostics"
         if version == "MS41.0"
         else "/VANOS/watchdog/full-stack-boot-reset"
     )
@@ -5735,6 +5864,29 @@ def _group_launch_retard():
         print(f"[PASS] {versions[variant]} absolute launch angle/state/native event and observation recovery")
 
 
+def _group_limiter_v20():
+    from engines.patcher import verify_v20_diagnostics, verify_v20_knock
+    from engines.patcher import verify_v20_recovery, verify_launch_v20
+
+    gate = sys.modules[__name__]
+    for path, variant in _REFERENCE_VARIANTS.items():
+        family = PATCHES[_FULL_STACK_PATCH_IDS[variant][-2]]["target"]
+        suffix = "" if family == "MS41.3" else "_ms41" + family[-1]
+        cut, launch = (prefix + "_v20" + suffix for prefix in ("ignition_cut", "launch_control"))
+        for ids in ((cut,), (cut, launch)):
+            image = _build_from(path, ids, marker=None)
+            for suite in (verify_v20_diagnostics, verify_v20_knock, verify_v20_recovery):
+                suite.verify(gate, family, image)
+                _collect_executed_opcodes()
+            if len(ids) == 2:
+                verify_launch_v20.verify(gate, family, image)
+                verify_v20_diagnostics.verify_launch_observations(gate, family, image)
+            else:
+                verify_launch_v20.verify_standalone(gate, family, image)
+            _collect_executed_opcodes()
+            print(f"[PASS] {family} {' + '.join(ids)} native limiter and fault controls", flush=True)
+
+
 GROUPS = {
     "cal-guard": _group_cal_guard,
     "loader-doors": _group_loader,
@@ -5747,6 +5899,7 @@ GROUPS = {
     "features-ms412": _group_features_412,
     "features-ms413": _group_features_413,
     "launch-retard": _group_launch_retard,
+    "limiter-v20": _group_limiter_v20,
 }
 assert tuple(GROUPS) == _GROUP_NAMES
 
@@ -5766,6 +5919,7 @@ def main(argv=()):
     args = _parse_args(argv)
     _verify_registry()
     _ADMISSION_EMULATORS.clear()
+    _EXECUTED_OPCODES.clear()
     if args.list:
         print("\n".join(GROUPS))
         return 0
@@ -5774,11 +5928,10 @@ def main(argv=()):
         GROUPS[name]()
         if name in {"intel-flash", "amd-flash"}:
             print(f"[PASS] {name} actual array mutation/readback")
-    executed_opcodes = set().union(
-        *(emu.cpu.executed_opcodes for emu in _ADMISSION_EMULATORS))
-    assert executed_opcodes, "private admission executed no firmware instructions"
-    require_trusted(executed_opcodes)
-    print(f"[PASS] trusted opcode evidence ({len(executed_opcodes)} executed)")
+    _collect_executed_opcodes()
+    assert _EXECUTED_OPCODES, "private admission executed no firmware instructions"
+    require_trusted(_EXECUTED_OPCODES)
+    print(f"[PASS] trusted opcode evidence ({len(_EXECUTED_OPCODES)} executed)")
     print(f"admission fingerprint: {_admission_fingerprint()}")
     if args.group:
         print(f"PRIVATE MS41 EMULATOR FOCUSED CHECK PASS ({len(selected)} groups)")

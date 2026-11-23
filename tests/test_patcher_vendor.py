@@ -7,7 +7,7 @@ import checksum
 import pytest
 
 EXPECTED_IDS = {
-    "alphan_failsafe", "alphan_failsafe_v1", "alphan_failsafe_v2", "amd_flash", "amd_flash_v3", "amd_flash_v4", "top_ds2_guard", "cal_guard", "cal_guard_v1",
+    "alphan_failsafe", "alphan_failsafe_v1", "alphan_failsafe_v2", "alphan_failsafe_v3", "amd_flash", "amd_flash_v3", "amd_flash_v4", "top_ds2_guard", "cal_guard", "cal_guard_v1",
     "cal_guard_v2", "cal_guard_v4", "cal_guard_v5", "softbsl_loader_v11", "door_0x43",
     "door_0x43_ms410", "door_0x43_ms411", "door_magic", "door_magic_ms410",
     "door_magic_ms411", "ignition_cut", "ignition_cut_v2", "ignition_cut_v3", "ignition_cut_v4",
@@ -41,11 +41,11 @@ EXPECTED_IDS = {
     "launch_control_v14", "launch_control_v14_ms410", "launch_control_v14_ms411", "launch_control_v14_ms412",
     "ignition_cut_v15_ms410", "launch_control_v15_ms410",
     *(f"{feature}_v{revision}{suffix}" for feature in ("ignition_cut", "launch_control")
-      for revision in (16, 17, 18) for suffix in ("", "_ms410", "_ms411", "_ms412")),
+      for revision in (16, 17, 18, 19, 20) for suffix in ("", "_ms410", "_ms411", "_ms412")),
     "softbsl_loader", "softbsl_loader_legacy", "softbsl_loader_relocated_v1",
     "softbsl_loader_v2", "softbsl_loader_v3_bench_failed", "softbsl_loader_v9",
     "softbsl_loader_v10", "cal_guard_v3_compatibility", "cal_guard_v4_bench_failed",
-    "vanos_minrpm_ms410", "vanos_minrpm_v2_ms410", "vanos_minrpm_ms411",
+    "vanos_minrpm_ms410", "vanos_minrpm_v2_ms410", "vanos_minrpm_v3_ms410", "vanos_minrpm_ms411", "vanos_minrpm_v2_ms411",
 }
 
 _CUT_STATE_ASM = {
@@ -92,7 +92,7 @@ def test_retired_cut_sources_preserve_their_original_ram_operands():
 
 def test_current_sources_use_relocated_state():
     patcher = Path(__file__).resolve().parents[1] / "engines" / "patcher"
-    for path in (*patcher.glob("*v16*.asm"), *patcher.glob("*v18*.asm")):
+    for path in (*patcher.glob("*v16*.asm"), *patcher.glob("*v1[89]*.asm")):
         code = "\n".join(line.split(";", 1)[0]
                          for line in path.read_text(encoding="utf-8").splitlines())
         assert not re.search(r"0xE84[7-A]\b", code, re.IGNORECASE), path.name
@@ -411,46 +411,39 @@ def test_exact_calguard_artifact_is_registered_and_prior_revision_is_upgradable(
     assert any("exact prior revision" in line for line in log)
 
 
-def test_alphan_v3_registers_and_upgrades_only_exact_v1_v2_bytes():
+def test_alphan_v4_registers_and_upgrades_exact_predecessors():
     patches = patch_ms41.load_patches()
     current = patches["alphan_failsafe"]
     predecessors = [
         patches["alphan_failsafe_v1"],
         patches["alphan_failsafe_v2"],
+        patches["alphan_failsafe_v3"],
     ]
 
-    assert current["version"] == "V3"
-    assert current["supersedes"] == [
-        "alphan_failsafe_v1", "alphan_failsafe_v2"]
+    assert current["version"] == "V4"
+    assert set(current["supersedes"]) == {p["id"] for p in predecessors}
     assert current.get("deprecated") is not True
-    assert current["status"] == "TESTED"
-    assert current["tested"] is True
+    assert current["status"] == "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED"
+    assert current["tested"] is False
     assert all(patch["deprecated"] for patch in predecessors)
-    assert all("BROKEN" in patch["status"] for patch in predecessors)
+    assert all("BROKEN" in patch["status"] for patch in predecessors[:2])
     assert patch_ms41.validate_splices(current) == []
     assert patch_ms41.validate_splices(predecessors[0])
     assert patch_ms41.validate_splices(predecessors[1]) == []
 
-    current_edits = {edit["off"]: edit for edit in current["edits"]}
+    control, _ = patch_ms41.build(ref("MS41.3"), ["ignition_cut_v20", "launch_control_v20"])
+    direct, _ = patch_ms41.build(control, [current["id"]])
     for predecessor in predecessors:
-        for prior_edit in predecessor["edits"]:
-            upgrades = current_edits[prior_edit["off"]]["upgrade_expect"]
-            assert prior_edit["data"] in upgrades
-
-        legacy, _ = patch_ms41.build(
-            ref("MS41.3"), [predecessor["id"]], allow_deprecated=True)
-        upgraded, log = patch_ms41.build(legacy, ["alphan_failsafe"])
+        legacy, _ = patch_ms41.build(control, [predecessor["id"]], allow_deprecated=True)
+        upgraded, _ = patch_ms41.build(legacy, [current["id"]])
+        assert upgraded == direct
         assert patch_ms41.is_applied(upgraded, current)
         assert all(
             not patch_ms41.is_applied(upgraded, prior)
             for prior in predecessors
         )
-        assert sum("exact prior revision" in line for line in log) == 2
-
-        reverted = patch_ms41.revert(upgraded, current)
-        for edit in current["edits"]:
-            expected = bytes.fromhex(edit["expect"])
-            assert reverted[edit["off"]:edit["off"] + len(expected)] == expected
+        assert patch_ms41.revert(upgraded, current) == control
+        assert patch_ms41.build(upgraded, [current["id"]])[0] == upgraded
 
 
 @pytest.mark.parametrize(
@@ -658,7 +651,7 @@ def test_softbsl_v11_rejects_a_corrupted_boot_hook_prefix():
 def test_relocated_loader_and_historical_feature_descriptors_use_built_hex_artifacts():
     root = Path(__file__).resolve().parents[1]
     patches = patch_ms41.load_patches()
-    alphan = patches["alphan_failsafe"]
+    alphan = patches["alphan_failsafe_v3"]
     alphan_cave = next(
         edit["data"] for edit in alphan["edits"]
         if edit["off"] == alphan["cave"]["base"]
@@ -838,26 +831,26 @@ def test_ignition_cut_guards_leave_o2_heater_diagnostics_untouched(
 def test_latest_switch_caves_follow_the_stock_sir_selector_order():
     patches = patch_ms41.load_patches()
     active_caves = {
-        "ignition_cut_v18": bytes.fromhex(next(
+        "ignition_cut_v20": bytes.fromhex(next(
             edit["data"]
-            for edit in patches["ignition_cut_v18"]["edits"]
+            for edit in patches["ignition_cut_v20"]["edits"]
             if edit["off"] == 0x3A600
         )),
-        "launch_control_v18": bytes.fromhex(next(
+        "launch_control_v20": bytes.fromhex(next(
             edit["data"]
-            for edit in patches["launch_control_v18"]["edits"]
+            for edit in patches["launch_control_v20"]["edits"]
             if edit["off"] == 0x39F80
         )),
-        "launch_control_v18_ms412": bytes.fromhex(next(
+        "launch_control_v20_ms412": bytes.fromhex(next(
             edit["data"]
-            for edit in patches["launch_control_v18_ms412"]["edits"]
+            for edit in patches["launch_control_v20_ms412"]["edits"]
             if edit["off"] == 0x39F80
         )),
     }
     launch_reads = (
-        bytes.fromhex("f3f861fd6982"),      # selector 01: fd60.9 / pin 80
-        bytes.fromhex("f3f861fd6981"),      # selector 02: fd60.8 / pin 81
-        bytes.fromhex("f3f860fd67f88000"),  # selector 04: fd60.7 / pin 82
+        bytes.fromhex("8a301090"),  # JB FD60.9 / pin 80
+        bytes.fromhex("8a300b80"),  # JB FD60.8 / pin 81
+        bytes.fromhex("8a300670"),  # JB FD60.7 / pin 82
     )
 
     for patch_id, cave in active_caves.items():
@@ -867,7 +860,7 @@ def test_latest_switch_caves_follow_the_stock_sir_selector_order():
                 bytes.fromhex("f3fa61fd69a1"),
                 bytes.fromhex("f3fa60fd67fa8000"),
             )
-            if patch_id == "ignition_cut_v18"
+            if patch_id == "ignition_cut_v20"
             else launch_reads
         )
         offsets = [cave.find(read) for read in sir_reads]
@@ -875,8 +868,8 @@ def test_latest_switch_caves_follow_the_stock_sir_selector_order():
         assert all(offset >= 0 for offset in offsets), (patch_id, offsets)
         assert all(cave.count(read) == 1 for read in sir_reads), patch_id
 
-    ms413 = active_caves["launch_control_v18"]
-    ms412 = active_caves["launch_control_v18_ms412"]
+    ms413 = active_caves["launch_control_v20"]
+    ms412 = active_caves["launch_control_v20_ms412"]
     assert len(ms413) == len(ms412)
     assert ms413 != ms412
 
@@ -1004,14 +997,14 @@ def test_ignition_v7_is_anchored_only_at_the_six_channel_p1l_final_stage():
 
 def test_latest_ms412_program_patches_recompute_enabled_program_checksum():
     out, _log = patch_ms41.build(
-        ref("MS41.2"), ["ignition_cut_v18_ms412", "launch_control_v18_ms412"])
+        ref("MS41.2"), ["ignition_cut_v20_ms412", "launch_control_v20_ms412"])
     status = checksum.checksum_status(out)
     assert status == {
         "boot": True, "program": True, "cal": True,
         "prog_disabled": False, "cal_disabled": False,
     }
     assert patch_ms41.validate_splices(
-        patch_ms41.load_patches()["launch_control_v18_ms412"]) == []
+        patch_ms41.load_patches()["launch_control_v20_ms412"]) == []
     # V16 retains the native soft/fault selection; the former hook is stock.
     assert out[0x247D2:0x247D6] == ref("MS41.2")[0x247D2:0x247D6]
 
@@ -1019,7 +1012,7 @@ def test_latest_ms412_program_patches_recompute_enabled_program_checksum():
 def test_latest_ms413_program_patches_recompute_all_checksums():
     out, _log = patch_ms41.build(
         ref("MS41.3clean"),
-        ["alphan_failsafe", "ignition_cut_v18", "launch_control_v18"],
+        ["alphan_failsafe", "ignition_cut_v20", "launch_control_v20"],
     )
     status = checksum.checksum_status(out)
     assert status["boot"] and status["program"] and status["cal"]
@@ -1032,17 +1025,17 @@ def test_latest_ms413_program_patches_recompute_all_checksums():
         (
             "MS41.0",
             [
-                "ignition_cut_v18_ms410",
-                "launch_control_v18_ms410",
-                "vanos_minrpm_v2_ms410",
+                "ignition_cut_v20_ms410",
+                "launch_control_v20_ms410",
+                "vanos_minrpm_v3_ms410",
             ],
         ),
         (
             "MS41.1",
             [
-                "ignition_cut_v18_ms411",
-                "launch_control_v18_ms411",
-                "vanos_minrpm_ms411",
+                "ignition_cut_v20_ms411",
+                "launch_control_v20_ms411",
+                "vanos_minrpm_v2_ms411",
             ],
         ),
     ],
@@ -1064,22 +1057,22 @@ def test_latest_older_firmware_feature_ports_compose_and_recompute_program(
         (
             "MS41.0",
             ["ignition_cut_v8_ms410", "launch_control_v6_ms410"],
-            ["ignition_cut_v18_ms410", "launch_control_v18_ms410"],
+            ["ignition_cut_v20_ms410", "launch_control_v20_ms410"],
         ),
         (
             "MS41.1",
             ["ignition_cut_v8_ms411", "launch_control_v6_ms411"],
-            ["ignition_cut_v18_ms411", "launch_control_v18_ms411"],
+            ["ignition_cut_v20_ms411", "launch_control_v20_ms411"],
         ),
         (
             "MS41.2",
             ["ignition_cut_v8_ms412", "launch_control_v6_ms412"],
-            ["ignition_cut_v18_ms412", "launch_control_v18_ms412"],
+            ["ignition_cut_v20_ms412", "launch_control_v20_ms412"],
         ),
         (
             "MS41.3",
             ["ignition_cut_v8", "launch_control_v6"],
-            ["ignition_cut_v18", "launch_control_v18"],
+            ["ignition_cut_v20", "launch_control_v20"],
         ),
     ],
 )

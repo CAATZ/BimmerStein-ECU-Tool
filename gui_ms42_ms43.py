@@ -642,7 +642,7 @@ class MS42MS43Desktop(MS42MS43StorageDesktop, MS42MS43ConfigDesktop):
         self._log(f"VIN written and verified: {info['vin']}", "ok")
         QMessageBox.information(self, "VIN Write Complete", f"VIN written and verified:\n\n{info['vin']}")
 
-    def _ms42_ms43_read(self, mode):
+    def _ms42_ms43_read(self, mode, *, on_archived=None):
         ecu = self._ds2
         size = images.FULL_SIZE if mode == "full" else ecu.profile.partial_size
         label = f"{'Full ROM image' if mode == 'full' else 'Calibration'} ({size // 1024} KB)"
@@ -681,9 +681,15 @@ class MS42MS43Desktop(MS42MS43StorageDesktop, MS42MS43ConfigDesktop):
             return data
 
         def done(data):
-            entry = self._backup_save_bytes(data, mode, source, checksum_context=checksum_context)
+            try:
+                entry = self._backup_save_bytes(data, mode, source, checksum_context=checksum_context)
+            except Exception as error:
+                self._save_unarchived_read(data, f"{ecu.family.lower()}_{mode}.bin", error)
+                return
             self._session_backup_read = True
             self._refresh_backup_table()
+            if on_archived:
+                on_archived(data, entry)
             self._offer_additional_read_copy(data, entry, label)
         self._run_task(task, on_success=done)
 
@@ -697,7 +703,42 @@ class MS42MS43Desktop(MS42MS43StorageDesktop, MS42MS43ConfigDesktop):
             except (OSError, ValueError) as error:
                 QMessageBox.warning(self, "Image Not Loaded", str(error))
 
-    def _ms42_ms43_write(self, data, filename, mode):
+    def _ms42_ms43_edited_write_limit(self, original, image, family):
+        """Explain an editor change the selected program/calibration/boot writer would omit."""
+        from ms42_ms43_agent import BOOT_WRITE_SECTORS, SECTORS
+        from ms42_ms43_identity import IDENTITY_GRAFT_RANGES
+
+        profile = images.PROFILES[family]
+        if len(original) != len(image):
+            return "The edited image and its source have different sizes."
+        if len(image) == profile.partial_size:
+            end = profile.calibration_write_length
+            if original[end:] != image[end:]:
+                return "This edit changes bytes outside the writable calibration region."
+            return None
+
+        ranges = [(offset, offset + size) for _, offset, size in profile.program_write_regions]
+        ranges.append((profile.calibration_offset,
+                       profile.calibration_offset + profile.calibration_write_length))
+        include_boot = self.chk_bootloader_write.isChecked() and self.chk_bootloader_write.isEnabled()
+        for sector in BOOT_WRITE_SECTORS:
+            start, end = SECTORS[sector:sector + 2]
+            if not include_boot and original[start:end] != image[start:end]:
+                return "This edit changes the boot region, which the selected write preserves."
+            ranges.append((start, end))
+        if include_boot and self.chk_boot_preserve_identity.isChecked():
+            for start, end in IDENTITY_GRAFT_RANGES[family]:
+                if original[start:end] != image[start:end]:
+                    return "This edit changes ECU identity bytes that the selected write preserves."
+        ranges.append((len(image), len(image)))
+        previous = 0
+        for start, end in sorted(ranges):
+            if original[previous:start] != image[previous:start]:
+                return "This edit changes retained or reserved bytes outside the writable flash regions."
+            previous = end
+        return None
+
+    def _ms42_ms43_write(self, data, filename, mode, *, checksum_context=None, live_config_checksum=None):
         ecu = self._ds2
         try:
             target_identity = images.image_identity(data, ecu.family)
@@ -707,6 +748,8 @@ class MS42MS43Desktop(MS42MS43StorageDesktop, MS42MS43ConfigDesktop):
             QMessageBox.warning(self, "Incompatible Image", str(error))
             return
         verify = self.chk_verify.isChecked()
+        correct_checksum = (self.chk_correct_cksum.isChecked() if live_config_checksum is None
+                            else live_config_checksum)
         backup = self.chk_backup_before_write.isChecked()
         force_slow = self.chk_force_slow_ds2.isChecked()
         write_boot = mode == "full" and self.chk_bootloader_write.isChecked()
@@ -731,34 +774,47 @@ class MS42MS43Desktop(MS42MS43StorageDesktop, MS42MS43ConfigDesktop):
                        "The separate retained-data sectors are preserved.\n"
                        "Power loss during boot programming can require hardware recovery."
                        if write_boot else "Bootloader and protected identity are preserved.")
-        answer = QMessageBox.question(
-            self, f"Write {ecu.family}",
+        confirmation = (
             f"Write {'program and calibration' if mode == 'full' else 'calibration'} "
             f"from {filename}?\n\n{boot_notice}\n"
             f"Backup: {'On' if backup else 'Off'} · Verify: {'On' if verify else 'Off'}\n\n"
             f"{voltage}\n\nKeep ignition ON, the engine STOPPED and the connection stable. "
-            "The automatic transfer may restart the ECU to finalize programming.",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            "The automatic transfer may restart the ECU to finalize programming.")
+        if live_config_checksum is None:
+            answer = QMessageBox.question(self, f"Write {ecu.family}", confirmation,
+                                          QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        else:
+            answer = self._confirm_edited_write(f"Write {ecu.family}", confirmation, data,
+                                                f"{ecu.family}_config_{mode}.bin")
         if answer != QMessageBox.Yes:
             return
 
         def task(log_fn, progress_fn):
             with ecu.transfer(force_slow=force_slow):
-                if backup:
+                if backup and not write_boot:
                     original = ecu.read_full(progress_cb=progress_fn, log_fn=log_fn)
                     self._backup_save_bytes(original, "full", "Before flash diagnostic read")
                 write = ecu.write_full if mode == "full" else ecu.write_tune
                 options = {"write_boot": write_boot} if mode == "full" else {}
+                if checksum_context is not None:
+                    options["checksum_context"] = checksum_context
                 if write_boot:
                     options["preserve_identity"] = preserve_identity
+                    if backup:
+                        options["boot_backup"] = lambda raw: self._backup_save_bytes(
+                            raw, "full", "Before boot write (raw RAM agent read)")
                 write(bytes(data), progress_cb=progress_fn, log_fn=log_fn, verify=verify,
-                      use_ram=not force_slow, use_agent=not force_slow, **options)
+                      correct_checksum=correct_checksum, use_ram=not force_slow,
+                      use_agent=not force_slow, **options)
             if not verify:
                 log_fn("Program/calibration readback skipped (Verify off); boot readback verified."
                        if write_boot else
                        "Read-back verification skipped (Verify off). ECU-side finalization completed.")
 
         def done(_result):
+            if self._config_data is None:
+                self._ms42_ms43_config_key = None
+                self._update_config_buttons()
             if mode == "full":
                 self._ms42_ms43_written_revision(ecu, target_identity)
             self._refresh_backup_table()
@@ -968,10 +1024,13 @@ class MS42MS43Desktop(MS42MS43StorageDesktop, MS42MS43ConfigDesktop):
         self._ms42_ms43_update_storage()
 
     def _ms42_ms43_close_data(self):
+        if not self._ms42_ms43_confirm_storage_discard():
+            return
         self._ms42_ms43_data_view = False
         self._ms42_ms43_data_snapshot = None
         self._ms42_ms43_storage_snapshot = None
         self._ms42_ms43_storage_source = ""
+        self._ms42_ms43_storage_dirty = False
         self._ms42_ms43_storage_status.setText("No storage backup loaded.")
         self._ms42_ms43_data_text.clear()
         self._ms42_ms43_update_data()
@@ -979,15 +1038,16 @@ class MS42MS43Desktop(MS42MS43StorageDesktop, MS42MS43ConfigDesktop):
     def _ms42_ms43_show_data(self, snapshot):
         from ms42_ms43_diagnostics import format_snapshot
 
-        self._ms42_ms43_data_snapshot = snapshot
-        self._ms42_ms43_data_view = True
-        self._ms42_ms43_data_text.setPlainText(format_snapshot(snapshot))
         if "retained_raw" in snapshot:
             from ms42_ms43_storage import from_identity_snapshot
             try:
-                self._ms42_ms43_show_storage(from_identity_snapshot(snapshot), "ECU Data snapshot")
+                if not self._ms42_ms43_show_storage(from_identity_snapshot(snapshot), "ECU Data snapshot"):
+                    return
             except ValueError as error:
                 self._log(f"Retained flash can be inspected; restore metadata is unavailable: {error}", "warn")
+        self._ms42_ms43_data_snapshot = snapshot
+        self._ms42_ms43_data_view = True
+        self._ms42_ms43_data_text.setPlainText(format_snapshot(snapshot))
         self._ms42_ms43_update_data()
 
     def _ms42_ms43_read_data(self):

@@ -38,6 +38,7 @@ backups and logs.
 - **Offline calibration tools:** ROM analysis with user-managed definitions,
   file comparisons, calibration extraction and a Bins library for organizing
   reads, imports and prepared images.
+- **Community patches:** import a compatible MS42/MS43 XDF, configure its available settings and roll back edits using the saved record.
 - **MS41 firmware patches:** inspect installed revisions, configure supported
   features and compose images with dependency, collision and checksum checks.
 - **MS41 recovery tools:** guided Soft-BSL installation and a separate hardware
@@ -49,11 +50,13 @@ the [MS42/MS43 guide](docs/MS42_MS43.md) lists revision coverage and current lim
 
 ### Current release
 
-[**Beta 19 — 0.1.0b19**](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b19)
-adds MS42/MS43 support, expands diagnostics and storage tools, and includes
-MS41 Ignition Cut and Launch Control V18. See the [release notes](RELEASE_NOTES.md)
-for the changes and validation limits. Windows installers and complete portable
-packages are available for x64, x86, Windows 7 x64 and Windows 7 x86.
+[**Beta 20 — 0.1.0b20**](https://github.com/CAATZ/BimmerStein-ECU-Tool/releases/tag/v0.1.0b20)
+adds community XDF patch lists for MS42/MS43 and makes it easier to save, export
+or flash an edited BIN. Live Data now shows missed readings as gaps and opens
+long CSV logs in pages. MS41 updates include Ignition Cut and Launch Control V20
+and corrected original VANOS behavior on supported firmware.
+See the [release notes](RELEASE_NOTES.md) for details and use limits.
+
 
 ## Acknowledgements
 
@@ -111,10 +114,12 @@ reconnecting. Installing or updating the Windows application does not flash an E
 | Storage | MS41 512-byte EEPROM; MS42 16 KiB flash journal; MS43 2 KiB EEPROM and separate 16 KiB raw flash banks |
 | Offline work | Image analysis, checksums, comparisons, Bins, calibration extraction and supported configuration edits |
 | MS41 recovery | Soft-BSL and hardware BSL, including supported Intel and AMD/JEDEC flash devices |
+| MS42/MS43 hardware recovery | Integrated BSL-Unbricker through manual boot entry; offline candidate awaiting physical qualification |
 
 Available functions depend on the detected firmware and fitted hardware. The app
 does not treat an unknown firmware revision or module layout as a supported one.
-MS41 Soft-BSL, hardware-BSL controls and the Patches catalog remain MS41-specific.
+Soft-BSL and the built-in patch catalog are specific to MS41. MS42/MS43 use imported XDF patch lists. The integrated
+BSL-Unbricker also provides a separate MS42/MS43 hardware-entry route.
 
 ## Flashing and recovery
 
@@ -169,8 +174,26 @@ direct ASC0 connection. It supports the documented Intel 28F200 and AMD/JEDEC
 external VPP/RP# supply; AMD/JEDEC devices use a different programming method.
 
 See the [hardware recovery companion](https://github.com/CAATZ/MS41-BSL-Unbricker)
-for wiring and setup. This is an advanced MS41 workflow, separate from normal
-K-Line flashing and MS42/MS43 RAM-agent access.
+for MS41 wiring and setup. That standalone companion remains MS41-specific.
+
+**MS42/MS43 hardware recovery**
+
+The integrated **BSL-Unbricker** can load a RAM agent through manual C167
+hardware boot entry even when the installed ECU boot code is damaged. Select
+MS42 or MS43 explicitly and use verified boot-entry instructions for that ECU.
+Every operation requires fresh manual boot entry. This implementation is an
+offline candidate; physical ECU recovery and adapter timing are not yet qualified.
+
+Reads save raw 512 KiB flash or the 32 KiB MS42 / 64 KiB MS43 calibration.
+Full recovery preserves live identity and retained flash data by default;
+**Restore exact backup** replaces both from the selected trusted full image.
+It does not restore separate serial EEPROM. Before erase, the app saves the
+original full flash and prepared target, then verifies each written sector and
+the complete flash readback. After success, follow the manual ignition-cycle
+prompt; this route does not automatically reset into DS2.
+
+See the [BSL-Unbricker instructions](manual/USER_MANUAL.md)
+for file, preservation and recovery details.
 
 ## Diagnostics, adaptations and coding
 
@@ -219,7 +242,7 @@ verified mapping remain unavailable rather than using a guessed address.
 **Values**, **Graphs** and **Instruments** share your selected channels. View live
 data or open a saved CSV, adjust the panel dividers, and save your preferred
 instruments. CSV logging retains the complete session; the live viewer keeps a
-bounded recent history. Stop polling before changing logger definitions.
+bounded recent history. Long CSVs open in pages. A missed reading leaves a gap. Stop polling before changing logger definitions.
 
 Polling modes and rates depend on the selected logger. MS41 supports grouped
 DS2 reads and Telegram polling, with compatible logger definitions available
@@ -252,9 +275,10 @@ Bins when ready.
 
 The Patches tab detects installed and deprecated revisions, checks dependencies
 and byte collisions, applies the selected configuration, corrects checksums and
-saves the composed image in Bins. Availability depends on the identified MS41
-variant and the patch's exact supported firmware. The patch catalog is
-MS41-specific.
+opens a review where you can save a named BIN, export a copy or proceed to flashing a temporary image. Availability depends on the identified MS41
+variant and the patch's exact supported firmware. MS41 uses its built-in patch
+catalog. The Patches tab also accepts user-supplied MS42/MS43 patch lists.
+See [importing a community XDF and rolling back changes](docs/MS42_MS43.md#community-patch-lists).
 
 Each revision retains its own testing status. **Untested** patches remain
 untested; **Ignition Cut and Launch Control are HIGHLY EXPERIMENTAL** and have
@@ -271,7 +295,7 @@ mismatched definition can point to the wrong addresses.
 
 1. Choose x64 for 64-bit Windows or x86 for 32-bit Windows. Use the separately
    labelled **Windows 7** package on Windows 7 SP1.
-2. Run the installer, or extract the entire portable ZIP to a writable folder.
+2. Run the installer for your Windows version and architecture.
 3. Install the driver for your FTDI adapter, then start **BimmerStein ECU Tool**.
 
 Keep the complete application folder together. Required runtimes, resources,

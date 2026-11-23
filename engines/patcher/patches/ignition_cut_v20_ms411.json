@@ -1,0 +1,599 @@
+{
+  "id": "ignition_cut_v20_ms411",
+  "family_id": "ignition_cut_v20",
+  "version": "V20",
+  "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
+  "tested": false,
+  "maturity": "Experimental",
+  "validation": "Needs testing",
+  "verification": "Focused reference-image tests cover coprocessor replies, capture timing, misfire recovery and native faults. A simultaneous coil interrupt can delay crank acknowledgment. Bench and on-car validation remain required.",
+  "title": "Ignition Cut",
+  "user_description": "Independent ignition-cut limiter with RPM hysteresis, optional fixed injector pulse width and an optional fixed ignition angle in a configurable RPM region below the cut limit. Provides shared timing and combustion-observation recovery for Launch Control V20.",
+  "description": "MS41.1 Ignition Cut V20 retains the native crank-capture instructions, preserves unread knock replies and tracks recovery from actual combustion changes.",
+  "target": "MS41.1",
+  "recompute": [
+    "program",
+    "cal"
+  ],
+  "requires": [],
+  "conflicts": [
+    "ignition_cut_v7_ms411",
+    "ignition_cut_v8_ms411",
+    "ignition_cut_v9_ms411",
+    "ignition_cut_v10_ms411",
+    "ignition_cut_v11_ms411",
+    "ignition_cut_v14_ms411",
+    "ignition_cut_v16_ms411",
+    "ignition_cut_v17_ms411",
+    "ignition_cut_v18_ms411",
+    "ignition_cut_v19_ms411"
+  ],
+  "supersedes": [
+    "ignition_cut_v7_ms411",
+    "ignition_cut_v8_ms411",
+    "ignition_cut_v9_ms411",
+    "ignition_cut_v10_ms411",
+    "ignition_cut_v11_ms411",
+    "ignition_cut_v14_ms411",
+    "ignition_cut_v16_ms411",
+    "ignition_cut_v17_ms411",
+    "ignition_cut_v18_ms411",
+    "ignition_cut_v19_ms411"
+  ],
+  "cave": {
+    "region": "proghigh-gap",
+    "base": 243328,
+    "splice_off": 242790,
+    "splice_op": "calls",
+    "relocatable": false,
+    "splices": [
+      {
+        "off": 242790,
+        "base": 12288,
+        "op": "calls"
+      },
+      {
+        "off": 242890,
+        "base": 12288,
+        "op": "calls"
+      },
+      {
+        "off": 146010,
+        "base": 243904,
+        "op": "calls"
+      },
+      {
+        "off": 166490,
+        "base": 244816,
+        "op": "jmps"
+      },
+      {
+        "off": 168040,
+        "base": 244846,
+        "op": "jmps"
+      },
+      {
+        "off": 166012,
+        "base": 244880,
+        "op": "jmps"
+      },
+      {
+        "off": 166910,
+        "base": 244910,
+        "op": "jmps"
+      },
+      {
+        "off": 167482,
+        "base": 244940,
+        "op": "jmps"
+      },
+      {
+        "off": 208822,
+        "base": 244970,
+        "op": "jmps"
+      },
+      {
+        "off": 163888,
+        "base": 244994,
+        "op": "jmps"
+      },
+      {
+        "off": 193580,
+        "base": 245030,
+        "op": "jmps"
+      },
+      {
+        "off": 193774,
+        "base": 245054,
+        "op": "jmps"
+      },
+      {
+        "off": 217022,
+        "base": 245078,
+        "op": "jmps"
+      },
+      {
+        "off": 216218,
+        "base": 245332,
+        "op": "jmps"
+      },
+      {
+        "off": 216804,
+        "base": 245336,
+        "op": "jmps"
+      },
+      {
+        "off": 194088,
+        "base": 245186,
+        "op": "jmps"
+      },
+      {
+        "off": 193572,
+        "base": 243456,
+        "op": "calls"
+      },
+      {
+        "off": 193682,
+        "base": 243456,
+        "op": "calls"
+      },
+      {
+        "off": 193766,
+        "base": 243502,
+        "op": "calls"
+      },
+      {
+        "off": 193880,
+        "base": 243502,
+        "op": "calls"
+      },
+      {
+        "off": 185542,
+        "base": 243548,
+        "op": "jmps"
+      },
+      {
+        "off": 7512,
+        "base": 243648,
+        "op": "calls"
+      },
+      {
+        "off": 7724,
+        "base": 243648,
+        "op": "calls"
+      },
+      {
+        "off": 241826,
+        "base": 10486,
+        "op": "calls"
+      },
+      {
+        "off": 207226,
+        "base": 10556,
+        "op": "jmps"
+      },
+      {
+        "off": 191276,
+        "base": 10762,
+        "op": "jmps"
+      },
+      {
+        "off": 189836,
+        "base": 10862,
+        "op": "jmps"
+      },
+      {
+        "off": 216942,
+        "base": 245340,
+        "op": "jmps"
+      }
+    ],
+    "cals": {
+      "CUTSW": 96000,
+      "CUTRPM": 96001,
+      "CUT_HYST": 96002,
+      "CUT_IPW": 96003,
+      "CUT_RETARD_RANGE": 96005,
+      "CUT_IGN_ANGLE": 96006
+    },
+    "retard_entries": {
+      "state": 245312,
+      "timing": 243648,
+      "qualification": 243712,
+      "ram": 55299,
+      "check": 245322,
+      "state_body": 8192,
+      "source_ram": 55300
+    },
+    "knock_entries": {
+      "dirty": 26624,
+      "timing_dirty": 26678,
+      "timing_release": 26702,
+      "initialize": 26742,
+      "active": 26786,
+      "request": 26870,
+      "ingress": 26940,
+      "prefilter": 27146,
+      "global_gate": 27246
+    },
+    "knock_layout": {
+      "base": 26624,
+      "raw": 63188,
+      "sample": 64630,
+      "phase": 64671,
+      "request": 258210,
+      "ingress": 223610,
+      "telemetry": 62649,
+      "prefilter": 174892,
+      "fault": 175988,
+      "output": 176320,
+      "global_gate": 173452,
+      "global_skip": 173600,
+      "sync": 64862,
+      "windows": [
+        17210,
+        20832
+      ],
+      "snapshots": [
+        17364,
+        17548,
+        17730,
+        18466,
+        18650,
+        18832,
+        20914,
+        21064,
+        21214,
+        21386,
+        21536,
+        21684
+      ],
+      "caller": 223826,
+      "enabled": 64860,
+      "rpm": 64572,
+      "coolant": 63160,
+      "derivative": 64573
+    },
+    "knock_marker_abi": {
+      "initialized": 167,
+      "timing_episode_latched": 231
+    },
+    "fixed_ipw": {
+      "entry": 27392,
+      "hook": 162394,
+      "continuation": 162538,
+      "state_ram": 55308,
+      "native": 160,
+      "fixed_base": 161,
+      "native_fallback": 162
+    },
+    "charge_event": 28672
+  },
+  "edits": [
+    {
+      "off": 242790,
+      "expect": "65f204ff",
+      "data": "da000070"
+    },
+    {
+      "off": 242890,
+      "expect": "65f204ff",
+      "data": "da000070"
+    },
+    {
+      "off": 146010,
+      "expect": "f2f494eff6f49aefc2f5a0fc",
+      "data": "da03c0f8da00006bfa02ea7a"
+    },
+    {
+      "off": 243328,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "fa00007001d867f8f00047f8a0003d04f3f801d869833d04fcf465f204ffdb00da000068e7f81f0075f802d8fcf4db00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 166490,
+      "expect": "88d08880",
+      "data": "fa0350fc"
+    },
+    {
+      "off": 168834,
+      "expect": "c4861800",
+      "data": "c4861800"
+    },
+    {
+      "off": 168880,
+      "expect": "c4471000",
+      "data": "c4471000"
+    },
+    {
+      "off": 208822,
+      "expect": "f3fa34fc",
+      "data": "fa03eafc"
+    },
+    {
+      "off": 163888,
+      "expect": "f4893300",
+      "data": "fa0302fd"
+    },
+    {
+      "off": 193580,
+      "expect": "e6f4ecf0",
+      "data": "fa0326fd"
+    },
+    {
+      "off": 193774,
+      "expect": "e6f430f0",
+      "data": "fa033efd"
+    },
+    {
+      "off": 217022,
+      "expect": "f3f83cfc",
+      "data": "fa0356fd"
+    },
+    {
+      "off": 212304,
+      "expect": "e6fc46ee",
+      "data": "e6fc46ee"
+    },
+    {
+      "off": 212348,
+      "expect": "e6fc52ee",
+      "data": "e6fc52ee"
+    },
+    {
+      "off": 244704,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "fa0350fe67f8f00047f8a0003d08f3f801d869872d03e1f875f802d8db00e004db00da03fafd3d0ff3f801d867f8f00047f8a0003df4f3f802d846f530f03d0269810d016982db00da03fafd3d10f3f801d867f8f00047f8a0003de1f3f802d846f530f03d0269850d0267f80a00db00ecf4ecf5f05eda0302fc2d03fcf5fcf4db00fcf5fcf488d08880fa025eca8a180b10ecf4ecf5f05cda0302fc2d03fcf5fcf4db00fcf5fcf488608880fa026cd0ecf4ecf5f05cda0302fc2d03fcf5fcf4db00fcf5fcf488608890fa0280c8ecf4ecf5f05cda0302fc2d03fcf5fcf4db00fcf5fcf488608890fa0202ccecf4ecf5f05cda0302fc2d03fcf5fcf4db00fcf5fcf488808890fa023eceecf4da03e0fb2d03fcf4fa03a672fcf4f3fa34fcfa03ba6f8a180c10ecf4ecf5f059da0302fc2d04fcf5fcf4fa0232c1fcf5fcf4f4893300fa0234c0ecf4da03fafd2d03fcf4fa028cb4fcf4e6f4ecf0fa0230b4ecf4da03fafd2d03fcf4fa024eb5fcf4e6f430f0fa02f2b4ecf4da03fafd2d03fcf4fa034a11fcf4f3f83cfcfa03c20fecf4da039ef82d0fe6f40202f6f460f5f6f462f5f6f464f5e7f8ef0065f802d8fcf4fa03ec0dfcf4f489e8abfa039e0cecf4da039ef83d0bf48906acc084f48460f53d05fcf4c2f480f5fa03e80efcf4fa03560f8a181410ecf4ecf5f059da0302fc2d0cd4490200f6f40efdd4490400f6f410fdfcf5fcf4fa0284bafcf5fcf48a0a0200fa022cb6fa026ab6da03e0fb3d12f3f801d867f8f00047f8a0003d0cda032afe3d09da034afe47f8c3003d04e1f875f802d8db00e004db00f3f803d847f8c3003d04f3f805d847f8e700db00"
+    },
+    {
+      "off": 168040,
+      "expect": "88608880",
+      "data": "fa036efc"
+    },
+    {
+      "off": 166012,
+      "expect": "88608890",
+      "data": "fa0390fc"
+    },
+    {
+      "off": 166910,
+      "expect": "88608890",
+      "data": "fa03aefc"
+    },
+    {
+      "off": 167482,
+      "expect": "88808890",
+      "data": "fa03ccfc"
+    },
+    {
+      "off": 216218,
+      "expect": "f489e8ab",
+      "data": "fa0354fe"
+    },
+    {
+      "off": 216804,
+      "expect": "c2f480f5",
+      "data": "fa0358fe"
+    },
+    {
+      "off": 194088,
+      "expect": "8a0a1f00",
+      "data": "fa03c2fd"
+    },
+    {
+      "off": 193572,
+      "expect": "e4c92b00",
+      "data": "da0300f7"
+    },
+    {
+      "off": 193682,
+      "expect": "e4c92b00",
+      "data": "da0300f7"
+    },
+    {
+      "off": 193766,
+      "expect": "e4894200",
+      "data": "da032ef7"
+    },
+    {
+      "off": 193880,
+      "expect": "e4894200",
+      "data": "da032ef7"
+    },
+    {
+      "off": 185542,
+      "expect": "8a080220",
+      "data": "fa035cf7"
+    },
+    {
+      "off": 243456,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88be88ecf4da0350f83d0ee7f8fe0046f930f02d02e7f8fd0065f802d8fcf4fc88e4c92b00db00fcf4fc88db00ec88be88ecf4da0350f83d0ee7f8fb0046f930f02d02e7f8f70065f802d8fcf4fc88e4894200db00fcf4fc88db00ecf4ecf5f059da0328fc2d23e004e4894000c4495e00c4496000c4496200c4496400d4496e0042f46a00ed0fe004c4496600c4496800c4496a00c4496c00c4496e00fcf5fcf4fa020a97fcf5fcf4fa027496fcf5fcf48a080220fa024c96fa02ce94"
+    },
+    {
+      "off": 243792,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "da03e0fb3d0df3f801d867f8f00047f8a0003d09da032afe3d06e1f875f802d8db00cc00cc00e004db00"
+    },
+    {
+      "off": 243870,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "da03fafd3d0bf3f801d867f8f00047f8a0003de2f3f802d867f81000db00"
+    },
+    {
+      "off": 7512,
+      "expect": "f00267f00f00",
+      "data": "da03c0f7cc00"
+    },
+    {
+      "off": 7724,
+      "expect": "f00267f00f00",
+      "data": "da03c0f7cc00"
+    },
+    {
+      "off": 243904,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88be88ecf5f3fa01d867faf00047faa0002d0ee6f500c0f6f502d8f7fa04d8f7fa0dd8e7faa000f7fa0cd8f7fa01d8fcf5fc88f2f494efdb00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 243648,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ecf4da0340fe47f83f00ed0de6f0ff00210840209d0af020da003668e7f81f0075f802d80d02da004e68fcf4f00267f00f00db00"
+    },
+    {
+      "off": 243712,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ecf447fdc1003d0cf2f430fd66f47f003d07f2f432fd66f400c03d02e7fdc300fcf4fc88db00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 245312,
+      "expect": "ffffffffffffffffffffffffffff",
+      "data": "fa000060cc00cc00cc00fa000a60"
+    },
+    {
+      "off": 8192,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ecf7e0070d04cc00ec88ecf7e017ec00ecf4ecf5ecf6ecf3e6000400f3fc03d8e7fdc000e6f3ff00f3f801d867f8f80047f8a000ea303862f3fa3cfc43fadb02ea903862e6000800f2f4ec0746f4fa03ea309c61f2f4ee0746f4c0f9ea309c61e6000400f3f8b6fd67f84000ea20a061f3f8bef143f81537ea90a061f3f8d0e843f81637ea80a061f3f810374980ea20e2604981ea30a460f3f861fd6982ea00c2604982ea30b460f3f861fd6981ea00c2604984ea30a061f3f860fd67f88000f3fa123749a0ea20dc6049a1ea30a0614980ea30a061ea00e2604980ea20a061f3f811374980ea200c614981ea30a061f3f61f3747f63f00eae0a061f3f81337f3fa1e37e127ea00fe61f3f61d3747f63f00eae0a061f3fa3cfcf3f8133743f82cf0eae0a061ea20346143fa2cf0ea90a061f3fa173747faff00ea305661f3fa133747fafd00ea805461e7faff00ea00566109a343fadb02ea806261f3fadb0241a8ea906a61f18af3fa3cfc41a8ea90966167fcfd0047fcc100ea30a061f3f804d84981ea30a061f3f813fd67f88000ea20a061e117ea002662e6000400e6f3ff00f3f800374980ea20e8614981ea30c261f3f861fd6982ea203862ea00e8614982ea30d661f3f861fd6981ea203862ea00e8614984ea303862f3f860fd67f88000ea203862f3f6063747f63f00eae03862f3f80137f3fa0537e13749a0ea202e6241a8ea902e6243f83cfceaf02e62218af3fa3cfc41a8ea802e6243fa2cf0ea902e62e7fdc100ea0038624972ea20a061e6f3ff00da0300f849e1ea205e62e7ffff0047fdc300ea305062f1f6be88f7f704d8f7fd03d8ea008462e7ffc00047fdc300ea308462f3f803d847f8c300ea308462f3f804d84187ea308462e7ffc300fcf3fcf6fcf5fcf4fc00f18ffcf7fc88db00"
+    },
+    {
+      "off": 10240,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88be88ecf4e004f6f406d8f6f408d8f6f40ad8f3f805d847f8e7003d05f3f803d847f8c3002d04e7f8a700f7f805d8fcf4fc88db00ec88be88da000068ecf4e7f8e700f7f805d8fcf4fc88db00ec88be88ecf4f3f803d847f8c3002d09f3f805d847f8e7003d04e7f8a700f7f805d8fcf4fc88db00f3f805d867f8bf0047f8a7002d0ef3f807d849832d06e7f83f00f7f806d8f7f80bd8e7f8a700f7f805d8db00ec88be88da007668f3f801d867f8f00047f8a0003d17f3f802d867f820003d0ef3f801d869843d0af3f803d847f8c3003d09f3f805d847f8e7003d08da000068e0140d05e7f8a700f7f805d8e004fc884840db00ec88ecf4f3f80bd847f83f002d17ec88be88da00a2683d0bf3f8d5f647f80c003d06f2f4d6f6f6f408d8e1180d01e108f7f807d8e108f7f80ad8fc88fcf4fc88e6f1d4f6db00ec88ecf4f3f80bd847f83f003d06fcf4fc88c2f1d7f6fa037e69be88ecf5f2f4d6f6c091f7f2b9f44815ed3df148e44176fcec88c2f507d848523d0442f408d82d310d2b48513d2942f408d82d26f3f8d5f647f80c003d21f041084148463d01e00443f89ffc3d19f2f4d6f6f6f408d8e128f7f807d8e118f7f80ad8f3f806d847f83f002d05e0154c5175fa06d80d0ae0154c5175fa0bd80d05e0154c51915065fa0bd8fc88ec88fcf466f4fff7f2f512fed455040066f500087045f2f512fec4450400fcf5fcf4fc88fa038e69ecf4ecf5da00a2683d0ce0154c56f3f80bd8618a2d06fcf5fcf4f0465c14fa0230abf2f41cfd68442d0d8a1917e08a1915f08a2f13808a2f11a0f2f40cea66f400103d0cfcf5fcf4e6f4fffb64f41cfdf4e6cce9c0e75c87fa02c0b0fcf5fcf4fa0274afec88ecf4da00a2683d0ef3f80bd847f83f003d09f2f41cfd66f400042d04fcf4fc88fa0290a5fcf4fc88fa0220a6",
+      "name": "knock recovery from completed native 0102 replies"
+    },
+    {
+      "off": 826,
+      "expect": "43f090fa",
+      "data": "43f090fa",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 4448,
+      "expect": "43f090fa",
+      "data": "43f090fa",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 241826,
+      "expect": "e6f1d4f6",
+      "data": "da00f668",
+      "name": "knock request"
+    },
+    {
+      "off": 980,
+      "expect": "f2f6d4f6",
+      "data": "f2f6d4f6",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 1164,
+      "expect": "f2f6d4f6",
+      "data": "f2f6d4f6",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 1346,
+      "expect": "f2f6d4f6",
+      "data": "f2f6d4f6",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 2082,
+      "expect": "f2f6d4f6",
+      "data": "f2f6d4f6",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 2266,
+      "expect": "f2f6d4f6",
+      "data": "f2f6d4f6",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 2448,
+      "expect": "f2f6d4f6",
+      "data": "f2f6d4f6",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 4530,
+      "expect": "f2f6d4f6",
+      "data": "f2f6d4f6",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 4680,
+      "expect": "f2f6d4f6",
+      "data": "f2f6d4f6",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 4830,
+      "expect": "f2f6d4f6",
+      "data": "f2f6d4f6",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 5002,
+      "expect": "f2f6d4f6",
+      "data": "f2f6d4f6",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 5152,
+      "expect": "f2f6d4f6",
+      "data": "f2f6d4f6",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 5300,
+      "expect": "f2f6d4f6",
+      "data": "f2f6d4f6",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 207226,
+      "expect": "c2f1d7f6",
+      "data": "fa003c69",
+      "name": "knock ingress"
+    },
+    {
+      "off": 191276,
+      "expect": "f0465c14",
+      "data": "fa000a6a",
+      "name": "knock prefilter"
+    },
+    {
+      "off": 189836,
+      "expect": "9a0e48a0",
+      "data": "fa006e6a",
+      "name": "knock global_gate"
+    },
+    {
+      "off": 11008,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ecf1ecf2ecf3ecf6ecf7ecf8ecf9ecfaecfbecfeecffec00e6000400ec88be88c2f101d86813f3f380faf2f284f6f2f374faf18269822d05f3fa1937f3fb1a370d08f1826981ea20e46bf3fa0337f3fb043746f5ffffea20e46bf2f45efd66f400a446f40004ea30ec6bf2f402fd66f40800ea30ec6bf3f881faea30ec6b4935eae0ec6bf3f8a0fc4985eae0ec6bf2f450ff66f4004f46f40043ea30ec6bf2f446ff66f4cf0046f44100ea30ec6b4830ea20ec6b42f346feeaf0ec6bf0e5f0f5f0537c352052ea80ec6b4850ea20ec6b2851f0455c14084140e4eae0ec6bfc88ea00126cfc88e6f1a0000d03fc88e6f1a200f3f80cd847f8a1002d04f7f20cd8ea00746de003f2fe96eff2ff98eff2f284f6f0cec2fd28dc5c4d06fd0008da00906dea80ee6bf064f0cfc2fd29dc5c4d06fd0008da00906dea80ee6bf074f0cec2fd2adc5c4d06fd0008da00906dea80ee6bf084f0cfc2fd2bdc5c4d06fd0008da00906dea80ee6bf094f0cec2fd2cdc5c4d06fd0008da00906dea80ee6bf0a4f0cfc2fd2ddc5c4d06fd0008da00906dea80ee6bf0b4ec88be884830ea202a6d42f374faea306e6d42f284f6ea306e6d43f380faea306e6df3f801d869834182ea306e6df2f45efd66f400a446f40004ea306e6df2f402fd66f40800ea306e6df3f881faea306e6d4935eae06e6df3f8a0fc4985eae06e6df2f450ff66f4004f46f40043ea306e6df2f446ff66f4cf0046f44100ea306e6d4830ea206e6d42f346feeaf06e6de6f1a100f6fe96eff6ff98eff04e00429d02e6f4fffff6f420fcf04f00429d02e6f4fffff6f422fcf6f628fcf6f72afcf6f82cfcf6f92efcf6fa30fcf6fb32fcf7f20cd8fc880d03fc88ea00ee6bfc00fcfffcfefcfbfcfafcf9fcf8fcf7fcf6fcf3fcf2fcf1ea00c66d1bcdf2f40cfe46f400108d03e6f4ffff0d055c44f2fd0efe7ccd704d48302d064045ed0748403d0248202d03204c1e88db001f88db00f2f494eff6f49aefc2f5a0fcf485e2ab3d14f2fc96efc2f4a0fcf4a428dcc0ad5c4d06fd0008da03526222f496efc2f5a0fc5c15c44528fc0d13f2fc98efc2f4a0fcf4a428dcc0ad5c4d06fd0008da03526222f498efc2f5a0fc5c15c44528fcf2fc94eff2fd84f6da03bc5ff6f494eff2fc96eff2fd84f6da03bc5ff6f420fcf2fc98eff2fd84f6da03bc5ff6f422fcdb00"
+    },
+    {
+      "name": "Committed combustion and private recovery",
+      "off": 245328,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ea0060feea008cfeea0042ffea0054fff3f801d867f8f00047f8a0003d0df3f802d867f820003d04f3f801d869842d03e1f875f802d8db00e004db00f3f801d867f8f00047f8a0003d35f3f802d867f810002d11e7f8ef0065f802d8e6f40202f6f40ed8f6f410d8f6f412d8e7f8800075f802d80d10da03fafd3d0df3f802d867f880002d1748969d15f4890ed82d122981e4890ed8f489e8abc08462f460fd3d09f48960f53d06f489eeab65f882f5fa03ac0df489e8abfa039e0cf3f801d867f8f00047f8a0003db7da03fafd3db3f3f802d867f810003daef3f802d867f880002da9f2f40ed872f410d872f412d8db00da030cff3d04c2f480f5fa03e80efa03560fda030cff3d04f3f882f5fa03720ffa034a11"
+    },
+    {
+      "off": 216942,
+      "expect": "f3f882f5",
+      "data": "fa035cfe"
+    },
+    {
+      "name": "ignition_cut_v20_ms411_charge",
+      "off": 12288,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ecf4f3f801d867f8f000c600040047f8a0003d5ff3f800372d1147f8ff002d2749813d039a3023900d0949823d039a301e800d0449843d1b9a301970f3f9013743f93cfcfd0cf3f801d89af41000f3f8023741899d0c219843f93cfced08e11875f801d8f3f802d89af422600d08f3f802d89af42660e7f8fe0065f801d88a1817409a5b1560f3f9133743f93cfcfd0cf3f801d89af40c10f3f8183741899d08219843f93cfced04e12875f801d80d16e7f8fd0065f801d8f3f801d88af40e000d04e7f8fc0065f801d8e7f8df0065f802d8fc00fcf465f204ffdb00fc00e6f40003f6f406d8f68e0ad8e7f83f0075f802d8fcf4db00"
+    }
+  ],
+  "revert_superseded": true,
+  "cal_defaults": {
+    "CUT_RETARD_RANGE": 6
+  }
+}

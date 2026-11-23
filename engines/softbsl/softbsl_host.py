@@ -719,7 +719,7 @@ class SoftBSL:
                 self.ds2._checked_io(ser.flush)
                 time.sleep(len(token) * 12 / self.ds2.baud)
                 # Empty D2XX reads can take >10 ms even with a 1 ms timeout.
-                # Poll queued bytes where supported; Android uses one bounded read.
+                # Poll queued bytes where supported.
                 # Leave room for the 1.25 ms ACK character and USB receive latency.
                 receive_deadline = time.perf_counter() + 0.003
                 while True:
@@ -3181,6 +3181,12 @@ def _verify_post_keycycle_bootstrap(args, probe, identity):
 
 def _patch_state(image, patch, file_range=None):
     """Return absent/applied/legacy/partial for exact edit bytes, optionally in one file range."""
+    if patch.get("id") == "alphan_failsafe" and file_range is None:
+        from engines.patcher.patch_ms41 import alphan_install_state, load_patches
+        state = alphan_install_state(image, load_patches())
+        if state == patch["id"]:
+            return "applied"
+        return "legacy" if state in patch["supersedes"] else state
     states = []
     for edit in patch["edits"]:
         offset = int(edit["off"])
@@ -3367,6 +3373,7 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
         driver_patches = []
 
     from engines.patcher.patch_ms41 import (
+        alphan_install_state,
         deprecated_aif_patch_state,
         is_applied,
         load_patches,
@@ -3506,6 +3513,20 @@ def _persistent_patch_plan(base, chip, *, with_calguard=False, with_alphan=False
 
     if is_applied(clean_base, patch_defs[bootstrap_door_id]):
         clean_base = bytes(revert(clean_base, patch_defs[bootstrap_door_id]))
+    if version == "MS41.3" and alphan_install_state(clean_base, patch_defs) == "partial":
+        # The temporary 0x43 door reuses the AlphaN cave. An intact jump to a
+        # missing body could run the door as load-management code after key-on.
+        current = patch_defs["alphan_failsafe"]
+        for pid in (current["id"], *current["supersedes"]):
+            for edit in patch_defs[pid]["edits"]:
+                if edit["expect"] == edit["data"] or not bytes.fromhex(edit["expect"]).strip(b"\xff"):
+                    continue
+                payload = bytes.fromhex(edit["data"])
+                off = edit["off"]
+                if clean_base[off:off + len(payload)] == payload:
+                    raise SoftBSLError(
+                        "Partial AlphaN installation has an active hook. "
+                        "Restore a complete BIN before staging the bootstrap.")
     patch_ids = (["softbsl_loader", persistent_door_id]
                  + (["cal_guard"] if with_calguard else [])
                  + (["alphan_failsafe"] if with_alphan else [])

@@ -1,4 +1,4 @@
-"""Exact V18 actual-intervention episode and V17 negative-control witnesses.
+"""Exact V19 actual-intervention episode and V17 negative-control witnesses.
 
 Eligibility without an actual scheduled-angle change remains ordinary native
 operation. After any real change, later no-op events cannot release protection
@@ -9,8 +9,8 @@ from engines.patcher.verify_knock_guard import _bytes, _call, _native, _run, _se
 
 
 def _configured(gate, image, variant, suffix, angle):
-    cals = dict(gate.PATCHES["ignition_cut_v18" + suffix]["cave"]["cals"])
-    cals.update(gate.PATCHES["launch_control_v18" + suffix]["cave"]["cals"])
+    cals = dict(gate.PATCHES["ignition_cut_v19" + suffix]["cave"]["cals"])
+    cals.update(gate.PATCHES["launch_control_v19" + suffix]["cave"]["cals"])
     values = dict(CUTSW=0, CUTRPM=125, CUT_HYST=0, CUT_IPW=65535,
                   CUT_RETARD_RANGE=6, CUT_IGN_ANGLE=angle, LC_SW=255,
                   LC_IGN_ANGLE=255, LC_CUT_IGN_ANGLE=255)

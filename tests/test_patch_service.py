@@ -74,7 +74,7 @@ def test_current_ignition_and_launch_validation_is_software_only():
     definitions = patch_service.definitions()
     for kind in ("ignition_cut", "launch_control"):
         for suffix in ("", "_ms410", "_ms411", "_ms412"):
-            revision = "v18"
+            revision = "v20"
             patch = definitions[f"{kind}_{revision}{suffix}"]
             display = patch_service._display_metadata(patch)
             assert display["maturity"] == "HIGHLY EXPERIMENTAL"
@@ -146,7 +146,7 @@ def test_available_patches_filters_by_version():
     avail = patch_service.available_patches(ref("MS41.3"))
     ids = {p["id"] for p in avail}
     assert "cal_guard" in ids
-    assert "vanos_minrpm_v2_ms410" not in ids        # MS41.0 target, filtered out
+    assert "vanos_minrpm_v3_ms410" not in ids        # MS41.0 target, filtered out
     assert "ignition_cut" not in ids                 # V1 deprecated, superseded by V11
     assert "ignition_cut_v2" not in ids              # V2 deprecated, superseded by V11
     assert "ignition_cut_v3" not in ids              # V3 deprecated (gated on speed, not rpm)
@@ -154,11 +154,11 @@ def test_available_patches_filters_by_version():
     assert "launch_control_v2" not in ids             # field-failed V2 is remove-only
     assert "ignition_cut_v6" not in ids              # field-failed V6 is remove-only
     assert "ignition_cut_v7" not in ids              # V7 is remove-only
-    assert "ignition_cut_v18" in ids                  # independent shared-request revision
+    assert "ignition_cut_v20" in ids                  # independent shared-request revision
     assert "launch_control_v3" not in ids            # V3 is retained only for removal
     assert "launch_control_v4" not in ids            # overlapping V4 is remove-only
     assert "launch_control_v5" not in ids            # V5 is remove-only
-    assert "launch_control_v18" in ids                # independent ignition requester
+    assert "launch_control_v20" in ids                # independent ignition requester
     assert "door_0x43" not in ids                    # installer-only Soft-BSL bootstrap
     assert "top_ds2_guard" not in ids               # automatic TOP-image protection
     assert "alphan_failsafe" in ids
@@ -172,11 +172,11 @@ def test_available_patches_filters_by_version():
     assert amd["status"] == "TESTED"
     assert amd["tested"] is True
     alphan = next(p for p in avail if p["id"] == "alphan_failsafe")
-    assert alphan["status"] == "TESTED"
-    assert alphan["tested"] is True
+    assert alphan["status"] == "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED"
+    assert alphan["tested"] is False
     assert next(p for p in avail if p["id"] == "softbsl_loader")["tested"] is True
     assert next(p for p in avail if p["id"] == "door_magic")["tested"] is True
-    ic = next(p for p in avail if p["id"] == "ignition_cut_v18")
+    ic = next(p for p in avail if p["id"] == "ignition_cut_v20")
     assert ic["status"] == "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED"
     assert ic["tested"] is False
     assert ic["legacy"] == []                          # clean ref base has no predecessor installed
@@ -194,7 +194,8 @@ def test_patch_versions_are_badges_not_title_text():
     expected = {
         "alphan_failsafe_v1": "V1",
         "alphan_failsafe_v2": "V2",
-        "alphan_failsafe": "V3",
+        "alphan_failsafe_v3": "V3",
+        "alphan_failsafe": "V4",
         "amd_flash": "V5",
         "amd_flash_v4": "V4",
         "amd_flash_v3": "V3",
@@ -276,6 +277,9 @@ def test_patch_versions_are_badges_not_title_text():
         "softbsl_loader_v11": "V11",
         "vanos_minrpm_ms410": "V1",
         "vanos_minrpm_v2_ms410": "V2",
+        "vanos_minrpm_v3_ms410": "V3",
+        "vanos_minrpm_ms411": "V1",
+        "vanos_minrpm_v2_ms411": "V2",
     }
     expected.update({f"{kind}_v14{suffix}": "V14"
                      for kind in ("ignition_cut", "launch_control")
@@ -283,7 +287,7 @@ def test_patch_versions_are_badges_not_title_text():
     expected.update({"ignition_cut_v15_ms410": "V15", "launch_control_v15_ms410": "V15"})
     expected.update({f"{kind}_v{revision}{suffix}": f"V{revision}"
                      for kind in ("ignition_cut", "launch_control")
-                     for revision in (16, 17) for suffix in ("", "_ms410", "_ms411", "_ms412")})
+                     for revision in (16, 17, 18, 19) for suffix in ("", "_ms410", "_ms411", "_ms412")})
     definitions = patch_service.definitions()
 
     for patch_id, version in expected.items():
@@ -298,7 +302,7 @@ def test_available_patches_exposes_only_latest_ms412_ports():
 
     assert ids == {
         "amd_flash", "cal_guard", "door_magic",
-        "ignition_cut_v18_ms412", "launch_control_v18_ms412", "softbsl_loader",
+        "ignition_cut_v20_ms412", "launch_control_v20_ms412", "softbsl_loader",
     }
     assert all(p["target"] == "MS41.2" for p in avail)
     assert not any(p.get("deprecated") for p in avail)
@@ -342,23 +346,18 @@ def test_persistent_door_requires_the_resident_loader(variant, door_id):
         patch_service.revert_patch(image, "softbsl_loader")
 
 
-def test_ms410_vanos_v2_is_selectable_and_retains_hardware_tested_logic():
+def test_ms410_vanos_v3_is_selectable():
     avail = patch_service.available_patches(ref("MS41.0"))
     assert [patch["id"] for patch in avail] == [
         "amd_flash", "cal_guard", "door_magic_ms410",
-        "ignition_cut_v18_ms410", "launch_control_v18_ms410",
-        "softbsl_loader", "vanos_minrpm_v2_ms410",
+        "ignition_cut_v20_ms410", "launch_control_v20_ms410",
+        "softbsl_loader", "vanos_minrpm_v3_ms410",
     ]
     patch = next(
-        item for item in avail if item["id"] == "vanos_minrpm_v2_ms410"
+        item for item in avail if item["id"] == "vanos_minrpm_v3_ms410"
     )
-    definition = patch_service.definitions()["vanos_minrpm_v2_ms410"]
-    assert patch["version"] == "V2"
-    assert patch["status"] == "TESTED"
-    assert patch["tested"] is True
-    assert definition["tested"] is True
-    assert "vehicle-tested runtime behavior" in patch["user_description"]
-    assert "UNTESTED" not in patch["title"]
+    assert patch["version"] == "V3" and patch["ok"]
+    assert patch["tested"] is False
 
 
 def test_ms410_vanos_v1_is_detected_upgraded_and_removed_checksum_safely():
@@ -383,18 +382,19 @@ def test_ms410_vanos_v1_is_detected_upgraded_and_removed_checksum_safely():
         for patch in patch_service.available_patches(legacy)
     }
     assert available["vanos_minrpm_ms410"]["deprecated"] is True
-    assert available["vanos_minrpm_v2_ms410"]["legacy"] == [{
+    assert available["vanos_minrpm_v3_ms410"]["legacy"] == [{
         "id": "vanos_minrpm_ms410",
         "label": "V1 invalid-checksum revision",
     }]
 
     upgraded, log = patch_service.build_image(
-        legacy, ["vanos_minrpm_v2_ms410"]
+        legacy, ["vanos_minrpm_v3_ms410"]
     )
-    assert patch_service.is_applied(upgraded, v2)
+    assert patch_service.is_applied(upgraded, definitions["vanos_minrpm_v3_ms410"])
+    assert not patch_service.is_applied(upgraded, v2)
     assert not patch_service.is_applied(upgraded, v1)
-    assert upgraded[0x17008:0x17010] == b"VANOSRT3"
-    assert any("exact prior revision" in line for line in log)
+    assert upgraded[0x17008:0x17010] == b"VANOSRT5"
+    assert "removed exact predecessor vanos_minrpm_ms410" in log
     assert all(
         patch_ms41.checksum.checksum_status(upgraded)[name]
         for name in ("boot", "program", "cal")
@@ -404,37 +404,88 @@ def test_ms410_vanos_v1_is_detected_upgraded_and_removed_checksum_safely():
     assert cleaned == ref("MS41.0")
 
 
-def test_ms410_vanos_v2_isolated_build_and_revert_have_valid_checksums():
+def test_ms410_vanos_v3_isolated_build_and_revert_have_valid_checksums():
     stock = ref("MS41.0")
-    definition = patch_service.definitions()["vanos_minrpm_v2_ms410"]
+    definition = patch_service.definitions()["vanos_minrpm_v3_ms410"]
     installed, _log = patch_service.build_image(
-        stock, ["vanos_minrpm_v2_ms410"]
+        stock, ["vanos_minrpm_v3_ms410"]
     )
 
-    assert installed[0x17008:0x17010] == b"VANOSRT3"
+    assert installed[0x17008:0x17010] == b"VANOSRT5"
     assert patch_service.is_applied(installed, definition)
     assert all(
         patch_ms41.checksum.checksum_status(installed)[name]
         for name in ("boot", "program", "cal")
     )
     assert patch_service.revert_patch(
-        installed, "vanos_minrpm_v2_ms410"
+        installed, "vanos_minrpm_v3_ms410"
     ) == stock
 
 
 def test_ms411_exposes_current_feature_ports_and_softbsl():
     assert [patch["id"] for patch in patch_service.available_patches(ref("MS41.1"))] == [
         "amd_flash", "cal_guard", "door_magic_ms411",
-        "ignition_cut_v18_ms411", "launch_control_v18_ms411",
-        "softbsl_loader", "vanos_minrpm_ms411",
+        "ignition_cut_v20_ms411", "launch_control_v20_ms411",
+        "softbsl_loader", "vanos_minrpm_v2_ms411",
     ]
+
+
+@pytest.mark.parametrize("variant,old_id,current_id", [
+    ("MS41.0", "vanos_minrpm_ms410", "vanos_minrpm_v3_ms410"),
+    ("MS41.0", "vanos_minrpm_v2_ms410", "vanos_minrpm_v3_ms410"),
+    ("MS41.1", "vanos_minrpm_ms411", "vanos_minrpm_v2_ms411"),
+])
+@pytest.mark.parametrize("raw", [0xFF, 0, 125, 254])
+def test_vanos_upgrade_and_removal_preserve_the_calibration(variant, old_id, current_id, raw):
+    current = patch_service.definitions()[current_id]
+    # A configured BIN can keep the threshold even after the executable is removed.
+    source = bytearray(ref(variant))
+    source[current["cave"]["cals"]["VANOSRPM"]] = raw
+    source = bytes(patch_ms41.checksum.correct_verified_checksums(source)[0])
+    prior, _ = patch_ms41.build(source, [old_id], allow_deprecated=True)
+    rows = {p["id"]: p for p in patch_service.available_patches(prior)}
+    assert rows[old_id]["deprecated"] and rows[old_id]["removable"]
+    assert rows[current_id]["can_upgrade"] and rows[current_id]["ok"]
+    assert patch_service.revert_patch(prior, old_id) == source
+
+    upgraded, _ = patch_service.build_image(prior, [current_id])
+    assert upgraded == patch_service.build_image(source, [current_id])[0]
+    assert patch_service.is_applied(upgraded, current)
+    assert upgraded[current["cave"]["cals"]["VANOSRPM"]] == raw
+    assert patch_service.revert_patch(upgraded, current_id) == source
+
+
+@pytest.mark.parametrize("variant,old_id,current_id", [
+    ("MS41.0", "vanos_minrpm_v2_ms410", "vanos_minrpm_v3_ms410"),
+    ("MS41.1", "vanos_minrpm_ms411", "vanos_minrpm_v2_ms411"),
+])
+@pytest.mark.parametrize("damage", ["partial predecessor", "occupied program space"])
+def test_vanos_rejects_damaged_or_occupied_upgrade(variant, old_id, current_id, damage):
+    patches = patch_service.definitions()
+    prior, _ = patch_ms41.build(ref(variant), [old_id], allow_deprecated=True)
+    offset = (patches[old_id]["cave"]["base"] if damage == "partial predecessor"
+              else patches[current_id]["cave"]["base"])
+    if variant == "MS41.0" and damage == "occupied program space":
+        # V3 grows the existing 30-byte V2 routine in place.
+        offset += 30
+    image = bytearray(prior)
+    image[offset] ^= 1
+    snapshot = bytes(image)
+    rows = {p["id"]: p for p in patch_service.available_patches(image)}
+    assert not rows[current_id]["ok"] and not rows[current_id].get("can_upgrade")
+    with pytest.raises(patch_service.PatchError):
+        patch_service.build_image(image, [current_id])
+    assert image == snapshot
+    if damage == "occupied program space":
+        assert rows[old_id]["removable"]
+        assert patch_service.revert_patch(image, old_id)[offset] == image[offset]
 
 
 @pytest.mark.parametrize(
     "variant,ignition_id,launch_id",
     [
-        ("MS41.0", "ignition_cut_v18_ms410", "launch_control_v18_ms410"),
-        ("MS41.1", "ignition_cut_v18_ms411", "launch_control_v18_ms411"),
+        ("MS41.0", "ignition_cut_v20_ms410", "launch_control_v20_ms410"),
+        ("MS41.1", "ignition_cut_v20_ms411", "launch_control_v20_ms411"),
     ],
 )
 def test_older_launch_ports_require_and_compose_with_matching_ignition_port(
@@ -476,21 +527,21 @@ def test_stock_intel_image_is_allowed_on_amd_when_boot_is_preserved(variant):
 
 def test_available_patches_flags_legacy_v1_installed():
     base, _ = _deprecated_fixture(ref("MS41.3"), ["ignition_cut"])
-    ic = next(p for p in patch_service.available_patches(base) if p["id"] == "ignition_cut_v18")
+    ic = next(p for p in patch_service.available_patches(base) if p["id"] == "ignition_cut_v20")
     assert [(l["id"], l["label"]) for l in ic["legacy"]] == [("ignition_cut", "V1")]
     assert ic["installed"] is False                    # V11's own edits aren't present
 
 
 def test_available_patches_flags_legacy_v2_installed():
     base, _ = _deprecated_fixture(ref("MS41.3"), ["ignition_cut_v2"])
-    ic = next(p for p in patch_service.available_patches(base) if p["id"] == "ignition_cut_v18")
+    ic = next(p for p in patch_service.available_patches(base) if p["id"] == "ignition_cut_v20")
     assert [(l["id"], l["label"]) for l in ic["legacy"]] == [("ignition_cut_v2", "V2")]
     assert ic["installed"] is False
 
 
 @pytest.mark.parametrize(
     "variant,ignition_id",
-    [("MS41.2", "ignition_cut_v18_ms412"), ("MS41.3", "ignition_cut_v18")],
+    [("MS41.2", "ignition_cut_v20_ms412"), ("MS41.3", "ignition_cut_v20")],
 )
 def test_field_failed_v6_is_remove_only_and_v10_replaces_it(
         variant, ignition_id):
@@ -519,24 +570,24 @@ def test_launch_control_requires_and_composes_with_ignition_cut_v10():
     # Launch V10 requires the shared V11 cut engine, but its runtime
     # ignition request is independent of V11's standalone CUTSW state.
     with pytest.raises(patch_ms41.PatchError):
-        patch_service.build_image(ref("MS41.3"), ["launch_control_v18"])
+        patch_service.build_image(ref("MS41.3"), ["launch_control_v20"])
     out, _ = patch_service.build_image(
-        ref("MS41.3"), ["ignition_cut_v18", "launch_control_v18"])
+        ref("MS41.3"), ["ignition_cut_v20", "launch_control_v20"])
     assert len(out) == patch_ms41.FULL
-    ignition_base, _ = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v18"])
-    out2, _ = patch_service.build_image(ignition_base, ["launch_control_v18"])
+    ignition_base, _ = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v20"])
+    out2, _ = patch_service.build_image(ignition_base, ["launch_control_v20"])
     assert len(out2) == patch_ms41.FULL
-    assert "launch_control_v18" not in patch_service.collisions(["ignition_cut_v18"])
-    assert "ignition_cut_v18" not in patch_service.collisions(["launch_control_v18"])
+    assert "launch_control_v20" not in patch_service.collisions(["ignition_cut_v20"])
+    assert "ignition_cut_v20" not in patch_service.collisions(["launch_control_v20"])
 
 
 @pytest.mark.parametrize(
     "variant,ignition_id,launch_id",
     [
-        ("MS41.0", "ignition_cut_v18_ms410", "launch_control_v18_ms410"),
-        ("MS41.1", "ignition_cut_v18_ms411", "launch_control_v18_ms411"),
-        ("MS41.2", "ignition_cut_v18_ms412", "launch_control_v18_ms412"),
-        ("MS41.3", "ignition_cut_v18", "launch_control_v18"),
+        ("MS41.0", "ignition_cut_v20_ms410", "launch_control_v20_ms410"),
+        ("MS41.1", "ignition_cut_v20_ms411", "launch_control_v20_ms411"),
+        ("MS41.2", "ignition_cut_v20_ms412", "launch_control_v20_ms412"),
+        ("MS41.3", "ignition_cut_v20", "launch_control_v20"),
     ],
 )
 def test_installed_launch_blocks_removing_its_ignition_dependency(
@@ -572,10 +623,10 @@ def test_installed_launch_blocks_removing_its_ignition_dependency(
 @pytest.mark.parametrize(
     "variant,ignition_id,old_id,new_id",
     [
-        ("MS41.3", "ignition_cut_v18",
-         "launch_control_v3", "launch_control_v18"),
-        ("MS41.2", "ignition_cut_v18_ms412",
-         "launch_control_v3_ms412", "launch_control_v18_ms412"),
+        ("MS41.3", "ignition_cut_v20",
+         "launch_control_v3", "launch_control_v20"),
+        ("MS41.2", "ignition_cut_v20_ms412",
+         "launch_control_v3_ms412", "launch_control_v20_ms412"),
     ],
 )
 def test_launch_v3_is_remove_only_and_v4_replaces_it(
@@ -617,7 +668,7 @@ def test_overlapping_ms413_launch_v4_is_detected_removed_and_replaced():
     assert legacy["installed"] is True
     assert legacy["deprecated"] is True
     assert legacy["removable"] is True
-    assert available["launch_control_v18"]["legacy"] == [
+    assert available["launch_control_v20"]["legacy"] == [
         {"id": "launch_control_v4", "label": "V4"}
     ]
 
@@ -628,10 +679,10 @@ def test_overlapping_ms413_launch_v4_is_detected_removed_and_replaced():
     assert cleaned_status["program"]
     assert cleaned_status["cal"]
     upgraded, _log = patch_service.build_image(
-        cleaned, ["ignition_cut_v18", "launch_control_v18"])
+        cleaned, ["ignition_cut_v20", "launch_control_v20"])
     assert not patch_service.is_applied(
         upgraded, definitions["launch_control_v4"])
-    assert patch_service.is_applied(upgraded, definitions["launch_control_v18"])
+    assert patch_service.is_applied(upgraded, definitions["launch_control_v20"])
     assert upgraded[0x1752C:0x17534] == old_values
     assert upgraded[0x107E0:0x107EB] == b"\xFF" * 11
 
@@ -807,29 +858,79 @@ def test_non_triggering_relocated_v1_is_removable_and_superseded():
     assert patch_service.is_applied(current, patches["softbsl_loader"])
 
 
-def test_broken_alphan_v2_is_detected_and_directly_upgraded_to_v3():
+@pytest.mark.parametrize("prior_id", ["alphan_failsafe_v1", "alphan_failsafe_v2", "alphan_failsafe_v3"])
+def test_alphan_prior_revision_is_detected_and_directly_upgraded_to_v4(prior_id):
     stock = ref("MS41.3")
-    v2_image, _ = _deprecated_fixture(stock, ["alphan_failsafe_v2"])
+    source, _ = _deprecated_fixture(stock, [prior_id])
     available = {
-        patch["id"]: patch for patch in patch_service.available_patches(v2_image)
+        patch["id"]: patch for patch in patch_service.available_patches(source)
     }
 
-    assert available["alphan_failsafe_v2"]["installed"] is True
-    assert available["alphan_failsafe_v2"]["deprecated"] is True
+    assert available[prior_id]["installed"] is True
+    assert available[prior_id]["deprecated"] is True
     replacement = available["alphan_failsafe"]
     assert replacement["installed"] is False
-    assert replacement["version"] == "V3"
+    assert replacement["version"] == "V4"
     assert replacement["legacy"] == [{
-        "id": "alphan_failsafe_v2",
-        "label": "V2 broken SS1v2 load-domain integration",
+        "id": prior_id,
+        "label": patch_service.definitions()[prior_id]["label"],
     }]
 
-    upgraded, log = patch_service.build_image(v2_image, ["alphan_failsafe"])
+    upgraded, _ = patch_service.build_image(source, ["alphan_failsafe"])
+    assert upgraded == patch_service.build_image(stock, ["alphan_failsafe"])[0]
     definitions = patch_service.definitions()
     assert patch_service.is_applied(upgraded, definitions["alphan_failsafe"])
     assert not patch_service.is_applied(
-        upgraded, definitions["alphan_failsafe_v2"])
-    assert sum("exact prior revision" in line for line in log) == 2
+        upgraded, definitions[prior_id])
+
+
+def test_alphan_mixed_native_hooks_block_upgrade_and_removal():
+    definitions = patch_service.definitions()
+    stock = ref("MS41.3")
+    current = definitions["alphan_failsafe"]
+    historical = definitions["alphan_failsafe_v3"]
+    v3, _ = _deprecated_fixture(stock, [historical["id"]])
+    hooks = [edit for edit in current["edits"]
+             if edit["expect"] != edit["data"] and bytes.fromhex(edit["expect"]).strip(b"\xff")]
+    assert hooks
+    for edit in hooks:
+        start = edit["off"]
+        replacement = bytes.fromhex(edit["data"])
+        assert v3[start:start + len(replacement)] != replacement
+        mixed = bytearray(v3)
+        mixed[start:start + len(replacement)] = replacement
+        assert not patch_service.is_applied(mixed, historical)
+        assert not patch_service.is_applied(mixed, current)
+        row = next(p for p in patch_service.available_patches(mixed) if p["id"] == current["id"])
+        assert not row["installed"] and not row["ok"]
+        with pytest.raises(patch_service.PatchError, match="Partial or unknown AlphaN"):
+            patch_service.build_image(mixed, [current["id"]])
+        with pytest.raises(patch_service.PatchError, match="nothing to remove"):
+            patch_service.revert_patch(mixed, historical["id"])
+        with pytest.raises(patch_service.PatchError, match="nothing to remove"):
+            patch_service.revert_patch(mixed, current["id"])
+
+
+@pytest.mark.parametrize("orphan_body", [False, True])
+@pytest.mark.parametrize("cave,start", [(0x3AC98, 0x3AC98), (0x39B6A, 0x39C04)],
+                         ids=["main", "acquisition-extension"])
+def test_alphan_v3_with_occupied_v4_space_remains_identifiable_but_cannot_upgrade(orphan_body, cave, start):
+    definitions = patch_service.definitions()
+    current = definitions["alphan_failsafe"]
+    old = definitions["alphan_failsafe_v3"]
+    v3, _ = _deprecated_fixture(ref("MS41.3"), [old["id"]])
+    image = bytearray(v3)
+    room = next(e for e in current["edits"] if e["off"] == cave)
+    occupied = bytes.fromhex(room["data"])[start - cave:] if orphan_body else b"\x42"
+    assert occupied.strip(b"\xff")
+    image[start:start + len(occupied)] = occupied
+    rows = {entry["id"]: entry for entry in patch_service.available_patches(image)}
+    assert rows[old["id"]]["installed"]
+    assert not rows[current["id"]]["ok"]
+    with pytest.raises(patch_service.PatchError, match="program space.*occupied"):
+        patch_service.build_image(image, [current["id"]])
+    cleaned = patch_service.revert_patch(image, old["id"])
+    assert cleaned[start:start + len(occupied)] == occupied
 
 
 def test_softbsl_v2_is_detected_and_directly_upgraded_to_v11():
@@ -952,7 +1053,7 @@ def test_configured_v9_upgrade_and_v10_removal_preserve_calibration(
         variant, suffix, with_launch):
     patches = patch_ms41.load_patches()
     old_id = "ignition_cut_v9" + suffix
-    new_id = "ignition_cut_v18" + suffix
+    new_id = "ignition_cut_v20" + suffix
     launch_id = "launch_control_v7" + suffix
     historical = dict(patches)
     historical[launch_id] = dict(patches[launch_id], requires=[old_id])
@@ -1023,10 +1124,10 @@ def test_revert_legacy_v1_then_apply_v9():
     corrected_stock, _ = patch_ms41.checksum.correct_checksums(ref("MS41.3"))
     assert cleaned == bytes(corrected_stock)             # stock bytes plus corrected program CRC
 
-    ic = next(p for p in patch_service.available_patches(cleaned) if p["id"] == "ignition_cut_v18")
+    ic = next(p for p in patch_service.available_patches(cleaned) if p["id"] == "ignition_cut_v20")
     assert ic["legacy"] == []                            # V1 gone, no longer flagged
 
-    out, log = patch_service.build_image(cleaned, ["ignition_cut_v18"])
+    out, log = patch_service.build_image(cleaned, ["ignition_cut_v20"])
     assert len(out) == patch_ms41.FULL
 
 
@@ -1035,7 +1136,7 @@ def test_revert_legacy_v2_then_apply_v9():
     cleaned = patch_service.revert_patch(v2_base, "ignition_cut_v2")
     corrected_stock, _ = patch_ms41.checksum.correct_checksums(ref("MS41.3"))
     assert cleaned == bytes(corrected_stock)             # stock bytes plus corrected program CRC
-    out, _ = patch_service.build_image(cleaned, ["ignition_cut_v18"])
+    out, _ = patch_service.build_image(cleaned, ["ignition_cut_v20"])
     assert len(out) == patch_ms41.FULL
 
 
@@ -1326,12 +1427,12 @@ def test_calguard_removal_rejects_unknown_or_partial_startup(
 def test_available_patches_flags_needs_boot():
     avail = {p["id"]: p for p in patch_service.available_patches(ref("MS41.3"))}
     assert avail["cal_guard"]["needs_boot"] is True          # writes SA1
-    assert avail["ignition_cut_v18"]["needs_boot"] is False   # program region
+    assert avail["ignition_cut_v20"]["needs_boot"] is False   # program region
 
 
 def test_boot_write_patches_detected_in_built_image():
     stock = ref("MS41.3")
-    v9_img, _ = patch_service.build_image(stock, ["ignition_cut_v18"])
+    v9_img, _ = patch_service.build_image(stock, ["ignition_cut_v20"])
     assert patch_service.boot_write_patches_in(v9_img) == []     # program patch, nothing in boot
     cg_img, _ = _calguard_image(stock)
     assert patch_service.boot_write_patches_in(cg_img) == [
@@ -1350,7 +1451,7 @@ def test_missing_boot_patches_gate():
     assert patch_service.missing_boot_patches(cg_img, None) == [
         "cal_guard", "softbsl_loader"]
     # a pure program patch is never gated
-    v9_img, _ = patch_service.build_image(stock, ["ignition_cut_v18"])
+    v9_img, _ = patch_service.build_image(stock, ["ignition_cut_v20"])
     assert patch_service.missing_boot_patches(v9_img, None) == []
 
 

@@ -182,6 +182,11 @@ def verify_fixed_ipw(gate,version,installed_image):
     """Run accepted/fallback/native/transition/whole-caller contracts."""
     p = LAYOUTS[version]
     reference = gate._cut_reference(version)
+    # V20 moves eligibility to CC6 on every family. The fuel caller still
+    # initializes state before the unchanged fixed-IPW calculation.
+    suffix = "" if version=="MS41.3" else "_ms41"+version[-1]
+    current = gate.PATCHES.get("ignition_cut_v20"+suffix)
+    event_owned = bool(current and gate.patch_ms41.is_applied(installed_image,current))
     count = 0
     # Relocated native tail is byte-for-byte stock, including real arithmetic
     # calls and relative branches. Its return adds only the enclosing CALLS.
@@ -336,10 +341,9 @@ def verify_fixed_ipw(gate,version,installed_image):
         emu.write_byte(p['rpm'],160 if active else 100)
         emu.write_byte(p['index'],phase)
         emu.write_byte(0xFA80,phase)
-        if version=='MS41.3':
-            # SS1v2's request owner runs at the real CC6 charge call, not in
-            # foreground fueling. Preserve that native ordering explicitly.
-            _run(emu,0x3D92A,0x3D92E)
+        if version=='MS41.3' or event_owned:
+            charge=gate._CC6_IGNITION_HOOKS[gate._bound_variant(installed_image)]
+            _run(emu,charge,charge+4)
         captured=[]
         emu.cpu.set_trace(lambda pc,op:captured.append(tuple(emu.read(a) for a in p['banks'])) if pc==p['base'] else None)
         _call(emu,p['task'])

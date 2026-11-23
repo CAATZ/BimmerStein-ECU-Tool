@@ -480,6 +480,8 @@ def test_authorization_timeout_preserves_only_unchanged_challenge_phase(workflow
         assert peer.requests == requests
 
 
+
+
 @pytest.mark.parametrize("fault,initial_probes,baud_commands", [
     ("startup_late", 2, 1), ("startup_silent", 3, 0),
     ("startup_partial", 1, 0), ("postbaud_silent", 1, 1),
@@ -494,9 +496,13 @@ def test_only_empty_initial_identity_reply_can_retry_without_replaying_entry(
         assert len(data) == ecu.profile.partial_size
         assert ecu.rate_confirmed and peer.restored
     else:
-        with pytest.raises(DS2Error, match="Incomplete resident" if fault == "startup_partial" else "No resident"):
+        with pytest.raises(DS2Error, match="Incomplete resident" if fault == "startup_partial" else "No resident") as failure:
             with ecu.read_transfer():
                 pytest.fail("Unconfirmed resident identity must not yield a reader")
+        if fault == "startup_partial":
+            assert ("Incomplete resident-service response to 0x02 "
+                    "(9600 baud, parity N; received 15 of 16 declared bytes, expected 16)") in str(failure.value)
+            assert peer.profile["identity"].decode("ascii") not in str(failure.value)
         assert not ecu.rate_confirmed
         assert peer.requests[-1] == ("resident", 0x02, b"")
         assert not any(mode == "resident" and command in (0x71, 0x78, 0x79)

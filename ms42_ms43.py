@@ -93,13 +93,16 @@ def detect_connected(transport, ident=None):
     if variant_from_program_id(decoded["reported_identifier"]):
         return transport
     transport.set_stopbits(False)
+    ms41_candidate = len(ident) == 42 and all(decoded.values())
     try:
         family = detect_family(transport)
     except DS2Error:
         transport._check_operation()
+        if not ms41_candidate:
+            raise
         family = None
     if family is None:
-        if len(ident) == 42 and all(decoded.values()):
+        if ms41_candidate:
             transport.set_stopbits(True)
             transport.ms41_identity_unconfirmed = True
             return transport
@@ -579,7 +582,7 @@ class MS42MS43ECU:
 
     def _write(self, data, *, full, progress_cb, log_fn, verify, checksum_context,
                correct_checksum, journal, recovering=False, use_ram=False,
-               use_agent=False, write_boot=False, preserve_identity=True):
+               use_agent=False, write_boot=False, preserve_identity=True, boot_backup=None):
         if type(preserve_identity) is not bool:
             raise ValueError("preserve_identity must be True or False")
         if self._pending_storage is not None:
@@ -588,6 +591,8 @@ class MS42MS43ECU:
             raise DS2Error("An incomplete identity write owns this connection; retry it first")
         if write_boot and not (full and (recovering or (use_ram and use_agent))):
             raise ValueError("Boot updates require a full image and the custom RAM agent")
+        if boot_backup is not None and not write_boot:
+            raise ValueError("A raw boot backup requires a boot write")
         if self._pending_image is not None and not recovering:
             raise DS2Error("An incomplete write is retained; explicitly retry the same image")
         image = bytes(data)
@@ -647,6 +652,8 @@ class MS42MS43ECU:
             validate_boot_image(image, self.family)
             writer.write_boot = True
             writer.preserve_identity = preserve_identity
+            if not recovering:
+                writer.boot_backup = boot_backup
         target_hash = sha256(image).hexdigest()
         if journal is None:
             from app_paths import mutable_path
@@ -795,11 +802,11 @@ class MS42MS43ECU:
 
     def write_full(self, data, progress_cb=None, log_fn=None, *, verify=False,
                    checksum_context=None, correct_checksum=True, journal=None, use_ram=False,
-                   use_agent=False, write_boot=False, preserve_identity=True):
+                   use_agent=False, write_boot=False, preserve_identity=True, boot_backup=None):
         return self._write(data, full=True, progress_cb=progress_cb, log_fn=log_fn, verify=verify,
                            checksum_context=checksum_context, correct_checksum=correct_checksum,
                            journal=journal, use_ram=use_ram, use_agent=use_agent, write_boot=write_boot,
-                           preserve_identity=preserve_identity)
+                           preserve_identity=preserve_identity, boot_backup=boot_backup)
 
     def write_tune(self, data, progress_cb=None, log_fn=None, *, verify=False,
                    checksum_context=None, correct_checksum=True, journal=None, use_ram=False,

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from ds2 import DS2Error, DS2Interface, _xor
-from ms42_ms43_resident import ResidentReader
+from ms42_ms43_resident import ResidentReader, ResidentRejected
 
 
 class Serial:
@@ -42,8 +42,12 @@ class Serial:
             reply = reply[:-1]
         elif self.failure == "negative":
             reply = bytes.fromhex("03 01 B0 B2")
+        elif isinstance(self.failure, int):
+            reply = bytes((3, 1, self.failure, 3 ^ 1 ^ self.failure))
         elif self.failure == "bad_length":
             reply = b"\x02\x01\x03"
+        elif self.failure == "length_too_large":
+            reply = bytes((reply[0] + 2,)) + reply[1:]
         elif self.failure == "timeout":
             reply = b""
         self.pending = (bytes(len(message)) if self.failure == "echo" else message) + reply
@@ -82,6 +86,41 @@ def test_fault_stops_read_without_replay_or_any_flash_request(reader, failure):
         reader._read(0x80000, 512)
     assert len(reader.transport._ser.requests) == 1
     assert reader.transport._ser.requests[0][2] == 0x71
+
+
+@pytest.mark.parametrize("fault,received,declared", [("short_reply", 3, 4), ("length_too_large", 4, 6)])
+def test_incomplete_reply_reports_lengths_without_replaying_request(reader, fault, received, declared):
+    reader.transport._ser.failure = fault
+    with pytest.raises(DS2Error) as failure:
+        reader._exchange(0x78, b"\x00\x00\xB7\x48\xB7\xB7")
+    assert str(failure.value) == (
+        "Incomplete resident-service response to 0x78 "
+        f"(9600 baud, parity E; received {received} of {declared} declared bytes, expected 4)")
+    assert len(reader.transport._ser.requests) == 1
+
+
+@pytest.mark.parametrize("baud", (9600, 187500))
+@pytest.mark.parametrize("status", (0xB4, 0xD0))
+def test_rejected_reply_reports_link_context_without_replaying_request(reader, baud, status):
+    events = []
+    reader.transport.diagnostic_fn = lambda event, fields: events.append((event, fields))
+    reader.transport.baud = reader.transport._ser.baudrate = baud
+    reader.transport._ser.parity = "N"
+    reader.transport._ser.failure = status
+    with pytest.raises(ResidentRejected) as failure:
+        reader._exchange(0x02, count=12)
+    assert (failure.value.command, failure.value.status) == (0x02, status)
+    detail = " (flash manufacturer check failed)" if status == 0xD0 else ""
+    assert str(failure.value) == (
+        f"Resident command 0x02 rejected (0x{status:02X}){detail} ({baud} baud, parity N)")
+    assert len(reader.transport._ser.requests) == 1
+    assert len(events) == 1 and events[0][0] == "request_failed"
+    assert events[0][1]["status"] == status and events[0][1]["phase"] == "validation"
+
+
+def test_resident_rejection_keeps_two_argument_constructor():
+    assert str(ResidentRejected(0x73, 0xD0)) == (
+        "Resident command 0x73 rejected (0xD0) (flash manufacturer check failed)")
 
 
 @pytest.mark.parametrize("address,length", [(-2, 2), (1, 2), (0, 3), (0, -2), (0xFFFFFE, 4)])

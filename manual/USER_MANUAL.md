@@ -2,7 +2,7 @@
 
 **BMW MS41, MS42 and MS43 programming and diagnostics**
 
-Version 0.1.0b19 - Windows x64/x86 and Windows 7 x64/x86
+Version 0.1.0b20 - Windows x64/x86 and Windows 7 x64/x86
 
 Documentation updated 1 November 2026.
 
@@ -71,6 +71,7 @@ new program identity and available transfer routes.
 | MS42/MS43 RAM agent | Temporary high-speed reads and writes | Requires matching boot/service code; engine stopped. |
 | MS41 Soft-BSL | Persistent loader plus RAM agents | Guided installation modifies ECU firmware. |
 | MS41 hardware BSL | Intel 28F200 and AMD/JEDEC 29F200/29F400 | Separate direct ASC0 wiring, not normal K-Line. |
+| MS42/MS43 hardware BSL | Integrated recovery with manual C167 boot entry | Offline candidate; physical recovery and adapter timing are not yet qualified. |
 | Full files | MS41: 256 KiB; MS42/MS43: 512 KiB | Match the family and intended operation. |
 | Tune files | MS41: 24 KiB; MS42: 32 KiB; MS43: 64 KiB | Match the calibration to its program. |
 | Windows packages | x64/x86 and separate Windows 7 x64/x86 packages | Choose the correct operating system and architecture. |
@@ -103,18 +104,9 @@ available. Revision support does not establish physical testing of every ECU.
 The application folder and shortcuts are named **BimmerStein ECU Tool**.
 An update keeps the existing installation location.
 
-### Portable Windows package
-
-1. Verify the release ZIP checksum against its matching `.zip.sha256` file when supplied.
-2. Extract the complete ZIP into a writable folder.
-3. Run `BimmerStein ECU Tool.exe` from the extracted application folder.
-
-Keep the complete extracted folder together. Application runtimes, protocol resources, patch
-descriptors, and RAM-agent payloads are required beside the executable.
-
 The executable may not be code-signed. Windows can show an unknown-publisher warning.
-Verify the exact downloaded installer or ZIP against its corresponding `.exe.sha256`
-or `.zip.sha256` file, or its entry in `SHA256SUMS.txt`, before continuing.
+Verify the exact downloaded installer against its corresponding `.exe.sha256`
+file, or its entry in `SHA256SUMS.txt`, before continuing.
 
 ### Interface driver
 
@@ -124,7 +116,7 @@ can use the standard serial fallback at their compatible rates.
 
 ### Data folders
 
-The portable application creates mutable data beside the executable:
+By default, the installed application stores your files beside the executable:
 
 - `backups/` for saved reads, generated images, and recovery material.
 - `logs/` for session logs and diagnostic detail.
@@ -132,7 +124,7 @@ The portable application creates mutable data beside the executable:
 Every package includes `BimmerStein MS41 Patch Definitions.xml` beside the executable for use with
 a compatible calibration editor. The ROM Analyzer stores user-imported definitions under
 `%LOCALAPPDATA%\BimmerStein ECU Tool\definitions\`. This keeps the selected definition available
-when the portable application folder is replaced during an update.
+after an application update.
 
 Treat full ROMs and logs as private. They can contain a VIN, calibration identity, ECU identity,
 and operation history.
@@ -180,7 +172,7 @@ to normal identification; active writes and retained recovery keep their existin
 | VIN / EWS | VIN editing and family-specific EWS alignment or synchronization. |
 | ROM Analyzer | Inspect a BIN offline without connecting to an ECU. |
 | Soft-BSL | Install and operate the persistent MS41 Soft-BSL loader. |
-| BSL-Unbricker | MS41 hardware bootstrap reads, erase, program, and recovery. |
+| BSL-Unbricker | MS41 hardware recovery and a separate MS42/MS43 manual boot-entry recovery route. |
 
 <!-- pagebreak -->
 
@@ -297,15 +289,16 @@ Use the app's controlled ignition-cycle instructions when it reports that a cycl
 
 ### When hardware BSL is required
 
-For MS41, use the BSL-Unbricker workflow when normal DS2 no longer starts and
-no retained session can recover the ECU. MS42/MS43 hardware recovery is outside
-this application's BSL tab; use an appropriate separate recovery method.
+Use the BSL-Unbricker workflow when normal DS2 no longer starts and no retained
+session can recover the ECU. Select the correct family: MS41 uses its documented
+direct ASC0 connection; MS42/MS43 uses manual hardware boot entry through K-Line.
+The MS42/MS43 route remains an offline candidate awaiting physical qualification.
 
 > [!DANGER]
 > Do not experiment with reset lines, ignition cycles, VPP, or chip-family selections during a
-> retained recovery session. Preserve the session first. For MS41, use hardware BSL only when
-> the retained path is no longer available or cannot recover the target. MS42/MS43 requires a
-> separate hardware recovery method if its software recovery path cannot restore operation.
+> retained recovery session. Preserve the session first. Use hardware BSL only when the retained
+> path is no longer available or cannot recover the target, following the selected family's
+> connection and manual-entry instructions.
 
 <!-- pagebreak -->
 
@@ -405,6 +398,10 @@ and all three views: **Values**, **Graphs**, and **Instruments**. Required valid
 reads may accompany selected values. Selection is locked during capture so the CSV schema
 stays fixed. Enabled CSV logging writes the session under the application `logs/` directory.
 
+Selected channels that the ECU cannot currently provide stay visible with a short reason
+in place of the value. They are excluded from acquisition and CSV output. Availability
+is checked again when the next capture starts.
+
 Favorites use stable parameter IDs and are saved separately for each exact ECU ID, program
 variant and logger definition. Bundled-definition favorites survive updates; imported XML
 favorites are tied to the file's contents. With no saved selection, the first three available
@@ -458,7 +455,7 @@ acquisition cycle. Selecting more data takes bus time and can reduce the sample 
 Use channel search to find values before capture. Move the sample cursor, zoom or pan to
 inspect a capture. The live view retains the latest 5,000
 samples; enabled CSV logging records the complete session. **Open CSV…** opens a saved log in
-the same viewer. Unavailable values remain unavailable.
+the same viewer. Use **Next page** and **Previous page** to move through long recordings. A blank sample marks a missed reading. If an older CSV has an ambiguous unit, the viewer leaves it blank.
 The single-line footer shows the capture mode, sample rate and CSV status or filename.
 Stopped captures show their result there; failures retain a visible **Error** prefix.
 Hover over the footer for complete messages, filenames and the history-retention note.
@@ -517,7 +514,8 @@ Rear-heater and raw lambda-monitor fields are omitted on firmware versions
 where the logger definitions do not provide a valid address.
 
 On MS41.3, the logger also exposes native MAF-fault, manual AlphaN and Speed
-Density mode flags. When the current AlphaN failsafe V3 program is identified,
+Density mode flags. **AlphaN Failsafe Revision** identifies a complete V3 or V4
+installation. When either revision is identified,
 extended engine load and MAF/model channels are available with their required
 load scaling. They remain unavailable in Speed Density mode or when the scaling
 does not match, because those RAM mirrors are not established as current values
@@ -559,6 +557,8 @@ Module coding requires normal K-Line mode; Direct Tap reaches only the Engine EC
 5. Keep ignition ON and the engine OFF while writing. A successful operation reads the module
    back and requires the decoded settings to match. Cycle ignition before testing the change.
 
+After an interrupted cluster write, choose **Read Settings** again. When the saved record matches, **Restore original coding** restores and verifies the original cluster settings. Recovery stops if it finds an unrelated change.
+
 ### Guided transmission conversion
 
 Supported exact E36/E39/E46 profiles are checked individually. Complete E53/Z3
@@ -584,7 +584,7 @@ state stops before a write.
 
 If a conversion is interrupted, do not start another plan. Use **Recover Interrupted Conversion...**
 to load the checked local record and either finish the reviewed target or restore the archived
-original coding. If the DME transmission-record result is unresolved, keep ignition ON and use the
+original coding. Restoring the original values accepts either transmission-controller layout. Finishing the conversion verifies the target layout. If the DME transmission-record result is unresolved, keep ignition ON and use the
 guided recovery; no success or rollback is assumed.
 
 <!-- pagebreak -->
@@ -790,15 +790,15 @@ is checked; that baseline cannot prove the file's earlier history.
 For two EEPROM entries, Compare shows decoded field and raw-byte differences when their known
 layouts match. Unknown or differing layouts are compared as raw bytes only.
 
-Select a 256 KB full-ROM entry and choose **Patches** to load it directly into the Patches tab.
-Adding or removing patches works on an in-memory copy; **Build Patched Image** archives a new Bin
-and never overwrites the selected original.
+Select a compatible full-ROM entry and choose **Patches** to load it into the Patches tab.
+You can save the edited image to Bins or review it for flashing straight from memory.
 
-Select a 24 KB tune or 256 KB full-ROM entry and choose **BSL-Unbricker** to load it as the
-hardware-BSL reference image and open that tab. This prepares the recovery controls only; it does
-not connect to hardware, review or approve a flash plan, or flash the ECU. A tune selects the
-**tune** region when available. A full ROM leaves the chip, physical half, and region unchanged for
-the operator to select explicitly.
+Select a recognized tune or full-ROM entry and choose **BSL-Unbricker** to load
+the reference image and open that tab: MS41 uses 24/256 KiB, MS42 uses 32/512 KiB,
+and MS43 uses 64/512 KiB. This prepares the controls only; it does not connect,
+approve a plan or flash the ECU. The file selects the family and a tune selects
+the **tune** region. Review the family and region before proceeding; MS41 also
+requires the correct chip and physical half.
 
 <!-- pagebreak -->
 
@@ -807,16 +807,24 @@ the operator to select explicitly.
 ![Patch selection with maturity, installation and validation status](images/patches.png)
 
 The Patches tab loads a compatible base image, checks which patches apply, detects already-installed
-and deprecated revisions, validates dependencies and byte collisions, recomputes required
-checksums, and archives the composed image into Bins.
+and deprecated revisions, validates dependencies and byte collisions, and recomputes required
+checksums. Windows offers the same output actions for MS41 patches and imported MS42/MS43 XDF lists.
+
+For MS42/MS43, load your base BIN, choose **Import patch list…** and select a compatible XDF for its software version. Select the imported list to see its patches. Use **Configure** on a patch or **All XDF settings…** for the full list. **Rollback / files…** lets you undo a recorded build or export its rollback record. Keep the record with the BIN when moving it to another PC.
 
 The footer shows the base filename and program/calibration identity; hover for
 the full path and details. Operation progress temporarily takes priority.
 Hybrid warnings stay at the start of the summary.
 
-Select an editable patch and choose **Configure**. **Configure \*** marks pending
-settings; **Build Patched Image** saves them with the patches and makes the saved
-image the working base. No intermediate BIN or ECU readback is needed.
+Select an editable patch and choose **Configure**. **Configure \*** marks pending settings.
+**Save to Bins…** lets you name the image in **Patched** and makes it the working base.
+After saving, click the filename to select the image in Bins. **Flash…** opens its
+write review. **Export BIN…** saves a copy of that exact image wherever you choose.
+
+Choose **Flash without saving…** to review a temporary image. **Export BIN…** is also
+available in this review, including while disconnected. Exporting leaves the review
+open. Cancel returns to your pending edits. Continuing uses the normal ECU write checks.
+The temporary workflow keeps XDF rollback records for exported or submitted images.
 Deselecting a patch discards its pending settings; loading another base clears
 all pending changes.
 
@@ -846,17 +854,27 @@ and **Details** stay in the same position in every row; unavailable actions are 
   Emulator or bench results do not imply vehicle validation; **Details** retains the full proof notes.
 - Boot-region patches require a transfer path that can actually deliver their bytes.
 
-Ignition Cut V18 and Launch Control V18 are current for MS41.0, MS41.1,
+Ignition Cut V20 and Launch Control V20 are current for MS41.0, MS41.1,
 MS41.2 and MS41.3. Launch Control requires the matching ignition-cut revision,
 but the standalone Ignition Cut switch may remain Off.
-They retain compatible configured controls during upgrade and include the later
-timing and injection-recovery corrections. These revisions are **HIGHLY
-EXPERIMENTAL** and require vehicle testing. Offline verification does not
-establish safe engine behavior.
-AlphaN MAF-failsafe V3 is **Tested**. AMD 29F Flash Driver V5, CalGuard V6,
+Upgrading retains compatible limiter settings. These revisions are **HIGHLY
+EXPERIMENTAL**. In emulator tests the coil interrupt delayed the start of coil
+charge on permitted sparks. When it interrupted crank capture, V20 could miss a
+closely spaced second input edge that stock accepted. Regular tooth spacing
+through 8,160 RPM passed the tested schedules. Bench timing and on-car behavior
+remain unverified.
+
+AlphaN MAF-failsafe V4 is available for MS41.3. During a confirmed MAF fault,
+the engine uses modeled load while the diagnostic continues to evaluate the
+MAF measurement. V4 also uses the TPS-fault curve's own RPM axis and preserves
+Speed Density transient fueling. V4 has focused emulator coverage. Bench and
+on-car validation remain open. Exact V1, V2 and V3 installations can upgrade
+to V4. The patcher rejects partial or mixed installations.
+
+AMD 29F Flash Driver V5, CalGuard V6,
 Soft-BSL entry V2 and loader V12 have **Tested** validation status following owner
 confirmation. This status applies to the recorded configurations; check **Details**
-for the test scope. Ignition Cut and Launch Control V18 still require testing.
+for the test scope. Ignition Cut and Launch Control V20 still require testing.
 Bench results are specific to the tested ECU, flash device and bank; **Details**
 records that scope. Removing CalGuard also removes its startup wait while
 preserving Soft-BSL and the flash driver.
@@ -904,7 +922,10 @@ Releasing a physical switch ends optional fixed timing even while the limiter
 latch remains active.
 After release, it can rearm only below Arm Speed. Arm Speed must be at least
 1 km/h; set it to 1 to allow arming at a reported speed of zero. Clutch polarity
-applies only to physical switch modes. A saved zero Arm Speed in an older
+applies only to physical switch modes. An invalid polarity disarms those modes.
+On all four supported variants, a diagnosed vehicle-speed fault disarms Launch. A stationary
+high-load hold can also qualify this native fault and release the lower Launch RPM limit.
+A saved zero Arm Speed in an older
 configuration must be corrected before enabling or updating an enabled setup.
 
 ### Fuel-cut launch mode
@@ -927,7 +948,9 @@ Two fuel-only settings default to **Follow stock**:
 
 Both settings use 32 RPM steps, accept 0-8128 RPM, and remain independent.
 Subtraction saturates at zero. **Follow stock** reads the current corresponding
-stock calibration. When stock soft governs, either stock RPM threshold is reached,
+stock calibration. At least one of A or B must be below the launch soft RPM.
+If neither permits recovery, V20 releases Launch and returns control to the native limiter.
+When stock soft governs, either stock RPM threshold is reached,
 or launch disengages during an active cut, stock hysteresis remains selected
 until that cut episode ends. Rearming during that episode does not reset the
 native counters or replace stock hysteresis. The ignition-only settings are
@@ -948,7 +971,7 @@ spark-cut request is active; selecting an ignition retard range does not enable 
 **Preserve stock injection** uses the ECU's calculated injection. A custom **0 ms**
 is a valid zero base pulse, not a guaranteed injector shutoff. Native cylinder
 and battery corrections, scheduling and fuel shutoffs still apply. If the
-corrected pulse cannot fit the validated timing interval, V18 returns to native
+corrected pulse cannot fit the validated timing interval, V20 returns to native
 fueling. Launch fuel mode ignores these ignition-only settings and uses the
 native staged fuel limiter.
 
@@ -973,11 +996,13 @@ native limiter intervention ends the optional fuel-mode timing request. Arming
 alone does not change timing. Ignition-cut mode ignores this fuel-mode setting;
 normal dwell and injection remain under their existing controls.
 
-For active optional timing, V18 uses the later of the selected angle and the
+For active optional timing, V20 uses the later of the selected angle and the
 ECU's native protected timing: it does not advance timing past that protection.
 Native input and knock-sensor faults retain their veto. Learned knock
 corrections are preserved; affected learning waits through actual spark cuts or
 timing changes and the required fresh-sample recovery.
+When native timing already meets the requested angle, that setting alone leaves
+oxygen sampling and short-term fuel trims active.
 
 Ordinary requested-angle telemetry does not show this final scheduling
 override. Software checks do not replace bench and vehicle validation.
@@ -1004,6 +1029,13 @@ route. Immobilizer and checksum options appear only for supported revisions.
 No global VANOS, complete knock-disable, IACV conversion or complete ASC control
 is assumed from a similarly named setting. Octane-adaptation learning does not
 disable knock detection or correction.
+
+In Windows ECU Config, a file opened from Bins uses **Save to Bins…** and gets a named copy
+in **Configured**. For a file opened elsewhere, **Apply & Save…** lets you choose the
+name and location. Both show **Flash…** and **Export BIN…** immediately after saving.
+**Flash without saving…** opens the same temporary-image review as Patches.
+For live ECU edits, **Write to ECU** offers **Export BIN…** in its write confirmation.
+Select **Keep a copy in Bins** before writing if you also want a named copy in **Configured**.
 
 The following details describe MS41:
 
@@ -1107,14 +1139,19 @@ and verify the physical half. Keep normal tune/program writes on their usual rou
 
 <!-- pagebreak -->
 
-## BSL-Unbricker - MS41
+## BSL-Unbricker
 
 ![Hardware BSL review and programming controls](images/bsl-unbricker.png)
 
-Hardware BSL communicates through the 80C166 bootstrap loader even when flash contents are blank or
-corrupt.
+Select the ECU family before choosing an operation. The integrated desktop tab
+contains distinct MS41 and MS42/MS43 paths. The separate
+[hardware recovery companion](https://github.com/CAATZ/MS41-BSL-Unbricker)
+remains MS41-specific.
 
-### Required connection
+The MS41 path communicates through the 80C166 bootstrap loader even when flash
+contents are blank or corrupt. The connection instructions below apply to MS41.
+
+### MS41 required connection
 
 - Separate full-duplex ASC0 Tx/Rx direct tap.
 - 8N1 serial framing with no K-Line echo removal.
@@ -1125,12 +1162,12 @@ corrupt.
 Selectable rates are 9,600, 19,200, and 38,400 baud. Use 38,400 as the preferred D2XX rate and select
 19,200 or 9,600 when adapter, wiring, or signal stability requires a fallback.
 
-### Intel VPP
+### MS41 Intel VPP
 
 Intel 28F200 erase/program requires the correct 12 V VPP/RP# supply. AMD/JEDEC parts do not. The
 VPP control remains disabled until the Intel chip family is selected.
 
-### Read and write workflow
+### MS41 read and write workflow
 
 1. Select the dedicated BSL COM port, chip, physical half, region, and rate. The application uses
    the DTR reset line for the supported entry circuit.
@@ -1141,6 +1178,42 @@ VPP control remains disabled until the Intel chip family is selected.
 5. Choose **Confirm and Flash** only when the plan is correct.
 6. Monitor erase, programming, and complete physical-region read-back.
 7. Remove VPP and bootstrap straps before returning to normal K-Line operation.
+
+### MS42/MS43 hardware recovery
+
+This route loads a temporary RAM agent through the C167 hardware bootstrap
+loader, without relying on working ECU boot code or a DS2 session. It is an
+**offline candidate awaiting physical qualification**; native execution tests
+do not establish electrical timing or successful recovery of a physical ECU.
+Use verified hardware boot-entry instructions for the selected ECU; the MS41
+wiring, chip-half and Intel VPP instructions above do not apply.
+
+1. Disconnect the normal DS2 session. Select **MS42** or **MS43**, the K-Line
+   adapter port and agent rate. The default is 125,000 baud; MS42 also offers
+   166,667 and MS43 offers 187,500. Bootstrap entry uses 38,400/8N1.
+2. Enter hardware boot mode manually before **each** connection check, chip-ID
+   read, flash read or write. The app does not pulse DTR or reset the ECU.
+3. Read **Full Flash** for raw 512 KiB bytes, or **Tune** for the 32 KiB MS42 /
+   64 KiB MS43 calibration. Reads are saved to Bins; an extra copy is optional.
+4. For a write, select **all** and a matching 512 KiB full image, or **tune** and
+   a compatible calibration. Tune recovery requires valid live boot/program
+   data and matching software. Choose **Review Flash Plan**, check its contents,
+   then use **Confirm and Flash** after fresh manual boot entry.
+5. Keep the default preservation behavior unless restoring a trusted exact
+   backup. Full recovery normally preserves valid live identity and the retained
+   flash range `0x4000..0x7FFF`. **Restore exact backup (replace identity and
+   retained data)** replaces those bytes from the full reference and disables
+   checksum correction. It does not restore the separate MS43 serial EEPROM.
+   Missing live identity requires a trusted exact backup instead of a donor
+   image with presumed identity preservation.
+6. Before any erase, the app saves both the original raw full flash and the
+   prepared full target under **backups/bsl/**. It checks the flash device and
+   image, verifies every changed sector, and compares a complete 512 KiB readback
+   with the prepared target. These backups and readback checks are mandatory.
+7. After success, release the boot strap, cycle ignition as prompted and reconnect
+   normally. There is no automatic reset into DS2. If programming fails after
+   erase, retain the saved prepared target, re-enter hardware boot mode and use
+   **Restore exact backup** with that target for the next recovery attempt.
 
 <!-- pagebreak -->
 
@@ -1173,8 +1246,10 @@ integrity before retrying.
 - If the UI says erase did not start, correct the reported connection or file problem and retry.
 - If the UI says recovery is active, keep ignition ON and use **Retry Flash Recovery**.
 - If an MS41 no longer boots and no retained session exists, prepare its hardware-BSL connection.
-- For MS42/MS43 in that state, use a suitable separate hardware recovery method; the app's
-  BSL-Unbricker is MS41-specific.
+- For MS42/MS43 in that state, the integrated BSL-Unbricker has a manual hardware-entry
+  recovery route. It remains an offline candidate awaiting physical qualification.
+- If a hardware-BSL write failed after erase, use its saved prepared target and the
+  displayed fresh-entry recovery instructions; do not assume a normal DS2 session exists.
 
 ### The ROM Analyzer cannot load definitions
 
@@ -1228,6 +1303,14 @@ identifiers are excluded from the default metadata, and generic ZIP member names
 - [ ] The reviewed physical address plan matches the intended region.
 - [ ] The reference image is the correct size and byte order.
 - [ ] A recovery plan exists if programming is interrupted.
+
+### Before MS42/MS43 hardware BSL recovery
+
+- [ ] The selected family and verified physical boot-entry procedure match the ECU.
+- [ ] Normal DS2 is disconnected and fresh manual boot entry is ready.
+- [ ] The matching full image or calibration is selected; the exact-restore choice is intentional.
+- [ ] The backup location can retain the original and prepared 512 KiB images.
+- [ ] The route's offline-only qualification and manual post-write ignition cycle are understood.
 
 <!-- pagebreak -->
 

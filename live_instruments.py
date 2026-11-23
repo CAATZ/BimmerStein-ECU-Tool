@@ -247,12 +247,11 @@ class LiveInstruments(QWidget):
         dirty = QRectF(event.rect())
         line = self.fontMetrics().lineSpacing()
         pad = max(6, line / 2)
-        color_indices = {name: index for index, name in enumerate(self.view.series)}
         for name, rect in self.card_rects.items():
             if not dirty.intersects(rect):
                 continue
             snapshot = self.view.card_snapshot(name)
-            color = QColor(self.colors[color_indices[name] % len(self.colors)])
+            color = QColor(self.colors[self.view.table_rows[name] % len(self.colors)])
             painter.setBrush(QColor("#242424"))
             painter.setPen(QColor("#444444"))
             painter.drawRoundedRect(rect, 5, 5)

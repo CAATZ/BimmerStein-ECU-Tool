@@ -1,0 +1,496 @@
+{
+  "id": "ignition_cut_v20_ms410",
+  "family_id": "ignition_cut_v20",
+  "version": "V20",
+  "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
+  "tested": false,
+  "verification": "Focused reference-image tests cover coprocessor replies, capture timing, misfire recovery and native faults. A simultaneous coil interrupt can delay crank acknowledgment. Bench and on-car validation remain required.",
+  "title": "Ignition Cut",
+  "user_description": "Independent ignition-cut limiter with RPM hysteresis, optional fixed injector pulse width and an optional fixed ignition angle in a configurable RPM region below the cut limit. Provides shared timing and combustion-observation recovery for Launch Control V20.",
+  "description": "MS41.0 Ignition Cut V20 retains the native crank-capture instructions, preserves unread knock replies and tracks recovery from actual combustion changes.",
+  "target": "MS41.0",
+  "recompute": [
+    "program",
+    "cal"
+  ],
+  "requires": [],
+  "conflicts": [
+    "ignition_cut_v7_ms410",
+    "ignition_cut_v8_ms410",
+    "ignition_cut_v9_ms410",
+    "ignition_cut_v10_ms410",
+    "ignition_cut_v11_ms410",
+    "ignition_cut_v14_ms410",
+    "ignition_cut_v15_ms410",
+    "ignition_cut_v16_ms410",
+    "ignition_cut_v17_ms410",
+    "ignition_cut_v18_ms410",
+    "ignition_cut_v19_ms410"
+  ],
+  "supersedes": [
+    "ignition_cut_v7_ms410",
+    "ignition_cut_v8_ms410",
+    "ignition_cut_v9_ms410",
+    "ignition_cut_v10_ms410",
+    "ignition_cut_v11_ms410",
+    "ignition_cut_v14_ms410",
+    "ignition_cut_v15_ms410",
+    "ignition_cut_v16_ms410",
+    "ignition_cut_v17_ms410",
+    "ignition_cut_v18_ms410",
+    "ignition_cut_v19_ms410"
+  ],
+  "cave": {
+    "region": "proghigh-tail",
+    "base": 223264,
+    "splice_off": 222968,
+    "splice_op": "calls",
+    "relocatable": false,
+    "splices": [
+      {
+        "off": 222968,
+        "base": 228864,
+        "op": "calls"
+      },
+      {
+        "off": 223068,
+        "base": 228864,
+        "op": "calls"
+      },
+      {
+        "off": 137280,
+        "base": 223744,
+        "op": "calls"
+      },
+      {
+        "off": 181860,
+        "base": 224616,
+        "op": "jmps"
+      },
+      {
+        "off": 182610,
+        "base": 224646,
+        "op": "jmps"
+      },
+      {
+        "off": 181382,
+        "base": 224680,
+        "op": "jmps"
+      },
+      {
+        "off": 182280,
+        "base": 224710,
+        "op": "jmps"
+      },
+      {
+        "off": 167064,
+        "base": 224740,
+        "op": "jmps"
+      },
+      {
+        "off": 146754,
+        "base": 224764,
+        "op": "jmps"
+      },
+      {
+        "off": 145796,
+        "base": 224800,
+        "op": "jmps"
+      },
+      {
+        "off": 146008,
+        "base": 224824,
+        "op": "jmps"
+      },
+      {
+        "off": 145788,
+        "base": 225280,
+        "op": "calls"
+      },
+      {
+        "off": 145862,
+        "base": 225280,
+        "op": "calls"
+      },
+      {
+        "off": 7382,
+        "base": 224960,
+        "op": "calls"
+      },
+      {
+        "off": 7594,
+        "base": 224960,
+        "op": "calls"
+      },
+      {
+        "off": 222130,
+        "base": 227062,
+        "op": "calls"
+      },
+      {
+        "off": 165450,
+        "base": 227132,
+        "op": "jmps"
+      },
+      {
+        "off": 143596,
+        "base": 227338,
+        "op": "jmps"
+      },
+      {
+        "off": 142222,
+        "base": 227438,
+        "op": "jmps"
+      }
+    ],
+    "cals": {
+      "CUTSW": 94224,
+      "CUTRPM": 94225,
+      "CUT_HYST": 94226,
+      "CUT_IPW": 94227,
+      "CUT_RETARD_RANGE": 94229,
+      "CUT_IGN_ANGLE": 94230
+    },
+    "retard_entries": {
+      "state": 225344,
+      "timing": 224960,
+      "qualification": 225024,
+      "ram": 55299,
+      "check": 225354,
+      "state_body": 225792,
+      "source_ram": 55300
+    },
+    "knock_entries": {
+      "dirty": 210432,
+      "timing_dirty": 210486,
+      "timing_release": 210510,
+      "initialize": 210550,
+      "active": 210594,
+      "request": 210678,
+      "ingress": 210748,
+      "prefilter": 210954,
+      "global_gate": 211054
+    },
+    "knock_layout": {
+      "base": 210432,
+      "raw": 61754,
+      "sample": 64288,
+      "phase": 64329,
+      "request": 205746,
+      "ingress": 181834,
+      "telemetry": 61625,
+      "prefilter": 159980,
+      "fault": 161072,
+      "output": 161404,
+      "global_gate": 158606,
+      "global_skip": 158754,
+      "sync": 64846,
+      "windows": [
+        17080,
+        20702
+      ],
+      "snapshots": [
+        17234,
+        17418,
+        17600,
+        18336,
+        18520,
+        18702,
+        20784,
+        20934,
+        21084,
+        21256,
+        21406,
+        21554
+      ],
+      "caller": 182054,
+      "enabled": 64844,
+      "rpm": 64230,
+      "coolant": 61680,
+      "derivative": 64231
+    },
+    "knock_marker_abi": {
+      "initialized": 167,
+      "timing_episode_latched": 231
+    },
+    "fixed_ipw": {
+      "entry": 211456,
+      "hook": 153664,
+      "continuation": 153808,
+      "state_ram": 55308,
+      "native": 160,
+      "fixed_base": 161,
+      "native_fallback": 162
+    },
+    "charge_event": 212480
+  },
+  "edits": [
+    {
+      "off": 222968,
+      "expect": "65f204ff",
+      "data": "da03003e"
+    },
+    {
+      "off": 223068,
+      "expect": "65f204ff",
+      "data": "da03003e"
+    },
+    {
+      "off": 137280,
+      "expect": "f2f4baecf6f4c0ecc2f54afb",
+      "data": "da03002ada03003afa02d058"
+    },
+    {
+      "off": 223264,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "fa03003e01d867f8f00047f8a0003d04f3f801d869833d04fcf465f204ffdb00da030036e13875f802d8fcf4db00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 181860,
+      "expect": "88d08880",
+      "data": "fa03682d"
+    },
+    {
+      "off": 183360,
+      "expect": "c4861800",
+      "data": "c4861800"
+    },
+    {
+      "off": 183406,
+      "expect": "c4471000",
+      "data": "c4471000"
+    },
+    {
+      "off": 167064,
+      "expect": "f3f8defa",
+      "data": "fa03e42d"
+    },
+    {
+      "off": 146754,
+      "expect": "f4893300",
+      "data": "fa03fc2d"
+    },
+    {
+      "off": 145796,
+      "expect": "e6f490ed",
+      "data": "fa03202e"
+    },
+    {
+      "off": 224544,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "fa03003567f8f00047f8a0003d08f3f801d869872d03e13875f802d8db00e004db00da03702e3d0ff3f801d867f8f00047f8a0003df4f3f802d846f556ed3d0269810d016982db00ecf4ecf5f05eda03422d2d03fcf5fcf4db00fcf5fcf488d08880fa0268868a180b10ecf4ecf5f05cda03422d2d03fcf5fcf4db00fcf5fcf488608880fa025689ecf4ecf5f05cda03422d2d03fcf5fcf4db00fcf5fcf488608890fa028a84ecf4ecf5f05cda03422d2d03fcf5fcf4db00fcf5fcf488608890fa020c88ecf4da03202d2d03fcf4fa0258cffcf4f3f8defafa029ccc8a180c10ecf4ecf5f059da03422d2d04fcf5fcf4fa02fa7dfcf5fcf4f4893300fa02467decf4da03702e2d03fcf4fa02c079fcf4e6f490edfa0288798a181410ecf4ecf5f059da03422d2d0cd4490200f6f40efdd4490400f6f410fdfcf5fcf4fa02be7bfcf5fcf48a0a0200fa025c7afa029a7ada03202d3d12f3f801d867f8f00047f8a0003d0cda03a02e3d09da034a3047f8c3003d04e13875f802d8db00e004db00f3f803d847f8c3003d04f3f805d847f8e700db00"
+    },
+    {
+      "off": 182610,
+      "expect": "88608880",
+      "data": "fa03862d"
+    },
+    {
+      "off": 181382,
+      "expect": "88608890",
+      "data": "fa03a82d"
+    },
+    {
+      "off": 182280,
+      "expect": "88608890",
+      "data": "fa03c62d"
+    },
+    {
+      "off": 146008,
+      "expect": "8a0a1f00",
+      "data": "fa03382e"
+    },
+    {
+      "off": 145788,
+      "expect": "e4c92b00",
+      "data": "da030030"
+    },
+    {
+      "off": 145862,
+      "expect": "e4c92b00",
+      "data": "da030030"
+    },
+    {
+      "off": 225280,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88be88ecf4da03502f3d0ee7f8fe0046f956ed2d02e7f8fd0065f802d8fcf4fc88e4c92b00db00fcf4fc88db00"
+    },
+    {
+      "off": 225104,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "da03202d3d0df3f801d867f8f00047f8a0003d09da03a02e3d06e13875f802d8db00cc00cc00e004db00"
+    },
+    {
+      "off": 7382,
+      "expect": "f00267f00f00",
+      "data": "da03c02ecc00"
+    },
+    {
+      "off": 7594,
+      "expect": "f00267f00f00",
+      "data": "da03c02ecc00"
+    },
+    {
+      "off": 223744,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88be88ecf5f3fa01d867faf00047faa0002d0ee6f500c0f6f502d8f7fa04d8f7fa0dd8e7faa000f7fa0cd8f7fa01d8fcf5fc88f2f4baecdb00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 224960,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ecf4da03403047f83f00ed0ce6f0ff00210840209d09f020da033636e13875f802d80d02da034e36fcf4f00267f00f00db00"
+    },
+    {
+      "off": 225024,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ecf447fdc1003d0cf2f430fd66f47f003d07f2f432fd66f400c03d02e7fdc300fcf4fc88db00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "off": 225344,
+      "expect": "ffffffffffffffffffffffffffff",
+      "data": "fa030032cc00cc00cc00fa030a32"
+    },
+    {
+      "off": 225792,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88ecf7e0070d04cc00ec88ecf7e017ec00ecf4ecf5ecf6ecf3e6000400f3fc03d8e7fdc000e6f3ff00f3f801d867f8f80047f8a000ea303834f3fae6fa43fad301ea903834e6000800f2f4260746f4fa03ea309c33f2f4280746f4002bea309c33e6000400f3f880fd67f84000ea20a033f3f8f4ed43f82530ea90a033f3f8d0e843f82630ea80a033f3f820304980ea20e2324981ea30a432f3f851fd6982ea00c2324982ea30b432f3f851fd6981ea00c2324984ea30a033f3f850fd67f88000f3fa223049a0ea20dc3249a1ea30a0334980ea30a033ea00e2324980ea20a033f3f821304980ea200c334981ea30a033f3f62f3047f63f00eae0a033f3f82330f3fa2e30e127ea00fe33f3f62d3047f63f00eae0a033f3fae6faf3f8233043f852edeae0a033ea20343343fa52edea90a033f3fa273047faff00ea305633f3fa233047fafd00ea805433e7faff00ea00563309a343fad301ea806233f3fad30141a8ea906a33f18af3fae6fa41a8ea90963367fcfd0047fcc100ea30a033f3f804d84981ea30a033f3f813fd67f88000ea20a033e117ea002634e6000400e6f3ff00f3f810304980ea20e8334981ea30c233f3f851fd6982ea203834ea00e8334982ea30d633f3f851fd6981ea203834ea00e8334984ea303834f3f850fd67f88000ea203834f3f6163047f63f00eae03834f3f81130f3fa1530e13749a0ea202e3441a8ea902e3443f8e6faeaf02e34218af3fae6fa41a8ea802e3443fa52edea902e34e7fdc100ea0038344972ea20a033e6f3ff00da03002f49e1ea205e34e7ffff0047fdc300ea305034f1f6be88f7f704d8f7fd03d8ea008434e7ffc00047fdc300ea308434f3f803d847f8c300ea308434f3f804d84187ea308434e7ffc300fcf3fcf6fcf5fcf4fc00f18ffcf7fc88db00"
+    },
+    {
+      "off": 226816,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ec88be88ecf4e004f6f406d8f6f408d8f6f40ad8f3f805d847f8e7003d05f3f803d847f8c3002d04e7f8a700f7f805d8fcf4fc88db00ec88be88da030036ecf4e7f8e700f7f805d8fcf4fc88db00ec88be88ecf4f3f803d847f8c3002d09f3f805d847f8e7003d04e7f8a700f7f805d8fcf4fc88db00f3f805d867f8bf0047f8a7002d0ef3f807d849832d06e7f83f00f7f806d8f7f80bd8e7f8a700f7f805d8db00ec88be88da037636f3f801d867f8f00047f8a0003d17f3f802d867f820003d0ef3f801d869843d0af3f803d847f8c3003d09f3f805d847f8e7003d08da030036e0140d05e7f8a700f7f805d8e004fc884840db00ec88ecf4f3f80bd847f83f002d17ec88be88da03a2363d0bf3f83bf147f80c003d06f2f43cf1f6f408d8e1180d01e108f7f807d8e108f7f80ad8fc88fcf4fc88e6f13af1db00ec88ecf4f3f80bd847f83f003d06fcf4fc88c2f13df1fa024ec6be88ecf5f2f43cf1c091f7f2b9f04815ed3df148e44120fbec88c2f507d848523d0442f408d82d310d2b48513d2942f408d82d26f3f83bf147f80c003d21f041084148463d01e00443f849fb3d19f2f43cf1f6f408d8e128f7f807d8e118f7f80ad8f3f806d847f83f002d05e0154c5175fa06d80d0ae0154c5175fa0bd80d05e0154c51915065fa0bd8fc88ec88fcf466f4fff7f2f512fed455040066f500087045f2f512fec4450400fcf5fcf4fc88fa025ec6ecf4ecf5da03a2363d0ce0154c56f3f80bd8618a2d06fcf5fcf4f0465c14fa02f070f2f41cfd68442d0d8a1917e08a1915f08a2713808a2711a0f2f40cea66f400103d0cfcf5fcf4e6f4fffb64f41cfdf4e6cce9c0e75c87fa027c76fcf5fcf4fa023075ec88ecf4da03a2363d0ef3f80bd847f83f003d09f2f41cfd66f400042d04fcf4fc88fa02926bfcf4fc88fa02226c",
+      "name": "knock recovery from completed native 0102 replies"
+    },
+    {
+      "off": 696,
+      "expect": "43f090fa",
+      "data": "43f090fa",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 4318,
+      "expect": "43f090fa",
+      "data": "43f090fa",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 222130,
+      "expect": "e6f13af1",
+      "data": "da03f636",
+      "name": "knock request"
+    },
+    {
+      "off": 850,
+      "expect": "f2f63af1",
+      "data": "f2f63af1",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 1034,
+      "expect": "f2f63af1",
+      "data": "f2f63af1",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 1216,
+      "expect": "f2f63af1",
+      "data": "f2f63af1",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 1952,
+      "expect": "f2f63af1",
+      "data": "f2f63af1",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 2136,
+      "expect": "f2f63af1",
+      "data": "f2f63af1",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 2318,
+      "expect": "f2f63af1",
+      "data": "f2f63af1",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 4400,
+      "expect": "f2f63af1",
+      "data": "f2f63af1",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 4550,
+      "expect": "f2f63af1",
+      "data": "f2f63af1",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 4700,
+      "expect": "f2f63af1",
+      "data": "f2f63af1",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 4872,
+      "expect": "f2f63af1",
+      "data": "f2f63af1",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 5022,
+      "expect": "f2f63af1",
+      "data": "f2f63af1",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 5170,
+      "expect": "f2f63af1",
+      "data": "f2f63af1",
+      "name": "unchanged native crank capture"
+    },
+    {
+      "off": 165450,
+      "expect": "c2f13df1",
+      "data": "fa033c37",
+      "name": "knock ingress"
+    },
+    {
+      "off": 143596,
+      "expect": "f0465c14",
+      "data": "fa030a38",
+      "name": "knock prefilter"
+    },
+    {
+      "off": 142222,
+      "expect": "9a0e48a0",
+      "data": "fa036e38",
+      "name": "knock global_gate"
+    },
+    {
+      "off": 227840,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ecf1ecf2ecf3ecf6ecf7ecf8ecf9ecfaecfbecfeecffec00e6000400ec88be88c2f101d86813f3f380faf2f2eaf0f2f374faf18269822d05f3fa2930f3fb2a300d08f1826981ea20e43af3fa1330f3fb143046f5ffffea20e43af2f44efd66f400a446f40004ea30ec3af2f402fd66f40800ea30ec3af3f881faea30ec3a4935eae0ec3af3f84afb4985eae0ec3af2f450ff66f4004f46f40043ea30ec3af2f446ff66f4cf0046f44100ea30ec3a4830ea20ec3a42f346feeaf0ec3af0e5f0f5f0537c352052ea80ec3a4850ea20ec3a2851f0455c14084140e4eae0ec3afc88ea00123bfc88e6f1a0000d03fc88e6f1a200f3f80cd847f8a1002d04f7f20cd8ea00743ce003f2febcecf2ffbeecf2f2eaf0f0cec2fd28dc5c4d06fd0008da03903cea80ee3af064f0cfc2fd29dc5c4d06fd0008da03903cea80ee3af074f0cec2fd2adc5c4d06fd0008da03903cea80ee3af084f0cfc2fd2bdc5c4d06fd0008da03903cea80ee3af094f0cec2fd2cdc5c4d06fd0008da03903cea80ee3af0a4f0cfc2fd2ddc5c4d06fd0008da03903cea80ee3af0b4ec88be884830ea202a3c42f374faea306e3c42f2eaf0ea306e3c43f380faea306e3cf3f801d869834182ea306e3cf2f44efd66f400a446f40004ea306e3cf2f402fd66f40800ea306e3cf3f881faea306e3c4935eae06e3cf3f84afb4985eae06e3cf2f450ff66f4004f46f40043ea306e3cf2f446ff66f4cf0046f44100ea306e3c4830ea206e3c42f346feeaf06e3ce6f1a100f6febcecf6ffbeecf04e00429d02e6f4fffff6f4cafaf04f00429d02e6f4fffff6f4ccfaf6f6d2faf6f7d4faf6f8d6faf6f9d8faf6fadafaf6fbdcfaf7f20cd8fc880d03fc88ea00ee3afc00fcfffcfefcfbfcfafcf9fcf8fcf7fcf6fcf3fcf2fcf1ea00c63c1bcdf2f40cfe46f400108d03e6f4ffff0d055c44f2fd0efe7ccd704d48302d064045ed0748403d0248202d03204c1e88db001f88db00f2f4baecf6f4c0ecc2f54afbf485c8a83d14f2fcbcecc2f44afbf4a428dcc0ad5c4d06fd0008da0222bf22f4bcecc2f54afb5c15c445d2fa0d13f2fcbeecc2f44afbf4a428dcc0ad5c4d06fd0008da0222bf22f4beecc2f54afb5c15c445d2faf2fcbaecf2fdeaf0da02cabcf6f4baecf2fcbcecf2fdeaf0da02cabcf6f4cafaf2fcbeecf2fdeaf0da02cabcf6f4ccfadb00"
+    },
+    {
+      "name": "Committed combustion and private recovery",
+      "off": 226560,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "f3f801d867f8f00047f8a0003d0df3f802d867f820003d04f3f801d869842d03e13875f802d8db00e004db00"
+    },
+    {
+      "name": "ignition_cut_v20_ms410_charge",
+      "off": 228864,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ecf4f3f801d867f8f000c600040047f8a0003d5ff3f810302d1147f8ff002d2749813d039a2823900d0949823d039a281e800d0449843d1b9a281970f3f9113043f9e6fafd0cf3f801d89af41000f3f8123041899d0c219843f9e6faed08e11875f801d8f3f802d89af422600d08f3f802d89af42660e7f8fe0065f801d88a1817409a401560f3f9233043f9e6fafd0cf3f801d89af40c10f3f8283041899d08219843f9e6faed04e12875f801d80d16e7f8fd0065f801d8f3f801d88af40e000d04e7f8fc0065f801d8e7f8df0065f802d8fc00fcf465f204ffdb00fc00e6f40003f6f406d8f68e0ad8e7f8230075f802d8fcf4db00"
+    }
+  ],
+  "revert_superseded": true,
+  "maturity": "Experimental",
+  "validation": "Needs testing",
+  "cal_defaults": {
+    "CUT_RETARD_RANGE": 6
+  }
+}

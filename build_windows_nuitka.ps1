@@ -58,6 +58,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "MS42/MS43 RAM-agent artifact verification failed." }
     & $python -m engines.ms42_ms43.build --verify --eeprom
     if ($LASTEXITCODE -ne 0) { throw "MS43 EEPROM-agent artifact verification failed." }
+    & $python -m engines.ms42_ms43.build_hw_bsl_v1 --verify
+    if ($LASTEXITCODE -ne 0) { throw "MS42/MS43 hardware-BSL artifact verification failed." }
 
     if (-not $SkipTests) {
         $checkArguments = @("packaging\check_offline.py")
@@ -173,9 +175,9 @@ try {
     }
     $releaseReadme = $releaseReadme.Replace('(LICENSE)', '(LICENSE.txt)')
     $releaseReadme = $releaseReadme.Replace('(manual/USER_MANUAL.md)', '(BimmerStein-ECU-Tool-User-Manual.pdf)')
-    $releaseReadme = $releaseReadme.Replace('(docs/MS42_MS43.md)', '(MS42_MS43.md)')
+    $releaseReadme = $releaseReadme.Replace('(docs/MS42_MS43.md', '(MS42_MS43.md')
+    $releaseReadme = $releaseReadme.Replace('(docs/MS42_MS43.md#', '(MS42_MS43.md#')
     $releaseReadme = $releaseReadme.Replace('(docs/MS41_EEPROM.md)', '(MS41_EEPROM.md)')
-    $releaseReadme = [regex]::Replace($releaseReadme, ',\s+shared by desktop and Android', '')
     [System.IO.File]::WriteAllText(
         (Join-Path $appDir "README.md"),
         $releaseReadme,

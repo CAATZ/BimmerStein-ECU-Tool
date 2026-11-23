@@ -24,7 +24,8 @@ def test_calibration_only_live_edit_stays_on_existing_tune_writer(
     ecu.read_full = lambda **kw: pytest.fail("A calibration threshold change must not read the program")
     ecu.read_tune = lambda **kw: extract_calibration(source)
     writes = []
-    monkeypatch.setattr(window, "_ms42_ms43_write", lambda *args: writes.append(args))
+    window.chk_correct_cksum.setChecked(False)
+    monkeypatch.setattr(window, "_ms42_ms43_write", lambda *args, **_: writes.append(args))
     window._on_config_write_ecu()
     assert len(writes) == 1 and writes[0][2] == "tune"
     assert config.read_config(writes[0][0])[name] == after
@@ -42,7 +43,8 @@ def test_live_patch_edit_chooses_full_writer_only_for_changed_program_option(
     reads, writes = [], []
     ecu.read_full = lambda **kw: reads.append("full") or source
     ecu.read_tune = lambda **kw: reads.append("tune") or extract_calibration(source)
-    monkeypatch.setattr(window, "_ms42_ms43_write", lambda *args: writes.append(args))
+    window.chk_correct_cksum.setChecked(False)
+    monkeypatch.setattr(window, "_ms42_ms43_write", lambda *args, **_: writes.append(args))
     window._on_config_write_ecu()
     expected = "full" if changed else "tune"
     assert reads == [expected] and len(writes) == 1 and writes[0][2] == expected
@@ -64,7 +66,8 @@ def test_imported_patch_selection_does_not_replace_live_baseline(
     ecu.read_full = lambda **kw: source
     ecu.read_tune = lambda **kw: pytest.fail("Program option must use full read")
     writes = []
-    monkeypatch.setattr(window, "_ms42_ms43_write", lambda *args: writes.append(args))
+    window.chk_correct_cksum.setChecked(False)
+    monkeypatch.setattr(window, "_ms42_ms43_write", lambda *args, **_: writes.append(args))
     window._on_config_write_ecu()
     assert writes[0][2] == "full" and writes[0][0] == target
 

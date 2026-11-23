@@ -16,7 +16,7 @@ from tests.conftest import ref
     ("1406464", "MS41.2", "_ms412"),
     ("SHINDE1", "MS41.3", ""),
 ])
-@pytest.mark.parametrize("revision", ["V18", "V17", "V16", "V14"])
+@pytest.mark.parametrize("revision", ["V20", "V19", "V18", "V17", "V16", "V14"])
 def test_launch_probe_requires_its_own_hooks_and_matching_state_layout(
         ecu_id, family, suffix, revision):
     image, _ = patch_ms41.build(
@@ -26,11 +26,11 @@ def test_launch_probe_requires_its_own_hooks_and_matching_state_layout(
 
     class ImageDS2:
         def read_mem(self, address, length):
-            assert address >= 0x18000  # RAM markers cannot identify a patch.
+            assert address < 0x8000 or address >= 0x18000  # Program ROM, including low-segment code.
             return bytes(image[(address + index) ^ 0x4000] for index in range(length))
 
     ds2 = ImageDS2()
-    expected = "V16" if revision in ("V16", "V17", "V18") else "legacy"
+    expected = "V16" if revision in ("V16", "V17", "V18", "V19", "V20") else "legacy"
     assert detect_cut_runtime(ds2, ecu_id) == expected
     assert detect_launch_runtime(ds2, ecu_id) is None
     image, _ = patch_ms41.build(
@@ -61,24 +61,33 @@ def test_launch_probe_unknown_id_and_short_read():
         detect_launch_runtime(UnavailableDS2(), "1429861")
 
 
-def test_alphan_probe_requires_v3_code_on_shinde1():
+@pytest.mark.parametrize("pid,revision", [("alphan_failsafe_v3", "V3"), ("alphan_failsafe", "V4")])
+def test_alphan_probe_requires_complete_revision_on_shinde1(pid, revision):
     image = bytearray(ref("MS41.3"))
 
     class ImageDS2:
         def read_mem(self, address, length):
-            assert address >= 0x18000
+            assert 0 < length <= 247
             return bytes(image[(address + index) ^ 0x4000] for index in range(length))
 
     ds2 = ImageDS2()
     assert not detect_alphan_failsafe_runtime(ds2, "SHINDE1")
-    image, _ = patch_ms41.build(ref("MS41.3"), ["alphan_failsafe"])
-    image = bytearray(image)
-    assert detect_alphan_failsafe_runtime(ds2, "SHINDE1")
+    installed, _ = patch_ms41.build(ref("MS41.3"), [pid], allow_deprecated=True)
+    image = bytearray(installed)
+    assert detect_alphan_failsafe_runtime(ds2, "SHINDE1") == revision
     assert not detect_alphan_failsafe_runtime(ds2, "1406464")
-    # Preserve hooks but corrupt one cave prefix: V3 must not be inferred.
-    cave = patch_ms41.load_patches()["alphan_failsafe"]["cave"]["base"]
-    image[cave] ^= 1
-    assert not detect_alphan_failsafe_runtime(ds2, "SHINDE1")
+    patches = patch_ms41.load_patches()
+    for edit in patches[pid]["edits"]:
+        # Old short-prefix probes missed the tail of code bodies and the
+        # retired V2 hook. Every edit contributes to exact identification.
+        last = edit["off"] + len(bytes.fromhex(edit["data"])) - 1
+        image[last] ^= 1
+        assert detect_alphan_failsafe_runtime(ds2, "SHINDE1") is None
+        image[last] ^= 1
+    late = patches["alphan_failsafe_v2"]["cave"]["splice_off"]
+    retired = next(e for e in patches["alphan_failsafe_v2"]["edits"] if e["off"] == late)
+    image[late:late + 4] = bytes.fromhex(retired["data"])
+    assert detect_alphan_failsafe_runtime(ds2, "SHINDE1") is None
 
 
 @pytest.mark.parametrize("patch_id", ["alphan_failsafe_v1", "alphan_failsafe_v2"])

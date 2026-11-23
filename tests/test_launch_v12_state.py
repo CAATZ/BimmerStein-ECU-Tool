@@ -21,7 +21,7 @@ def test_installed_launch_retard_state(family, variant, suffix):
     if root:
         sys.path.insert(0, str(Path(root)))
     Emulator = pytest.importorskip("ms41emu").Emulator
-    patch_id = "launch_control_v18" + suffix
+    patch_id = "launch_control_v20" + suffix
     patch = patch_ms41.load_patches()[patch_id]
     image, _ = patch_ms41.build(ref(family), [*patch["requires"], patch["id"]])
     assert verify_launch_retard_state(image, variant, Emulator.load,

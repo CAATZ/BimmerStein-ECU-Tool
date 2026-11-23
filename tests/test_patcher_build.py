@@ -35,7 +35,7 @@ def test_build_rejects_unknown_and_mixed_target():
     with pytest.raises(patch_ms41.PatchError):
         patch_ms41.build(
             ref("MS41.3"),
-            ["cal_guard", "vanos_minrpm_v2_ms410"],
+            ["cal_guard", "vanos_minrpm_v3_ms410"],
         )  # .3 + .0 targets
 
 

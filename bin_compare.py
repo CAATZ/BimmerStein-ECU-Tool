@@ -1,4 +1,4 @@
-"""Read-only identity, metadata, and byte comparison for catalogued MS41 images."""
+"""Read-only identity, metadata, and byte comparison for catalogued ECU images."""
 
 from __future__ import annotations
 
@@ -40,19 +40,37 @@ def analyze_image(data: bytes, stored_sha256: str = "", *, checksum_context=None
     profile = images.image_profile(data)
     if profile:
         status = images.checksum_status(data, context=checksum_context)
-        return {**common, "checksum": {**status, "prog_disabled": False, "cal_disabled": False},
+        info = {**common, "checksum": {**status, "prog_disabled": False, "cal_disabled": False},
                 "type": "Full ROM" if len(data) == images.FULL_SIZE else "Tune",
                 "program_variant": profile.name if len(data) == images.FULL_SIZE else None,
                 "calibration_variant": profile.name, "hybrid": None, "analysis_error": ""}
-    if len(data) not in (MS41ECU.TUNE_SIZE, MS41ECU.FULL_ROM_SIZE):
-        return {
-            **common,
-            "type": "Unknown",
-            "analysis_error": (
-                f"unsupported Bin size {len(data):,}; "
-                "expected 24,576 or 262,144 bytes"
-            ),
-        }
+        if len(data) == images.FULL_SIZE:
+            from external_patch_library import ExternalPatchLibrary
+            from ms42_ms43_xdf_patches import inspect
+            library = ExternalPatchLibrary()
+            try:
+                chosen = library.preferred(data)
+                if chosen:
+                    catalog = library.catalog(chosen)
+                    history = library.receipt(data)
+                    rows = inspect(catalog, data, history if history and history["operations"] else None)
+                    info["patch_base"] = catalog.title
+                    info["installed_patches"] = [
+                        {"id": row["id"], "title": row["title"], "version": catalog.version}
+                        for row in rows if row["state"] in ("applied", "configured")]
+                    info["xdf_matches"] = [row["title"] for row in rows if row["state"] == "matching"]
+            except (ValueError, OSError) as exc:
+                info["patch_catalog_error"] = str(exc)
+        return info
+    ms41_sizes = {MS41ECU.TUNE_SIZE, MS41ECU.FULL_ROM_SIZE}
+    if len(data) not in ms41_sizes:
+        later_sizes = {images.FULL_SIZE} | {p.partial_size for p in images.PROFILES.values()}
+        if len(data) in later_sizes:
+            error = "unrecognized MS42/MS43 hardware identifier"
+        else:
+            sizes = ", ".join(str(n // 1024) for n in sorted(ms41_sizes | later_sizes))
+            error = f"unsupported Bin size {len(data):,} bytes (supported sizes in KiB: {sizes})"
+        return {**common, "type": "Unknown", "analysis_error": error}
     if len(data) == MS41ECU.FULL_ROM_SIZE and MS41ECU.looks_cpu_order(data):
         return {
             **common,
@@ -270,7 +288,7 @@ def _detail_lines(label: str, info: dict):
         patch_text = "none detected"
     else:
         patch_text = ", ".join(
-            item["id"] + (f" {item['version']}" if item["version"] else "")
+            (item["title"] if "xdf_matches" in info else item["id"]) + (f" {item['version']}" if item["version"] else "")
             for item in patches
         )
 
@@ -286,6 +304,10 @@ def _detail_lines(label: str, info: dict):
     ]
     if info["analysis_error"]:
         lines.append(f"{label} analysis: {info['analysis_error']}")
+    if info.get("xdf_matches"):
+        lines.append(f"{label} XDF results already present: " + ", ".join(info["xdf_matches"]))
+    if info.get("patch_catalog_error"):
+        lines.append(f"{label} XDF catalog: {info['patch_catalog_error']}")
     return lines
 
 

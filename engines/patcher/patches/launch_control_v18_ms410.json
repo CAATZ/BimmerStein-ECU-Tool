@@ -167,5 +167,7 @@
   "validation": "Needs testing",
   "cal_defaults": {
     "LC_RETARD_RANGE": 6
-  }
+  },
+  "deprecated": true,
+  "superseded_by": "launch_control_v19_ms410"
 }

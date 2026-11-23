@@ -50,8 +50,8 @@ def test_boot_write_forwards_explicit_identity_choice_through_real_worker(
     assert window._ms42_ms43_vin_info is None
     calls = []
 
-    def write(data, *, log_fn, progress_cb, verify, use_ram, use_agent, write_boot, preserve_identity):
-        assert data == image and write_boot and use_ram and use_agent and not verify
+    def write(data, *, log_fn, progress_cb, verify, use_ram, use_agent, correct_checksum, write_boot, preserve_identity):
+        assert data == image and write_boot and use_ram and use_agent and correct_checksum and not verify
         calls.append(preserve_identity)
         log_fn("Boot identity choice accepted")
         progress_cb(1, 1, "Boot verified")

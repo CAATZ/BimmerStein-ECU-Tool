@@ -13,7 +13,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from live_log import MAX_LOG_BYTES, display_specs, parse_log, sample_value
+from gui_controls import fit_window_to_screen
+from live_log import display_specs, parse_log, parse_log_stream, sample_value
 from live_instruments import LiveInstruments
 from live_statistics import BoxSummary, box_summary
 
@@ -108,8 +109,11 @@ class _HistoryPlot(QWidget):
         names = view.selected_channels()
         if not view.times or not names:
             painter.setPen(self.palette().windowText().color())
-            painter.drawText(self.rect(), Qt.AlignCenter,
-                             "Select channels to graph" if view.times else "No samples yet")
+            reasons = "\n".join(f"{name}: {view.unavailable_reasons[name]}"
+                                for name in names if name in view.unavailable_reasons)
+            alignment = Qt.AlignLeft | Qt.AlignTop if reasons else Qt.AlignCenter
+            painter.drawText(self.rect().adjusted(8, 8, -8, -8), alignment | Qt.TextWordWrap,
+                             reasons or ("Select channels to graph" if view.times else "No samples yet"))
             return
         left, right = view.time_range()
         start = max(0, bisect_left(view.times, left) - 1)
@@ -121,8 +125,14 @@ class _HistoryPlot(QWidget):
             top = order * row_height
             if not dirty.intersects(QRectF(0, top, self.width(), row_height)):
                 continue
+            if name in view.unavailable_reasons:
+                painter.setPen(self.palette().windowText().color())
+                painter.drawText(QRectF(8, top + 4, self.width() - 16, row_height - 8),
+                                 Qt.AlignLeft | Qt.AlignVCenter | Qt.TextWordWrap,
+                                 f"{name}\n{view.unavailable_reasons[name]}")
+                continue
             series = view.series[name]
-            color = QColor(COLORS[order % len(COLORS)])
+            color = QColor(COLORS[view.table_rows[name] % len(COLORS)])
             rect = QRectF(65, top + 28, chart_width, row_height - 52)
             numeric = [v for v in series["values"][start:stop] if v is not None]
             low, high = (min(numeric), max(numeric)) if numeric else (0, 1)
@@ -216,6 +226,7 @@ class LiveDataView(QWidget):
         self.live = live
         self.times = []
         self.series = {}
+        self.unavailable_reasons = {}
         self.specs = {}
         self.cursor = 0
         self._range = None
@@ -322,7 +333,8 @@ class LiveDataView(QWidget):
 
     def presentation_options(self, name):
         spec = self.specs.get(name, {})
-        if spec.get("kind") == "status" or name in self._text_channels:
+        if (name in self.unavailable_reasons
+                or spec.get("kind") == "status" or name in self._text_channels):
             return ("digital",)
         if (spec.get("kind") in ("dial", "raw") or name in self._numeric_channels
                 or self.series.get(name, {}).get("unit")):
@@ -407,7 +419,8 @@ class LiveDataView(QWidget):
             bounds = (self._card_bounds(name) if mode == "box" or (mode == "gauge" and not defined_range)
                       else (-1., 1.))
             self._card_cache[name] = dict(
-                current=value, unit=item["unit"], min=low, max=high,
+                current=None if name in self.unavailable_reasons else value,
+                unit="" if name in self.unavailable_reasons else item["unit"], min=low, max=high,
                 summary=box_summary(self._window_values(name))
                 if mode == "box" else BoxSummary(0),
                 bounds=bounds,
@@ -459,6 +472,20 @@ class LiveDataView(QWidget):
         for button in self.selection_buttons:
             button.setEnabled(enabled)
 
+    def set_unavailable_channels(self, reasons):
+        if reasons == self.unavailable_reasons:
+            return
+        self.unavailable_reasons = dict(reasons)
+        self.channels.blockSignals(True)
+        for index in range(self.channels.count()):
+            item = self.channels.item(index)
+            reason = reasons.get(item.text(), "")
+            item.setToolTip(reason)
+            item.setData(Qt.AccessibleDescriptionRole, reason)
+        self.channels.blockSignals(False)
+        self.gauges.update_geometry()
+        self._refresh()
+
     def set_channels(self, rows):
         rows = list(rows)
         selected = set(self.selected_channels())
@@ -503,6 +530,7 @@ class LiveDataView(QWidget):
             (name, item["unit"]) for name, item in self.series.items()]
         self.times = []
         self.series = {}
+        self.unavailable_reasons = {}
         self.cursor = 0
         self._range = None
         self.dropped = 0
@@ -547,7 +575,7 @@ class LiveDataView(QWidget):
                 item["values"].append(value)
                 item["labels"].append(label)
                 self._record_value(name, value, label)
-        # ponytail: bounded in-memory history; use the complete CSV for longer sessions.
+        # Bounded in-memory history; use the complete CSV for longer sessions.
         remove = max(0, len(self.times) - MAX_LIVE_SAMPLES)
         if remove:
             self._sample_base += remove
@@ -565,6 +593,8 @@ class LiveDataView(QWidget):
         self._refresh()
 
     def sample_text(self, name):
+        if name in self.unavailable_reasons:
+            return self.unavailable_reasons[name]
         if not self.times:
             return "—"
         item = self.series[name]
@@ -648,6 +678,8 @@ class LiveDataView(QWidget):
             value = self.sample_text(name)
             self.table.item(index, 1).setText(value)
             self.table.item(index, 1).setToolTip(value)
+            self.table.item(index, 2).setText(
+                "" if name in self.unavailable_reasons else self.series[name]["unit"])
         text = (f"{self.times[self.cursor]:.3f} s · Sample {self.cursor + 1:,} / {len(self.times):,}"
                 if self.times else "No samples")
         if self.dropped:
@@ -663,17 +695,16 @@ class LiveDataView(QWidget):
 def show_log(parent, path, definition_path=None, family=None):
     """Open a saved CSV without connecting to an ECU; errors stay in the UI."""
     try:
-        if definition_path is None:
-            from logger_definition_registry import LoggerDefinitionRegistry
-            status = LoggerDefinitionRegistry().status()
-            definition_path = None if status.bundled else status.path
-        with open(path, "rb") as stream:
-            payload = parse_log(stream.read(MAX_LOG_BYTES + 1), definition_path, family)
+        def read_page(page):
+            with open(path, encoding="utf-8-sig", newline="") as stream:
+                return parse_log_stream(stream, definition_path, family, page=page)
+
+        payload = read_page(0)
         dialog = QDialog(parent)
         dialog.setAttribute(Qt.WA_DeleteOnClose)
         dialog.setWindowTitle(f"Live Data Log — {Path(path).name}")
-        dialog.resize(1120, 780)
-        dialog.setMinimumSize(600, 450)
+        fit_window_to_screen(dialog, 1120, 780)
+        dialog.setMinimumSize(min(600, dialog.width()), min(450, dialog.height()))
         layout = QVBoxLayout(dialog)
         view = LiveDataView(dialog, definition_path=definition_path, live=False)
         view.family = family
@@ -681,7 +712,35 @@ def show_log(parent, path, definition_path=None, family=None):
         layout.addWidget(view)
         close = QPushButton("Close")
         close.clicked.connect(dialog.close)
-        layout.addWidget(close, alignment=Qt.AlignRight)
+        footer = QHBoxLayout()
+        if payload["has_next"]:
+            previous, following = QPushButton("Previous page"), QPushButton("Next page")
+            position = QLabel()
+            page = 0
+
+            def show_page(number, data=None):
+                nonlocal page
+                try:
+                    data = data or read_page(number)
+                except (OSError, ValueError) as error:
+                    QMessageBox.warning(dialog, "Cannot Read Log Page", str(error))
+                    return
+                if number != page:
+                    view.load(data)
+                page = number
+                first = data["first_sample"]
+                position.setText(f"Samples {first:,}–{first + len(data['times']) - 1:,}")
+                previous.setEnabled(page > 0)
+                following.setEnabled(data["has_next"])
+
+            previous.clicked.connect(lambda: show_page(page - 1))
+            following.clicked.connect(lambda: show_page(page + 1))
+            for control in (previous, following, position):
+                footer.addWidget(control)
+            show_page(0, payload)
+        footer.addStretch()
+        footer.addWidget(close)
+        layout.addLayout(footer)
         dialog.show()
         return dialog
     except (OSError, ValueError, RuntimeError) as error:

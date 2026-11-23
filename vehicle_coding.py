@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from dataclasses import dataclass
+from hashlib import sha256
 import time
 from typing import Mapping
 
+from app_paths import user_data_path
 from ds2 import DS2Error, DS2Timeout
+from transmission_swap_journal import ensure_directory_durable, write_new_file_durably
 from transmission_conversion import (
     _bmw_fast_payload,
     _positive,
@@ -17,6 +21,7 @@ from transmission_conversion import (
 from vehicle_coding_profiles import (
     CodingProfile as ModuleCodingProfile,
     CodingRegion,
+    PROFILE_BY_KEY,
     TARGET_BY_KEY,
     profiles_for_target,
     resolve_profile,
@@ -46,6 +51,7 @@ class ModuleCodingState:
     profile: ModuleCodingProfile
     raw_regions: tuple[tuple[str, bytes], ...]
     raw_ident: bytes
+    recovery_original: bytes | None = None
 
     @property
     def region_data(self) -> dict[str, bytes]:
@@ -183,8 +189,12 @@ def _identify(ds2, target_key: str) -> tuple[ModuleCodingProfile, bytes, int]:
                 "The immobilizer diagnostic variant does not match its coding profile")
     if target_key == "e39_ike" and not 0x01 <= diagnostic_index <= 0x04:
         raise UnsupportedCodingProfile("The connected cluster is not an E39 IKE")
-    if target_key == "e39_kmb" and not 0x1E <= diagnostic_index <= 0x28:
+    if target_key == "e39_kmb" and not 30 <= _bcd(diagnostic_index) <= 40:
         raise UnsupportedCodingProfile("The connected cluster is not an E39 KMB")
+    # BMW D_005B IDENTIFIKATION dispatches on byte 9 before opening its variant.
+    climate_indexes = {"e46_ihk": (0x30, 0x31, 0x32, 0x33), "e46_ihkr": (0x44,)}
+    if target_key in climate_indexes and diagnostic_index not in climate_indexes[target_key]:
+        raise UnsupportedCodingProfile(f"The connected climate controller does not match {target.name}")
     return profile, response, raw_ci
 
 
@@ -328,7 +338,10 @@ def _word_checksum_geometry(
             (0xD9, 0xDA, 0x180, 0xD8, False),
         )
     if profile.chassis in {"E38", "E39"}:
-        return ((0x58, 0x5A, 0x100, 0x58, False),)
+        first = (0x59, 0x5A, 0x100, 0x58, False)
+        if profile.key in {"E38.KMBI_E38.C12", "E39.KMB_E39.C07"}:
+            return (first, (0x101, 0x100, 0x1C0, 0x100, True))
+        return (first,)
     if profile.coding_index_raw in {0x02, 0x03, 0x04, 0x05, 0x06, 0x20, 0x21, 0x22}:
         return ((0x3F, 0x40, 0x200, 0x3E, False),)
     return ((0x16E, 0x70, 0x16E, 0x16E, False),)
@@ -374,6 +387,30 @@ def _validate_regions(profile: ModuleCodingProfile, regions: Mapping[str, bytes]
             raise DS2Error("invalid MK60 coding checksum")
 
 
+def _cluster_record(profile, ident):
+    key = sha256(profile.key.encode("ascii") + ident).hexdigest()
+    return user_data_path("coding-recovery", key + ".bin")
+
+
+def _cluster_recovery(profile, ident, current):
+    path = _cluster_record(profile, ident)
+    try:
+        record = path.read_bytes()
+    except FileNotFoundError:
+        return None
+    size = profile.data_length
+    digest, original, target = record[:32], record[32:32 + size], record[32 + size:]
+    if len(target) != size or digest != sha256(ident + original + target).digest():
+        raise DS2Error("The saved cluster coding recovery record is damaged")
+    if current in (original, target):
+        return None
+    for offset in range(0, size, 2):
+        word = slice(offset, offset + 2)
+        if current[word] not in (original[word], target[word]):
+            raise DS2Error("Cluster coding differs from the saved write at an unrelated word")
+    return original
+
+
 def read_module_coding(ds2, target_key: str) -> ModuleCodingState:
     """Read one exact embedded coding profile without external runtime files."""
     profile, ident, _raw_ci = _identify(ds2, target_key)
@@ -384,6 +421,11 @@ def read_module_coding(ds2, target_key: str) -> ModuleCodingState:
         for region in profile.regions
     )
     values = dict(regions)
+    if profile.transport == "word":
+        original = _cluster_recovery(profile, ident, regions[0][1])
+        if original is not None:
+            _validate_regions(profile, {regions[0][0]: original})
+            return ModuleCodingState(profile, regions, ident, original)
     _validate_regions(profile, values)
     return ModuleCodingState(profile, regions, ident)
 
@@ -495,8 +537,20 @@ def write_module_coding(
     expected_profile_key: str,
     expected_data: bytes,
     values: Mapping[str, bool | str],
+    *, restore_original: bool = False,
 ) -> ModuleCodingState:
     """Mask-edit selected fields, write them, and require exact readback."""
+    with ExitStack() as stack:
+        profile = PROFILE_BY_KEY.get(expected_profile_key)
+        if profile is not None and profile.transport == "word":
+            from backup_manager import _lock_file
+            directory = ensure_directory_durable(user_data_path("coding-recovery"))
+            lock = stack.enter_context((directory / "writer.lock").open("a+b"))
+            _lock_file(lock)
+        return _write_module_coding(ds2, target_key, expected_profile_key, expected_data, values, restore_original)
+
+
+def _write_module_coding(ds2, target_key, expected_profile_key, expected_data, values, restore_original):
     state = read_module_coding(ds2, target_key)
     if state.profile.key != expected_profile_key:
         raise DS2Error(
@@ -507,6 +561,11 @@ def write_module_coding(
         raise DS2Error(
             f"{state.profile.name} coding changed since it was read; read it again")
 
+    if restore_original != (state.recovery_original is not None):
+        raise DS2Error("Cluster recovery status changed. Read Settings again.")
+    if restore_original and values:
+        raise ValueError("Restore original coding does not accept setting changes")
+
     settings = {setting.key: setting for setting in state.profile.settings}
     unknown = set(values) - set(settings)
     if unknown:
@@ -515,6 +574,8 @@ def write_module_coding(
     updated = {key: bytearray(value) for key, value in expected.items()}
     for key, value in values.items():
         settings[key].apply(updated, value)
+    if restore_original:
+        updated[state.profile.regions[0].key] = bytearray(state.recovery_original)
 
     if state.profile.transport == "light_selected":
         for region in state.profile.regions:
@@ -526,6 +587,15 @@ def write_module_coding(
         region = state.profile.regions[0]
         updated[region.key][0] = (_xor(updated[region.key][1:]) + 1) & 0xFF
 
+    def verify_choices(regions):
+        for key, requested in values.items():
+            setting = settings[key]
+            if setting.toggle and type(requested) is str:
+                requested = requested == setting.toggle[0]
+            if setting.decode(regions) != requested:
+                raise DS2Error(f"{setting.label} does not match the requested setting")
+
+    verify_choices(updated)
     changed = tuple(
         region for region in state.profile.regions
         if expected[region.key] != bytes(updated[region.key])
@@ -535,6 +605,16 @@ def write_module_coding(
     if state.profile.transport in {"mrs_selected", "airbag_addressed"}:
         _mrs_prepare(ds2, state.profile, state.raw_ident, write=True)
 
+    target = b"".join(bytes(updated[region.key]) for region in state.profile.regions)
+    if state.profile.transport == "word" and not restore_original:
+        path = _cluster_record(state.profile, state.raw_ident)
+        if path.exists():
+            # A process may have stopped after reaching a verified endpoint.
+            if _cluster_recovery(state.profile, state.raw_ident, state.raw_data) is not None:
+                raise DS2Error("The previous cluster coding write requires recovery")
+            path.unlink()
+        record = state.raw_data + target
+        write_new_file_durably(path, sha256(state.raw_ident + record).digest() + record)
     for region in changed:
         before, after = expected[region.key], bytes(updated[region.key])
         try:
@@ -549,9 +629,12 @@ def write_module_coding(
             raise error
 
     verified = read_module_coding(ds2, target_key)
-    target = b"".join(bytes(updated[region.key]) for region in state.profile.regions)
-    if verified.profile.key != state.profile.key or verified.raw_data != target:
+    if (verified.profile.key != state.profile.key or verified.raw_ident != state.raw_ident
+            or verified.raw_data != target):
         raise DS2Error(f"{state.profile.name} coding write verification failed")
+    verify_choices(verified.region_data)
+    if state.profile.transport == "word":
+        _cluster_record(state.profile, state.raw_ident).unlink()
     return verified
 
 

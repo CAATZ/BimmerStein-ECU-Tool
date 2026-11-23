@@ -186,14 +186,14 @@ def test_batch_reuses_core_bytes_for_patch_aliases(tmp_path, monkeypatch, ecu_id
     assert poller.terminal_error is None and not poller.pop_errors()
     assert len(rows) == 1 and 1 <= len(fake.entries) <= 49
     assert rows[0]["Throttle Position"] == "50.2"
-    assert rows[0]["Launch TPS (threshold scale)"] == ("59.98" if ecu_id == "1429861" else "60.2")
+    assert rows[0]["Launch TPS (threshold scale)"] == ("59.98" if ecu_id == "1429861" else "60.16")
     assert not any(address <= 0xE8D0 < address + length for address, length in fake.reads)
 
 
 @pytest.mark.parametrize("telegram", [False, True])
 def test_extended_alphan_values_become_blank_on_current_speed_density_sample(tmp_path, monkeypatch, telegram):
     monkeypatch.setattr(live_data, "detect_cut_runtime", lambda *_args: None)
-    monkeypatch.setattr(live_data, "detect_alphan_failsafe_runtime", lambda *_args: True)
+    monkeypatch.setattr(live_data, "detect_alphan_failsafe_runtime", lambda *_args: "V4")
     fake = MemoryDS2()
     fake.memory[0x133BF] = 2
     fake.memory[0xE80A:0xE80C] = (1234).to_bytes(2, "little")
@@ -228,7 +228,7 @@ def test_extended_alphan_values_become_blank_on_current_speed_density_sample(tmp
                                                      (True, 3, False), (True, 2, True)])
 def test_extended_alphan_requires_exact_patch_and_x4_scale(monkeypatch, installed, scale, expected):
     monkeypatch.setattr(live_data, "detect_cut_runtime", lambda *_args: None)
-    monkeypatch.setattr(live_data, "detect_alphan_failsafe_runtime", lambda *_args: installed)
+    monkeypatch.setattr(live_data, "detect_alphan_failsafe_runtime", lambda *_args: "V4" if installed else None)
     fake = MemoryDS2()
     fake.memory[0x133BF] = scale
     poller = live_data.LiveDataPoller(ecu_id="SHINDE1", ds2=fake)

@@ -17,7 +17,7 @@ FRAGMENT = (
     / "engines"
     / "patcher"
     / "definitions"
-    / "ms412_ignition_cut_v18_launch_control_v18.xml"
+    / "ms412_ignition_cut_v20_launch_control_v20.xml"
 )
 STANDALONE = FRAGMENT.parent / "BimmerStein MS41 Patch Definitions.xml"
 
@@ -61,9 +61,9 @@ def _tables():
 
 
 def test_source_fragment_matches_ms412_patch_calibration_addresses():
-    ignition = _patch("ignition_cut_v18_ms412")["cave"]["cals"]
-    launch_413 = _patch("launch_control_v18")["cave"]["cals"]
-    launch_412 = _patch("launch_control_v18_ms412")["cave"]["cals"]
+    ignition = _patch("ignition_cut_v20_ms412")["cave"]["cals"]
+    launch_413 = _patch("launch_control_v20")["cave"]["cals"]
+    launch_412 = _patch("launch_control_v20_ms412")["cave"]["cals"]
     assert launch_412 != launch_413
 
     expected = {**ignition, **launch_412}
@@ -210,13 +210,13 @@ def test_combined_builder_remaps_only_ms413_launch_controls():
         )
         addresses[key] = int(launch.attrib["storageaddress"], 16)
         text = ET.tostring(rom, encoding="unicode")
-        revision = "V18"
+        revision = "V20"
         assert f"Ignition Cut {revision}" in text
         assert f"shared {revision} engine" in text
         other_revision = "V11" if revision == "V13" else "V13"
         assert f"Ignition Cut {other_revision}" not in text
         assert f"shared {other_revision} engine" not in text
-        assert "Launch Control V18" in text
+        assert "Launch Control V20" in text
 
     assert addresses[("SS1v2", "24kb")] == 0x47E0
     assert addresses[("12", "24kb")] == 0x352C
@@ -236,13 +236,13 @@ def test_standalone_artifact_is_reproducible_and_patch_only():
 
     root = ET.fromstring(expected)
     roms = root.findall("rom")
-    assert len(roms) == 12
+    assert len(roms) == 16
     patch_tables = set(TABLE_TO_CAL)
     for rom in roms:
         tables = {table.attrib["name"] for table in rom.findall("table")}
         xmlid = rom.findtext("romid/xmlid")
         text = ET.tostring(rom, encoding="unicode")
-        revision = "V18"
+        revision = "V20"
         assert f"Ignition Cut {revision}" in text
         assert f"shared {revision} engine" in text
         other_revision = "V11" if revision == "V13" else "V13"
@@ -265,17 +265,17 @@ def test_standalone_addresses_match_patch_descriptors_for_each_framing():
         xmlid = rid.findtext("xmlid")
         tables = {table.attrib["name"]: table for table in rom.findall("table")}
         if "MS410" in xmlid:
-            ignition_id = "ignition_cut_v18_ms410"
-            launch_id = "launch_control_v18_ms410"
+            ignition_id = "ignition_cut_v20_ms410"
+            launch_id = "launch_control_v20_ms410"
         elif "MS411" in xmlid:
-            ignition_id = "ignition_cut_v18_ms411"
-            launch_id = "launch_control_v18_ms411"
+            ignition_id = "ignition_cut_v20_ms411"
+            launch_id = "launch_control_v20_ms411"
         elif "MS412" in xmlid:
-            ignition_id = "ignition_cut_v18_ms412"
-            launch_id = "launch_control_v18_ms412"
+            ignition_id = "ignition_cut_v20_ms412"
+            launch_id = "launch_control_v20_ms412"
         else:
-            ignition_id = "ignition_cut_v18"
-            launch_id = "launch_control_v18"
+            ignition_id = "ignition_cut_v20"
+            launch_id = "launch_control_v20"
         expected_full = {
             **_patch(ignition_id)["cave"]["cals"],
             **_patch(launch_id)["cave"]["cals"],
@@ -290,11 +290,12 @@ def test_standalone_addresses_match_patch_descriptors_for_each_framing():
             ) == expected_address
 
         if "VANOSRT" in xmlid:
-            vanos_id = (
-                "vanos_minrpm_v2_ms410"
-                if "MS410_VANOSRT3" in xmlid
-                else "vanos_minrpm_ms411"
-            )
+            vanos_id = {
+                "VANOSRT2": "vanos_minrpm_ms411",
+                "VANOSRT3": "vanos_minrpm_v2_ms410",
+                "VANOSRT4": "vanos_minrpm_v2_ms411",
+                "VANOSRT5": "vanos_minrpm_v3_ms410",
+            }[rid.findtext("internalidstring")]
             vanos_full = _patch(vanos_id)["cave"]["cals"]["VANOSRPM"]
             address = int(
                 tables["VANOS Retrofit - Minimum RPM (Closed Throttle)"].attrib[
@@ -327,13 +328,14 @@ def test_standalone_ms410_uses_grounded_input_latch_labels():
 
 def test_standalone_ms410_throttle_angle_scale_preserves_raw_bytes_and_other_families():
     spec = next(spec for spec in patch_service._parameter_specs(
-        patch_service.definitions()["launch_control_v18_ms410"]) if spec["id"] == "LC_MINTPS")
+        patch_service.definitions()["launch_control_v20_ms410"]) if spec["id"] == "LC_MINTPS")
     for rom in ET.parse(STANDALONE).getroot().findall("rom"):
         table = next(table for table in rom.findall("table") if table.get("name") == "LC - Min TPS")
         scale = table.find("scaling")
         if "MS410" not in rom.findtext("romid/xmlid"):
             assert scale.get("units") == "TPS%"
             assert scale.get("expression") == "x*.47"
+            assert scale.get("format") == "0.00"
             continue
         assert scale.get("units") == spec["units"] == "° throttle"
         assert scale.get("expression") == "x*" + spec["step"]
@@ -353,7 +355,7 @@ def test_standalone_matches_every_declared_rom_variant():
         for rom in root.findall("rom")
         if "VANOSRT" in rom.findtext("romid/xmlid")
     }
-    assert vanos_markers == {"VANOSRT2", "VANOSRT3"}
+    assert vanos_markers == {"VANOSRT2", "VANOSRT3", "VANOSRT4", "VANOSRT5"}
     for rom in root.findall("rom"):
         rid = rom.find("romid")
         size = 262144 if rid.findtext("filesize") == "256kb" else 24576
@@ -368,44 +370,56 @@ def test_standalone_matches_real_images_after_each_tunable_patch_set():
     definitions = calibration_defs.load_definitions(STANDALONE)
     cases = (
         (
-            "MS41.3", ["ignition_cut_v18", "launch_control_v18"],
+            "MS41.3", ["ignition_cut_v20", "launch_control_v20"],
             "BIMMERSTEIN_MS413_SS1V2_24K", "BIMMERSTEIN_MS413_SS1V2_256K",
         ),
         (
-            "MS41.2", ["ignition_cut_v18_ms412", "launch_control_v18_ms412"],
+            "MS41.2", ["ignition_cut_v20_ms412", "launch_control_v20_ms412"],
             "BIMMERSTEIN_MS412_ID12_24K", "BIMMERSTEIN_MS412_ID12_256K",
         ),
         (
             "MS41.0",
-            ["ignition_cut_v18_ms410", "launch_control_v18_ms410"],
+            ["ignition_cut_v20_ms410", "launch_control_v20_ms410"],
             "BIMMERSTEIN_MS410_ID41_24K", "BIMMERSTEIN_MS410_ID41_256K",
         ),
         (
             "MS41.0",
             [
-                "ignition_cut_v18_ms410",
-                "launch_control_v18_ms410",
+                "ignition_cut_v20_ms410",
+                "launch_control_v20_ms410",
                 "vanos_minrpm_v2_ms410",
             ],
             "BIMMERSTEIN_MS410_VANOSRT3_24K", "BIMMERSTEIN_MS410_VANOSRT3_256K",
         ),
         (
+            "MS41.0",
+            ["ignition_cut_v20_ms410", "launch_control_v20_ms410", "vanos_minrpm_v3_ms410"],
+            "BIMMERSTEIN_MS410_VANOSRT5_24K", "BIMMERSTEIN_MS410_VANOSRT5_256K",
+        ),
+        (
             "MS41.1",
-            ["ignition_cut_v18_ms411", "launch_control_v18_ms411"],
+            ["ignition_cut_v20_ms411", "launch_control_v20_ms411"],
             "BIMMERSTEIN_MS411_ID60_24K", "BIMMERSTEIN_MS411_ID60_256K",
         ),
         (
             "MS41.1",
             [
-                "ignition_cut_v18_ms411",
-                "launch_control_v18_ms411",
+                "ignition_cut_v20_ms411",
+                "launch_control_v20_ms411",
                 "vanos_minrpm_ms411",
             ],
             "BIMMERSTEIN_MS411_VANOSRT2_24K", "BIMMERSTEIN_MS411_VANOSRT2_256K",
         ),
+        (
+            "MS41.1",
+            ["ignition_cut_v20_ms411", "launch_control_v20_ms411", "vanos_minrpm_v2_ms411"],
+            "BIMMERSTEIN_MS411_VANOSRT4_24K", "BIMMERSTEIN_MS411_VANOSRT4_256K",
+        ),
     )
     for version, patch_ids, partial_xmlid, full_xmlid in cases:
-        patched, _log = patch_ms41.build(ref(version), patch_ids)
+        patched, _log = patch_ms41.build(
+            ref(version), patch_ids,
+            allow_deprecated=bool({"vanos_minrpm_ms411", "vanos_minrpm_v2_ms410"} & set(patch_ids)))
         partial = MS41ECU.tune_from_full(patched)
         for image, xmlid in ((partial, partial_xmlid), (patched, full_xmlid)):
             matched = definitions.match(image)
@@ -415,7 +429,9 @@ def test_standalone_matches_real_images_after_each_tunable_patch_set():
                 value, units, _format = calibration_defs.read_scalar(
                     image, tables["VANOS Retrofit - Minimum RPM (Closed Throttle)"]
                 )
-                assert (value, units) == (8160, "RPM")
+                assert value == 8160
+                current = matched.idstr in ("VANOSRT4", "VANOSRT5")
+                assert units == ("RPM (8160 = Original VANOS logic)" if current else "RPM")
             assert calibration_defs.switch_state(
                 image, tables["Ignition Cut - Switch Input"]
             ) == "Off"

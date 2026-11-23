@@ -14,6 +14,6 @@ def test_fixed_ipw_native_envelope_and_handoffs(version):
     from engines.patcher.verify_fixed_ipw import verify_fixed_ipw
     suffix='' if version=='MS41.3' else '_'+version.lower().replace('.','')
     reference=gate._cut_reference(version)
-    image,_=gate.patch_ms41.build(reference,['ignition_cut_v18'+suffix,'launch_control_v18'+suffix])
+    image,_=gate.patch_ms41.build(reference,['ignition_cut_v20'+suffix,'launch_control_v20'+suffix])
     image=gate._bind_image(image,gate._bound_variant(reference))
     assert verify_fixed_ipw(gate,version,image)>700

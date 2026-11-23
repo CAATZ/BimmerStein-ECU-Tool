@@ -284,6 +284,11 @@ for _family in ("ignition_cut_v18", "launch_control_v18"):
         if parameter["id"] in ("CUT_IPW", "LC_IPW") else parameter
         for parameter in _EDITABLE_PARAMETER_FAMILIES[_family])
 
+_EDITABLE_PARAMETER_FAMILIES["ignition_cut_v19"] = _EDITABLE_PARAMETER_FAMILIES["ignition_cut_v18"]
+_EDITABLE_PARAMETER_FAMILIES["launch_control_v19"] = _EDITABLE_PARAMETER_FAMILIES["launch_control_v18"]
+_EDITABLE_PARAMETER_FAMILIES["ignition_cut_v20"] = _EDITABLE_PARAMETER_FAMILIES["ignition_cut_v19"]
+_EDITABLE_PARAMETER_FAMILIES["launch_control_v20"] = _EDITABLE_PARAMETER_FAMILIES["launch_control_v19"]
+
 
 def definitions():
     """Return the internal patch definitions used by every application workflow."""
@@ -530,7 +535,7 @@ def parameter_feedback(parameters, values=None, *, revision=None):
                 "ECU injector corrections still apply; native fuel cuts can still stop injection. "
                 "0 ms is a zero base pulse, not a command to switch injection off."
             )
-            if revision == "V18":
+            if revision in ("V18", "V19", "V20"):
                 feedback[ipw_id] += " Uses native fueling if the requested pulse cannot fit the validated timing interval."
     return feedback
 
@@ -565,6 +570,11 @@ def _encode_parameter(spec, value):
     return raw
 
 
+def _native_fuel_hysteresis(image, patch, name):
+    address = _NATIVE_FUEL_HYSTERESIS[patch["target"]][name]
+    return image[(MS41ECU.TUNE_DS2_BASE + address) ^ 0x4000]
+
+
 def _public_parameter(image, patch, spec):
     raw, _offset, width = _raw_parameter_value(image, patch, spec)
     current, current_display = _decode_parameter(spec, raw)
@@ -572,8 +582,7 @@ def _public_parameter(image, patch, spec):
     for token, label, _raw in spec.get("specials", ()):
         option = {"value": token, "label": label}
         if token == "@stock" and spec["id"] in ("LC_FUEL_HYST_A", "LC_FUEL_HYST_B"):
-            address = _NATIVE_FUEL_HYSTERESIS[patch["target"]][spec["id"]]
-            value = str(image[(MS41ECU.TUNE_DS2_BASE + address) ^ 0x4000] * 32)
+            value = str(_native_fuel_hysteresis(image, patch, spec["id"]) * 32)
             option.update(display_value=value, display_text=f"Stock: {value} RPM")
         elif token == "@stock" and spec["codec"] == "ipw_u16le":
             option["display_text"] = "Calculated by ECU"
@@ -631,7 +640,11 @@ def editable_parameters(data):
         if not specs or entry.get("deprecated"):
             continue
         editable = bool(entry.get("ok") and (checksum_ok or not entry["installed"]))
-        parameters = [_public_parameter(data, patch, spec) for spec in specs]
+        preview = data
+        if not entry["installed"] and patch.get("cal_defaults"):
+            preview = bytearray(data)
+            patch_ms41.initialize_calibration_defaults(preview, patch, data, all_patches)
+        parameters = [_public_parameter(preview, patch, spec) for spec in specs]
         result.append({
             "patch_id": patch_id,
             "title": patch.get("title", patch_id),
@@ -654,13 +667,13 @@ def _validate_parameter_relationships(image, patch, specs):
     def raw(parameter_id):
         return _raw_parameter_value(image, patch, by_id[parameter_id])[0]
 
-    for angle, width, limit in (("CUT_IGN_ANGLE", "CUT_RETARD_RANGE", "CUTRPM"),
-                                ("LC_CUT_IGN_ANGLE", "LC_RETARD_RANGE", "LC_MAXRPM")):
+    def validate_band(angle, width, limit):
         if angle in by_id and raw(angle) <= 63 and not 0 < raw(width) < raw(limit):
             raise PatchError(f"{width} must be positive and smaller than {limit} when the fixed angle is enabled")
-    if "LC_SW" not in by_id:
-        return
-    if raw("LC_SW") == 0xFF:
+
+    if "CUTSW" in by_id and raw("CUTSW") != 0xFF:
+        validate_band("CUT_IGN_ANGLE", "CUT_RETARD_RANGE", "CUTRPM")
+    if "LC_SW" not in by_id or raw("LC_SW") == 0xFF:
         return
     if raw("LC_ARMSPEED") == 0:
         raise PatchError("LC_ARMSPEED must be at least 1 km/h when Launch Control is enabled")
@@ -672,6 +685,17 @@ def _validate_parameter_relationships(image, patch, specs):
         raise PatchError("LC_CUTTYPE must be Fuel cut or Ignition cut when Launch Control is enabled")
     if raw("LC_SW") != 0 and raw("LC_CLUTCHPOL") not in (0, 1):
         raise PatchError("LC_CLUTCHPOL must be Active-high or Active-low for a switch input")
+    if raw("LC_CUTTYPE") == 1:
+        validate_band("LC_CUT_IGN_ANGLE", "LC_RETARD_RANGE", "LC_MAXRPM")
+    elif "LC_FUEL_HYST_A" in by_id:
+        limit = raw("LC_MAXRPM")
+        for name in ("LC_FUEL_HYST_A", "LC_FUEL_HYST_B"):
+            value = raw(name)
+            if value == 0xFF:
+                value = _native_fuel_hysteresis(image, patch, name)
+            if value < limit:
+                return
+        raise PatchError("At least one fuel hysteresis must be below the soft cut RPM for fuel to resume")
 
 
 def apply_parameter_changes(
@@ -832,8 +856,8 @@ def _installed_revision_satisfies(all_patches, requirement_id, installed_id):
     return False
 
 
-def _dependent_ids(all_patches, effective_ids, patch_id):
-    return sorted(
+def _dependent_ids(data, all_patches, effective_ids, patch_id):
+    dependents = sorted(
         candidate_id for candidate_id in effective_ids
         if candidate_id != patch_id
         and any(
@@ -842,6 +866,27 @@ def _dependent_ids(all_patches, effective_ids, patch_id):
             for required_id in all_patches[candidate_id].get("requires", [])
         )
     )
+    if dependents or patch_id not in effective_ids or not patch_id.startswith("ignition_cut"):
+        return dependents
+    installed_launch = [pid for pid in effective_ids if pid.startswith("launch_control")]
+    if installed_launch:
+        return sorted(pid for pid in installed_launch
+                      if any(req.startswith("ignition_cut") for req in all_patches[pid].get("requires", ())))
+    # Some historical Launch timing hooks now belong to Ignition Cut itself.
+    target = base_version(data)
+    cut_offsets = {edit["off"] for edit in all_patches[patch_id]["edits"]}
+    for launch in all_patches.values():
+        if (not launch["id"].startswith("launch_control") or not patch_ms41.supports_target(launch, target)
+                or not any(req.startswith("ignition_cut") for req in launch.get("requires", ()))):
+            continue
+        cave = launch["cave"]
+        offsets = {splice["off"] for splice in cave.get("splices", ())} | {cave["splice_off"]}
+        for edit in launch["edits"]:
+            off = edit["off"]
+            if (off in offsets and off not in cut_offsets and edit["data"][:8] != edit["expect"][:8]
+                    and data[off:off + 4] == bytes.fromhex(edit["data"][:8])):
+                return ["Launch Control (incomplete)"]
+    return dependents
 
 
 def installed_dependents(data, patch_id):
@@ -849,7 +894,7 @@ def installed_dependents(data, patch_id):
     all_patches = patch_ms41.load_patches()
     _ver, installed_ids, shadowed_ids = _installed_patch_state(data, all_patches)
     effective_ids = installed_ids - shadowed_ids
-    return _dependent_ids(all_patches, effective_ids, patch_id)
+    return _dependent_ids(data, all_patches, effective_ids, patch_id)
 
 
 def _display_metadata(patch):
@@ -890,7 +935,7 @@ def available_patches(data):
         if pid in PATCH_TAB_HIDDEN_IDS:
             continue
         installed = pid in installed_ids
-        required_by = _dependent_ids(all_patches, effective_ids, pid)
+        required_by = _dependent_ids(data, all_patches, effective_ids, pid)
         if p.get("deprecated"):
             # Deprecated patches are hidden UNLESS one is actually installed on this base - then surface a
             # remove-only row so a stray/old install can be reverted directly from the tab (no need to first
@@ -914,6 +959,14 @@ def available_patches(data):
         if not patch_ms41.supports_target(p, ver):
             continue
         errs = patch_ms41.validate_splices(p)
+        if pid == "alphan_failsafe":
+            problem = patch_ms41.alphan_upgrade_error(data, all_patches)
+            if problem:
+                errs.append(problem)
+        if p.get("allow_direct_upgrade"):
+            problem = patch_ms41.direct_upgrade_error(data, p, all_patches)
+            if problem:
+                errs.append(problem)
         # Prior AMD drivers still support TOP protection. Other dependencies
         # require exact current bytes; supersession alone does not prove compatibility.
         missing_requirements = [
@@ -958,10 +1011,12 @@ def available_patches(data):
                 continue
             legacy = {"id": lid, "label": all_patches[lid].get("label", lid)}
             legacy_required_by = _dependent_ids(
-                all_patches, effective_ids, lid)
+                data, all_patches, effective_ids, lid)
             if legacy_required_by:
                 legacy["required_by"] = legacy_required_by
             entry["legacy"].append(legacy)
+        if p.get("allow_direct_upgrade") and entry["legacy"]:
+            entry["can_upgrade"] = not errs
         out.append(entry)
     return out
 
@@ -991,6 +1046,8 @@ def revert_patch(base_data, patch_id):
     if p is None:
         raise patch_ms41.PatchError(f"no such patch: {patch_id}")
     dependents = installed_dependents(base_data, patch_id)
+    if "Launch Control (incomplete)" in dependents:
+        raise PatchError("Launch Control still has an installed hook. Restore a complete BIN before removing Ignition Cut.")
     if dependents:
         joined = ", ".join(dependents)
         raise patch_ms41.PatchError(

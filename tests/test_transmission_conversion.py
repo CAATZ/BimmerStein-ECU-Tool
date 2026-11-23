@@ -967,6 +967,27 @@ def _e46_connected_session(family="MS42"):
     )
 
 
+def test_e46_cluster_prewrite_refusal_preserves_the_independent_change(monkeypatch, tmp_path):
+    from tests.test_ms41_e39_cluster_checksum import ClusterBus
+
+    bus = ClusterBus(ci=7)
+    bus.memory = bytearray(512)
+    session = _e46_connected_session()
+    session.cluster = tx.read_e46_cluster_store(bus)
+    session.target_cluster = tx.build_e46_cluster_target(session.cluster, None, session.target)
+    journal = SwapOperationJournal(tmp_path / "journal")
+
+    def finish_preflight(*_args):
+        # Another editor changes a word outside the transmission field.
+        bus.memory[0x171] = 0x80
+
+    monkeypatch.setattr(tx, "_assert_session_fresh", finish_preflight)
+    with pytest.raises(tx.OwnerChangedBeforeWrite, match="instrument-cluster storage changed"):
+        tx.write_connected_modules(bus, session, archive_dir=tmp_path, journal=journal)
+    assert bus.memory[0x171] == 0x80 and bus.writes == []
+    assert journal.load(session.token).writes == ()
+
+
 @pytest.mark.parametrize("family", ("MS42", "MS43"))
 def test_connected_write_journal_reaches_awaiting_cycle(monkeypatch, tmp_path, family):
     session = _e46_connected_session(family)
@@ -1010,13 +1031,15 @@ def test_interrupted_recovery_can_restore_original_and_verify(
     journal.mark_failed(session.token, "simulated interruption")
     recovered = tx.load_connected_swap_journal(journal.load(session.token))
     events = []
-    monkeypatch.setattr(tx, "_assert_egs_snapshot", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tx, "_assert_egs_snapshot", lambda *_args, **_kwargs:
+                        pytest.fail("Original coding recovery must accept either physical layout"))
     monkeypatch.setattr(
         tx, "_restore_connected_owner",
         lambda _ds2, _session, name: events.append(f"restore {name}"),
     )
     monkeypatch.setattr(tx, "read_e46_dme_transmission", lambda _ds2: session.source)
-    monkeypatch.setattr(tx, "_verify_egs", lambda *_args: None)
+    monkeypatch.setattr(tx, "_verify_egs", lambda *_args:
+                        pytest.fail("Original coding verification must be independent of target hardware"))
     monkeypatch.setattr(tx, "read_mk20_transmission", lambda _ds2: session.stability)
 
     class Ds2:

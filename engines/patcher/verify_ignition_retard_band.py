@@ -17,10 +17,9 @@ _FAMILIES = {
 }
 
 
-def verify_ignition_retard_band(gate, installed_image, stock_image, variant):
+def verify_ignition_retard_band(gate, installed_image, stock_image, variant, *, revision="v19"):
     """Use stock scheduling as the oracle; never replace the native ISR."""
     version, suffix = _FAMILIES[variant]
-    revision = "v18"
     ignition_id, launch_id = "ignition_cut_" + revision + suffix, "launch_control_" + revision + suffix
     cals = dict(gate.PATCHES[ignition_id]["cave"]["cals"])
     cals.update(gate.PATCHES[launch_id]["cave"]["cals"])
@@ -124,6 +123,7 @@ def verify_ignition_retard_band(gate, installed_image, stock_image, variant):
             count += 1
 
         _verify_band_recovery(gate, version, image, variant, owner)
+        _verify_unchanged_timing(gate, version, image, variant, owner)
 
     # Shared controls must not let stale launch ownership suppress standalone,
     # and launch ignition has deterministic priority if both bands are eligible.
@@ -138,7 +138,7 @@ def verify_ignition_retard_band(gate, installed_image, stock_image, variant):
         assert patched[3].read_byte(CUT_SOURCE_ADDR) == expected_owner
         count += 1
 
-    standalone, _ = gate.patch_ms41.build(stock_image, [ignition_id])
+    standalone, _ = gate.patch_ms41.build(stock_image, [ignition_id], allow_deprecated=True)
     standalone = configured(gate._bind_image(standalone, variant), "standalone")
     # Deliberately enable launch calibrations without its program hooks. The
     # standalone installation must never call or infer an absent Launch patch.
@@ -149,7 +149,9 @@ def verify_ignition_retard_band(gate, installed_image, stock_image, variant):
     _verify_band_recovery(gate, version, standalone, variant, 3)
     fuel = configured(installed_image, "off", LC_SW=0, LC_CUTTYPE=0, LC_IGN_ANGLE=27)
     _verify_fuel_task_retard_recovery(gate, fuel, variant)
-    if variant == "1429861":
+    fuel_band = configured(installed_image, "off", LC_SW=0, LC_CUTTYPE=0, LC_IGN_ANGLE=27, LC_HARDRPM=120)
+    _verify_unchanged_timing(gate, version, fuel_band, variant, 1)
+    if variant == "1429861" and revision == "v19":
         # Reproduce V14's late owner overwrite at the current RAM ABI. The
         # exact historical descriptor still retains the original extra store.
         old_edit = next(edit for edit in gate.PATCHES["ignition_cut_v14_ms410"]["edits"]
@@ -203,6 +205,31 @@ def _verify_fuel_task_retard_recovery(gate, image, variant):
     gate._call_native(emu, entry)
     assert (emu.read_byte(CUT_TIMING_ADDR), emu.read_byte(CUT_SOURCE_ADDR), emu.reg.r[4] & 255) == (0xC0, 0, 255), (
         variant, "fuel-retard episode releases with native fuel state")
+
+
+def _verify_unchanged_timing(gate, version, image, variant, owner):
+    for ordinary in (228, 240):
+        for bank in gate.CUT_GUARD_LAYOUTS[version]["stft"][3]:
+            angles, _, state, emu = run_timing(
+                image, variant, gate._load_emulator, ordinary=ordinary, rpm_value=121,
+                extra_bytes=((CUT_RECOVERY_ADDR, 0), (0xD805, 0xA7)), return_emu=True)
+            assert [value for _, value in angles] == [ordinary, ordinary] and state == 0xC3
+            assert emu.read_byte(CUT_SOURCE_ADDR) == owner and emu.read_byte(CUT_RECOVERY_ADDR) == 0
+            emu.reg.r[0], emu.reg.r[8], emu.reg.r[9] = 0xE600, bank, 0x100
+            emu.write(bank + 6, 0x9000)
+            emu.write(bank + 12, 0x7000)
+            emu.write(bank + 14, 0xA000)
+            gate._native_stft_case(image, gate._native_stft_callers(version)[0], bank, 0xA0, emu=emu)
+            assert emu.read(bank + 6) == 0x8F00, (version, owner, ordinary, "native trim", bank)
+            for kind in ("front", "rear"):
+                entry = gate._CUT_MONITOR_LAYOUTS[version][kind]
+                if entry is None:
+                    continue
+                emu.write_byte(bank + 0x41, 0x55)
+                emu.reg.r[12], emu.reg.r[13] = bank if kind == "rear" else 0x55, bank
+                gate._call_native(emu, entry)
+                assert emu.read_byte(bank + (0x42 if kind == "rear" else 0x2B)) == 0x55
+                assert emu.read_byte(CUT_RECOVERY_ADDR) == 0, (version, owner, ordinary, kind, bank)
 
 
 def _verify_band_recovery(gate, version, image, variant, owner):

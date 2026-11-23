@@ -44,7 +44,7 @@ def test_cli_default_checksum_output_preserves_source_and_directory(
     corrected = bytes([1]) * len(original)
     source.write_bytes(original)
     monkeypatch.setattr(
-        "checksum.correct_checksums", lambda _data: (corrected, []))
+        "checksum.correct_verified_checksums", lambda _data: (corrected, []))
     args = SimpleNamespace(
         check_file=None, fix_file=str(source), output=None, verbose=False,
     )
@@ -55,3 +55,14 @@ def test_cli_default_checksum_output_preserves_source_and_directory(
     assert stopped.value.code == 0
     assert source.read_bytes() == original
     assert (directory / "rom_cksum.bin").read_bytes() == corrected
+
+
+def test_cli_refused_correction_leaves_existing_output_intact(tmp_path, capsys):
+    source, output = tmp_path / "damaged.bin", tmp_path / "original.bin"
+    source.write_bytes(bytes(256 * 1024))
+    output.write_bytes(b"original")
+    args = SimpleNamespace(check_file=None, fix_file=source, output=output, verbose=False)
+    with pytest.raises(SystemExit) as stopped:
+        ms41_flash.run_offline(args)
+    assert stopped.value.code == 1 and output.read_bytes() == b"original"
+    assert "invalid program checksum bounds" in capsys.readouterr().err

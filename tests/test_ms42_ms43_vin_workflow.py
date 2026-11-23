@@ -56,8 +56,10 @@ def expected_image(original, address):
 
 
 @pytest.mark.parametrize("mode", ("append", "full", "dirty"))
-def test_vin_write_preserves_whole_array_and_uses_no_finalizer(vin_workflow, mode):
+@pytest.mark.parametrize("echo_budget", (0, 128))
+def test_vin_write_preserves_whole_array_and_uses_no_finalizer(vin_workflow, mode, echo_budget):
     ecu, peer, address = vin_workflow
+    peer.echo_drain_chunk_size = echo_budget
     original = seed_history(peer, address, mode)
     expected, plan = expected_image(original, address)
     journal, progress = Journal(), []
@@ -70,6 +72,11 @@ def test_vin_write_preserves_whole_array_and_uses_no_finalizer(vin_workflow, mod
     assert peer.erases == ([0] if mode != "append" else [])
     record = address + plan.record_index * 46
     assert peer.programs[-1] == (record, plan.record[:2])
+    assert all(len(data) <= 1024 for _, data in peer.programs)
+    if mode != "append":
+        assert max(len(data) for _, data in peer.programs) == 1024
+    commit_index = max(index for index, request in enumerate(peer.agent_requests) if request[0] == ord("P"))
+    assert peer.agent_requests[commit_index - 1][0] == ord("R")
     if mode == "append":
         assert peer.programs == [(record + 2, plan.record[2:]), (record, plan.record[:2])]
     backup = next(fields for event, fields in journal.events if event == "vin_backup")

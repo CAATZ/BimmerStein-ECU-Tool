@@ -25,6 +25,7 @@ DEV_TESTS = tuple("tests/" + name + ".py" for name in (
     "test_ms42_ms43", "test_ms42_ms43_image", "test_ms42_ms43_agent",
     "test_ms42_ms43_agent_finalize", "test_ms42_ms43_agent_recovery",
     "test_ms42_ms43_agent_workflow", "test_ms42_ms43_baud_recovery",
+    "test_ms42_ms43_bsl", "test_bsl_service",
     "test_ms42_ms43_ram_write", "test_ms42_ms43_ram_write_rejections",
     "test_softbsl_recovery", "test_gui_operation_ownership", "test_packaging_config",
     "test_test_environment",
@@ -32,6 +33,7 @@ DEV_TESTS = tuple("tests/" + name + ".py" for name in (
     "tests/test_gui_smoke.py::test_native_write_passes_verify_choice_without_acquiring_backup",
     "tests/test_gui_smoke.py::test_native_write_handoff_requires_complete_original_identity",
     "tests/test_gui_smoke.py::test_softbsl_installer_post_erase_failure_keeps_port_and_recovery",
+    "tests/test_gui_smoke.py::test_bsl_read_uses_real_service_and_exclusive_backend_output",
 )
 
 

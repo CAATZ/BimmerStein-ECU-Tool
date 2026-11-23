@@ -173,12 +173,17 @@ def _choice(value: dict) -> CodingChoice:
 @lru_cache(maxsize=None)
 def profile_by_key(key: str) -> CodingProfile:
     value = _RAW_PROFILES[key]
+    regions = tuple(CodingRegion(**region) for region in value["regions"])
+    if key in {"E38.KMBI_E38.C12", "E39.KMB_E39.C07"}:
+        # A_KMB2 computes CHECKSUM_2 through word 223, beyond the last setting.
+        region, = regions
+        regions = (CodingRegion(region.key, region.selector, region.address, 0x1C0 - region.address),)
     return CodingProfile(
         value["key"], value["target"], value["chassis"], value["family"],
         value["name"], value["address"], value["transport"],
         value["coding_index_raw"], tuple(value["coding_indexes_raw"]),
         value["memory_structure"],
-        tuple(CodingRegion(**region) for region in value["regions"]),
+        regions,
         tuple(CodingSetting(
             setting["key"], setting["label"], setting["description"],
             setting["reference"], setting["level"],

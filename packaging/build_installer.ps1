@@ -51,8 +51,7 @@ $compilerCandidates = @(
     $IsccPath,
     $env:INNO_ISCC,
     "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
-    "C:\Program Files\Inno Setup 6\ISCC.exe",
-    "C:\tmp\ECUEditor-InnoSetup6\ISCC.exe"
+    "C:\Program Files\Inno Setup 6\ISCC.exe"
 )
 $compiler = $compilerCandidates |
     Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } |

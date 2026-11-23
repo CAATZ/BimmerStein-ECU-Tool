@@ -58,6 +58,7 @@ class MS42MS43ConfigDesktop:
         for widget in (*self._config_section_groups.values(), *self._ms42_ms43_config_notes):
             widget.setVisible(not active)
         if not active:
+            self.chk_config_fix.show()
             for button, tooltip in self._ms41_config_tooltips.items():
                 button.setToolTip(tooltip)
             return False
@@ -87,14 +88,17 @@ class MS42MS43ConfigDesktop:
                 combo.setEnabled(False)
                 table.setCellWidget(row, 1, combo)
                 self._ms42_ms43_config_combos[feature.name] = combo
+                combo.currentTextChanged.connect(self._update_config_buttons)
             table.resizeRowsToContents()
             row_height = max(table.fontMetrics().lineSpacing() + 14, 28)
             table.setMinimumHeight(table.horizontalHeader().height() + row_height * min(len(features), 4) + 4)
             self._ms42_ms43_config_detected.setText(
                 "Read from ECU to show reported configuration." if features else
                 f"Stock settings are not mapped for {family} software {software}.")
+            self._ms42_ms43_config_detected.setVisible(self._config_data is None or not features)
         idle = not self._task_busy and not self._actuator_cleanup_pending
         loaded = self._config_data is not None
+        self.chk_config_fix.setVisible(loaded)
         mode = "File mode — close file for ECU operations" if loaded else "ECU settings"
         self._ms42_ms43_config_group.setTitle(f"{family} {software} — {mode}")
         connected = self._is_ms42_ms43() and not self._ms42_ms43_link_unavailable()
@@ -102,11 +106,13 @@ class MS42MS43ConfigDesktop:
         self.btn_config_load.setEnabled(idle)
         self.btn_config_close.setEnabled(idle and loaded)
         self.btn_config_save.setEnabled(idle and loaded and bool(features))
+        self.btn_config_flash.setEnabled(self.btn_config_save.isEnabled())
         self.btn_config_copy_ecu.setEnabled(idle and loaded and same_family and bool(features))
         self.btn_config_read_ecu.setEnabled(idle and not loaded and connected and bool(features))
         self.btn_config_get_file.setEnabled(idle and not loaded and connected and bool(features))
         self.btn_config_write_ecu.setEnabled(
             idle and not loaded and connected and bool(self._ms42_ms43_config_changes()))
+        self.chk_config_keep.setEnabled(self.btn_config_write_ecu.isEnabled())
         for button in (self.btn_config_read_ecu, self.btn_config_copy_ecu):
             button.setToolTip("Read calibration settings, supported program options and ECU-reported configuration.")
         if loaded:
@@ -114,7 +120,8 @@ class MS42MS43ConfigDesktop:
                 "Close the loaded file to read directly from the ECU. "
                 "To copy ECU settings into this file, use Copy flags from ECU.")
         self.btn_config_write_ecu.setToolTip(
-            "Apply settings with the existing writer. Program options require program and calibration writing.")
+            "Apply settings with the Flash tab's checksum and verification options. "
+            "Program options require program and calibration writing.")
         return True
 
     def _ms42_ms43_config_values(self, values, *, remember=True):
@@ -144,13 +151,15 @@ class MS42MS43ConfigDesktop:
 
     def _ms42_ms43_config_changes(self):
         return {name: combo.currentText() for name, combo in self._ms42_ms43_config_combos.items()
-                if combo.isEnabled() and combo.currentText() != "Read current value…"}
+                if combo.isEnabled() and combo.currentText() != "Read current value…"
+                and combo.currentText() != self._ms42_ms43_config_original_values.get(name)}
 
     def _ms42_ms43_config_load(self, path, data):
         from ms42_ms43_config_patches import read_config
 
         identity = images.image_identity(data)
         values = read_config(data, identity["family"], identity["software_id"])
+        self._config_source_loaded(path)
         self._config_data, self._config_path = bytes(data), str(path)
         self._ms42_ms43_config_file_identity = identity
         self._ms42_ms43_config_key = None
@@ -175,12 +184,13 @@ class MS42MS43ConfigDesktop:
 
         def done(result):
             values, learned = result
-            self._ms42_ms43_config_values(values)
+            self._ms42_ms43_config_values(values, remember=not copy)
             self._ms42_ms43_config_detected.setText(
                 "Reported configuration: " + "; ".join(
                     f"{key}: {'Yes' if value is True else 'No' if value is False else value}"
                     for key, value in learned.items())
                 if learned else "Reported configuration unavailable.")
+            self._ms42_ms43_config_detected.setVisible(not copy or bool(learned))
             self._log("Configuration copied from ECU." if copy else "Configuration read.", "ok")
 
         self._run_task(task, on_success=done)
@@ -201,56 +211,71 @@ class MS42MS43ConfigDesktop:
         except (OSError, ValueError) as error:
             QMessageBox.warning(self, "Configuration Unavailable", str(error))
 
-    def _ms42_ms43_config_save(self):
+    def _ms42_ms43_config_file_image(self):
         from ms42_ms43_config_patches import apply_config
 
         identity = self._ms42_ms43_config_file_identity
-        try:
-            data = apply_config(self._config_data, self._ms42_ms43_config_changes(),
-                                identity["family"], identity["software_id"])
-            if self.chk_config_fix.isChecked():
-                context = None
-                if identity["family"] == "MS43" and identity["partial"]:
-                    context = self._backup_mgr.checksum_context(self._config_data)
-                    if context is None:
-                        full_path, _ = QFileDialog.getOpenFileName(
-                            self, "Matching MS43 full image for checksum context", "", "Binary Files (*.bin)")
-                        if not full_path:
-                            return
-                        context = Path(full_path).read_bytes()
-                        full_identity = images.image_identity(context, "MS43")
-                        if full_identity["partial"] or full_identity["software_id"] != identity["software_id"]:
-                            raise ValueError("Checksum context must be a matching MS43 full image.")
-                data, _details = images.correct_checksums(data, identity["family"], context=context)
-            path, _ = QFileDialog.getSaveFileName(
-                self, "Save configured image", str(Path(self._config_path).with_stem(
-                    Path(self._config_path).stem + "_config")), "Binary Files (*.bin)")
-            if path:
-                Path(path).write_bytes(data)
-                self._log(f"Configured image saved: {Path(path).name}", "ok")
-        except (OSError, ValueError) as error:
-            QMessageBox.warning(self, "Configuration Not Saved", str(error))
+        data = apply_config(self._config_data, self._ms42_ms43_config_changes(),
+                            identity["family"], identity["software_id"])
+        fix = self.chk_config_fix.isChecked()
+        context = None
+        if identity["family"] == "MS43" and identity["partial"] and (fix or self._config_file_in_bins):
+            context = self._backup_mgr.checksum_context(self._config_data)
+            if fix and context is None:
+                full_path, _ = QFileDialog.getOpenFileName(
+                    self, "Matching MS43 full image for checksum context", "", "Binary Files (*.bin)")
+                if not full_path:
+                    return None, None
+                context = Path(full_path).read_bytes()
+                full_identity = images.image_identity(context, "MS43")
+                if full_identity["partial"] or full_identity["software_id"] != identity["software_id"]:
+                    raise ValueError("Checksum context must be a matching MS43 full image.")
+        if fix:
+            data, _details = images.correct_checksums(data, identity["family"], context=context)
+        return bytes(data), context
 
     def _ms42_ms43_config_write(self):
-        from ms42_ms43_config_patches import apply_config, patches_for, requires_full_write
+        from ms42_ms43_config_patches import apply_config, requires_full_write
 
         changes = self._ms42_ms43_config_changes()
         if not changes:
             return
-        family, software = self._ds2.family, self._ecu_cal_id
+        ecu, software = self._ds2, self._ecu_cal_id
+        family = ecu.family
         original = self._ms42_ms43_config_original_values
-        patch_names = {patch.name for patch in patches_for(family, software)}
-        changes = {name: value for name, value in changes.items()
-                   if name not in patch_names or value != original.get(name)}
         mode = "full" if requires_full_write(changes, original, family, software) else "tune"
         force_slow = self.chk_force_slow_ds2.isChecked()
+        keep_copy = self.chk_config_keep.isChecked()
+        correct_checksum = self.chk_correct_cksum.isChecked()
 
         def task(log_fn, progress_fn):
-            with self._ds2.read_transfer(force_slow=force_slow,
-                                         log_fn=log_fn, use_agent=True) as reader:
+            with ecu.read_transfer(force_slow=force_slow, log_fn=log_fn, use_agent=True) as reader:
                 read = reader.read_full if mode == "full" else reader.read_tune
                 current = read(progress_cb=progress_fn, log_fn=log_fn)
-            return apply_config(current, changes, family, software)
+            target = apply_config(current, changes, family, software)
+            if target == current:
+                return None
+            context = None
+            if correct_checksum:
+                if mode == "tune" and family == "MS43":
+                    context = ecu.read_memory(
+                        images.MS43_MONITOR_CONTEXT_ADDRESS, images.MS43_MONITOR_CONTEXT_SIZE)
+                target, _ = images.correct_checksums(target, family, context=context)
+            return target, context, bytes(current) if keep_copy else None
 
-        self._run_task(task, on_success=lambda data: self._ms42_ms43_write(
-            data, "ECU configuration", mode))
+        def done(result):
+            if self._ds2 is not ecu or self._ecu_cal_id != software:
+                self._log("Configuration write cancelled because the ECU connection changed.", "warn")
+                return
+            if result is None:
+                self._ms42_ms43_config_values(changes)
+                self._log("Selected settings already match the ECU.")
+                return
+            target, context, original = result
+            if keep_copy and not self._keep_config_image(target, family, original, checksum_context=context):
+                return
+            options = {"checksum_context": context} if context is not None else {}
+            self._ms42_ms43_write(target, "ECU configuration", mode,
+                                  live_config_checksum=correct_checksum, **options)
+
+        self._run_task(task, on_success=done)

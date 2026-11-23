@@ -40,7 +40,7 @@ def patch_window(monkeypatch, tmp_path):
 
     monkeypatch.setattr(window._backup_mgr, "add_data", archive)
     monkeypatch.setattr(window, "_refresh_backup_table", lambda: None)
-    monkeypatch.setattr(window, "_offer_additional_read_copy", lambda *_a, **_k: None)
+    monkeypatch.setattr(gui.QInputDialog, "getText", lambda *args, text: (text, True))
     try:
         yield window, archived, errors
     finally:
@@ -79,12 +79,12 @@ def _set_number(dialog, parameter_id, value):
 
 def test_installed_parameter_patch_has_configure_button(patch_window, monkeypatch):
     window, archived, errors = patch_window
-    image = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v18"])[0]
+    image = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v20"])[0]
     window._set_patch_base(image, "parameter-test.bin")
 
-    group = window._patch_parameter_groups["ignition_cut_v18"]
-    button = window._patch_rows["ignition_cut_v18"].findChild(
-        QPushButton, "patch_configure_ignition_cut_v18")
+    group = window._patch_parameter_groups["ignition_cut_v20"]
+    button = window._patch_rows["ignition_cut_v20"].findChild(
+        QPushButton, "patch_configure_ignition_cut_v20")
     assert group["editable"] is True
     assert len(group["parameters"]) == 6
     assert button is not None and button.isEnabled()
@@ -96,7 +96,7 @@ def test_installed_parameter_patch_has_configure_button(patch_window, monkeypatc
     window._on_patches_build()
 
     expected = patch_service.apply_parameter_changes(
-        image, "ignition_cut_v18", {"CUTRPM": "4000"})[0]
+        image, "ignition_cut_v20", {"CUTRPM": "4000"})[0]
     assert archived == [expected]
     assert window._patch_base == expected
     assert not window._patch_parameter_changes
@@ -106,9 +106,9 @@ def test_installed_parameter_patch_has_configure_button(patch_window, monkeypatc
 
 def test_configuration_shows_current_modes_and_reviews_rounded_values(patch_window, monkeypatch):
     window, _archived, errors = patch_window
-    source = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v18"])[0]
+    source = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v20"])[0]
     source = patch_service.apply_parameter_changes(
-        source, "ignition_cut_v18", {"CUTRPM": "4000"})[0]
+        source, "ignition_cut_v20", {"CUTRPM": "4000"})[0]
     window._set_patch_base(source, "current-values.bin")
     reviews = []
     monkeypatch.setattr(QMessageBox, "warning",
@@ -124,11 +124,11 @@ def test_configuration_shows_current_modes_and_reviews_rounded_values(patch_wind
         return QDialog.Accepted
 
     monkeypatch.setattr(QDialog, "exec_", edit)
-    window._on_patch_configure("ignition_cut_v18")
+    window._on_patch_configure("ignition_cut_v20")
     assert "4000 RPM → 4192 RPM" in reviews[0]
-    assert window._patch_parameter_changes["ignition_cut_v18"]["changes"] == {"CUTRPM": "4192"}
+    assert window._patch_parameter_changes["ignition_cut_v20"]["changes"] == {"CUTRPM": "4192"}
     _edit_dialog(monkeypatch, {"CUTRPM": "4200"}, expected={"CUTRPM": "4192"})
-    window._on_patch_configure("ignition_cut_v18")
+    window._on_patch_configure("ignition_cut_v20")
     assert len(reviews) == 1  # Rounding to the existing draft is a harmless no-op.
     assert not errors
 
@@ -136,15 +136,15 @@ def test_configuration_shows_current_modes_and_reviews_rounded_values(patch_wind
 def test_launch_configuration_rejects_zero_arm_speed(patch_window, monkeypatch):
     window, archived, errors = patch_window
     source = patch_service.build_image(
-        ref("MS41.3"), ["ignition_cut_v18", "launch_control_v18"])[0]
+        ref("MS41.3"), ["ignition_cut_v20", "launch_control_v20"])[0]
     window._set_patch_base(source, "launch-arm-speed.bin")
-    group = window._patch_parameter_groups["launch_control_v18"]
+    group = window._patch_parameter_groups["launch_control_v20"]
     arm_speed = next(parameter for parameter in group["parameters"]
                      if parameter["id"] == "LC_ARMSPEED")
     assert arm_speed["minimum"] == "1"
 
     _edit_dialog(monkeypatch, {"LC_ARMSPEED": "0"})
-    window._on_patch_configure("launch_control_v18")
+    window._on_patch_configure("launch_control_v20")
 
     assert "LC_ARMSPEED must be between 1" in errors[-1][1]
     assert window._patch_base == source
@@ -157,8 +157,8 @@ def test_launch_configuration_rejects_zero_arm_speed(patch_window, monkeypatch):
 ))
 def test_launch_dialog_rejects_enabled_unknown_choices(patch_window, monkeypatch, mode, strategy, error):
     window, archived, errors = patch_window
-    launch = "launch_control_v18_ms410"
-    source = patch_service.build_image(ref("MS41.0"), ["ignition_cut_v18_ms410", launch])[0]
+    launch = "launch_control_v20_ms410"
+    source = patch_service.build_image(ref("MS41.0"), ["ignition_cut_v20_ms410", launch])[0]
     window._set_patch_base(source, "unknown-launch-choice.bin")
     changes = {"LC_SW": mode, "LC_ARMSPEED": "1", "LC_MAXSPEED": "10"}
     if strategy:
@@ -171,8 +171,8 @@ def test_launch_dialog_rejects_enabled_unknown_choices(patch_window, monkeypatch
 
 def test_ms410_throttle_angle_and_launch_rearm_feedback_reach_desktop(patch_window, monkeypatch):
     window, archived, errors = patch_window
-    launch = "launch_control_v18_ms410"
-    source = patch_service.build_image(ref("MS41.0"), ["ignition_cut_v18_ms410", launch])[0]
+    launch = "launch_control_v20_ms410"
+    source = patch_service.build_image(ref("MS41.0"), ["ignition_cut_v20_ms410", launch])[0]
     window._set_patch_base(source, "throttle-angle.bin")
 
     def edit(dialog):
@@ -201,8 +201,8 @@ def test_ms410_throttle_angle_and_launch_rearm_feedback_reach_desktop(patch_wind
 @pytest.mark.parametrize("mode", ["always", "off"])
 def test_loaded_zero_arm_speed_requires_an_explicit_edit(patch_window, monkeypatch, mode):
     window, archived, errors = patch_window
-    launch = "launch_control_v18"
-    source = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v18", launch])[0]
+    launch = "launch_control_v20"
+    source = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v20", launch])[0]
     source = bytearray(patch_service.apply_parameter_changes(source, launch, {
         "LC_SW": mode, "LC_CUTTYPE": "fuel", "LC_ARMSPEED": "1", "LC_MAXSPEED": "10",
     })[0])
@@ -238,8 +238,8 @@ def test_loaded_zero_arm_speed_requires_an_explicit_edit(patch_window, monkeypat
 
 def test_launch_configuration_accepts_hard_below_soft(patch_window, monkeypatch):
     window, archived, errors = patch_window
-    launch = "launch_control_v18"
-    source = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v18", launch])[0]
+    launch = "launch_control_v20"
+    source = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v20", launch])[0]
     window._set_patch_base(source, "launch-hard-below-soft.bin")
     changes = {
         "LC_SW": "always", "LC_CUTTYPE": "fuel", "LC_ARMSPEED": "1",
@@ -260,8 +260,8 @@ def test_launch_configuration_accepts_hard_below_soft(patch_window, monkeypatch)
 def test_launch_fixed_angle_number_control_accepts_negative_and_keeps_off_distinct(
         patch_window, monkeypatch):
     window, archived, errors = patch_window
-    launch = "launch_control_v18"
-    source = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v18", launch])[0]
+    launch = "launch_control_v20"
+    source = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v20", launch])[0]
     window._set_patch_base(source, "launch-angle.bin")
 
     def edit(dialog):
@@ -285,14 +285,14 @@ def test_launch_fixed_angle_number_control_accepts_negative_and_keeps_off_distin
 
 
 @pytest.mark.parametrize("patch_id,range_id,angle_id,limit_id", [
-    ("ignition_cut_v18", "CUT_RETARD_RANGE", "CUT_IGN_ANGLE", "CUTRPM"),
-    ("launch_control_v18", "LC_RETARD_RANGE", "LC_CUT_IGN_ANGLE", "LC_MAXRPM"),
+    ("ignition_cut_v20", "CUT_RETARD_RANGE", "CUT_IGN_ANGLE", "CUTRPM"),
+    ("launch_control_v20", "LC_RETARD_RANGE", "LC_CUT_IGN_ANGLE", "LC_MAXRPM"),
 ])
 def test_ignition_retard_dialog_shows_lower_threshold_and_saves_independent_angle(
         patch_window, monkeypatch, patch_id, range_id, angle_id, limit_id):
     window, archived, errors = patch_window
     source = patch_service.build_image(
-        ref("MS41.3"), ["ignition_cut_v18", "launch_control_v18"])[0]
+        ref("MS41.3"), ["ignition_cut_v20", "launch_control_v20"])[0]
     source = patch_service.apply_parameter_changes(source, patch_id, {limit_id: "4000"})[0]
     window._set_patch_base(source, "ignition-retard.bin")
 
@@ -317,13 +317,13 @@ def test_ignition_retard_dialog_shows_lower_threshold_and_saves_independent_angl
 
 
 @pytest.mark.parametrize("patch_id,prefix,limit_id,angle_id", [
-    ("ignition_cut_v18", "CUT", "CUTRPM", "CUT_IGN_ANGLE"),
-    ("launch_control_v18", "LC", "LC_MAXRPM", "LC_CUT_IGN_ANGLE"),
+    ("ignition_cut_v20", "CUT", "CUTRPM", "CUT_IGN_ANGLE"),
+    ("launch_control_v20", "LC", "LC_MAXRPM", "LC_CUT_IGN_ANGLE"),
 ])
 def test_timing_preview_tracks_hysteresis_and_modes_without_saving(
         patch_window, monkeypatch, patch_id, prefix, limit_id, angle_id):
     window, archived, errors = patch_window
-    source = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v18", "launch_control_v18"])[0]
+    source = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v20", "launch_control_v20"])[0]
     settings = {limit_id: "4000", prefix + "_RETARD_RANGE": "32",
                 prefix + "_HYST": "0", angle_id: "-10.125"}
     if prefix == "LC":
@@ -357,9 +357,9 @@ def test_timing_preview_tracks_hysteresis_and_modes_without_saving(
 def test_unknown_launch_angle_stays_disabled_until_explicitly_changed(
         patch_window, monkeypatch, raw):
     window, archived, errors = patch_window
-    launch = "launch_control_v18"
+    launch = "launch_control_v20"
     source = bytearray(patch_service.build_image(
-        ref("MS41.3"), ["ignition_cut_v18", launch])[0])
+        ref("MS41.3"), ["ignition_cut_v20", launch])[0])
     address = patch_service.definitions()[launch]["cave"]["cals"]["LC_IGN_ANGLE"]
     source[address] = raw
     source = bytes(checksum.correct_checksums(source)[0])
@@ -400,8 +400,8 @@ def test_unknown_launch_angle_stays_disabled_until_explicitly_changed(
 
 def test_launch_fuel_hysteresis_dialog_keeps_stock_and_custom_choices(patch_window, monkeypatch):
     window, archived, errors = patch_window
-    launch = "launch_control_v18"
-    source = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v18", launch])[0]
+    launch = "launch_control_v20"
+    source = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v20", launch])[0]
     source = patch_service.apply_parameter_changes(
         source, launch, {"LC_FUEL_HYST_B": "64"})[0]
     window._set_patch_base(source, "launch-fuel-hysteresis.bin")
@@ -433,8 +433,8 @@ def test_selected_patches_configure_before_first_build(
     if alter_checksum_store:
         image[0x5C80] ^= 1
     image = bytes(image)
-    ignition = "ignition_cut_v18"
-    launch = "launch_control_v18"
+    ignition = "ignition_cut_v20"
+    launch = "launch_control_v20"
     window._set_patch_base(image, "unpatched-base.bin")
     ignition_button = window._patch_rows[ignition].findChild(
         QPushButton, "patch_configure_" + ignition)
@@ -487,7 +487,7 @@ def test_selected_patches_configure_before_first_build(
 def test_parameter_draft_lifecycle(patch_window, monkeypatch, action):
     window, archived, errors = patch_window
     image = ref("MS41.3")
-    patch_id = "ignition_cut_v18"
+    patch_id = "ignition_cut_v20"
     window._set_patch_base(image, "unpatched-base.bin")
     window._patch_checkboxes[patch_id].setChecked(True)
     _edit_dialog(monkeypatch, {"CUTRPM": "4000"})
@@ -545,7 +545,7 @@ def test_parameter_draft_lifecycle(patch_window, monkeypatch, action):
 
 def test_selected_patch_rejects_incompatible_bytes_before_configure(patch_window, monkeypatch):
     window, archived, errors = patch_window
-    patch_id = "ignition_cut_v18"
+    patch_id = "ignition_cut_v20"
     image = bytearray(ref("MS41.3"))
     image[patch_service.definitions()[patch_id]["edits"][0]["off"]] ^= 1
     window._set_patch_base(image, "incompatible-base.bin")
@@ -575,7 +575,7 @@ def test_removing_unrelated_patch_keeps_selected_parameter_draft(patch_window, m
     window, archived, errors = patch_window
     image = patch_service.build_image(ref("MS41.3"), ["softbsl_loader", "cal_guard"])[0]
     window._set_patch_base(image, "installed-calguard.bin")
-    patch_id = "ignition_cut_v18"
+    patch_id = "ignition_cut_v20"
     window._patch_checkboxes[patch_id].setChecked(True)
     _edit_dialog(monkeypatch, {"CUTRPM": "4000"})
     window._on_patch_configure(patch_id)
@@ -586,6 +586,8 @@ def test_removing_unrelated_patch_keeps_selected_parameter_draft(patch_window, m
     assert window._patch_checkboxes[patch_id].isChecked()
     assert window._patch_parameter_changes == pending
     assert window._patch_removed_ids == {"cal_guard"}
+    assert window._patch_status_labels["cal_guard"].text() == "Removal pending"
+    assert window._patch_status_labels[patch_id].text() == "Install pending"
     assert not archived and not errors
     window._on_patches_build()
     expected = patch_service.revert_patch(image, "cal_guard")
@@ -598,7 +600,7 @@ def test_removing_unrelated_patch_keeps_selected_parameter_draft(patch_window, m
 @pytest.mark.parametrize("current,expected", [("@off", "0.000"), ("-10.125", "-10.125")])
 def test_angle_off_mode_starts_at_tdc_and_preserves_configured_values(patch_window, current, expected):
     group = next(group for group in patch_service.editable_parameters(ref("MS41.3"))
-                 if group["patch_id"] == "launch_control_v18")
+                 if group["patch_id"] == "launch_control_v20")
     parameter = deepcopy(next(item for item in group["parameters"]
                               if item["id"] == "LC_IGN_ANGLE"))
     parameter["current"] = current
@@ -618,7 +620,7 @@ def test_angle_off_mode_starts_at_tdc_and_preserves_configured_values(patch_wind
 def test_numeric_modes_preserve_custom_value_and_show_native_range(patch_window):
     window, _archived, _errors = patch_window
     group = next(group for group in patch_service.editable_parameters(ref("MS41.3"))
-                 if group["patch_id"] == "launch_control_v18")
+                 if group["patch_id"] == "launch_control_v20")
     parameter = deepcopy(next(item for item in group["parameters"]
                               if item["id"] == "LC_FUEL_HYST_A"))
     parameter["current"] = "160"
@@ -645,7 +647,7 @@ def test_numeric_modes_preserve_custom_value_and_show_native_range(patch_window)
 
 def test_short_configuration_stays_compact_when_resized(patch_window, monkeypatch):
     window, _archived, errors = patch_window
-    patch_id = "vanos_minrpm_v2_ms410"
+    patch_id = "vanos_minrpm_v3_ms410"
     window._set_patch_base(ref("MS41.0"), "compact-form.bin")
     window._patch_checkboxes[patch_id].setChecked(True)
 
@@ -673,7 +675,7 @@ def test_short_configuration_stays_compact_when_resized(patch_window, monkeypatc
 
 def test_configuration_aligns_fields_modes_and_help(patch_window, monkeypatch):
     window, _archived, errors = patch_window
-    image = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v18"])[0]
+    image = patch_service.build_image(ref("MS41.3"), ["ignition_cut_v20"])[0]
     window._set_patch_base(image, "aligned-fields.bin")
 
     def inspect(dialog):
@@ -718,7 +720,7 @@ def test_configuration_aligns_fields_modes_and_help(patch_window, monkeypatch):
         return QDialog.Rejected
 
     monkeypatch.setattr(QDialog, "exec_", inspect)
-    window._on_patch_configure("ignition_cut_v18")
+    window._on_patch_configure("ignition_cut_v20")
     assert not errors
 
 
@@ -827,7 +829,7 @@ def test_patch_details_popup_preserves_rows_and_visible_warnings(patch_window):
 @pytest.mark.parametrize("point_size", (9, 13))
 @pytest.mark.parametrize("viewport_width", (640, 1120))
 def test_patch_header_columns_align_with_optional_fields_and_pending_changes(
-        monkeypatch, request, point_size, viewport_width):
+        monkeypatch, request, qtbot, point_size, viewport_width):
     app = QApplication.instance() or QApplication([])
     original_font = app.font()
     app.setFont(QFont("Segoe UI", point_size))
@@ -922,6 +924,25 @@ def test_patch_header_columns_align_with_optional_fields_and_pending_changes(
                 expected_position = columns[name][0]
             assert (header.mapTo(window._patch_group, QPoint()).x(), header.width()) == expected_position
             assert header.width() >= header.sizeHint().width()
+        assert scroll.horizontalScrollBar().maximum() == 0
+        checkbox = window._patch_checkboxes["minimal"]
+        state = window._patch_status_labels["minimal"]
+        checkbox.click()
+        assert state.text() == "Install pending"
+        checkbox.click()
+        assert state.text() == "Not installed"
+        details = window._patch_rows["minimal"].findChild(QPushButton, "patch_details_toggle_minimal")
+        def positions():
+            return (state.mapTo(scroll.widget(), state.rect().center()),
+                    details.mapTo(scroll.widget(), details.rect().center()))
+        geometry = positions()
+        if viewport_width == 640:
+            assert geometry[0].y() > geometry[1].y()
+        scroll.resize(viewport_width + 1200, scroll.height())
+        qtbot.waitUntil(lambda: abs(positions()[0].y() - positions()[1].y()) <= 1)
+        scroll.resize(viewport_width, scroll.height())
+        qtbot.waitUntil(lambda: positions() == geometry)
+        assert scroll.horizontalScrollBar().maximum() == 0
     finally:
         scroll.hide()
         window.patches_splitter.insertWidget(0, scroll)

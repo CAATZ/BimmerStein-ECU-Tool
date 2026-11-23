@@ -75,7 +75,7 @@ def launch_gui():
 def run_offline(args):
     """Offline checksum verify/correct on a .bin file (no ECU connection)."""
     from ms41 import MS41ECU
-    from checksum import verify_checksum, correct_checksums, checksum_state
+    from checksum import verify_checksum, correct_verified_checksums, checksum_state
     import logging
 
     log_level = logging.DEBUG if args.verbose else logging.INFO
@@ -96,7 +96,11 @@ def run_offline(args):
         if len(data) != MS41ECU.FULL_ROM_SIZE:
             print("Checksum correction needs a full 256 KB ROM image.")
             sys.exit(1)
-        patched, details = correct_checksums(data)
+        try:
+            patched, details = correct_verified_checksums(data)
+        except ValueError as error:
+            print(f"Checksum correction failed: {error}", file=sys.stderr)
+            sys.exit(1)
         source = Path(args.fix_file)
         out = args.output or source.with_name(source.stem + "_cksum.bin")
         with open(out, "wb") as f:

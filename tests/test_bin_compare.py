@@ -4,6 +4,8 @@ import os
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import bin_compare
@@ -72,6 +74,18 @@ def test_wrong_size_replacement_still_reports_identity_mismatch(tmp_path):
 
     assert "A identity status: REPLACED OR MODIFIED" in report
     assert "A analysis: unsupported Bin size 1,024" in report
+    assert "supported sizes in KiB: 24, 32, 64, 256, 512" in report
+    assert "BYTE DIFFERENCES\nUnavailable:" in report
+
+
+@pytest.mark.parametrize("size_kib", [32, 64, 512])
+def test_compare_reports_unrecognized_ms42_ms43_hardware_id(tmp_path, size_kib):
+    entry = _entry(tmp_path / "unknown.bin", bytes(size_kib * 1024))
+    valid = _entry(tmp_path / "tune.bin", bytes(MS41ECU.TUNE_SIZE))
+
+    report = bin_compare.compare_entries(entry, valid)
+
+    assert "A analysis: unrecognized MS42/MS43 hardware identifier" in report
     assert "BYTE DIFFERENCES\nUnavailable:" in report
 
 

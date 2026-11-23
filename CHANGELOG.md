@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 Release numbers use a `major.minor.patch` base and the compact `bN` beta suffix
 shared by BimmerStein applications.
 
+## [0.1.0b20]
+
+- **Community patch lists.** Import a compatible MS42/MS43 XDF in Patches, configure its settings and keep a rollback record. The built-in MS41 catalog remains available.
+- **Edited BINs.** Give a patched or configured image a name, export it directly, or review it for flashing without saving a library copy.
+- **Live Data and CSV.** Missed readings leave gaps. Long recordings open in pages, and new logs preserve the units needed to interpret their values. MS41.3 patch channels now appear when the ECU reports a stock firmware number and its program signature confirms MS41.3.
+- **MS41 patches.** Ignition Cut and Launch Control advance to V20. Original VANOS logic is corrected for MS41.0 1429861 and MS41.1 1437806. MS41.3 gains AlphaN MAF-failsafe V4.
+- **Coding recovery.** Supported clusters can restore the saved original settings after an interrupted write. Guided transmission conversion preserves independently changed coding when it detects a mismatch.
+
+Coding and guided transmission conversion remain highly experimental and are not recommended until further vehicle testing.
+
 ## [0.1.0b19]
 
 ### Added

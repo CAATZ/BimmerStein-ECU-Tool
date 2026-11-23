@@ -1,4 +1,4 @@
-# bimmerstein-test: {"api":1,"id":"ms413-ignition-cut","name":"MS41.3 ignition-cut recovery diagnosis","description":"MS41.3 only: V18 and legacy cut, launch inputs, effective limiter threshold, timing and recovery capture.","version":"8","mode":"read_only","ecu_ids":["SHINDE1"],"default_duration_seconds":60,"result_schema":"bimmerstein-ms413-diagnostic-v5"}
+# bimmerstein-test: {"api":1,"id":"ms413-ignition-cut","name":"MS41.3 ignition-cut recovery diagnosis","description":"MS41.3 only: V20 and legacy cut, launch inputs, effective limiter threshold, timing and recovery capture.","version":"11","mode":"read_only","ecu_ids":["SHINDE1","1406464"],"requires_ss1v2":true,"default_duration_seconds":60,"result_schema":"bimmerstein-ms413-diagnostic-v5"}
 """Read-only MS41.3/SS1v2 cut, limiter, fueling, and self-test capture."""
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from ds2 import DS2Error, DS2Interface
 from cut_runtime import cut_program_state_probe, cut_state_address
 from ds2_fast_read import IDENTITY_LENGTH
 from dtc import parse_ds2_dtc_response
+from engines.patcher.patch_ms41 import load_patches
 from ecu_info import (
     BANK_MARKER_ADDR,
     BANK_MARKER_LEN,
@@ -89,6 +90,15 @@ V17_RECOVERY_BATCH_LAYOUT = V14_RECOVERY_BATCH_LAYOUT + (
     ("knock_fault_flags_b", 0xFD32, 2),
 ) + V17_KNOCK_GUARD_LAYOUT
 V18_RECOVERY_BATCH_LAYOUT = V17_RECOVERY_BATCH_LAYOUT + (("fixed_ipw_state", 0xD80C, 1),)
+V20_KNOCK_GUARD_LAYOUT = tuple(
+    (name, 0xD805 + index, 1) for index, name in enumerate((
+        "knock_guard_marker", "knock_drained_channel_mask", "knock_reply_state",
+        "knock_witness_value", "knock_witness_channel", "knock_reply_credited",
+        "knock_retained_valid_mask"))
+)
+V20_RECOVERY_BATCH_LAYOUT = tuple(
+    item for item in V18_RECOVERY_BATCH_LAYOUT if item not in V17_KNOCK_GUARD_LAYOUT
+) + V20_KNOCK_GUARD_LAYOUT
 
 SLOW_READS = (
     ("cut_recovery_pending", 0xE848, 1),
@@ -156,8 +166,8 @@ SLOW_READS = (
 
 def _state_address(revision):
     address = cut_state_address(revision)
-    if revision in ("V17", "V18") and address != 0xD801:
-        raise RuntimeError("V17/V18 recording requires an updated app/core; update the application and try again")
+    if revision in ("V17", "V18", "V19", "V20") and address != 0xD801:
+        raise RuntimeError("V17–V20 recording requires an updated app/core; update the application and try again")
     return address
 
 
@@ -189,7 +199,7 @@ def _batch_entries(layout):
 
 
 def _slow_reads_for_revision(revision):
-    if revision not in ("V16", "V17", "V18"):
+    if revision not in ("V16", "V17", "V18", "V19", "V20"):
         return SLOW_READS
     addresses = {"cut_recovery_pending": 0xD802,
                  "cut_state_and_recovery": 0xD801,
@@ -197,8 +207,10 @@ def _slow_reads_for_revision(revision):
                  "recovery_neighbors": 0xD800}
     return tuple((name, addresses.get(name, address), length)
                  for name, address, length in SLOW_READS) + (
-        (("knock_guard", 0xD805, 7),) if revision in ("V17", "V18") else ()) + (
-        (("fixed_ipw_state", 0xD80C, 1),) if revision == "V18" else ())
+        (("knock_guard", 0xD805, 7),) if revision in ("V17", "V18", "V19", "V20") else ()) + (
+        (("fixed_ipw_state", 0xD80C, 1),) if revision in ("V18", "V19", "V20") else ()) + (
+        (("launch_fuel_stage_owner", 0xD80D, 1),
+         ("misfire_cylinder_recovery", 0xD80E, 6)) if revision == "V20" else ())
 
 SELF_TEST_BITS = {
     0x0001: "startup RAM pattern test: FA00-FDFE",
@@ -719,7 +731,30 @@ V18_LAUNCH_PROBES = (
 )
 # END V18 PROBES
 
-PATCH_PROBES = V18_PATCH_PROBES + V18_LAUNCH_PROBES + V17_PATCH_PROBES + V17_LAUNCH_PROBES + V16_PATCH_PROBES + V16_LAUNCH_PROBES + V14_PATCH_PROBES + V14_LAUNCH_PROBES + V11_PATCH_PROBES + V10_PATCH_PROBES + (
+def _code_probes(patch):
+    probes = []
+    for edit in patch["edits"]:
+        data = bytes.fromhex(edit["data"])
+        for offset in range(0, len(data), 128):
+            address = (edit["off"] + offset) ^ 0x4000
+            probes.append((f"{patch['id']}_{address:05x}", address, data[offset:offset + 128]))
+    return tuple(probes)
+
+
+_patches = load_patches()
+if "ignition_cut_v19" in _patches and "launch_control_v19" in _patches:
+    V19_PATCH_PROBES = _code_probes(_patches["ignition_cut_v19"])
+    V19_LAUNCH_PROBES = _code_probes(_patches["launch_control_v19"])
+else:
+    V19_PATCH_PROBES = V19_LAUNCH_PROBES = ()
+if "ignition_cut_v20" in _patches and "launch_control_v20" in _patches:
+    V20_PATCH_PROBES = _code_probes(_patches["ignition_cut_v20"])
+    V20_LAUNCH_PROBES = _code_probes(_patches["launch_control_v20"])
+else:
+    V20_PATCH_PROBES = V20_LAUNCH_PROBES = ()
+del _patches
+
+PATCH_PROBES = V20_PATCH_PROBES + V20_LAUNCH_PROBES + V19_PATCH_PROBES + V19_LAUNCH_PROBES + V18_PATCH_PROBES + V18_LAUNCH_PROBES + V17_PATCH_PROBES + V17_LAUNCH_PROBES + V16_PATCH_PROBES + V16_LAUNCH_PROBES + V14_PATCH_PROBES + V14_LAUNCH_PROBES + V11_PATCH_PROBES + V10_PATCH_PROBES + (
     ("ignition_cut_v9_hook", 0x3D92A, bytes.fromhex("da0370dc")),
     ("ignition_cut_v9_coil_hook", 0x3D98E, bytes.fromhex("da0370dc")),
     ("ignition_cut_v9_control_hook", 0x2755A, bytes.fromhex("da03a0de")),
@@ -838,7 +873,7 @@ def _write_record(report, record) -> None:
 @contextmanager
 def _wire_capture(ds2, report):
     """Observe the existing parser's reads; never reconstruct a reply from data."""
-    transport = getattr(ds2, "_ds2", ds2)  # Android API 1 owns the same DS2 object.
+    transport = getattr(ds2, "_ds2", ds2)
     execute = getattr(transport, "_execute", None)
     read = getattr(transport, "_read_exact", None)
     available = callable(execute) and callable(read)
@@ -965,7 +1000,7 @@ def _decode_ignition_cals(raw: bytes, revision=None) -> dict:
         "fixed_ipw_ms": None if ipw == 0xFFFF else round(ipw * 0.00534, 4),
         **({"retard_range_rpm": raw[5] * 32,
             "fixed_angle_raw": f"0x{raw[6]:02X}",
-            "fixed_angle_deg_btdc": _angle(raw[6])} if revision in ("V14", "V16", "V17", "V18") else {}),
+            "fixed_angle_deg_btdc": _angle(raw[6])} if revision in ("V14", "V16", "V17", "V18", "V19", "V20") else {}),
     }
 
 
@@ -975,7 +1010,7 @@ def _decode_launch_cals(raw: bytes, revision=None) -> dict:
         "switch": _selector(raw[0]),
         "cut_type": {0: "fuel", 1: "ignition"}.get(
             raw[1], f"invalid {raw[1]}"),
-        "clutch_polarity": "active-high" if raw[2] == 0 else "active-low",
+        "clutch_polarity": {0: "active-high", 1: "active-low"}.get(raw[2], f"invalid {raw[2]}"),
         "rpm": raw[3] * 32,
         "arm_speed_kmh": raw[4],
         "max_speed_kmh": raw[5],
@@ -985,7 +1020,7 @@ def _decode_launch_cals(raw: bytes, revision=None) -> dict:
         "hard_rpm": None if raw[7] == 0xFF else raw[7] * 32,
         "hard_rpm_mode": ("soft + 96, capped by native hard RPM" if raw[7] == 0xFF
                           else "independent, capped by native hard RPM")
-                         if revision in ("V14", "V16", "V17", "V18") else
+                         if revision in ("V14", "V16", "V17", "V18", "V19", "V20") else
                          ("soft + 96" if raw[7] == 0xFF else "fixed"),
         "hysteresis_rpm": 0 if raw[8] == 0xFF else raw[8] * 32,
         "fixed_ipw_mode": "stock" if ipw == 0xFFFF else "fixed",
@@ -998,7 +1033,7 @@ def _decode_launch_cals(raw: bytes, revision=None) -> dict:
             "retard_range_rpm": raw[14] * 32,
             "ignition_cut_angle_raw": f"0x{raw[15]:02X}",
             "ignition_cut_angle_deg_btdc": _angle(raw[15])}
-           if revision in ("V14", "V16", "V17", "V18") else {}),
+           if revision in ("V14", "V16", "V17", "V18", "V19", "V20") else {}),
     }
 
 
@@ -1030,6 +1065,9 @@ def _required_probe_failures(probes: dict) -> list[str]:
          tuple(name for name, _address, _expected in V16_PATCH_PROBES + V16_LAUNCH_PROBES),
          tuple(name for name, _address, _expected in V17_PATCH_PROBES + V17_LAUNCH_PROBES),
          tuple(name for name, _address, _expected in V18_PATCH_PROBES + V18_LAUNCH_PROBES))
+    for ignition, launch in ((V19_PATCH_PROBES, V19_LAUNCH_PROBES), (V20_PATCH_PROBES, V20_LAUNCH_PROBES)):
+        if ignition and launch:
+            profiles += (tuple(name for name, _, _ in ignition + launch),)
     return min(([
         name for name in profile
         if not probes.get(name, {}).get("matches", False)
@@ -1037,7 +1075,7 @@ def _required_probe_failures(probes: dict) -> list[str]:
 
 
 def _runtime_revision(probes: dict) -> str | None:
-    for label in ("V18", "V17", "V16", "V14", "V11", "V10", "V9"):
+    for label in ("V20", "V19", "V18", "V17", "V16", "V14", "V11", "V10", "V9"):
         prefix = "ignition_cut_" + label.lower() + "_"
         names = [name for name, _address, _expected in PATCH_PROBES
                  if name.startswith(prefix)]
@@ -1047,16 +1085,23 @@ def _runtime_revision(probes: dict) -> str | None:
 
 
 def _decode_recovery(pending: int, revision) -> dict:
+    known = 0x1F if revision in ("V14", "V16", "V17", "V18", "V19", "V20") else 0x0F
+    if revision == "V20":
+        known |= 0xE0
     decoded = {
         "cut_recovery_pending_raw": f"0x{pending:02X}",
-        "cut_recovery_unknown_bits": f"0x{pending & (0xE0 if revision in ('V14', 'V16', 'V17', 'V18') else 0xF0):02X}",
+        "cut_recovery_unknown_bits": f"0x{pending & ~known:02X}",
         "cut_recovery_pending": {
             name: bool(pending & mask)
             for name, mask in (("front_b1", 1), ("front_b2", 2),
                                ("rear_b1", 4), ("rear_b2", 8))},
     }
-    if revision in ("V14", "V16", "V17", "V18"):
+    if revision in ("V14", "V16", "V17", "V18", "V19", "V20"):
         decoded["misfire_recovery_pending"] = bool(pending & 0x10)
+    if revision == "V20":
+        decoded["last_charge_omitted"] = bool(pending & 0x20)
+        decoded["launch_spark_authorized"] = bool(pending & 0x40)
+        decoded["misfire_counters_initialized"] = bool(pending & 0x80)
     return decoded
 
 
@@ -1064,9 +1109,9 @@ def _decode_timing(state: int, source: int, revision=None) -> dict:
     return {
         "timing_state_raw": f"0x{state:02X}",
         "timing_state": {0xC0: "inactive",
-                         0xC1: ("eligible, native fault veto" if revision in ("V17", "V18")
+                         0xC1: ("eligible, native fault veto" if revision in ("V17", "V18", "V19", "V20")
                                 else "eligible, native protection veto"),
-                         0xC3: ("limiter timing constraint active" if revision in ("V17", "V18")
+                         0xC3: ("limiter timing constraint active" if revision in ("V17", "V18", "V19", "V20")
                                 else "timing override published")}.get(state, "unknown/uninitialized"),
         "timing_source_raw": f"0x{source:02X}",
         "timing_source": {0: "none", 1: "fuel launch", 2: "ignition launch",
@@ -1085,18 +1130,30 @@ def _decode_knock_qualification(global_history, channel_histories, faults_a, fau
 
 
 def _decode_knock_guard(raw, revision="V17"):
-    initialized = raw[0] in ((0xA7, 0xE7) if revision == "V18" else (0xA7,))
-    return {
+    initialized = raw[0] in ((0xA7, 0xE7) if revision in ("V18", "V19", "V20") else (0xA7,))
+    common = {
         "knock_guard_raw": bytes(raw).hex(),
         "knock_guard_initialized": initialized,
         **({"knock_modified_timing_episode": raw[0] == 0xE7 if initialized else None}
-           if revision == "V18" else {}),
-        "knock_clean_window_mask_raw": f"0x{raw[1]:02X}",
+           if revision in ("V18", "V19", "V20") else {}),
+        "knock_retained_valid_mask_raw": f"0x{raw[6]:02X}",
+    }
+    if revision == "V20":
+        return {
+            **common, "knock_drained_channel_mask_raw": f"0x{raw[1]:02X}",
+            "knock_reply_state": ({0: "unproven", 1: "awaiting completed pair", 2: "credited",
+                                   3: "invalidated by omitted charge"}
+                                  .get(raw[2], "unknown") if initialized else None),
+            "knock_witness_value": raw[3] if initialized and raw[2] in (1, 2) else None,
+            "knock_witness_channel": raw[4] if initialized and raw[2] in (1, 2) else None,
+            "knock_reply_credited": bool(raw[5]) if initialized and raw[5] in (0, 1) else None,
+        }
+    return {
+        **common, "knock_clean_window_mask_raw": f"0x{raw[1]:02X}",
         "knock_open_phase_mask_raw": f"0x{raw[2]:02X}",
         **{name: bool(value) if initialized and value in (0, 1) else None
            for name, value in zip(("knock_old_reply_drained", "knock_request_qualified",
                                    "knock_snapshot_qualified"), raw[3:6])},
-        "knock_retained_valid_mask_raw": f"0x{raw[6]:02X}",
     }
 
 
@@ -1123,7 +1180,7 @@ def _identity_snapshot(ds2) -> tuple[bytes, dict]:
     cal_prefix = _read_exact(ds2, 0x1000E, 2)
     bank_raw = _read_exact(ds2, BANK_MARKER_ADDR, BANK_MARKER_LEN)
 
-    probes = _patch_probe_snapshot(ds2)
+    probes = _patch_probe_snapshot(ds2) if signature == SS1V2_PROG_SIG else {}
 
     return identify, {
         "identify_length": len(identify),
@@ -1314,6 +1371,8 @@ def _slow_snapshot(ds2, phase: str, revision: str | None = None, report=None) ->
     record = raw["dtc100_record"]
     reason = record[6] | (record[7] << 8)
     live_reason = _le(raw["self_test_live"])
+    cut = raw["cut_state_and_recovery"][0]
+    cut_valid = (cut & 0xF0) == 0xA0
 
     return {
         "type": phase,
@@ -1342,10 +1401,14 @@ def _slow_snapshot(ds2, phase: str, revision: str | None = None, report=None) ->
         },
         "slow_values": {
             **_decode_recovery(raw["cut_recovery_pending"][0], revision),
-            **({"cut_recovery_pending": None} if revision not in ("V10", "V11", "V14", "V16", "V17", "V18") else {}),
-            **(_decode_timing(raw["recovery_neighbors"][3 if revision in ("V16", "V17", "V18") else 9],
-                             raw["recovery_neighbors"][4 if revision in ("V16", "V17", "V18") else 10], revision)
-               if revision in ("V14", "V16", "V17", "V18") else {}),
+            **({"launch_fuel_stage_owner_raw": raw["launch_fuel_stage_owner"][0]}
+               if revision == "V20" else {}),
+            **({"misfire_cylinder_recovery": list(raw["misfire_cylinder_recovery"])}
+               if revision == "V20" and raw["cut_recovery_pending"][0] & 0x80 else {}),
+            **({"cut_recovery_pending": None} if revision not in ("V10", "V11", "V14", "V16", "V17", "V18", "V19", "V20") else {}),
+            **(_decode_timing(raw["recovery_neighbors"][3 if revision in ("V16", "V17", "V18", "V19", "V20") else 9],
+                             raw["recovery_neighbors"][4 if revision in ("V16", "V17", "V18", "V19", "V20") else 10], revision)
+               if revision in ("V14", "V16", "V17", "V18", "V19", "V20") else {}),
             "front_o2_b1_v": round((_le(raw["front_o2_b1"]) & 0x03FF) * 5 / 1023, 4),
             "front_o2_b2_v": round((_le(raw["front_o2_b2"]) & 0x03FF) * 5 / 1023, 4),
             "softbsl_phase_e740": raw["softbsl_phase"][0],
@@ -1425,21 +1488,21 @@ def _slow_snapshot(ds2, phase: str, revision: str | None = None, report=None) ->
             "coil_monitor_switches_1023d": raw[
                 "coil_monitor_switches"].hex(),
         },
-        **(_decode_fixed_ipw_state(raw["fixed_ipw_state"][0]) if revision == "V18" else {}),
+        **(_decode_fixed_ipw_state(raw["fixed_ipw_state"][0]) if revision in ("V18", "V19", "V20") else {}),
         "ignition_cut_cals": _decode_ignition_cals(raw["ignition_cals"], revision),
         "launch_control_cals": _decode_launch_cals(raw["launch_cals"], revision),
         "limiter_context": {
             "native_fuel_limiter_active": bool(raw["native_fuel_limiter"][0] & 0x80),
             "effective_soft_threshold_rpm": raw["effective_soft_rpm"][0] * 32,
             "launch_armed": bool(raw["launch_armed_latch"][0] & 0x40),
-            "native_fuel_recovery_priority": bool(raw["cut_state_and_recovery"][0] & 8),
-            "runtime_valid": (raw["cut_state_and_recovery"][0] & 0xF0) == 0xA0,
+            "native_fuel_recovery_priority": cut_valid and bool(cut & 8),
+            "runtime_valid": cut_valid,
             "note": "Sequential snapshot. Fuel-limiter active does not identify the threshold source. "
                     "Recovery priority selects native recovery settings; it is not a cut request. "
                     "Compare the effective threshold with the configured ignition and launch targets.",
         },
         "knock_learning": {
-            **(_decode_knock_guard(raw["knock_guard"], revision) if revision in ("V17", "V18") else {}),
+            **(_decode_knock_guard(raw["knock_guard"], revision) if revision in ("V17", "V18", "V19", "V20") else {}),
             **_decode_knock_qualification(
                 raw["knock_global_history"][0], raw["knock_channel_histories"],
                 _le(raw["knock_fault_flags"][:2]), _le(raw["knock_fault_flags"][2:])),
@@ -1474,6 +1537,7 @@ def decode_batch_payload(raw: bytes, layout=BATCH_LAYOUT, revision=None) -> dict
         offset += length
 
     cut = values["cut_state"]
+    cut_valid = (cut & 0xF0) == 0xA0
     decoded = {
             "rpm": values["rpm_mirror"],
             "cut_rpm": values["cut_rpm"] * 32,
@@ -1483,11 +1547,11 @@ def decode_batch_payload(raw: bytes, layout=BATCH_LAYOUT, revision=None) -> dict
             "throttle_raw": values["throttle"],
             "launch_tps_threshold_pct": round(values["throttle"] * 0.47, 3),
             "cut_state_raw": f"0x{cut:02X}",
-            "cut_patch_runtime": (cut & 0xF0) == 0xA0,
-            "standalone_ignition_cut": bool(cut & 0x01),
-            "launch_ignition_cut": bool(cut & 0x02),
-            "launch_fuel_cut": bool(cut & 0x04),
-            "native_fuel_recovery_priority": bool(cut & 0x08),
+            "cut_patch_runtime": cut_valid,
+            "standalone_ignition_cut": cut_valid and bool(cut & 0x01),
+            "launch_ignition_cut": cut_valid and bool(cut & 0x02),
+            "launch_fuel_cut": cut_valid and bool(cut & 0x04),
+            "native_fuel_recovery_priority": cut_valid and bool(cut & 0x08),
             "launch_armed": bool(values["launch_latch"] & 0x40),
             "native_limiter_active": bool(values["native_limiter"] & 0x80),
             "native_fuel_limiter_active": bool(values["native_limiter"] & 0x80),
@@ -1529,8 +1593,9 @@ def decode_batch_payload(raw: bytes, layout=BATCH_LAYOUT, revision=None) -> dict
             [values[f"knock_history_channel_{index + 1}"] for index in range(6)],
             values["knock_fault_flags_a"], values["knock_fault_flags_b"]))
     if "knock_guard_marker" in values:
+        guard_layout = V20_KNOCK_GUARD_LAYOUT if revision == "V20" else V17_KNOCK_GUARD_LAYOUT
         decoded.update(_decode_knock_guard(
-            [values[name] for name, _address, _length in V17_KNOCK_GUARD_LAYOUT], revision))
+            [values[name] for name, _address, _length in guard_layout], revision))
     if "fixed_ipw_state" in values:
         decoded.update(_decode_fixed_ipw_state(values["fixed_ipw_state"]))
     return {"raw_by_address": raw_by_address, "values": decoded}
@@ -1573,8 +1638,8 @@ def run_capture(args) -> int:
     recovery_tracking = bool(getattr(args, "recovery_tracking", False))
     stationary_wideband = recovery_tracking or bool(getattr(args, "stationary_wideband", False))
     batch_layout = (
-        RECOVERY_BATCH_LAYOUT if recovery_tracking else STATIONARY_WIDEBAND_BATCH_LAYOUT
-        if stationary_wideband else BATCH_LAYOUT
+        _batch_layout_for_revision(RECOVERY_BATCH_LAYOUT, None) if recovery_tracking
+        else STATIONARY_WIDEBAND_BATCH_LAYOUT if stationary_wideband else BATCH_LAYOUT
     )
     managed_ds2 = getattr(args, "ds2", None) is None
     ds2 = getattr(args, "ds2", None) or DS2Interface(
@@ -1604,12 +1669,12 @@ def run_capture(args) -> int:
         _write_record(report, {
             "type": "start",
             "schema": "bimmerstein-ms413-diagnostic-v5",
-            "recorder_version": "8",
+            "recorder_version": "11",
             "supported_family": "MS41.3 / exact SS1v2 program signature",
             "measurement_notes": {
                 "native_fuel_limiter": "Native fuel-limiter episode, including fuel-mode launch. "
                                        "The active flag alone does not identify its threshold source.",
-                "timing_state": "V17/V18 C3 means the limiter timing constraint is active. "
+                "timing_state": "V17–V20 C3 means the limiter timing constraint is active. "
                                 "The native protected angle may win or tie; no physical spark timing is measured.",
                 "launch_latch": "Throttle below minimum or speed at/above maximum releases launch. "
                                 "Arming requires speed below arm speed; switch release alone retains the latch.",
@@ -1653,11 +1718,12 @@ def run_capture(args) -> int:
                     + ", ".join(required_probe_failures))
 
             revision = identity["ignition_hook_revision"]
-            if recovery_tracking and revision not in ("V10", "V11", "V14", "V16", "V17", "V18"):
-                raise RuntimeError("Recovery tracking requires a supported V10/V11/V14/V16/V17/V18 layout")
-            if recovery_tracking and revision in ("V14", "V16", "V17", "V18"):
+            if recovery_tracking and revision not in ("V10", "V11", "V14", "V16", "V17", "V18", "V19", "V20"):
+                raise RuntimeError("Recovery tracking requires a supported V10/V11/V14/V16/V17/V18/V19/V20 layout")
+            if recovery_tracking and revision in ("V14", "V16", "V17", "V18", "V19", "V20"):
                 batch_layout = _batch_layout_for_revision(
-                    V18_RECOVERY_BATCH_LAYOUT if revision == "V18" else
+                    V20_RECOVERY_BATCH_LAYOUT if revision == "V20" else
+                    V18_RECOVERY_BATCH_LAYOUT if revision in ("V18", "V19") else
                     V17_RECOVERY_BATCH_LAYOUT if revision == "V17" else V14_RECOVERY_BATCH_LAYOUT,
                     revision)
                 _write_record(report, {
@@ -1669,7 +1735,7 @@ def run_capture(args) -> int:
                                      for name, address, length in batch_layout],
                 })
             batch_layout = _batch_layout_for_revision(batch_layout, revision)
-            if revision in ("V16", "V17", "V18") and not recovery_tracking:
+            if revision in ("V16", "V17", "V18", "V19", "V20") and not recovery_tracking:
                 _write_record(report, {
                     "type": "batch_layout", "ignition_hook_revision": revision,
                     "batch_layout": [{"name": name, "address": f"0x{address:04X}", "length": length}
@@ -1950,7 +2016,7 @@ def _parser() -> argparse.ArgumentParser:
         help="replace unused fast pin-82 sampling with E800 WBO AFR telemetry")
     parser.add_argument(
         "--recovery-tracking", action="store_true",
-        help="capture revision-specific recovery flags and WBO in every frame; pins 80/81 remain unsampled")
+        help="capture revision-specific recovery flags, WBO and inputs 80, 81 and 82 in every frame")
     parser.add_argument(
         "--no-echo", action="store_true",
         help="direct ASC0 tap only; normal K-line adapters must keep echo enabled")

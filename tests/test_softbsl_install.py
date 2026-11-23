@@ -112,23 +112,34 @@ def test_alphan_compose_is_available_only_for_ms413():
             ref("MS41.2"), "29f400", with_alphan=True)
 
 
-def test_alphan_v2_upgrades_during_softbsl_install_compose():
+@pytest.mark.parametrize("with_alphan", [False, True])
+def test_alphan_dangling_jump_rejects_bootstrap_even_if_cave_is_erased(with_alphan):
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+
+    patch = patch_ms41.load_patches()["alphan_failsafe_v3"]
+    splice = next(e for e in patch["edits"] if e["off"] == patch["cave"]["splice_off"])
+    base = bytearray(ref("MS41.3"))
+    jump = bytes.fromhex(splice["data"])
+    off = splice["off"]
+    base[off:off + len(jump)] = jump
+    with pytest.raises(softbsl_install._sb.SoftBSLError, match="Partial AlphaN.*active hook"):
+        softbsl_install._sb.compose_persistent_image(base, "29f400", with_alphan=with_alphan)
+
+
+@pytest.mark.parametrize("prior_id", ["alphan_failsafe_v1", "alphan_failsafe_v2", "alphan_failsafe_v3"])
+def test_alphan_legacy_upgrades_during_softbsl_install_compose(prior_id):
     from engines.patcher import patch_ms41
     from tests.conftest import ref
 
     patches = patch_ms41.load_patches()
     stock = ref("MS41.3")
-    v1, _ = patch_ms41.build(
-        stock, ["alphan_failsafe_v1"], allow_deprecated=True)
-    v2, _ = patch_ms41.build(
-        stock, ["alphan_failsafe_v2"], allow_deprecated=True)
-    v3, _ = patch_ms41.build(stock, ["alphan_failsafe"])
+    prior, _ = patch_ms41.build(stock, [prior_id], allow_deprecated=True)
+    v4, _ = patch_ms41.build(stock, ["alphan_failsafe"])
     current = patches["alphan_failsafe"]
     assert softbsl_install._sb._patch_state(stock, current) == "absent"
-    assert softbsl_install._sb._patch_state(v1, current) == "legacy"
-    assert softbsl_install._sb._patch_state(
-        v2, current) == "legacy"
-    assert softbsl_install._sb._patch_state(v3, current) == "applied"
+    assert softbsl_install._sb._patch_state(prior, current) == "legacy"
+    assert softbsl_install._sb._patch_state(v4, current) == "applied"
     assert softbsl_install._sb._confirm_reinstall(
         SimpleNamespace(confirm_reinstall=lambda _message: True),
         stock, patches, ["alphan_failsafe"],
@@ -137,7 +148,7 @@ def test_alphan_v2_upgrades_during_softbsl_install_compose():
     args = softbsl_install._sb.InstallRequest(
         port="COM_TEST",
         prompt=lambda _message: None,
-        base=v2,
+        base=prior,
         chip="29f400",
         with_alphan=True,
         confirm_reinstall=lambda _message: True,
@@ -145,8 +156,11 @@ def test_alphan_v2_upgrades_during_softbsl_install_compose():
     try:
         softbsl_install._sb._install_resolve_images(args)
         target = Path(args.target).read_bytes()
+        bootstrap = Path(args.bootstrap).read_bytes()
         assert patch_ms41.is_applied(target, patches["alphan_failsafe"])
-        assert not patch_ms41.is_applied(target, patches["alphan_failsafe_v2"])
+        assert not patch_ms41.is_applied(target, patches[prior_id])
+        assert patch_ms41.is_applied(bootstrap, patches["door_0x43"])
+        assert not patch_ms41.is_applied(bootstrap, patches[prior_id])
     finally:
         if args.target:
             shutil.rmtree(Path(args.target).parent, ignore_errors=True)

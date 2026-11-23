@@ -17,6 +17,11 @@ their recovery state instead of silently starting a second write.
 The separate MS43 EEPROM agent reads and restores the serial EEPROM. EEPROM
 restore is a separate user action; normal ROM writes do not clone that storage.
 
+Hardware boot entry uses a separate, independently authored cold loader and
+the unchanged bulk-agent payload. See [hardware BSL revision 1](HW_BSL_V1.md)
+for its wire contract, source checks and bounded native evidence. This route
+does not require working stock boot code; physical recovery remains unqualified.
+
 ## Source and payload checks
 
 `agent.asm` and `eeprom.asm` contain the source. Their manifests bind source,

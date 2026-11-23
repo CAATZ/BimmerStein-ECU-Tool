@@ -677,5 +677,7 @@
   "revert_superseded": true,
   "cal_defaults": {
     "CUT_RETARD_RANGE": 6
-  }
+  },
+  "deprecated": true,
+  "superseded_by": "ignition_cut_v19_ms412"
 }

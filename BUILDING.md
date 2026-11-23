@@ -1,11 +1,11 @@
 # Building BimmerStein ECU Tool
 
-Beta 19 uses Nuitka for Windows x64 and x86 installers and portable packages.
+Beta 20 ships four Nuitka installers, one each for x64 and x86 on modern Windows and Windows 7 SP1. The two corresponding-source archives include the build instructions for their respective profiles.
 The public project is `GPL-3.0-only` and is marked **OFF-ROAD USE ONLY**.
 
 ## Build environments
 
-Beta 19 release profiles use CPython 3.10.11 for modern Windows and CPython
+Beta 20 release profiles use CPython 3.10.11 for modern Windows and CPython
 3.8.10 for Windows 7 SP1, with MinGW and LTO disabled. Use a separate environment
 for each operating-system profile and architecture. The default source script
 also supports its documented MSVC environment. Install dependencies matching the
@@ -64,10 +64,10 @@ on-car behavior. Render and inspect every manual PDF page before publication.
 
 ## Public firmware policy
 
-Beta 19 includes Ignition Cut V18 and Launch Control V18 on MS41.0/.1/.2/.3,
+Beta 20 includes Ignition Cut V20 and Launch Control V20 on MS41.0/.1/.2/.3,
 AMD 29F Flash Driver V5, CalGuard V6, Soft-BSL entry V2 and loader V12.
 The four recovery items have **Tested** validation status following owner confirmation;
-Ignition Cut and Launch Control V18 remain HIGHLY EXPERIMENTAL and require
+Ignition Cut and Launch Control V20 remain HIGHLY EXPERIMENTAL and require
 vehicle testing. Coding and transmission conversion are HIGHLY EXPERIMENTAL
 and not recommended until further testing. Keep all untested patches untested.
 Preserve historical descriptors needed for installed-patch detection, migration
@@ -75,7 +75,7 @@ and removal. Keep validation
 labels tied to the available evidence; bench and offline checks do not establish
 vehicle testing for every firmware and flash-chip combination.
 
-## Prepare Beta 19
+## Prepare Beta 20
 
 Build from a clean, reviewed source checkout. Release metadata records the
 source commit and must show `source_dirty: false`. Keep private projects,
@@ -87,20 +87,20 @@ compatibility and package-verification adapters; selecting another interpreter
 with `-PythonPath` alone does not apply those profiles.
 
 ```powershell
-.\packaging\prepare_release.ps1 -Version 0.1.0b19 -PyQtLicenseBasis GPLv3
+.\packaging\prepare_release.ps1 -Version 0.1.0b20 -PyQtLicenseBasis GPLv3
 ```
 
 For both architectures, pass the path to a prepared 32-bit environment:
 
 ```powershell
-.\packaging\prepare_release.ps1 -Version 0.1.0b19 -PyQtLicenseBasis GPLv3 `
+.\packaging\prepare_release.ps1 -Version 0.1.0b20 -PyQtLicenseBasis GPLv3 `
     -Architectures x64,x86 -PythonX86Path '<x86-venv>\Scripts\python.exe'
 ```
 
 Use `-PythonPath` to select a different x64 environment, and `-IsccPath` if
 Inno Setup is not in its usual installation location. `-SkipInstaller` produces
 portable packages only. To build a single application folder, use
-`build_windows_nuitka.ps1 -Version 0.1.0b19 -Architecture x64`; the old
+`build_windows_nuitka.ps1 -Version 0.1.0b20 -Architecture x64`; the old
 `build_windows.ps1` command forwards to the same build.
 
 For a routine build, `-TestPaths tests/test_changed_area.py` extends the fixed
@@ -119,7 +119,7 @@ Verify each portable package and installer by starting the app, then installing,
 starting and uninstalling in an isolated test directory. Check archive CRCs,
 manifest hashes, native runtime architecture, public content and required notices.
 
-The intended tag is `v0.1.0b19`. Preparation does not create a tag, commit, push
+The intended tag is `v0.1.0b20`. Preparation does not create a tag, commit, push
 or publish. Publication requires the release owner's final review.
 
 Windows 7 compatibility must be checked on Windows 7 SP1 itself; a successful

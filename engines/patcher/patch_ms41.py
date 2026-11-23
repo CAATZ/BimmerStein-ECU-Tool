@@ -78,6 +78,22 @@ def load_patches():
     for p in sorted(glob.glob(os.path.join(PATCH_DIR, "*.json"))):
         d = json.loads(Path(p).read_text(encoding="utf-8"))
         out[d["id"]] = d
+    # AlphaN revisions moved several native hooks. An exact old cave must not
+    # hide an additional live hook from another revision (including V2's late jump).
+    alphan = [p for p in out.values() if p["id"].startswith("alphan_failsafe")]
+    anchors = {(e["off"], e["expect"]) for p in alphan for e in p["edits"]
+               if bytes.fromhex(e["expect"]).strip(b"\xff")}
+    for p in alphan:
+        owned = {e["off"] + i: b for e in p["edits"]
+                 for i, b in enumerate(bytes.fromhex(e["data"]))}
+        guards = []
+        for offset, original_hex in sorted(anchors):
+            original = bytes.fromhex(original_hex)
+            if not all(offset + i in owned for i in range(len(original))):
+                expected = bytes(owned.get(offset + i, b) for i, b in enumerate(original))
+                guards.append({"off": offset, "expect": original_hex, "data": expected.hex()})
+        if guards:
+            p["match_anchors"] = guards
     return out
 
 
@@ -262,7 +278,7 @@ def _matches_loader_bank_marker(patch, offset, declared, actual):
 
 def is_applied(data, patch):
     """Match installed bytes, allowing either valid bank ID for a Soft-BSL loader."""
-    for e in patch["edits"]:
+    for e in (*patch["edits"], *patch.get("match_anchors", ())):
         off = e["off"]; dat = bytes.fromhex(e["data"])
         actual = bytes(data[off:off + len(dat)])
         # Bank identity is metadata, not a loader revision. Check all four bytes;
@@ -279,8 +295,49 @@ def is_absent(data, patch):
     return all(
         bytes(data[e["off"]:e["off"] + len(bytes.fromhex(e["expect"]))])
         == bytes.fromhex(e["expect"])
-        for e in patch["edits"]
+        for e in (*patch["edits"], *patch.get("match_anchors", ()))
     )
+
+
+def _restore_edit_bytes(data, patch):
+    restored = bytearray(data)
+    for edit in patch["edits"]:
+        start = edit["off"]
+        original = bytes.fromhex(edit["expect"])
+        restored[start:start + len(original)] = original
+    return restored
+
+
+def direct_upgrade_error(image, current, patches):
+    """Accept a clean install, an intact current revision, or an exact migration."""
+    if is_absent(image, current) or is_applied(image, current):
+        return None
+    for old_id in current["supersedes"]:
+        old = patches[old_id]
+        if is_applied(image, old):
+            if is_absent(_restore_edit_bytes(image, old), current):
+                return None
+            return f"{current['title']} {current['version']} needs program space already in use."
+    return f"Partial or unknown {current['title']} installation. Restore a known-good BIN."
+
+
+def alphan_install_state(image, patches):
+    """Return the fully matched revision ID, absent, or partial."""
+    current = patches["alphan_failsafe"]
+    for pid in (current["id"], *current["supersedes"]):
+        if is_applied(image, patches[pid]):
+            return pid
+    return "absent" if is_absent(image, current) else "partial"
+
+
+def alphan_upgrade_error(image, patches):
+    current = patches["alphan_failsafe"]
+    state = alphan_install_state(image, patches)
+    if state == "partial":
+        return "Partial or unknown AlphaN installation. Restore a complete BIN before upgrading."
+    if state in current["supersedes"] and not is_absent(revert(image, patches[state]), current):
+        return "AlphaN V4 needs additional program space that is already occupied."
+    return None
 
 
 def restore_missing_calguard_v5_body(data, patches):
@@ -319,6 +376,13 @@ def needs_boot_write(patch):
     return False
 
 
+def _correct_patch_checksums(data, flags):
+    try:
+        return checksum.correct_verified_checksums(data, correct_program="program" in flags)
+    except ValueError as exc:
+        raise PatchError(f"Patched ROM checksum verification failed: {exc}") from exc
+
+
 def revert(data, patch):
     """Undo a single already-applied patch: restore each edit's pre-patch `expect` bytes.
     Raises PatchError if the patch isn't currently applied (nothing to safely undo — the
@@ -327,17 +391,13 @@ def revert(data, patch):
     program checksum is enabled, and for SA1 hooks that change the always-on boot CRC."""
     if not is_applied(data, patch):
         raise PatchError(f"'{patch['id']}' is not currently applied to this base — nothing to remove")
-    out = bytearray(data)
-    for e in patch["edits"]:
-        off = e["off"]; exp = bytes.fromhex(e["expect"])
-        out[off:off + len(exp)] = exp
+    out = _restore_edit_bytes(data, patch)
     matches = [version for version in FINGERPRINTS if check_base(out, version) is None]
     target = matches[0] if len(matches) == 1 else (patch_targets(patch)[0]
                                                    if len(patch_targets(patch)) == 1 else None)
     flags = recompute_flags(patch, target) if target else set()
     if flags:
-        out, _details = checksum.correct_checksums(
-            out, correct_program=("program" in flags))
+        out, _details = _correct_patch_checksums(out, flags)
     return bytes(out)
 
 
@@ -484,6 +544,24 @@ def with_startup_wait(data, patch_ids, patches):
     return selected
 
 
+def initialize_calibration_defaults(data, patch, source, patches):
+    defaults = patch.get("cal_defaults")
+    if not defaults:
+        return False
+    prior_ids = patch.get("supersedes", ())
+    if isinstance(prior_ids, str):
+        prior_ids = (prior_ids,)
+    prior_cals = [patches[pid].get("cave", {}).get("cals", {}) for pid in prior_ids
+                  if pid in patches and is_applied(source, patches[pid])]
+    changed = False
+    for name, value in defaults.items():
+        address = patch["cave"]["cals"][name]
+        if data[address] == 0xFF and not any(cals.get(name) == address for cals in prior_cals):
+            data[address] = value
+            changed = True
+    return changed
+
+
 def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=False):
     """Compose the selected patches onto base_data (bytes); return (out_bytes, log_lines).
 
@@ -524,7 +602,7 @@ def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=F
     # launch feature. Migrate only exact predecessors with identical existing
     # calibration addresses; relocated historical controls need explicit review.
     for successor in patches.values():
-        if (successor.get("family_id") not in ("launch_control_v12", "launch_control_v14", "launch_control_v15", "launch_control_v16", "launch_control_v17", "launch_control_v18")
+        if (successor.get("family_id") not in ("launch_control_v12", "launch_control_v14", "launch_control_v15", "launch_control_v16", "launch_control_v17", "launch_control_v18", "launch_control_v19", "launch_control_v20")
                 or successor["id"] in resolved
                 or not supports_target(successor, target)
                 or not any(required in resolved for required in successor.get("requires", []))):
@@ -572,6 +650,17 @@ def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=F
     if err:
         raise PatchError(f"BASE REJECTED: {err}")
     log.append(f"base OK: {target}, {len(data)} B")
+
+    if "alphan_failsafe" in patch_ids:
+        problem = alphan_upgrade_error(data, patches)
+        if problem:
+            raise PatchError(problem)
+
+    for patch in chosen:
+        if patch.get("allow_direct_upgrade"):
+            problem = direct_upgrade_error(data, patch, patches)
+            if problem:
+                raise PatchError(problem)
 
     # Supersession may restore a loader's FF marker preimage. Preserve the
     # verified source bank through that migration unless explicitly overridden.
@@ -699,12 +788,8 @@ def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=F
             data[off:off + len(dat)] = dat
         # Defaults initialize only newly introduced controls in an erased tune.
         # They are not revision signatures and never reset an installed setting.
-        if newly_installed:
-            for name, value in p.get("cal_defaults", {}).items():
-                address = p["cave"]["cals"][name]
-                if data[address] == 0xFF:
-                    data[address] = value
-                    recompute.add("cal")
+        if newly_installed and initialize_calibration_defaults(data, p, base_data, patches):
+            recompute.add("cal")
         recompute |= recompute_flags(p, target)
         log.append(f"applied {p['id']}: {len(p['edits'])} edits")
 
@@ -720,8 +805,7 @@ def build(base_data, patch_ids, patches=None, marker=None, *, allow_deprecated=F
         raise PatchError("TOP DS2 protection requires a TOP bank image")
 
     if recompute:
-        corrected, details = checksum.correct_checksums(
-            data, correct_program=("program" in recompute))
+        corrected, details = _correct_patch_checksums(data, recompute)
         data[:] = corrected                       # correct_checksums returns a COPY
         log.append(f"recomputed checksums: {','.join(sorted(recompute))}")
         log.extend("  " + d.replace("→", "->") for d in details)

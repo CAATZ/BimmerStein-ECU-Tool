@@ -1,13 +1,15 @@
-"""Shared, bounded Live Data CSV reader for the desktop and Android viewers."""
+"""Bounded Live Data CSV reader for saved recordings."""
 
 import csv
 import io
 import math
+from functools import lru_cache
 
 from live_data import display_rows, live_display_spec
 
 
-MAX_LOG_BYTES = 16 * 1024 * 1024
+_PAGE_VALUES = 64_000
+_PAGE_ROWS = 4_000
 _SUPPLY_NAMES = ("Ignition Supply Voltage", "Ignition Supply Voltage (KL15)",
                  "Battery Voltage (after main relay)")
 
@@ -54,33 +56,72 @@ def display_specs(channels, definition_path=None, family=None):
     return result
 
 
-def parse_log(payload, definition_path=None, family=None):
-    """Read canonical Time[,Datetime],channel... CSV without inventing units."""
-    data = bytes(payload)
-    if not data or len(data) > MAX_LOG_BYTES:
-        raise ValueError("Live Data log must be between 1 byte and 16 MiB")
-    try:
-        text = data.decode("utf-8-sig")
-    except UnicodeDecodeError as error:
-        raise ValueError("Live Data log must be UTF-8 CSV") from error
-    rows = csv.reader(io.StringIO(text, newline=""))
+@lru_cache(maxsize=1)
+def _bundled_units():
+    from ms42_ms43_live import display_rows as family_rows
+    units = {}
+    for name, unit in (*display_rows(), *family_rows("MS42"), *family_rows("MS43")):
+        units.setdefault(name, set()).add(unit)
+    for name in _SUPPLY_NAMES:
+        units.setdefault(name, set()).add("V")
+    return units
+
+
+def csv_channel_header(name, unit):
+    if _bundled_units().get(name) == {unit} and " [" not in name:
+        return name
+    return f"{name} [{unit}]"
+
+
+def parse_log(payload, definition_path=None, family=None, *, page=0):
+    with io.TextIOWrapper(io.BytesIO(bytes(payload)), encoding="utf-8-sig", newline="") as stream:
+        return parse_log_stream(stream, definition_path, family, page=page)
+
+
+def parse_log_stream(stream, definition_path=None, family=None, *, page=0):
+    """Read one contiguous page of original samples, including missing readings."""
+    if type(page) is not int or page < 0:
+        raise ValueError("Invalid Live Data page")
+    rows = csv.reader(stream)
     try:
         header = next(rows)
     except StopIteration as error:
         raise ValueError("Live Data log is empty") from error
+    except UnicodeDecodeError as error:
+        raise ValueError("Live Data log must be UTF-8 CSV") from error
     except csv.Error as error:
         raise ValueError(f"Invalid Live Data CSV: {error}") from error
     if not header or header[0] != "Time":
         raise ValueError("Live Data log must start with a Time column")
     channel_start = 2 if len(header) > 1 and header[1] == "Datetime" else 1
-    channels = header[channel_start:]
-    if not channels or len(channels) > 128:
-        raise ValueError("Live Data log must contain 1 to 128 parameters")
+    channels = []
+    units = {}
+    ambiguous = set()
+    declared = dict(display_rows(definition_path)) if definition_path is not None else {}
+    for column in header[channel_start:]:
+        name, separator, suffix = column.rpartition(" [")
+        if separator and suffix.endswith("]"):
+            unit = suffix[:-1]
+        else:
+            name = column
+            candidates = _bundled_units().get(name, set())
+            unit = declared.get(name, next(iter(candidates)) if len(candidates) == 1 else "")
+            if len(candidates) > 1 and name not in declared:
+                ambiguous.add(name)
+        channels.append(name)
+        units[name] = unit
+    if not channels:
+        raise ValueError("Live Data log contains no parameters")
     if any(not name.strip() for name in channels) or len(set(channels)) != len(channels):
         raise ValueError("Live Data log contains blank or duplicate parameter names")
 
     times = []
     series = [{"name": name, "values": [], "labels": []} for name in channels]
+    page_size = max(1, min(_PAGE_ROWS, _PAGE_VALUES // len(channels)))
+    start = page * page_size
+    count = 0
+    previous = None
+    has_next = False
     try:
         for line_number, row in enumerate(rows, start=2):
             if not row or all(not value.strip() for value in row):
@@ -93,44 +134,32 @@ def parse_log(payload, definition_path=None, family=None):
                 raise ValueError(f"Live Data row {line_number} has an invalid Time") from error
             if not math.isfinite(timestamp) or timestamp < 0:
                 raise ValueError(f"Live Data row {line_number} has an invalid Time")
-            if times and timestamp < times[-1]:
+            if previous is not None and timestamp < previous:
                 raise ValueError(f"Live Data row {line_number} moves backward in time")
+            previous = timestamp
+            count += 1
+            if count <= start:
+                continue
+            if len(times) == page_size:
+                has_next = True
+                break
             times.append(timestamp)
-            if len(times) > 100_000:
-                raise ValueError("Live Data log exceeds 100,000 rows")
-            if len(times) * len(channels) > 2_000_000:
-                raise ValueError("Live Data log exceeds 2,000,000 parameter samples")
             for item, raw in zip(series, row[channel_start:]):
                 value, label = sample_value(raw)
                 item["values"].append(value)
                 item["labels"].append(label)
+    except UnicodeDecodeError as error:
+        raise ValueError("Live Data log must be UTF-8 CSV") from error
     except csv.Error as error:
         raise ValueError(f"Invalid Live Data CSV: {error}") from error
     if not times:
         raise ValueError("Live Data log contains no samples")
-    units = dict(display_rows(definition_path))
-    if definition_path is None:
-        # Older CSVs predate the rail-qualified MS43 labels; values stay unchanged.
-        units.update((name, "V") for name in _SUPPLY_NAMES)
-        from ms42_ms43_live import display_rows as family_rows
-        if family in {"MS42", "MS43"}:
-            # The connected family is only a viewer hint: an arbitrary selected
-            # CSV can still contain channels captured from another ECU.
-            units.update(family_rows(family))
-        else:
-            # Old CSVs carry names, not family metadata. Add only unambiguous
-            # units and leave every existing MS41 mapping untouched.
-            candidates = {}
-            for ecu_family in ("MS42", "MS43"):
-                for name, unit in family_rows(ecu_family):
-                    candidates.setdefault(name, set()).add(unit)
-            units.update((name, next(iter(values))) for name, values in candidates.items()
-                         if name not in units and len(values) == 1)
     for item in series:
         item["unit"] = units.get(item["name"], "")
     return {
         "times": times,
         "series": series,
+        "page": page, "first_sample": start + 1, "has_next": has_next,
         "display_specs": display_specs(
-            ((name, units.get(name, "")) for name in channels), definition_path, family),
+            ((name, units[name]) for name in channels if name not in ambiguous), definition_path, family),
     }

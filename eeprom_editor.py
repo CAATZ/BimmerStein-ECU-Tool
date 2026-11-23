@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
 )
 
 from engines.softbsl import eeprom_ram
+from gui_controls import fit_window_to_screen
 
 
 def _display(field):
@@ -145,7 +146,7 @@ class EepromComparisonDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.resize(940, 620)
+        fit_window_to_screen(self, 940, 620)
         layout = QVBoxLayout(self)
         rows = comparison_rows(before, after, variant)
         note = QLabel(f'{before_label} → {after_label}\n'

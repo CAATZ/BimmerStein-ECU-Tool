@@ -111,6 +111,23 @@ def test_unknown_family_does_not_fall_into_ms41_probes():
     assert [c[1] for c in link.calls] == [0x0D, 6]
 
 
+def test_detection_preserves_truncated_directory_failure_without_further_probes():
+    failure = DS2Timeout("short response from 0x12: expected 76, got 48")
+    failure.request_context = {
+        "command": 0x0D, "phase": "response_body",
+        "declared_response_length": 76, "response_length": 48,
+    }
+    def truncated_directory(command, args):
+        raise failure
+    link = Link(truncated_directory)
+    with pytest.raises(DS2Timeout, match="expected 76, got 48") as caught:
+        protocol.detect_connected(link, b"unknown")
+    assert caught.value is failure
+    assert caught.value.request_context["response_length"] == 48
+    assert link.calls == [(0x12, 0x0D, b"")]
+    assert link.stopbits == [False]
+
+
 @pytest.mark.parametrize("nonreply", [False, True])
 def test_factory_shaped_ms41_unknown_id_can_use_independent_read_only_probes(nonreply):
     ident = (b"???????" + b"12" + b"34" + b"56" + b"78" + b"40" + b"97" +

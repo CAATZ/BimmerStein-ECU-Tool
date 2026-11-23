@@ -1,4 +1,4 @@
-"""Typed in-process service for the hardware 80C166 BSL recovery path."""
+"""Typed in-process service for family-specific hardware BSL recovery."""
 from dataclasses import dataclass, field, replace
 from typing import Callable, Optional
 import os
@@ -11,6 +11,7 @@ from app_paths import mutable_path
 
 _BACKUP_DIR = str(mutable_path("backups", "bsl"))
 BSL_BAUD_RATES = (9600, 19200, 38400)
+MS42_MS43_BSL_BAUD_RATES = {"MS42": (125000, 166667), "MS43": (125000, 187500)}
 
 
 @dataclass
@@ -46,6 +47,8 @@ class BSLOperationRequest:
     raw_hole: bool = False
     cpu_order: bool = False
     file_order: bool = True
+    family: str = "MS41"
+    preserve_identity: bool = True
 
 
 @dataclass(frozen=True)
@@ -58,13 +61,28 @@ class BSLFlashPlan:
     chip: str
     half: str
     baud: int
-    reset_line: str
+    reset_line: Optional[str]
     fix_checksums: bool
     force: bool
+    family: str = "MS41"
+    preserve_identity: bool = True
 
 
-def flash_regions(chip, half="upper"):
+def _backend(family):
+    if family == "MS41":
+        return engine
+    if family in ("MS42", "MS43"):
+        import ms42_ms43_bsl
+        return ms42_ms43_bsl
+    raise ValueError(f"Unsupported hardware-BSL family {family!r}.")
+
+
+def flash_regions(chip, half="upper", *, family="MS41"):
     """Region names for the selected physical flash geometry."""
+    if family in ("MS42", "MS43"):
+        return ["tune", "all"]
+    if family != "MS41":
+        raise ValueError(f"Unsupported hardware-BSL family {family!r}.")
     if chip == "29f400" and half == "upper":
         regions = engine.FLASH_REGIONS_AMD
     elif chip == "29f200" or (chip == "29f400" and half == "lower"):
@@ -75,7 +93,29 @@ def flash_regions(chip, half="upper"):
 
 
 def create_flash_plan(port, region, ref_path, chip, half, fix_checksums=False, force=False,
-                      *, baud=9600, reset_line="dtr"):
+                      *, baud=9600, reset_line="dtr", family="MS41", preserve_identity=True):
+    if family in ("MS42", "MS43"):
+        from ms42_ms43_image import FULL_SIZE, image_identity
+        if int(baud) not in MS42_MS43_BSL_BAUD_RATES[family]:
+            raise ValueError(f"Unsupported {family} hardware-BSL agent baud rate {baud}.")
+        if region not in flash_regions(chip, half, family=family):
+            raise ValueError(f"Unsupported {family} hardware-BSL region {region!r}.")
+        if force:
+            raise ValueError("MS42/MS43 hardware-BSL safety guards cannot be overridden.")
+        if not preserve_identity and fix_checksums:
+            raise ValueError("Exact backup restore cannot modify image checksums.")
+        with open(ref_path, "rb") as handle:
+            ref_bytes = handle.read()
+        image_identity(ref_bytes, family)
+        if region == "all" and len(ref_bytes) != FULL_SIZE:
+            raise ValueError("Full recovery requires an exact 512 KiB image.")
+        return BSLFlashPlan(
+            port=str(port), region=region, ref_path=os.path.abspath(ref_path),
+            ref_bytes=bytes(ref_bytes), chip="29f400", half="full", baud=int(baud),
+            reset_line=None, fix_checksums=bool(fix_checksums), force=False, family=family,
+            preserve_identity=bool(preserve_identity))
+    if family != "MS41":
+        raise ValueError(f"Unsupported hardware-BSL family {family!r}.")
     if chip not in ("auto", "28f200", "29f200", "29f400"):
         raise ValueError(f"Unsupported flash-chip geometry {chip!r}.")
     if chip == "auto":
@@ -113,13 +153,14 @@ def create_flash_plan(port, region, ref_path, chip, half, fix_checksums=False, f
 
 
 def _base_request(port, chip, half, progress=None, *, baud=9600, reset_line="dtr",
-                  serial_factory=None):
+                  serial_factory=None, family="MS41"):
     def progress_cb(done, total, label):
         if progress:
             progress(done, total, label)
 
     return BSLOperationRequest(
-        port=port, chip=chip, half=half, baud=int(baud), reset_line=reset_line,
+        port=port, chip=chip, half=half, baud=int(baud),
+        reset_line=reset_line if family == "MS41" else None, family=family,
         progress_cb=progress_cb if progress else None, serial_factory=serial_factory)
 
 
@@ -170,30 +211,36 @@ def _flash_request(plan, arm, progress=None, *, serial_factory=None,
     request = _base_request(
         plan.port, plan.chip, plan.half, progress,
         baud=plan.baud, reset_line=plan.reset_line,
-        serial_factory=serial_factory)
+        serial_factory=serial_factory, family=plan.family)
     return replace(
         request, region=plan.region, ref=plan.ref_path, ref_bytes=plan.ref_bytes,
         fix_checksums=plan.fix_checksums, force=plan.force, arm=bool(arm),
+        preserve_identity=plan.preserve_identity,
         destructive_cb=destructive_cb, backup_cb=backup_cb,
         backup_dir=request.backup_dir if backup_dir is None else os.fspath(backup_dir))
 
 
-def _log_transport(log, port, baud, reset_line):
+def _log_transport(log, port, baud, reset_line, family="MS41"):
+    if family != "MS41":
+        _event_forwarder(log)(
+            f"{family} hardware BSL: {port}, K-line/8N1 with echo, manual boot entry; "
+            f"38,400 baud bootstrap, {int(baud):,} baud agent.")
+        return
     _event_forwarder(log)(
         f"Hardware BSL transport: {port}, {int(baud):,} baud, direct ASC0/8N1, "
         f"no echo, {str(reset_line).upper()} reset.")
 
 
 def flash_dry_run(plan, log):
-    _log_transport(log, plan.port, plan.baud, plan.reset_line)
-    return _run_handler(engine.cmd_flash, _flash_request(plan, arm=False), log)
+    _log_transport(log, plan.port, plan.baud, plan.reset_line, plan.family)
+    return _run_handler(_backend(plan.family).cmd_flash, _flash_request(plan, arm=False), log)
 
 
 def flash_arm(plan, log, progress=None, *, serial_factory=None,
               destructive_cb=None, backup_dir=None, backup_cb=None):
-    _log_transport(log, plan.port, plan.baud, plan.reset_line)
+    _log_transport(log, plan.port, plan.baud, plan.reset_line, plan.family)
     return _run_handler(
-        engine.cmd_flash, _flash_request(
+        _backend(plan.family).cmd_flash, _flash_request(
             plan, arm=True, progress=progress, serial_factory=serial_factory,
             destructive_cb=destructive_cb, backup_dir=backup_dir,
             backup_cb=backup_cb),
@@ -201,45 +248,54 @@ def flash_arm(plan, log, progress=None, *, serial_factory=None,
 
 
 def _diag(handler, port, chip, half, log, progress=None, *, baud=9600,
-          reset_line="dtr", serial_factory=None, **fields):
+          reset_line="dtr", serial_factory=None, family="MS41", **fields):
     request = replace(
         _base_request(
             port, chip, half, progress, baud=baud, reset_line=reset_line,
-            serial_factory=serial_factory),
+            serial_factory=serial_factory, family=family),
         **fields)
     return _run_handler(handler, request, log)
 
 
 def sync(port, chip, half, log, *, baud=9600, reset_line="dtr", progress=None,
-         serial_factory=None):
+         serial_factory=None, family="MS41"):
     return _diag(
-        engine.cmd_sync, port, chip, half, log, progress,
-        baud=baud, reset_line=reset_line, serial_factory=serial_factory)
+        _backend(family).cmd_sync, port, chip, half, log, progress,
+        baud=baud, reset_line=reset_line, serial_factory=serial_factory, family=family)
 
 
 def chip_id(port, chip, half, log, *, baud=9600, reset_line="dtr", progress=None,
-            serial_factory=None):
+            serial_factory=None, family="MS41"):
     return _diag(
-        engine.cmd_id, port, chip, half, log, progress,
-        baud=baud, reset_line=reset_line, serial_factory=serial_factory)
+        _backend(family).cmd_id, port, chip, half, log, progress,
+        baud=baud, reset_line=reset_line, serial_factory=serial_factory, family=family)
 
 
 def businfo(port, chip, half, log, *, baud=9600, reset_line="dtr", progress=None,
-            serial_factory=None):
+            serial_factory=None, family="MS41"):
+    if family != "MS41":
+        _event_forwarder(log)("Bus Info is available only for MS41 hardware BSL.", "warn")
+        return 2
     return _diag(
         engine.cmd_businfo, port, chip, half, log, progress,
         baud=baud, reset_line=reset_line, serial_factory=serial_factory)
 
 
 def verify_alias(port, chip, half, log, *, baud=9600, reset_line="dtr", progress=None,
-                 serial_factory=None):
+                 serial_factory=None, family="MS41"):
+    if family != "MS41":
+        _event_forwarder(log)("Verify Alias is available only for MS41 hardware BSL.", "warn")
+        return 2
     return _diag(
         engine.cmd_verify_alias, port, chip, half, log, progress,
         baud=baud, reset_line=reset_line, serial_factory=serial_factory)
 
 
 def vpp_on(port, chip, half, log, *, baud=9600, reset_line="dtr", progress=None,
-           serial_factory=None):
+           serial_factory=None, family="MS41"):
+    if family != "MS41":
+        _event_forwarder(log)("VPP control is available only for MS41 hardware BSL.", "warn")
+        return 2
     if chip != "28f200":
         _event_forwarder(log)(
             "VPP control applies only to the Intel 28F200; AMD/JEDEC flash is single-supply.",
@@ -251,30 +307,30 @@ def vpp_on(port, chip, half, log, *, baud=9600, reset_line="dtr", progress=None,
 
 
 def _dump(port, outfile, chip, half, log, progress=None, *, partial, baud=9600,
-          reset_line="dtr", serial_factory=None):
+          reset_line="dtr", serial_factory=None, family="MS41"):
     return _diag(
-        engine.cmd_dump, port, chip, half, log, progress,
-        baud=baud, reset_line=reset_line, serial_factory=serial_factory,
+        _backend(family).cmd_dump, port, chip, half, log, progress,
+        baud=baud, reset_line=reset_line, serial_factory=serial_factory, family=family,
         file=outfile, partial=bool(partial), range=None, no_alias=False,
         raw_hole=False, cpu_order=False, file_order=True)
 
 
 def dump_full(port, outfile, chip, half, log, progress=None, *, baud=9600,
-              reset_line="dtr", serial_factory=None):
-    """Read one visible 256 KB flash bank into a standard file-order image."""
+              reset_line="dtr", serial_factory=None, family="MS41"):
+    """Read a complete family-sized flash image in standard file order."""
     return _dump(
         port, outfile, chip, half, log, progress,
         partial=False, baud=baud, reset_line=reset_line,
-        serial_factory=serial_factory)
+        serial_factory=serial_factory, family=family)
 
 
 def dump_tune(port, outfile, chip, half, log, progress=None, *, baud=9600,
-              reset_line="dtr", serial_factory=None):
-    """Read the standard 24 KB CPU/DS2-order calibration partial."""
+              reset_line="dtr", serial_factory=None, family="MS41"):
+    """Read the selected family's standard calibration partial."""
     return _dump(
         port, outfile, chip, half, log, progress,
         partial=True, baud=baud, reset_line=reset_line,
-        serial_factory=serial_factory)
+        serial_factory=serial_factory, family=family)
 
 
 # Compatibility for older internal callers: an unqualified dump is a full read.

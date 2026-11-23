@@ -37,6 +37,10 @@ class ClusterBus:
     def identify():
         return b"1406464 connected identity"
 
+    def read_mem(self, address, length):
+        assert (address, length) == (0x10005, 1)
+        return b"\x2c"
+
     def send_frame(self, frame, **_kwargs):
         self.frames.append(frame)
         assert reduce(xor, frame) == 0 and frame[0] == 0x80
@@ -167,6 +171,34 @@ def test_interrupted_write_restores_even_when_native_checksum_is_invalid(fail_wo
         assert bus.memory[89] != reduce(xor, bus.memory[90:256])
     tx.restore_cluster_store(bus, session.cluster)
     assert bus.memory == original
+
+
+def test_conversion_rechecks_selector_before_creating_archive(monkeypatch, tmp_path):
+    bus = ClusterBus()
+    session = _session(bus)
+    monkeypatch.setattr(bus, "read_mem", lambda _address, _length: b"\x2b")
+    monkeypatch.setattr(tx, "read_ms41_runtime_transmission", lambda *_: session.source)
+    with pytest.raises(RuntimeError, match="dynamic AT/MT"):
+        tx.write_connected_modules(bus, session, archive_dir=tmp_path, eeprom_current=session.eeprom_before)
+    assert not bus.writes and not list(tmp_path.iterdir())
+
+
+def test_prewrite_rejection_and_ambiguous_rollback_preserve_independent_change(monkeypatch, tmp_path):
+    bus = ClusterBus()
+    session = _session(bus)
+    journal = SwapOperationJournal(tmp_path / "journal")
+    def drift(_bus, _session):
+        bus.memory[88] ^= 0x08
+    monkeypatch.setattr(tx, "_assert_session_fresh", drift)
+    with pytest.raises(tx.OwnerChangedBeforeWrite):
+        tx.write_connected_modules(bus, session, archive_dir=tmp_path, journal=journal,
+                                   eeprom_current=session.eeprom_before)
+    assert journal.load(session.token).writes == ()
+    assert not bus.writes and bus.memory[88] == (session.cluster.data[0] ^ 8)
+    session.written.append("cluster")
+    with pytest.raises(RuntimeError, match="outside the interrupted target"):
+        tx.rollback_connected_modules(bus, session)
+    assert not bus.writes and session.written == ["cluster"]
 
 
 def test_connected_write_archive_and_final_verification(monkeypatch, tmp_path):

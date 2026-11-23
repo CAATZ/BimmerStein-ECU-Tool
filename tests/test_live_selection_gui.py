@@ -180,6 +180,71 @@ def test_disconnect_context_preserves_completed_capture(desktop):
     assert settings.value(context, type=list) == ["P8"]
 
 
+@pytest.mark.parametrize("with_measurement", [True, False])
+def test_runtime_unavailable_channels_stay_visible_and_retry_next_capture(
+        desktop, monkeypatch, with_measurement):
+    import live_data
+    from tests.test_live_roughness_channels import MemoryDS2
+
+    create, settings, _registry = desktop
+    window = create("SHINDE1", "MS41.3")
+    window._ds2 = MemoryDS2()
+    window.chk_live_log.setChecked(False)
+    names = ["AFR Target", "Ignition Cut Timing", "Launch Cut Timing"]
+    if with_measurement:
+        names.insert(0, "Engine RPM")
+    window.live_view.set_selected_channels(names)
+    window.live_view.set_presentation("AFR Target", "gauge")
+    saved = settings.value(window._live_channel_context, type=list)
+    monkeypatch.setattr(live_data.LiveDataPoller, "start",
+                        lambda self, log_path: self._prepare_live_profile())
+
+    window._on_live_start()
+    window._live_timer.stop()
+    poller = window._poller
+    if with_measurement:
+        poller._write_csv_row({"Engine RPM": "900"})
+    else:
+        poller._poll_loop()  # No admitted measurements; stop without inventing samples.
+    window._refresh_live_display()
+    view = window.live_view
+    assert set(view.selected_channels()) == set(names)
+    assert settings.value(window._live_channel_context, type=list) == saved
+    assert view.sample_text("AFR Target") == "Wideband mode disabled"
+    assert view.sample_text("Ignition Cut Timing") == "Ignition-cut patch not detected"
+    assert view.presentation_for("AFR Target") == "digital"
+    assert view.card_snapshot("AFR Target")["current"] is None
+    assert view.card_snapshot("AFR Target")["unit"] == ""
+    for name in names:
+        index = view.table_rows[name]
+        assert not view.table.isRowHidden(index)
+        assert view.table.item(index, 1).text() == view.sample_text(name)
+    if with_measurement:
+        assert view.sample_text("Engine RPM") == "900"
+        cell = view.table.item(view.table_rows["AFR Target"], 1)
+        window._append_live_samples()
+        assert view.table.item(view.table_rows["AFR Target"], 1) is cell
+        window._on_live_stop()
+    else:
+        assert window._poller is None and not view.times
+    assert view.sample_text("AFR Target") == "Wideband mode disabled"
+
+    # Support becomes available next capture; the saved presentation also returns.
+    window._ds2.memory[0xFD22:0xFD24] = (0x100).to_bytes(2, "little")
+    window._ds2.memory[0x133C0:0x133C2] = (0xFA9A).to_bytes(2, "little")
+    monkeypatch.setattr(live_data, "detect_cut_runtime", lambda *_args: "V16")
+    monkeypatch.setattr(live_data, "detect_launch_runtime", lambda *_args: "V16")
+    window._on_live_start()
+    window._live_timer.stop()
+    window._poller._write_csv_row({"Engine RPM": "950", "AFR Target": "14.7"})
+    window._append_live_samples()
+    assert not view.unavailable_reasons
+    assert view.sample_text("AFR Target") == "14.7"
+    assert view.presentation_for("AFR Target") == "gauge"
+    assert set(view.selected_channels()) == set(names)
+    window._on_live_stop()
+
+
 def test_imported_content_and_program_variant_have_distinct_favorites(desktop, tmp_path):
     create, settings, registry = desktop
     window = create("1406464", "MS41.2")

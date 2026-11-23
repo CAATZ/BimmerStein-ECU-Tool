@@ -174,8 +174,10 @@ def test_erase_reconciles_entire_sector_before_retry(agent_workflow, monkeypatch
 
 
 @pytest.mark.parametrize("boot", (False, True))
-def test_overcleared_bit_repairs_one_complete_frozen_sector(agent_workflow, monkeypatch, boot):
+@pytest.mark.parametrize("echo_budget", (0, 128))
+def test_overcleared_bit_repairs_one_complete_frozen_sector(agent_workflow, monkeypatch, boot, echo_budget):
     ecu, peer = agent_workflow
+    peer.echo_drain_chunk_size = echo_budget
     target = boot_target(peer) if boot else target_image(peer, "tune")
     original = peer.agent_request
     failed = []
@@ -203,6 +205,8 @@ def test_overcleared_bit_repairs_one_complete_frozen_sector(agent_workflow, monk
         expected[:0x4000], expected[0x8000:0x10000] = target[:0x4000], target[0x8000:0x10000]
     assert peer.image == expected
     assert peer.image[0x4000:0x8000] == peer.original[0x4000:0x8000]
+    assert max(count for command, _offset, count, _data in peer.agent_requests
+               if command == agent.PROGRAM) == 1024
 
 
 def test_definitive_flash_failure_retains_same_target_without_replay(agent_workflow, monkeypatch):

@@ -323,6 +323,15 @@ class SwapOperationJournal:
         )
         return self._save(path, record)
 
+    def cancel_unstarted_write(self, operation_id: str, owner: str) -> SwapJournalRecord:
+        path, record = self._editable(operation_id)
+        writes = record["writes"]
+        if (record["phase"] != "writing" or not writes
+                or writes[-1]["owner"] != owner or writes[-1]["complete"]):
+            raise JournalStateError("only the last unstarted write intent can be withdrawn")
+        writes.pop()
+        return self._save(path, record)
+
     def mark_write_complete(self, operation_id: str, owner: str) -> SwapJournalRecord:
         path, record = self._editable(operation_id)
         if record["phase"] != "writing":

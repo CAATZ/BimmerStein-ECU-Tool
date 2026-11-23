@@ -16,7 +16,7 @@ def revision_vin(request, monkeypatch):
 
 @pytest.mark.parametrize("mode", ("append", "full", "dirty"))
 def test_same_transaction_and_whole_array_preservation(revision_vin, mode):
-    transactions.test_vin_write_preserves_whole_array_and_uses_no_finalizer(revision_vin, mode)
+    transactions.test_vin_write_preserves_whole_array_and_uses_no_finalizer(revision_vin, mode, 0)
 
 
 @pytest.mark.parametrize("mode", ("append", "full"))

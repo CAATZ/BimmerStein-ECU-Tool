@@ -1087,7 +1087,7 @@ def test_output_drain_waits_for_empty_queue_and_preserves_other_transports(monke
     d.transport_name = "pyserial"
     d._flush_output()
     assert calls == [0.05, 0.05]
-    for transport in ("d2xx", "android_usb", None):
+    for transport in ("d2xx", "injected_usb", None):
         d.transport_name = transport
         d._flush_output()
     assert calls == [0.05, 0.05, "flush", "flush", "flush"]

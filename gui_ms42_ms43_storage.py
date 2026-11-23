@@ -509,6 +509,7 @@ class MS42MS43StorageDesktop:
     def _ms42_ms43_build_storage(self, layout):
         self._ms42_ms43_storage_snapshot = None
         self._ms42_ms43_storage_source = ""
+        self._ms42_ms43_storage_dirty = False
         group = QGroupBox("Memory backup and restore")
         grid = QGridLayout(group)
         grid.setColumnStretch(0, 1)
@@ -609,11 +610,27 @@ class MS42MS43StorageDesktop:
             idle and state and getattr(state, "operation", None) in ("eeprom_restore", "retained_restore")
             and self._ms42_ms43_interrupted() and getattr(self._ds2, "can_retry_write", False)))
 
-    def _ms42_ms43_show_storage(self, snapshot, source):
+    def _ms42_ms43_confirm_storage_discard(self):
+        return not self._ms42_ms43_storage_dirty or QMessageBox.question(
+            self, "Discard Edited Storage Backup?",
+            "The loaded storage backup contains unsaved edits. Discard them?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes
+
+    def _ms42_ms43_show_storage(self, snapshot, source, *, edited=False):
+        if (not edited and snapshot != self._ms42_ms43_storage_snapshot
+                and not self._ms42_ms43_confirm_storage_discard()):
+            return False
         self._ms42_ms43_storage_snapshot = dict(snapshot, data=bytes(snapshot["data"]))
-        self._ms42_ms43_storage_source = source
+        self._ms42_ms43_storage_dirty = edited
         self._ms42_ms43_data_view = True
         self._ms42_ms43_select_storage_layout((snapshot["family"], snapshot["kind"]))
+        self._ms42_ms43_set_storage_source(source)
+        self._ms42_ms43_update_data()
+        return True
+
+    def _ms42_ms43_set_storage_source(self, source):
+        snapshot = self._ms42_ms43_storage_snapshot
+        self._ms42_ms43_storage_source = source
         label = ("EEPROM" if snapshot["kind"] == "eeprom" else
                  "retained-data journal" if snapshot["family"] == "MS42" else "raw flash banks")
         empty = snapshot["data"] == b"\xFF" * len(snapshot["data"])
@@ -624,7 +641,6 @@ class MS42MS43StorageDesktop:
                 status += " Select EEPROM, then Read EEPROM to back up the separate EEPROM."
         self._ms42_ms43_storage_status.setText(status)
         self._ms42_ms43_storage_status.setToolTip(f"SHA-256: {sha256(snapshot['data']).hexdigest()}")
-        self._ms42_ms43_update_data()
 
     def _ms42_ms43_catalog_storage(self, snapshot, source):
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -641,13 +657,18 @@ class MS42MS43StorageDesktop:
         slow = kind == "retained" and self.chk_force_slow_ds2.isChecked()
 
         def task(log_fn, progress_fn):
-            snapshot = read_storage(self._ds2, kind, force_slow=slow, log_fn=log_fn, progress_cb=progress_fn)
-            entry = self._ms42_ms43_catalog_storage(snapshot, f"ECU {kind} read")
-            log_fn(f"Storage backup saved in Bins: {entry.filename}")
-            return snapshot, entry.filename
+            return read_storage(self._ds2, kind, force_slow=slow, log_fn=log_fn, progress_cb=progress_fn)
 
-        def done(result):
-            self._ms42_ms43_show_storage(*result)
+        def done(snapshot):
+            source = f"ECU {kind} read"
+            try:
+                entry = self._ms42_ms43_catalog_storage(snapshot, source)
+            except Exception as error:
+                self._ms42_ms43_show_storage(snapshot, source)
+                self._save_unarchived_read(snapshot["data"], f"{snapshot['family']}_{kind}.bin", error)
+                return
+            self._log(f"Storage backup saved in Bins: {entry.filename}", "ok")
+            self._ms42_ms43_show_storage(snapshot, entry.filename)
             self._refresh_backup_table()
 
         self._run_task(task, on_success=done)
@@ -682,7 +703,7 @@ class MS42MS43StorageDesktop:
             if not accepted:
                 return
         snapshot["software_id"] = software
-        self._ms42_ms43_show_storage(snapshot, source + " (selected layout)")
+        return self._ms42_ms43_show_storage(snapshot, source + " (selected layout)")
 
     def _ms42_ms43_load_storage(self):
         from ms42_ms43_storage import decode_snapshot
@@ -717,6 +738,9 @@ class MS42MS43StorageDesktop:
                     Path(path).write_text(encode_snapshot(snapshot), encoding="utf-8")
             except (OSError, ValueError) as error:
                 QMessageBox.warning(self, "Storage Backup Not Saved", str(error))
+            else:
+                self._ms42_ms43_storage_dirty = False
+                self._ms42_ms43_set_storage_source(Path(path).name)
 
     def _ms42_ms43_view_storage(self):
         snapshot = self._ms42_ms43_storage_snapshot
@@ -725,7 +749,9 @@ class MS42MS43StorageDesktop:
         source = self._ms42_ms43_storage_source
         dialog = _StorageBackupDialog(self, snapshot)
         if dialog.exec_() == QDialog.Accepted and dialog.edited_snapshot is not None:
-            self._ms42_ms43_show_storage(dialog.edited_snapshot, source + " (edited)")
+            if not self._ms42_ms43_storage_dirty:
+                source += " (edited)"
+            self._ms42_ms43_show_storage(dialog.edited_snapshot, source, edited=True)
 
     def _ms42_ms43_restore_storage(self):
         from ms42_ms43_storage import restore_storage
@@ -757,7 +783,7 @@ class MS42MS43StorageDesktop:
 
     def _ms42_ms43_storage_restored(self, result):
         snapshot = result["snapshot"]
-        source = "Verified restore"
+        source = None
         try:
             entry = self._ms42_ms43_catalog_storage(snapshot, f"ECU {snapshot['kind']} verified restore")
             source = entry.filename
@@ -765,7 +791,8 @@ class MS42MS43StorageDesktop:
         except (OSError, ValueError, BackupIndexError) as error:
             self._log(f"Storage restore verified; Bins save failed: {error}. "
                       f"Recovery journal: {result.get('backup_journal', '')}", "warn")
-        self._ms42_ms43_show_storage(snapshot, source)
+        if source is not None or snapshot != self._ms42_ms43_storage_snapshot:
+            self._ms42_ms43_show_storage(snapshot, source or "Verified restore")
         QMessageBox.information(self, "Storage Restored", "The loaded storage backup was written and read back successfully.")
 
     def _ms42_ms43_storage_failed(self, error):

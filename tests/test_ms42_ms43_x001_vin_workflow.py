@@ -22,7 +22,7 @@ def x001_vin(x001_workflow, monkeypatch):
 
 @pytest.mark.parametrize("mode", ("append", "full", "dirty"))
 def test_x001_vin_preserves_flash_and_uses_selected_rate(x001_vin, mode, compatibility):
-    workflow.test_vin_write_preserves_whole_array_and_uses_no_finalizer(x001_vin, mode)
+    workflow.test_vin_write_preserves_whole_array_and_uses_no_finalizer(x001_vin, mode, 0)
     assert_handoff(x001_vin[1], compatibility)
 
 

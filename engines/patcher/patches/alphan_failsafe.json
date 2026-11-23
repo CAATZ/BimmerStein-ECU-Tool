@@ -1,11 +1,11 @@
 {
   "id": "alphan_failsafe",
-  "version": "V3",
-  "status": "TESTED",
+  "version": "V4",
+  "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
   "title": "AlphaN MAF failsafe",
-  "tested": true,
-  "user_description": "Falls back to SS1v2's native expanded AlphaN load model when an active MAF fault is detected, while preserving manually selected AlphaN and Speed Density behavior.",
-  "description": "V3 routes fd30.1 (active MAF fault) through SS1v2's native expanded AlphaN producer before the shared load publisher and filter. It publishes coherent FC52/FC54, E80A/E80C and E8E4/E8E8 domains, preserves fd22.A manual AlphaN and fd22.9 Speed Density paths, converts the legacy DTC12 fallback table into SS1v2's reduced load domain, and restores fd22.A OR fd30.1 at both downstream load guards. Supersedes broken V1 and V2; tested.",
+  "tested": false,
+  "user_description": "Uses SS1v2 expanded AlphaN when a MAF fault is active. The MAF diagnostic continues to follow measured airflow for recovery. Retains the native manual AlphaN and Speed Density selections.",
+  "description": "SS1v2-specific V4 preserves measured MAF load and airflow across modeled publications. Independent measured and engine filter histories use their respective load-dependent gains. The dual MAF/TPS fallback uses its own six-point RPM axis, full-width load scaling, and native IAT correction. The downstream fuel guards preserve the native Speed Density routing. Mixed MAF/MAP banks are excluded from MAF recovery.",
   "target": "MS41.3",
   "recompute": [
     "cal"
@@ -14,75 +14,189 @@
   "conflicts": [],
   "supersedes": [
     "alphan_failsafe_v1",
-    "alphan_failsafe_v2"
+    "alphan_failsafe_v2",
+    "alphan_failsafe_v3"
   ],
+  "revert_superseded": true,
   "cave": {
     "region": "proghigh",
-    "base": 236394,
-    "splice_off": 174186,
+    "base": 240792,
+    "splice_off": 174180,
     "splice_op": "jmps",
     "relocatable": false,
     "splices": [
       {
-        "off": 174186,
-        "base": 236394,
+        "off": 174180,
+        "base": 240792,
+        "op": "jmps"
+      },
+      {
+        "off": 174342,
+        "base": 240928,
+        "op": "jmps"
+      },
+      {
+        "off": 174466,
+        "base": 240946,
+        "op": "jmps"
+      },
+      {
+        "off": 174486,
+        "base": 240964,
+        "op": "jmps"
+      },
+      {
+        "off": 174500,
+        "base": 240988,
         "op": "jmps"
       },
       {
         "off": 174260,
-        "base": 236418,
+        "base": 241006,
         "op": "jmps"
       },
       {
         "off": 249696,
-        "base": 236448,
+        "base": 241072,
         "op": "jmps"
       },
       {
         "off": 249946,
+        "base": 241092,
+        "op": "jmps"
+      },
+      {
+        "off": 200434,
+        "base": 236394,
+        "op": "jmps"
+      },
+      {
+        "off": 200338,
+        "base": 236448,
+        "op": "jmps"
+      },
+      {
+        "off": 180500,
         "base": 236464,
+        "op": "jmps"
+      },
+      {
+        "off": 140236,
+        "base": 236480,
+        "op": "jmps"
+      },
+      {
+        "off": 173506,
+        "base": 236508,
+        "op": "jmps"
+      },
+      {
+        "off": 173744,
+        "base": 236530,
+        "op": "jmps"
+      },
+      {
+        "off": 174012,
+        "base": 236548,
         "op": "jmps"
       }
     ]
   },
   "edits": [
     {
+      "off": 140236,
+      "expect": "e004da024007",
+      "data": "fa03c0dbcc00"
+    },
+    {
+      "off": 173506,
+      "expect": "f3f8e9e8",
+      "data": "fa03dcdb"
+    },
+    {
+      "off": 173744,
+      "expect": "f3fae9e8",
+      "data": "fa03f2db"
+    },
+    {
+      "off": 174012,
+      "expect": "f3fae9e8",
+      "data": "fa0304dc"
+    },
+    {
+      "off": 174180,
+      "expect": "8a114190",
+      "data": "fa0398ec"
+    },
+    {
       "off": 174186,
       "expect": "9a113ea0",
-      "data": "fa036adb"
+      "data": "9a113ea0"
     },
     {
       "off": 174260,
       "expect": "e6fc4840",
-      "data": "fa0382db"
+      "data": "fa036eed"
+    },
+    {
+      "off": 174342,
+      "expect": "c2fd53fc",
+      "data": "fa0320ed"
+    },
+    {
+      "off": 174466,
+      "expect": "c2fd53fc",
+      "data": "fa0332ed"
+    },
+    {
+      "off": 174486,
+      "expect": "f2fce8e8",
+      "data": "fa0344ed"
+    },
+    {
+      "off": 174500,
+      "expect": "f6f4e8e8",
+      "data": "fa035ced"
     },
     {
       "off": 174504,
       "expect": "f6f4e4e8",
-      "upgrade_expect": [
-        "fa036a9b",
-        "fa036adb"
-      ],
       "data": "f6f4e4e8"
+    },
+    {
+      "off": 180500,
+      "expect": "f68e54fc",
+      "data": "fa03b0db"
+    },
+    {
+      "off": 200338,
+      "expect": "f6f552fc",
+      "data": "fa03a0db"
+    },
+    {
+      "off": 200434,
+      "expect": "f60752fc",
+      "data": "fa036adb"
+    },
+    {
+      "off": 236394,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "f60752fc8a010540f3f219d8f78e19d80d04f3f218d8f78e18d849203d0a8a11089048202d06f60714d8f6f516d8f78e1dd8fa03f64ef6f552fcf6f514d8f6f516d8fa03964ef68e54fcf68e14d8f68e16d8fa021881e118f7f81dd88a010340f7f818d80d02f7f819d8e004da024007db008a110390428e1cd83d04f3f8e9e8fa02c6e5fa0214e68a110390428e1cd83d0df3fae9e8fa02b4e68a110390428e1cd83d04f3fae9e8fa02c0e7fa0254e8"
+    },
+    {
+      "off": 240792,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "ecf8e0089a110c90f3f81cd83d07f2f4e8e8f6f41ad8e118f7f81cd8fa02eae8f3f81cd82d06f2f41ad8f6f4e8e8f78e1cd8ec88be88f2f414d8f2f516d8f3fc1dd8fc888a180c109a1102a09a180800f6f452fcf6f554fc49c02de0e0280dde49c03d0ff064c2f5bf3368532d0700668d0328513dfc0d02e6f6ffffe018fa02eee8e028fa0272e848813d03c0ddfa020ae9c2fd53fcfa020ae948813d03c0ddfa0286e9c2fd53fcfa0286e9f2fce8e848813d03f0d6fa029ee948823d01f0c9fa029ae948822d04f6f4e8e848812dd9fcf8fa02a8e98a180400e6fc4840fa02b8e8e6fcbc04c2fd3cfcda03ac48e6fcbe04da03344ac08c5c7cc2f5bf3368536cc5c2fdebe85c7d00cd46fc807ffd02e6fc807ffa02cce88a1106a08a1102908a180210fa03648ffa03828f8a1106a08a1102908a180210fa035e90fa037c90"
     },
     {
       "off": 249696,
       "expect": "8a110fa0",
-      "data": "fa03a0db"
+      "data": "fa03b0ed"
     },
     {
       "off": 249946,
       "expect": "8a110fa0",
-      "data": "fa03b0db"
-    },
-    {
-      "off": 236394,
-      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-      "upgrade_expect": [
-        "8a1106a08a180410f6f4e4e8fa02aea9e6fc8a04c2fd3cfcda03ac48e6fc0005f2fd02e9da039e49e6fc8841da036a4af1c8e6fc8804c2fdd0e8da03fc48e6fcc842da036a4ac08dc0ccda03b846f7f8ebe88a180600e6fc4840da036a4af1c80d05e6fcbe04da03344af1c8c0ccc2fdebe8da030c44c08c5c7cc2fd00e95c8dda034447f6f4e4e8f0c4f2fd3afcda03ce46f6f454fcfa02aea9",
-        "8a1106a08a180410f6f4e4e8fa02aee9e6fc8a04c2fd3cfcda03ac48e6fc0005f2fd02e9da039e49e6fc8841da036a4af1c8e6fc8804c2fdd0e8da03fc48e6fcc842da036a4ac08dc0ccda03b846f7f8ebe88a180600e6fc4840da036a4af1c80d05e6fcbe04da03344af1c8c0ccc2fdebe8da030c44c08c5c7cc2fd00e95c8dda034447f6f4e4e8f0c4f2fd3afcda03ce46f6f454fcfa02aee9"
-      ],
-      "data": "8a1804109a1104a0fa026ee8fa0272e8da0264b6fa02eee88a180400e6fc4840fa02b8e8e6fcbe04da03344ac0847c24f1c8fa02bee88a1104a08a180210fa03648ffa03828f8a1104a08a180210fa035e90fa037c90ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      "data": "fa03c4ed"
     }
   ]
 }

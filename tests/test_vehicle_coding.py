@@ -152,6 +152,80 @@ def test_gm3_timeout_explains_possible_ads_fallback():
         read_module_coding(ds2, "e39_gm3")
 
 
+@pytest.mark.parametrize("diagnostic,target", [(0x30, "e46_ihk"), (0x31, "e46_ihk"),
+                                               (0x32, "e46_ihk"), (0x33, "e46_ihk"), (0x44, "e46_ihkr")])
+def test_e46_climate_identity_selects_one_editor(diagnostic, target):
+    from vehicle_coding import identify_module, UnsupportedCodingProfile
+    ident = _ident(0x5B, 1, diagnostic)
+    assert identify_module(FakeDS2([ident]), target)[0].target == target
+    other = "e46_ihkr" if target == "e46_ihk" else "e46_ihk"
+    link = FakeDS2([ident])
+    with pytest.raises(UnsupportedCodingProfile, match="climate"):
+        read_module_coding(link, other)
+    assert len(link.calls) == 1
+
+
+def test_e39_can_flag_survives_checksum_and_really_changes(monkeypatch, tmp_path):
+    from tests.test_ms41_e39_cluster_checksum import ClusterBus
+    monkeypatch.setenv("BIMMERSTEIN_DATA_DIR", str(tmp_path))
+    bus = ClusterBus()
+    state = read_module_coding(bus, "e39_kmb")
+    item = next(s for s in state.profile.settings if "tachometer" in s.label.lower()
+                and state.profile.regions[0].address + s.parts[0].offset == 88)
+    current = state.decoded_values[item.key]
+    wanted = next(choice.value for choice in item.choices if choice.value != current)
+    original = bytes(bus.memory)
+    updated = write_module_coding(bus, "e39_kmb", state.profile.key, state.raw_data, {item.key: wanted})
+    assert updated.decoded_values[item.key] == wanted
+    assert [i for i, (a, b) in enumerate(zip(original, bus.memory)) if a != b] == [88]
+    assert bus.writes and bus.memory[89] == _xor(bus.memory[90:256])
+
+
+def test_cluster_restart_restores_only_archived_words(monkeypatch, tmp_path):
+    from tests.test_ms41_e39_cluster_checksum import ClusterBus
+    monkeypatch.setenv("BIMMERSTEIN_DATA_DIR", str(tmp_path))
+    profile = PROFILE_BY_KEY["E46.KMB_E46.C07"]
+    bus = ClusterBus()
+    bus.ident = _ident(0x80, 0x07)
+    bus.memory = bytearray(512)
+    state = read_module_coding(bus, profile.target)
+    setting = next(s for s in profile.settings if s.reference == "SPRACHE")
+    wanted = next(c.value for c in setting.choices if c.value != state.decoded_values[setting.key])
+    send = bus.send_frame
+
+    def disconnect(frame, **kwargs):
+        if frame[2] == 7 and int.from_bytes(frame[5:7], "big") == 0x16E // 2:
+            raise DS2Timeout("checksum write interrupted")
+        return send(frame, **kwargs)
+
+    monkeypatch.setattr(bus, "send_frame", disconnect)
+    with pytest.raises(DS2Timeout):
+        write_module_coding(bus, profile.target, profile.key, state.raw_data, {setting.key: wanted})
+    monkeypatch.setattr(bus, "send_frame", send)
+    partial = read_module_coding(bus, profile.target)
+    assert partial.recovery_original == state.raw_data and partial.raw_data != state.raw_data
+    with pytest.raises(DS2Error, match="recovery status"):
+        write_module_coding(bus, profile.target, profile.key, partial.raw_data, {})
+    bus.memory[0x90] ^= 1
+    with pytest.raises(DS2Error, match="unrelated word"):
+        write_module_coding(bus, profile.target, profile.key, partial.raw_data, {}, restore_original=True)
+    bus.memory[0x90] ^= 1
+    restored = write_module_coding(bus, profile.target, profile.key, partial.raw_data, {}, restore_original=True)
+    assert restored == state and not list(tmp_path.rglob("*.bin"))
+
+
+@pytest.mark.parametrize("key", ["E38.KMBI_E38.C12", "E39.KMB_E39.C07"])
+def test_extended_cluster_checksum_includes_tail_through_word_223(key):
+    profile = PROFILE_BY_KEY[key]
+    region, = profile.regions
+    data = bytearray(region.length)
+    data[0x100 - region.address] = 0x80
+    data[0x1BF - region.address] = 0x03
+    _apply_word_checksum(profile, region, data)
+    assert data[0x101 - region.address] == 0x83
+    assert data[0x59 - region.address] == 0
+
+
 def test_light_checksum_policies_are_profile_and_selector_exact():
     cases = (
         ("E39.LCM.C14", 0x0F, 9),

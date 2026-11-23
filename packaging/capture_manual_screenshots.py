@@ -90,9 +90,9 @@ def _synthetic_patch_records() -> list[dict]:
             "removable": True,
         },
         {
-            "id": "ignition_cut_v18",
+            "id": "ignition_cut_v20",
             "title": "Ignition Cut",
-            "version": "V18",
+            "version": "V20",
             "description": "Independent ignition-cut limiter with hysteresis and fixed-IPW control.",
             "user_description": "Adds an independent ignition-cut limiter.",
             "target": "MS41.3",
@@ -111,17 +111,17 @@ def _synthetic_patch_records() -> list[dict]:
             "removable": False,
         },
         {
-            "id": "launch_control_v18",
+            "id": "launch_control_v20",
             "title": "Launch Control / 2-step",
-            "version": "V18",
-            "description": "Independent launch requester using fuel cut or the shared V18 ignition engine.",
+            "version": "V20",
+            "description": "Independent launch requester using fuel cut or the shared V20 ignition engine.",
             "user_description": "Adds independently armed staged launch control.",
             "target": "MS41.3",
             "status": "OFFLINE EXACT-BYTE VERIFIED - ON-CAR TEST REQUIRED",
             "tested": False,
             "maturity": "HIGHLY EXPERIMENTAL",
             "validation": "Needs testing",
-            "requires": ["ignition_cut_v18"],
+            "requires": ["ignition_cut_v20"],
             "conflicts": [],
             "ok": True,
             "badge": "",
@@ -303,7 +303,7 @@ def main() -> int:
         patch_service.available_patches = lambda _data: _synthetic_patch_records()
         patch_service.editable_parameters = lambda _data: [
             {"patch_id": patch_id, "editable": True, "blocked_reason": ""}
-            for patch_id in ("ignition_cut_v18", "launch_control_v18")
+            for patch_id in ("ignition_cut_v20", "launch_control_v20")
         ]
         window._patch_base = bytes(256 * 1024)
         window._patch_base_source = "Synthetic_MS41_3_Demo.bin"
@@ -311,8 +311,8 @@ def main() -> int:
             "Base: Synthetic_MS41_3_Demo.bin · Program MS41.3 · Cal MS41.3"
         )
         window._refresh_patch_list()
-        window._patch_checkboxes["ignition_cut_v18"].setChecked(True)
-        window._patch_checkboxes["launch_control_v18"].setChecked(True)
+        window._patch_checkboxes["ignition_cut_v20"].setChecked(True)
+        window._patch_checkboxes["launch_control_v20"].setChecked(True)
     finally:
         patch_service.available_patches = original_available
         patch_service.editable_parameters = original_parameters

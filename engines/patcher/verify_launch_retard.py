@@ -41,8 +41,9 @@ def verify_launch_retard_artifacts(image, stock_image, variant):
         assert stock_image[hook ^ 0x4000:(hook ^ 0x4000) + 6] == _DISPLACED
         assert image[hook ^ 0x4000:(hook ^ 0x4000) + 6] == replacement
     patcher = Path(__file__).parent
-    for kind in ("timing", "qualification", "state", "state_entry"):
-        revision = {"timing": "v18", "qualification": "v18", "state": "v16", "state_entry": "v14"}[kind]
+    for kind, revision in (("timing", "v19"), ("guards", "v19"), ("observation", "v19"),
+                           ("gate", "v18" if family == "ms413" else "v19"),
+                           ("qualification", "v18"), ("state", "v16"), ("state_entry", "v14")):
         base = next(line.split()[1] for line in
                     (patcher / f"ignition_cut_{revision}_{family}_{kind}.asm").read_text().splitlines()
                     if line.startswith("base "))

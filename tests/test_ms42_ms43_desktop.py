@@ -292,9 +292,10 @@ def test_write_respects_backup_and_verify_choices(
         calls.append("backup")
         return full
 
-    def write(image, *, log_fn, progress_cb, verify, use_ram, use_agent, write_boot=False):
+    def write(image, *, log_fn, progress_cb, verify, use_ram, use_agent, correct_checksum, write_boot=False):
         assert use_ram is not force_slow
         assert use_agent is not force_slow
+        assert correct_checksum is not force_slow
         assert not write_boot
         calls.append((image, verify))
         log_fn("Fake write", "ok")
@@ -305,6 +306,7 @@ def test_write_respects_backup_and_verify_choices(
     window.chk_backup_before_write.setChecked(backup)
     window.chk_verify.setChecked(verify)
     window.chk_force_slow_ds2.setChecked(force_slow)
+    window.chk_correct_cksum.setChecked(not force_slow)
     monkeypatch.setattr(window, "_prewrite_battery_notice", lambda: "12.8 V")
     monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.Yes)
     completed = []

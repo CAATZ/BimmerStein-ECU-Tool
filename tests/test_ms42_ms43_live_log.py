@@ -26,6 +26,43 @@ def test_old_csv_can_resolve_unique_family_channels_without_guessing_unknown_uni
     assert "Unknown" not in parsed["display_specs"]
 
 
+@pytest.mark.parametrize("family", ["MS42", "MS43"])
+def test_fan_request_unit_follows_the_capture_and_legacy_is_ambiguous(family, tmp_path):
+    from ms42_ms43_live import MS42MS43LiveDataPoller, catalog_for
+    from types import SimpleNamespace
+    param = next(p for p in catalog_for(family) if p.name == "Electric Fan Request")
+    poller = MS42MS43LiveDataPoller(SimpleNamespace(family=family), selected_ids=[param.id])
+    path = tmp_path / "renamed.csv"
+    poller._open_csv(path)
+    poller._write_csv_row({param.name: "128"})
+    poller._csv_file.close()
+    other = "MS43" if family == "MS42" else "MS42"
+    replay = parse_log(path.read_bytes(), family=other)["series"][0]
+    assert (replay["name"], replay["unit"], replay["values"]) == (param.name, param.unit, [128])
+    legacy = parse_log(b"Time,Electric Fan Request\n0,128\n", family=other)
+    assert legacy["series"][0]["unit"] == "" and param.name not in legacy["display_specs"]
+
+
+def test_large_log_pages_retain_every_boundary_and_last_sample(tmp_path):
+    from live_log import parse_log_stream
+    path = tmp_path / "wide.csv"
+    names = [name for name, _unit in family_rows("MS43")]
+    with path.open("w", newline="") as stream:
+        stream.write("Time," + ",".join(names) + "\n")
+        body = ",".join(["12345678"] * len(names))
+        for i in range(20_000):
+            stream.write(f"{i},{body}\n")
+    assert path.stat().st_size > 16 * 1024 * 1024
+    def page(n):
+        with path.open(encoding="utf-8", newline="") as stream:
+            return parse_log_stream(stream, page=n)
+    first, second = page(0), page(1)
+    assert first["has_next"] and first["times"][-1] + 1 == second["times"][0]
+    last = page(19_999 // len(first["times"]))
+    assert not last["has_next"] and last["times"][-1] == 19_999
+    assert last["series"][-1]["values"][-1] == 12345678
+
+
 def test_ms41_display_specs_remain_owned_by_original_definition():
     channels = display_rows()
     specs = display_specs(channels)

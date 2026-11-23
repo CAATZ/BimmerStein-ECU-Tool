@@ -110,11 +110,13 @@ def _prog_calc(d) -> int:
 def _cal_entries(d):
     """Yield (store_addr, calc_value) for each calibration-table checksum."""
     start = d.find(_CAL_MAGIC)
-    if start < 0:
+    if start < 0 or start + 16 > len(d):
         return
     init = _be16(d, start + 0x0E)
     pos = start
     for _ in range(20):
+        if pos + 2 > len(d):
+            break
         ss = _u16le(d, pos)
         if ss == 0xFFFF:
             break
@@ -261,6 +263,7 @@ def correct_checksums(data: bytearray, correct_program: bool = True
             details.append(f"Boot-sector corrected: 0x{bs:04X} → 0x{bc:04X}")
 
     # Calibration table — present in both full ROM and 24 KB partial (magic auto-located).
+    store = None
     for store, calc in _cal_entries(out):
         if _u16le(out, store) != calc:
             struct.pack_into("<H", out, store, calc); fixed += 1
@@ -272,9 +275,22 @@ def correct_checksums(data: bytearray, correct_program: bool = True
             struct.pack_into("<H", out, _PROG_STORE, pc); fixed += 1
             details.append(f"Program corrected: 0x{ps:04X} → 0x{pc:04X}")
 
-    details.append(f"{fixed} checksum(s) corrected." if fixed
-                   else "All checksums already valid — no changes.")
+    if store is None:
+        details.append("Calibration checksum unavailable: no usable checksum table.")
+    if fixed:
+        details.append(f"{fixed} checksum(s) corrected.")
+    elif store is not None:
+        details.append("All checksums already valid — no changes.")
     return out, details
+
+
+def correct_verified_checksums(data, *, correct_program=True):
+    """Return an offline correction only when its resulting checksums verify."""
+    corrected, details = correct_checksums(data, correct_program=correct_program)
+    valid, verification = verify_checksum(corrected)
+    if not valid:
+        raise ValueError("\n".join(verification))
+    return corrected, details
 
 
 # ─────────────────────────── Enable switch ───────────────────────────────────

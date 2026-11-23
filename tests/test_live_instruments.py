@@ -25,7 +25,7 @@ def app():
 class _View:
     def __init__(self, names):
         self.names = names
-        self.series = {name: {} for name in names}
+        self.table_rows = {name: index for index, name in enumerate(names)}
         self.modes = dict.fromkeys(names, "digital")
         self.requests = []
         self.snapshot = {

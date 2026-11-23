@@ -574,17 +574,22 @@ class MS42MS43LiveDataPoller(LiveDataPoller):
                 try:
                     values = {}
                     if use_telegram:
-                        payload = bytes(self._ds2.execute(0x0B, b"\x00"))
-                        expected = sum(1 if entry[0] == 0 else 2 for entry in entries)
-                        if len(payload) != expected:
-                            raise DS2Error(f"Telegram payload length {len(payload)}; expected {expected}")
-                        offset, raw = 0, {}
-                        for entry in entries:
-                            length = 1 if entry[0] == 0 else 2
-                            raw[entry] = payload[offset:offset + length]
-                            offset += length
-                        values.update((p.id, p.decode(raw[p.descriptor][::-1] if p.selector == 6 else raw[p.descriptor]))
-                                      for p in mapped)
+                        try:
+                            payload = bytes(self._ds2.execute(0x0B, b"\x00"))
+                            expected = sum(1 if entry[0] == 0 else 2 for entry in entries)
+                            if len(payload) != expected:
+                                raise DS2Error(f"Telegram payload length {len(payload)}; expected {expected}")
+                            offset, raw = 0, {}
+                            for entry in entries:
+                                length = 1 if entry[0] == 0 else 2
+                                raw[entry] = payload[offset:offset + length]
+                                offset += length
+                            values.update((p.id, p.decode(raw[p.descriptor][::-1] if p.selector == 6 else raw[p.descriptor]))
+                                          for p in mapped)
+                        except DS2Error as error:
+                            with self._lock:
+                                self._errors.append(str(error))
+                            values.update((p.id, None) for p in mapped)
                     for command, request in dict.fromkeys((p.command, p.request)
                                                           for p in (remaining if use_telegram else ordinary)):
                         if self._stop.is_set():
@@ -616,6 +621,8 @@ class MS42MS43LiveDataPoller(LiveDataPoller):
                     with self._lock:
                         self._errors.append(str(error))
                         self._latest.update((p.name, ("ERR", p.unit)) for p in self._tel_params)
+                    if not self._stop.is_set():
+                        self._write_csv_row({})
                 self._stop.wait(max(0., self._interval - (time.monotonic() - started)))
         finally:
             if registered:

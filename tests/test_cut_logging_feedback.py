@@ -36,6 +36,18 @@ def test_exact_family_feedback_has_distinct_native_threshold_and_recovery(ecu_id
     assert current["BS_CUT_TIMING_STATE"].display(0xC3) == "Timing constraint active"
 
 
+@pytest.mark.parametrize("ecu_id", [family[0] for family in FAMILIES])
+def test_cut_flags_require_a_valid_marker(ecu_id):
+    params = {p.id: p for p in live_data.telegram_params_for(ecu_id, include_cut=True, include_launch=True)}
+    for name, bit in (("BS_CUT_IGNITION_REQUEST", 1), ("BS_CUT_LAUNCH_IGN_REQUEST", 2),
+                      ("BS_CUT_LAUNCH_FUEL_ACTIVE", 4)):
+        channel = params[name]
+        for state in range(256):
+            expected = ("Uninitialized" if state >> 4 != 0xA else
+                        "Active" if state & bit else "Inactive")
+            assert channel.display(channel.convert(state)) == expected
+
+
 def test_ms410_threshold_and_live_angle_share_exact_units_without_renaming_app_selections():
     path = bundled_logger_definition_path()
     ids = [node.get("id") for node in ET.parse(path).findall(".//ecuparam")]
@@ -59,6 +71,9 @@ def test_ms410_threshold_and_live_angle_share_exact_units_without_renaming_app_s
         other = {p.id:p for p in live_data.telegram_params_for(ecu_id, include_cut=True, include_launch=True)}
         assert other["BS_CUT_LAUNCH_TPS"].unit == "%"
         assert other["BS_CUT_LAUNCH_TPS"].convert(128) == pytest.approx(60.16)
+        threshold, working = other["BS_CUT_LAUNCH_MIN_TPS"], other["BS_CUT_LAUNCH_TPS"]
+        assert threshold.display(threshold.convert(101)) == "47.47"
+        assert working.display(working.convert(100)) == "47.00"
 
 
 @pytest.mark.parametrize("channel,address,name", [

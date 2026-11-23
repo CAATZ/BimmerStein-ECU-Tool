@@ -60,7 +60,7 @@ def test_fixed_splice_revisions_install_and_remove_preserving_native_wbo(with_la
 
 
 @pytest.mark.parametrize("with_launch", [False, True])
-def test_configured_exact_v10_upgrades_to_v14_without_losing_launch(with_launch):
+def test_configured_exact_v10_upgrades_without_losing_launch(with_launch):
     patches = patch_ms41.load_patches()
     historical = dict(patches)
     historical["launch_control_v7"] = dict(patches["launch_control_v7"],
@@ -81,8 +81,8 @@ def test_configured_exact_v10_upgrades_to_v14_without_losing_launch(with_launch)
             configured_stock[address:address + len(payload)] = payload
     configured, _ = patch_ms41.checksum.correct_checksums(configured)
     assert patch_ms41.is_applied(configured, patches["ignition_cut_v10"])
-    upgraded, _ = patch_service.build_image(configured, ["ignition_cut_v18"])
-    ids = ["ignition_cut_v18"] + (["launch_control_v18"] if with_launch else [])
+    upgraded, _ = patch_service.build_image(configured, ["ignition_cut_v20"])
+    ids = ["ignition_cut_v20"] + (["launch_control_v20"] if with_launch else [])
     direct, _ = patch_service.build_image(configured_stock, ids)
     assert upgraded == direct
     assert not patch_ms41.is_applied(upgraded, patches["ignition_cut_v10"])

@@ -353,10 +353,10 @@ def read_akmb_fa(ds2) -> FaHolderState:
 
 
 def write_akmb_fa(ds2, state: FaHolderState, stream: bytes) -> FaHolderState:
-    ident, ci, before = _read_akmb_region(ds2)
+    ident, ci, before = _read_before_write(_read_akmb_region, ds2)
     if (ident != state.ident or ci != state.coding_index
             or before != state.before):
-        raise RuntimeError("instrument-cluster vehicle order changed since preflight")
+        raise OwnerChangedBeforeWrite("instrument-cluster vehicle order changed since preflight")
     if ci is None:
         raise ValueError("instrument-cluster coding index is unavailable")
     selector, start, step, count, _blocks = _akmb_geometry(ci)
@@ -401,9 +401,9 @@ def read_alsz_fa(ds2) -> FaHolderState:
 
 
 def write_alsz_fa(ds2, state: FaHolderState, stream: bytes) -> FaHolderState:
-    ident, before = _read_alsz_region(ds2)
+    ident, before = _read_before_write(_read_alsz_region, ds2)
     if ident != state.ident or before != state.before:
-        raise RuntimeError("lighting-module vehicle order changed since preflight")
+        raise OwnerChangedBeforeWrite("lighting-module vehicle order changed since preflight")
     if len(stream) > 0x11F:
         raise ValueError("vehicle order exceeds lighting-module capacity")
     after = _prefix_after(state.before, bytes(stream), 16)
@@ -424,12 +424,13 @@ def write_alsz_fa(ds2, state: FaHolderState, stream: bytes) -> FaHolderState:
     )
 
 
-def restore_fa_holder(ds2, state: FaHolderState) -> None:
+def restore_fa_holder(ds2, state: FaHolderState, reviewed_target: bytes | None = None) -> None:
     """Restore every archived holder block, then require exact equality."""
     if state.name == "AKMB":
         ident, _current_ci, _before = _read_akmb_region(ds2)
         ci = state.coding_index
-        if ident != state.ident or ci is None:
+        _check_restore_image(_before, state.before, reviewed_target)
+        if ident != state.ident or ci != _current_ci or ci is None:
             raise RuntimeError("instrument-cluster identity changed during recovery")
         selector, start, step, count, _blocks = _akmb_geometry(ci)
         for index in range(len(state.before) // 32):
@@ -445,6 +446,7 @@ def restore_fa_holder(ds2, state: FaHolderState) -> None:
     if state.name != "ALSZ":
         raise ValueError(f"unknown vehicle-order holder {state.name!r}")
     ident, _before = _read_alsz_region(ds2)
+    _check_restore_image(_before, state.before, reviewed_target)
     if ident != state.ident:
         raise RuntimeError("lighting-module identity changed during recovery")
     for index in range(18):
@@ -559,9 +561,9 @@ def write_ews_zcs(ds2, state: ZcsHolderState, raw: bytes) -> ZcsHolderState:
     if state.name != "EWS":
         raise ValueError("an immobilizer vehicle-order snapshot is required")
     raw = encode_zcs(decode_zcs(raw))
-    current = read_ews_zcs(ds2)
+    current = _read_before_write(read_ews_zcs, ds2)
     if current != state:
-        raise RuntimeError("immobilizer vehicle order changed since preflight")
+        raise OwnerChangedBeforeWrite("immobilizer vehicle order changed since preflight")
     selector4 = raw[:16]
     selector5 = raw[16:20] + state.selector5_tail
     extra = b"\x00" if state.coding_index in (81, 82) else b""
@@ -574,10 +576,11 @@ def write_ews_zcs(ds2, state: ZcsHolderState, raw: bytes) -> ZcsHolderState:
     return verified
 
 
-def restore_ews_zcs(ds2, state: ZcsHolderState) -> None:
+def restore_ews_zcs(ds2, state: ZcsHolderState, reviewed_target: bytes | None = None) -> None:
     current = _read_ews_zcs_raw(ds2)
     if current.ident != state.ident or current.coding_index != state.coding_index:
         raise RuntimeError("immobilizer identity changed during recovery")
+    _check_restore_image(current.raw + current.selector5_tail, state.raw + state.selector5_tail, reviewed_target)
     # Use the archived selector-5 tail, even if the partially written copy no
     # longer decodes as a coherent ZCS.
     extra = b"\x00" if state.coding_index in (81, 82) else b""
@@ -648,9 +651,9 @@ def build_ews_transmission_target(state: CodingState,
 
 def write_ews_transmission(ds2, state: CodingState,
                            target_data: bytes) -> CodingState:
-    current = read_ews_transmission(ds2)
+    current = _read_before_write(read_ews_transmission, ds2)
     if current != state:
-        raise RuntimeError("immobilizer coding changed since preflight")
+        raise OwnerChangedBeforeWrite("immobilizer coding changed since preflight")
     target_data = bytes(target_data)
     if len(target_data) != len(state.data):
         raise ValueError("immobilizer target coding has the wrong length")
@@ -665,11 +668,12 @@ def write_ews_transmission(ds2, state: CodingState,
     return verified
 
 
-def restore_ews_transmission(ds2, state: CodingState) -> None:
+def restore_ews_transmission(ds2, state: CodingState, reviewed_target: bytes | None = None) -> None:
     current = read_ews_transmission(ds2)
     if (current.ident != state.ident
             or current.coding_index != state.coding_index):
         raise RuntimeError("immobilizer identity changed during recovery")
+    _check_restore_image(current.data, state.data, reviewed_target)
     _positive(
         ds2,
         bytes((0x44, len(state.data) + 4, 0x09)) + state.data,
@@ -878,9 +882,9 @@ def _validate_ms41_cluster_target(state: ClusterStoreState, target_data: bytes) 
 
 def write_cluster_store(ds2, state: ClusterStoreState, target_data: bytes) -> ClusterStoreState:
     _validate_ms41_cluster_target(state, target_data)
-    current = read_ms41_cluster_store(ds2, state.chassis)
+    current = _read_before_write(read_ms41_cluster_store, ds2, state.chassis)
     if current != state:
-        raise RuntimeError("instrument-cluster storage changed since preflight")
+        raise OwnerChangedBeforeWrite("instrument-cluster storage changed since preflight")
     _write_cluster_target_words(ds2, state, state.data, target_data)
     verified = read_ms41_cluster_store(ds2, state.chassis)
     if verified.data != bytes(target_data):
@@ -889,10 +893,11 @@ def write_cluster_store(ds2, state: ClusterStoreState, target_data: bytes) -> Cl
     return verified
 
 
-def restore_cluster_store(ds2, state: ClusterStoreState) -> None:
+def restore_cluster_store(ds2, state: ClusterStoreState, reviewed_target: bytes | None = None) -> None:
     current = read_ms41_cluster_store(ds2, state.chassis)
     if current.ident != state.ident or current.coding_index != state.coding_index:
         raise RuntimeError("instrument-cluster identity changed during recovery")
+    _check_restore_image(current.data, state.data, reviewed_target)
     _write_cluster_target_words(ds2, state, current.data, state.data)
     if read_ms41_cluster_store(ds2, state.chassis) != state:
         raise RuntimeError("instrument-cluster recovery verification failed")
@@ -917,10 +922,10 @@ def read_asc5_transmission(ds2, chassis: str) -> CodingState:
 def write_asc5_transmission(ds2, state: CodingState,
                             target: "Transmission") -> CodingState:
     target = Transmission(target)
-    current = _read_addressed_coding(
+    current = _read_before_write(_read_addressed_coding,
         ds2, state.name, (state.coding_index,), state.address, len(state.data))
     if current != state:
-        raise RuntimeError("traction-control coding changed since preflight")
+        raise OwnerChangedBeforeWrite("traction-control coding changed since preflight")
     data = bytearray(state.data)
     data[0] = (data[0] & ~0x10) | (0x10 if target is Transmission.AUTOMATIC else 0)
     _identify_c6(ds2, 0x56)
@@ -946,9 +951,9 @@ def read_mk20_transmission(ds2) -> CodingState:
 def write_mk20_transmission(ds2, state: CodingState,
                             target: "Transmission") -> CodingState:
     target = Transmission(target)
-    current = read_mk20_transmission(ds2)
+    current = _read_before_write(read_mk20_transmission, ds2)
     if current != state:
-        raise RuntimeError("MK20 coding changed since preflight")
+        raise OwnerChangedBeforeWrite("MK20 coding changed since preflight")
     data = bytearray(state.data)
     data[2] = (data[2] & ~0x80) | (0x80 if target is Transmission.AUTOMATIC else 0)
     _identify_c6(ds2, 0x56)
@@ -960,15 +965,16 @@ def write_mk20_transmission(ds2, state: CodingState,
     return verified
 
 
-def restore_transmission_coding(ds2, state: CodingState) -> None:
+def restore_transmission_coding(ds2, state: CodingState, reviewed_target: bytes | None = None) -> None:
     if state.name == "EWS":
-        restore_ews_transmission(ds2, state)
+        restore_ews_transmission(ds2, state, reviewed_target)
         return
     if state.name == "ASC5":
         current = _read_addressed_coding(
             ds2, state.name, (state.coding_index,), state.address, len(state.data))
         if current.ident != state.ident or current.coding_index != state.coding_index:
             raise RuntimeError(f"{state.name} identity changed during recovery")
+        _check_restore_image(current.data, state.data, reviewed_target)
         _identify_c6(ds2, 0x56)
         _positive(ds2, bytes((
             0x56, len(state.data) + 5, 0x09, state.address,
@@ -979,6 +985,7 @@ def restore_transmission_coding(ds2, state: CodingState) -> None:
         current = read_mk20_transmission(ds2)
         if current.ident != state.ident or current.coding_index != state.coding_index:
             raise RuntimeError(f"{state.name} identity changed during recovery")
+        _check_restore_image(current.data, state.data, reviewed_target)
         _identify_c6(ds2, 0x56)
         _positive(ds2, bytes((0x56, len(state.data) + 4, 0x09)) + state.data, 0x56)
         time.sleep(4.0)
@@ -1412,9 +1419,9 @@ def build_e46_cluster_target(state: ClusterStoreState, raw_zcs: bytes | None,
 
 def write_e46_cluster_store(ds2, state: ClusterStoreState,
                             target_data: bytes) -> ClusterStoreState:
-    current = read_e46_cluster_store(ds2)
+    current = _read_before_write(read_e46_cluster_store, ds2)
     if current != state:
-        raise RuntimeError("E46 instrument-cluster storage changed since preflight")
+        raise OwnerChangedBeforeWrite("E46 instrument-cluster storage changed since preflight")
     _write_cluster_target_words(ds2, state, state.data, target_data)
     verified = read_e46_cluster_store(ds2)
     if verified.data != bytes(target_data):
@@ -1422,10 +1429,11 @@ def write_e46_cluster_store(ds2, state: ClusterStoreState,
     return verified
 
 
-def restore_e46_cluster_store(ds2, state: ClusterStoreState) -> None:
+def restore_e46_cluster_store(ds2, state: ClusterStoreState, reviewed_target: bytes | None = None) -> None:
     current = read_e46_cluster_store(ds2, validate=False)
     if current.ident != state.ident or current.coding_index != state.coding_index:
         raise RuntimeError("E46 instrument-cluster identity changed during recovery")
+    _check_restore_image(current.data, state.data, reviewed_target)
     _write_cluster_target_words(ds2, state, current.data, state.data)
     if read_e46_cluster_store(ds2) != state:
         raise RuntimeError("E46 instrument-cluster recovery verification failed")
@@ -1540,9 +1548,9 @@ def _write_mk60_data(ds2, data: bytes) -> None:
 def write_mk60_transmission(ds2, state: Mk60State,
                             target: "Transmission") -> Mk60State:
     target = Transmission(target)
-    current = read_mk60_transmission(ds2)
+    current = _read_before_write(read_mk60_transmission, ds2)
     if current != state:
-        raise RuntimeError("MK60 coding changed since preflight")
+        raise OwnerChangedBeforeWrite("MK60 coding changed since preflight")
     data = bytearray(state.data)
     data[2] = (data[2] & ~0xC0) | (0x40 if target is Transmission.AUTOMATIC else 0)
     data[0] = (_xor(data[1:]) + 1) & 0xFF
@@ -1553,10 +1561,11 @@ def write_mk60_transmission(ds2, state: Mk60State,
     return verified
 
 
-def restore_mk60(ds2, state: Mk60State) -> None:
+def restore_mk60(ds2, state: Mk60State, reviewed_target: bytes | None = None) -> None:
     current = read_mk60_transmission(ds2, validate=False)
     if current.ident != state.ident or current.coding_index != state.coding_index:
         raise RuntimeError("MK60 identity changed during recovery")
+    _check_restore_image(current.data, state.data, reviewed_target)
     _write_mk60_data(ds2, state.data)
     if read_mk60_transmission(ds2) != state:
         raise RuntimeError("MK60 recovery verification failed")
@@ -2940,11 +2949,28 @@ def _assert_egs_snapshot(ds2, session: ConnectedSwapSession,
         raise RuntimeError(f"automatic-transmission computer assembly changed {label}")
 
 
+class OwnerChangedBeforeWrite(RuntimeError):
+    """The owner failed its comparison before sending any coding data."""
+
+
+def _read_before_write(reader, *args, **kwargs):
+    try:
+        return reader(*args, **kwargs)
+    except Exception as error:
+        raise OwnerChangedBeforeWrite(f"Module pre-write read failed: {error}") from error
+
+
+def _require_dynamic_selector(ds2, session: ConnectedSwapSession) -> None:
+    if session.family in MS41_EEPROM_RECORD_ADDRESS and ms41_selector(ds2) is not MS41Selector.DYNAMIC:
+        raise RuntimeError("DME transmission selector changed. The conversion requires dynamic AT/MT selection.")
+
+
 def _assert_session_fresh(ds2, session: ConnectedSwapSession) -> None:
     if session.family in MS41_EEPROM_RECORD_ADDRESS and session.cluster is not None:
         _validate_ms41_cluster_target(session.cluster, session.target_cluster)
     if bytes(ds2.identify()) != session.dme_ident:
         raise RuntimeError("engine-computer identity changed since compatibility checking")
+    _require_dynamic_selector(ds2, session)
     if (session.family in {"MS42", "MS43"} and session.source is not None
             and read_e46_dme_transmission(ds2) is not session.source):
         raise RuntimeError(
@@ -3053,31 +3079,38 @@ def _write_connected_owner(ds2, session: ConnectedSwapSession, name: str) -> Non
         raise ValueError(f"unknown transmission conversion owner {name!r}")
 
 
+def _check_restore_image(current: bytes, original: bytes, target: bytes | None) -> None:
+    if target is not None and (len(current) != len(original) or len(target) != len(original)
+            or any(value != old and value != new for value, old, new in zip(current, original, target))):
+        raise RuntimeError("module contains changes outside the interrupted target")
+
+
 def _restore_connected_owner(ds2, session: ConnectedSwapSession, name: str) -> None:
+    target = _connected_owner_target(session, name)
     if name == "stability":
         if isinstance(session.stability, Mk60State):
-            restore_mk60(ds2, session.stability)
+            restore_mk60(ds2, session.stability, target)
         elif session.stability.name in {"ASC57", "DSC57"}:
             from ms42_ms43_transmission import write_e39_stability
-            write_e39_stability(ds2, session.stability, session.stability.data, restoring=True)
+            write_e39_stability(ds2, session.stability, session.stability.data, restoring=True, reviewed_target=target)
         else:
-            restore_transmission_coding(ds2, session.stability)
+            restore_transmission_coding(ds2, session.stability, target)
     elif name == "cluster":
         if session.chassis == "E46":
-            restore_e46_cluster_store(ds2, session.cluster)
+            restore_e46_cluster_store(ds2, session.cluster, target)
         elif session.chassis == "E39" and session.family in {"MS42", "MS43"}:
             from ms42_ms43_transmission import write_e39_cluster
-            write_e39_cluster(ds2, session.cluster, session.cluster.data, restoring=True)
+            write_e39_cluster(ds2, session.cluster, session.cluster.data, restoring=True, reviewed_target=target)
         else:
-            restore_cluster_store(ds2, session.cluster)
+            restore_cluster_store(ds2, session.cluster, target)
     elif name == "alsz_fa":
-        restore_fa_holder(ds2, session.alsz_fa)
+        restore_fa_holder(ds2, session.alsz_fa, target)
     elif name == "akmb_fa":
-        restore_fa_holder(ds2, session.akmb_fa)
+        restore_fa_holder(ds2, session.akmb_fa, target)
     elif name == "ews_zcs":
-        restore_ews_zcs(ds2, session.ews_zcs)
+        restore_ews_zcs(ds2, session.ews_zcs, target)
     elif name == "ews_coding":
-        restore_ews_transmission(ds2, session.ews_coding)
+        restore_ews_transmission(ds2, session.ews_coding, target)
     else:
         raise ValueError(f"unknown transmission conversion owner {name!r}")
 
@@ -3146,7 +3179,13 @@ def write_connected_modules(ds2, session: ConnectedSwapSession,
                     {"target_sha256": sha256(target).hexdigest()},
                 )
             session.written.append(name)
-            _write_connected_owner(ds2, session, name)
+            try:
+                _write_connected_owner(ds2, session, name)
+            except OwnerChangedBeforeWrite:
+                session.written.pop()
+                if journal is not None:
+                    journal.cancel_unstarted_write(operation_id, name)
+                raise
             if journal is not None:
                 journal.mark_write_complete(operation_id, name)
         if session.family in {"MS42", "MS43"}:
@@ -3471,7 +3510,9 @@ def recover_connected_modules(ds2, session: ConnectedSwapSession, action: str,
     prior_chain = _recovery_chain(journal, supersedes, session.archive_path)
     if bytes(ds2.identify()) != session.dme_ident:
         raise RuntimeError("engine-computer identity differs from the recovery archive")
-    _assert_egs_snapshot(ds2, session)
+    if action == "target":
+        _require_dynamic_selector(ds2, session)
+        _assert_egs_snapshot(ds2, session)
 
     owners = _connected_owner_names(session)
     attempted, uncertain = _recovery_owner_attempts(prior_chain, owners)
@@ -3588,7 +3629,12 @@ def recover_connected_modules(ds2, session: ConnectedSwapSession, action: str,
                     {"target_sha256": sha256(target).hexdigest()},
                 )
                 session.written.append(name)
-                _write_connected_owner(ds2, session, name)
+                try:
+                    _write_connected_owner(ds2, session, name)
+                except OwnerChangedBeforeWrite:
+                    session.written.pop()
+                    journal.cancel_unstarted_write(journal_id, f"target_{name}")
+                    raise
                 journal.mark_write_complete(journal_id, f"target_{name}")
             dme_owner = "target_dme_post_coding"
             next_phase = "modules_written"
@@ -3662,7 +3708,6 @@ def verify_connected_original(ds2, session: ConnectedSwapSession,
             raise RuntimeError("DME transmission record was not restored")
         if read_ms41_runtime_transmission(ds2, session.family) is not session.source:
             raise RuntimeError("engine-computer original runtime mode was not restored")
-    _verify_egs(ds2, session)
     if journal is not None:
         journal.mark_final_verified(journal_id)
     session.phase = "restored"

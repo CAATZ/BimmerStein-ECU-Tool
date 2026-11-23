@@ -5,15 +5,16 @@ Called by the private admission owner with its canonical emulator and fixtures.
 This module neither opens a transport nor substitutes a diagnostic model.
 """
 
+from engines.patcher.verify_launch_retard import LAYOUTS as TIMING_LAYOUTS
 from engines.patcher.verify_launch_retard_state import (
     CUT_STATE_ADDR, CUT_RECOVERY_ADDR, CUT_TIMING_ADDR, CUT_SOURCE_ADDR,
 )
 
 _LAYOUTS = {
-    "MS41.0": ("launch_control_v18_ms410", 0xED52, 0xFAE6, 0xEDF4, 0xFD80, 0x33040),
-    "MS41.1": ("launch_control_v18_ms411", 0xF02C, 0xFC3C, 0xF1BE, 0xFDB6, 0x3FE40),
-    "MS41.2": ("launch_control_v18_ms412", 0xF014, 0xFC3C, 0xF19A, 0xFDB6, 0x3E800),
-    "MS41.3": ("launch_control_v18", 0xF014, 0xFC3C, 0xF19A, 0xFDB6, 0x3E800),
+    "MS41.0": ("launch_control_v19_ms410", 0xED52, 0xFAE6, 0xEDF4, 0xFD80, 0x33040),
+    "MS41.1": ("launch_control_v19_ms411", 0xF02C, 0xFC3C, 0xF1BE, 0xFDB6, 0x3FE40),
+    "MS41.2": ("launch_control_v19_ms412", 0xF014, 0xFC3C, 0xF19A, 0xFDB6, 0x3E800),
+    "MS41.3": ("launch_control_v19", 0xF014, 0xFC3C, 0xF19A, 0xFDB6, 0x3E800),
 }
 
 
@@ -35,6 +36,7 @@ def _seed(version, emu, *, marker=0xC3):
     emu.write_byte(CUT_STATE_ADDR, 0xA0)
     emu.write_byte(CUT_RECOVERY_ADDR, 0)
     emu.write_byte(CUT_TIMING_ADDR, marker)
+    emu.write_byte(0xD805, 0xE7 if marker == 0xC3 else 0xA7)
     emu.write_byte(CUT_SOURCE_ADDR, 1 if marker in (0xC1, 0xC3) else 0)
     emu.write_byte(latch, 0x40)
     emu.write_byte(soft, 125)
@@ -163,7 +165,7 @@ def verify_retard_guards(gate, version, installed_image):
             assert emu.read_byte(CUT_TIMING_ADDR) == 0xC3
             emu.reg.r[12], emu.reg.r[13] = 0x55, banks[0]
             gate._call_native(emu, monitors["front"])
-            assert emu.read_byte(CUT_RECOVERY_ADDR) == pending
+            assert emu.read_byte(CUT_RECOVERY_ADDR) == 0
 
     # Faults release observation; retained history must not veto the V18 angle.
     protection_cases = [(0xFD30, 1, True), (0xFD32, 0x8000, True)]
@@ -201,15 +203,53 @@ def verify_retard_guards(gate, version, installed_image):
                 version, "unknown startup RAM cannot create a pending misfire episode", marker)
     _verify_short_episode(gate, version, image)
     _verify_sample_irq(gate, version, image)
+    if version in ("MS41.0", "MS41.1", "MS41.2"):
+        _verify_skipped_charge(gate, version)
+
+
+def _verify_skipped_charge(gate, version):
+    values = dict(CUTSW=0, CUTRPM=125, CUT_HYST=0, LC_SW=0xFF)
+    control = {}
+    if version in gate.OLDER_FEATURE_LAYOUTS:
+        layout = gate.OLDER_FEATURE_LAYOUTS[version]
+        image = gate._case_image_older(layout, values)
+        control = dict(hook=layout["control_hook"], rpm_address=layout["rpm_address"],
+                       input_bytes=layout["input_bytes"], ipw_addresses=layout["ipw_addresses"])
+    else:
+        image = gate._case_image(values)
+    variant = gate._bound_variant(image)
+    if version == "MS41.0":
+        emu = gate._emu(image, dpp0=4)
+    else:
+        emu = gate._native_misfire_counts(version, image, 0xA0, 0, return_emu=True)
+        entry, stop, _, _, _, _, opportunities, counts, _, _ = gate._CUT_MISFIRE_LAYOUTS[version]
+        before = (emu.read(opportunities), gate._ram_bytes(emu, counts, 12))
+    for rpm, cut in ((125, True), (124, False)):
+        state, _, hygiene = gate._execute_control(
+            emu, rpm=rpm, state=0xA0 if cut else 0xA1, **control)
+        assert hygiene and state == (0xA0 | cut)
+        emu.write_byte(0xFA5F, 0)
+        emu.write(0xFD4E if version == "MS41.0" else 0xFD5E, 0)
+        emu.write_byte(0xFF04, 0xFF)
+        if cut:
+            emu.write_byte(CUT_RECOVERY_ADDR, 0)
+        gate._verify_cc6_interrupt_entry(emu, variant)
+        assert emu.read_byte(0xFF04) == (0xFF if cut else 0x7E), (version, rpm)
+        assert emu.read_byte(CUT_RECOVERY_ADDR) == (3 if version == "MS41.0" else 0x1F)
+    if version != "MS41.0":
+        emu.reg.r[9] = 0
+        result = emu.run_from(entry, stop_at=stop, max_steps=3000)
+        assert result.final_pc == stop
+        assert (emu.read(opportunities), gate._ram_bytes(emu, counts, 12)) == before
+        assert gate._ram_bytes(emu, 0xF560 if version == "MS41.1" else 0xF53A, 6) == bytes([2] * 6)
+        assert not emu.read_byte(CUT_RECOVERY_ADDR) & 0x10
 
 
 def _timing_fixture(gate, version, image):
     """Seed the actual native timing ISR for foreground/interrupt interactions."""
-    from engines.patcher.verify_launch_retard import LAYOUTS
-
     variant = gate._bound_variant(image)
     (_, isr, context, hooks, _, inverse, dwell, factors, offsets,
-     flags, crank, stage) = LAYOUTS[variant]
+     flags, crank, stage) = TIMING_LAYOUTS[variant]
     emu = _seed(version, gate._emu(image, dpp0=5), marker=0xC0)
     for address, value in ((inverse, 192), (crank, 0), (stage, 0),
                            (0xFABC, 119), (0xFA80, 0), (0xFA5F, 0)):
@@ -288,11 +328,18 @@ def _verify_short_episode(gate, version, image):
     assert timing_event() == [228, 228] and emu.read_byte(CUT_TIMING_ADDR) == 0xC3
     pending = 3 if version == "MS41.0" else 0x1F
     assert emu.read_byte(CUT_RECOVERY_ADDR) == pending, (version, "actual timing marks recovery")
+    inverse = TIMING_LAYOUTS[gate._bound_variant(image)][5]
+    emu.write_byte(inverse, 240)
+    assert timing_event() == [240, 240] and emu.read_byte(0xD805) == 0xE7
+    bank = gate.CUT_GUARD_LAYOUTS[version]["stft"][3][0]
+    emu.reg.r[12], emu.reg.r[13] = 0x55, bank
+    gate._call_native(emu, gate._CUT_MONITOR_LAYOUTS[version]["front"])
+    assert emu.read_byte(CUT_RECOVERY_ADDR) == pending
+    emu.write_byte(inverse, 192)
     emu.write_byte(0xE8D0, 99)
     assert timing_event() == [192, 192] and emu.read_byte(CUT_TIMING_ADDR) == 0xC0
     assert emu.read_byte(CUT_RECOVERY_ADDR) == pending
 
-    bank = gate.CUT_GUARD_LAYOUTS[version]["stft"][3][0]
     caller = gate._native_stft_callers(version)[0]
     emu.reg.r[0], emu.reg.r[8], emu.reg.r[9] = 0xE600, bank, 0x100
     emu.write(bank + 6, 0x9000)

@@ -3,6 +3,7 @@
 import sys
 import os
 import json
+import re
 import hashlib
 import tempfile
 import threading
@@ -21,17 +22,20 @@ from PyQt5.QtWidgets import (
     QLabel, QPushButton, QComboBox, QTextEdit,
     QProgressBar, QFileDialog, QGroupBox, QGridLayout, QFormLayout,
     QMessageBox, QTabWidget, QTabBar, QTableWidget,
-    QTableWidgetItem, QHeaderView, QAbstractItemView,
+    QTableWidgetItem, QHeaderView, QAbstractItemView, QStyledItemDelegate, QStyleOptionViewItem,
     QCheckBox, QRadioButton, QSpinBox, QDoubleSpinBox,
     QLineEdit, QInputDialog, QDialog, QDialogButtonBox, QScrollArea, QMenu, QLayout, QSplitter, QStackedWidget, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer, QUrl, QCoreApplication, QSize, QSettings, QLocale
+from PyQt5.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer, QUrl, QCoreApplication, QSize, QSettings, QLocale, QSaveFile, QIODevice
 from PyQt5.QtGui import (
     QFont, QColor, QTextCursor, QBrush, QDesktopServices, QIcon, QPalette,
-    QGuiApplication, QPainter,
+    QGuiApplication,
 )
 
-from gui_controls import ConfigComboBox
+from gui_controls import (
+    ConfigComboBox, ConfigSpinBox, ElidedLabel as _ElidedLabel, fit_window_to_screen, scroll_editor_wheel,
+)
+from gui_image_output import EditedImageOutputMixin, SavedImageActions, write_bin
 
 from ms41 import (
     FIRMWARE_COMPAT_CAL_ADDRS,
@@ -44,10 +48,11 @@ from ds2 import (
     DS2Interface, DS2Error, LegacyWriteRecovery, LegacyWriteRecoveryRequired,
     open_identified, resume_legacy_recovery,
 )
-from checksum import verify_checksum, correct_checksums
+from checksum import verify_checksum, correct_checksums, correct_verified_checksums
 import ms42_ms43
 import ms42_ms43_image
 from gui_ms42_ms43 import MS42MS43Desktop
+from gui_xdf_patches import ExternalPatchesPanel
 from ms42_ms43_resident import PROFILES as MS42_MS43_RAM_PROFILES, selected_profile
 from dtc import (format_dtc_table, parse_ds2_dtc_response, DS2DTCRecord,
                  read_ms41_fault_memory)
@@ -68,7 +73,7 @@ from vehicle_coding import (
 from vehicle_coding_profiles import TARGET_BY_KEY, targets_for_chassis
 import ecu_info
 from live_data import (
-    LiveDataPoller, RoughnessPoller, selection_catalog, read_adaptations,
+    LiveDataPoller, RoughnessPoller, logger_ecu_id, selection_catalog, read_adaptations,
     roughness_supported,
 )
 from rom_analyzer import analyze as analyze_rom
@@ -217,44 +222,50 @@ configure_high_dpi()
 
 
 class _MainScrollArea(QScrollArea):
-    """Keep the normal canvas fluid while preserving it below its design size."""
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self.widget() is not None:
+        canvas = self.widget()
+        if canvas is not None:
             viewport = self.viewport().size()
-            self.widget().resize(
-                max(MAIN_WINDOW_WIDTH, viewport.width()),
-                max(MAIN_CANVAS_MIN_HEIGHT, viewport.height()),
-            )
+            canvas.resize(max(canvas.minimumSizeHint().width(), viewport.width()),
+                          max(MAIN_CANVAS_MIN_HEIGHT, viewport.height()))
 
 
-class _FooterLabel(QLabel):
-    """Single-line footer text that can shrink without losing its full value."""
-    textChanged = pyqtSignal()
+class _PatchListScroll(QScrollArea):
+    widthChanged = pyqtSignal()
 
-    def __init__(self, text=""):
-        super().__init__(text)
-        self.setTextFormat(Qt.PlainText)
-        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.widthChanged.emit()
 
-    def setText(self, text):
-        super().setText(text)
-        self.setToolTip(text)
-        self.textChanged.emit()
 
-    def sizeHint(self):
-        return QSize(0, self.fontMetrics().height())
+class _PatchColumns(QGridLayout):
+    """Keep the metadata aligned across rows and wrap it below the title on narrow lists."""
 
-    def minimumSizeHint(self):
-        return self.sizeHint()
+    def __init__(self):
+        super().__init__()
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setHorizontalSpacing(8)
+        self.setVerticalSpacing(2)
+        self.setColumnStretch(0, 1)
+        self.metadata = QHBoxLayout()
+        self.actions = QHBoxLayout()
+        self.metadata.setSpacing(8)
+        self.actions.setSpacing(8)
+        self.addLayout(self.actions, 0, 2)
+        self._compact = None
+        self.set_compact(False)
 
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setPen(self.palette().windowText().color())
-        painter.drawText(
-            self.contentsRect(), Qt.AlignLeft | Qt.AlignVCenter,
-            self.fontMetrics().elidedText(
-                " ".join(self.text().splitlines()), Qt.ElideRight, self.contentsRect().width()))
+    def set_compact(self, compact):
+        if self._compact == compact:
+            return
+        if self._compact is not None:
+            self.removeItem(self.metadata)
+        self._compact = compact
+        if compact:
+            self.addLayout(self.metadata, 1, 0, 1, 3, Qt.AlignLeft)
+        else:
+            self.addLayout(self.metadata, 0, 1)
 
 
 class _PanelSplitter(QSplitter):
@@ -309,6 +320,13 @@ class _CompactTableWidget(QTableWidget):
         return size
 
 
+class _BinFilenameDelegate(QStyledItemDelegate):
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        option.features &= ~QStyleOptionViewItem.WrapText
+        option.textElideMode = Qt.ElideMiddle
+
+
 class _CompactTabs(QTabWidget):
     def addTab(self, page, title):
         # Preserve the existing sections and order; only reduce layout spacing.
@@ -349,6 +367,7 @@ class _PatchNumberEditor(QWidget):
         controls.setSpacing(12)
         decimals = int(parameter["decimals"])
         self.spin = QDoubleSpinBox() if decimals else QSpinBox()
+        self.spin.installEventFilter(self)
         self.spin.setObjectName(parameter["id"])
         self.spin.setLocale(QLocale.c())
         self.spin.setKeyboardTracking(False)
@@ -402,6 +421,12 @@ class _PatchNumberEditor(QWidget):
             if current == option["value"]:
                 button.setChecked(True)
         self._refresh_context()
+
+    def eventFilter(self, widget, event):
+        if widget is self.spin and event.type() == event.Wheel:
+            scroll_editor_wheel(widget, event)
+            return True
+        return super().eventFilter(widget, event)
 
     def _restore_custom_value(self):
         number = float if isinstance(self.spin, QDoubleSpinBox) else int
@@ -613,7 +638,7 @@ class AnalyzerParametersWindow(QDialog):
         self.setWindowTitle("ROM Analyzer Parameters")
         self.setModal(False)
         self.setAttribute(Qt.WA_DeleteOnClose, True)
-        self.resize(1100, 680)
+        fit_window_to_screen(self, 1100, 680)
         self._params = []
         self._counts = (0, 0)
 
@@ -1006,7 +1031,7 @@ class _BootGateBlock:
 # Main Window
 # ---------------------------------------------------------------------------
 
-class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
+class MS41FlashGUI(EditedImageOutputMixin, MS42MS43Desktop, QMainWindow):
     _ds2_reconnect_failed = pyqtSignal()
     _transfer_rate_observed = pyqtSignal(int, str)
 
@@ -1132,9 +1157,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
 
     def show_fitted(self):
         """Fit the normal window to the available work area without changing DPI."""
-        available = self.screen().availableGeometry()
-        self.resize(min(self.width(), available.width() - 40),
-                    min(self.height(), available.height() - 70))
+        fit_window_to_screen(self, self.width(), self.height())
         self.show()
 
     def _show_about(self):
@@ -1230,7 +1253,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
 
     def _build_ui(self):
         central = QWidget()
-        central.setMinimumSize(MAIN_WINDOW_WIDTH, MAIN_CANVAS_MIN_HEIGHT)
+        central.setMinimumHeight(MAIN_CANVAS_MIN_HEIGHT)
         root = QVBoxLayout(central)
         root.setSpacing(6)
         root.setContentsMargins(10, 10, 10, 10)
@@ -1274,6 +1297,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             "OFF-ROAD, COMPETITION, RESEARCH, AND BENCH USE ONLY"
         )
         self.lbl_intended_use.setAlignment(Qt.AlignCenter)
+        self.lbl_intended_use.setWordWrap(True)
         self.lbl_intended_use.setStyleSheet(
             "color:#e8c46a; font-size:10px; font-weight:bold; padding:2px 4px;"
         )
@@ -1322,6 +1346,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
 
         # ── Tab widget ──────────────────────────────────────────────────
         self.tabs = _CompactTabs()
+        self.tabs.tabBar().setObjectName("mainTabBar")
         self.tabs.setUsesScrollButtons(True)
         self.tabs.tabBar().setUsesScrollButtons(True)
         self.tabs.tabBar().setExpanding(False)
@@ -1345,6 +1370,10 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                 border: 1px solid #444;
                 border-bottom: none;
                 margin-right: 2px;
+            }
+            QTabBar#mainTabBar::tab {
+                min-width: 36px;
+                padding: 6px;
             }
             QTabBar::tab:selected {
                 background: #2a6099;
@@ -1380,7 +1409,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
 
         # ── Progress bar (shared) ───────────────────────────────────────
         self.progress_bar   = QProgressBar()
-        self.progress_label = _FooterLabel()
+        self.progress_label = _ElidedLabel()
         self.progress_bar.setVisible(False)
         self.progress_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.btn_about = QPushButton(self._build_label_text)
@@ -1413,6 +1442,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         root.addLayout(status_row)
         self.progress_label.textChanged.connect(self._update_footer_status)
         self.tabs.currentChanged.connect(self._update_footer_status)
+        self.tabs.currentChanged.connect(lambda: self._main_scroll.horizontalScrollBar().setValue(0))
         self._update_footer_status()
 
         self._set_ecu_buttons_enabled(False)
@@ -1583,9 +1613,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         self.chk_correct_cksum.setChecked(True)
         self.chk_correct_cksum.setStyleSheet("color:#aaa; padding:4px;")
         self.chk_correct_cksum.setToolTip(
-            "Recompute all MS41 checksums on the image before flashing so the ECU's "
-            "start-up verification passes (recommended). No-op for an unmodified "
-            "backup.")
+            "Recompute image checksums before flashing (recommended).")
         opt_row.addWidget(self.chk_correct_cksum)
 
         opt_row.addStretch()
@@ -3790,6 +3818,23 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
     # Flash read / write
     # -------------------------------------------------------------------
 
+    def _save_unarchived_read(self, data, filename, error):
+        self._log(f"Completed read could not be archived: {error}", "error")
+        message = f"Could not save to Bins:\n{error}\n\nSave the completed read elsewhere?"
+        while QMessageBox.warning(self, "Read Complete — Save Failed", message,
+                                  QMessageBox.Save | QMessageBox.Discard,
+                                  QMessageBox.Save) != QMessageBox.Discard:
+            path, _ = QFileDialog.getSaveFileName(self, "Save Completed Read", filename,
+                                                   "Binary Files (*.bin);;All Files (*)")
+            if not path:
+                continue
+            output = QSaveFile(path)
+            if (output.open(QIODevice.WriteOnly) and output.write(data) == len(data)
+                    and output.commit()):
+                self._log(f"Completed read saved: {path}", "ok")
+                return path
+            message = f"Could not save {path}:\n{output.errorString()}\n\nChoose another location?"
+
     def _offer_additional_read_copy(self, data, entry, label, dialog_title="Read Complete"):
         """Offer an optional external copy after Bins owns the authoritative read."""
         save_copy = QMessageBox.question(
@@ -3902,10 +3947,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                     self._refresh_backup_table()
                     self._session_backup_read = True
             except Exception as error:
-                self._log(f"{label} automatic Bins save failed: {error}", "error")
-                QMessageBox.critical(
-                    self, "Automatic Save Failed",
-                    f"The {label} was read, but could not be saved to Bins:\n{error}")
+                self._save_unarchived_read(data, f"ms41_{mode}.bin", error)
                 return
             self._log(f"{label} read complete: {entry.path}", "ok")
             self._offer_additional_read_copy(data, entry, label)
@@ -4011,18 +4053,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         with open(path, "rb") as f:
             data = bytearray(f.read())
 
-        # File sanity — reject blank/erased or zeroed images
-        ff_ratio   = data.count(0xFF) / len(data)
-        zero_ratio = data.count(0x00) / len(data)
-        if ff_ratio > 0.95:
-            QMessageBox.critical(self, "Invalid File",
-                f"This file is {ff_ratio*100:.0f}% 0xFF bytes — looks like a blank "
-                f"erased chip.\n\nFlash aborted.")
-            return
-        if zero_ratio > 0.95:
-            QMessageBox.critical(self, "Invalid File",
-                f"This file is {zero_ratio*100:.0f}% zero bytes and is not a valid ROM.\n\n"
-                f"Flash aborted.")
+        if not self._check_ms41_flash_image(data):
             return
 
         if self._ds2 is not None or self._calguard_boot_session_active():
@@ -4033,6 +4064,55 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         else:
             QMessageBox.information(self, "Not Connected",
                 "Connect to the ECU over DS2 first.")
+
+    def _check_ms41_flash_image(self, data):
+        for value, description in ((0xFF, "0xFF"), (0, "zero")):
+            ratio = data.count(value) / len(data)
+            if ratio > 0.95:
+                QMessageBox.critical(self, "Invalid File",
+                    f"This file is {ratio:.0%} {description} bytes and is not a valid ROM.\n\n"
+                    "Flash aborted.")
+                return False
+        return True
+
+    def _edited_image_flash_reason(self, image, family, *, original=None):
+        if self._ds2 is None:
+            return f"Connect to the {family} ECU to flash this image."
+        connected_family = self._ds2.family if self._is_ms42_ms43() else "MS41"
+        if family != connected_family:
+            return f"This {family} image cannot be flashed to a {connected_family} ECU."
+        if family == "MS41":
+            if len(image) not in (MS41ECU.FULL_ROM_SIZE, MS41ECU.TUNE_SIZE):
+                return "MS41 requires a 256 KB full ROM or a 24 KB tune."
+            full = len(image) == MS41ECU.FULL_ROM_SIZE
+        else:
+            full = len(image) == ms42_ms43_image.FULL_SIZE
+            if not full and len(image) != ms42_ms43_image.PROFILES[family].partial_size:
+                return f"The edited image is the wrong size for {family}."
+        action = self.btn_write_full if full else self.btn_write_tune
+        if self._task_busy or not action.isEnabled():
+            return "The Flash tab is unavailable for this write."
+        if family != "MS41" and original is not None:
+            return self._ms42_ms43_edited_write_limit(original, image, family)
+        return None
+
+    def _write_edited_image(self, image, filename, family, *, original=None, require_boot_write=False,
+                            disconnect_after_success=False, write_notes=None):
+        """Hand this editor result to the connected family's normal Flash writer."""
+        reason = self._edited_image_flash_reason(image, family, original=original)
+        if reason:
+            QMessageBox.information(self, "Flash Unavailable", reason)
+            return
+        if family != "MS41":
+            mode = "full" if len(image) == ms42_ms43_image.FULL_SIZE else "tune"
+            return self._ms42_ms43_write(image, filename, mode)
+        if not self._check_ms41_flash_image(image):
+            return
+        if len(image) == MS41ECU.FULL_ROM_SIZE:
+            self._ds2_write_full(bytearray(image), filename, require_boot_write=require_boot_write,
+                                 disconnect_after_success=disconnect_after_success, write_notes=write_notes)
+        else:
+            self._ds2_write_tune(bytearray(image), filename)
 
     def _ds2_verify_after_write(self, kind: str, image, log_fn, progress_fn):
         """Read the just-written image back over DS2 and compare byte-for-byte.
@@ -4384,7 +4464,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
     def _ds2_write_full(self, data: bytearray, filename: str, *,
                         require_boot_write=False, preserve_boot_identity=None,
                         archived_prewrite_image=None, on_write_success=None,
-                        disconnect_after_success=False, write_notes=None):
+                        disconnect_after_success=False, write_notes=None, live_config=False):
         """Validate and route a full 256 KB ROM write.
 
         ``require_boot_write`` is used by workflows whose intended edit lives inside file
@@ -4420,7 +4500,8 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                 preserve_boot_identity=boot_identity_preference,
                 archived_prewrite_image=archived_prewrite_image,
                 on_write_success=on_write_success,
-                disconnect_after_success=disconnect_after_success, write_notes=write_notes)
+                disconnect_after_success=disconnect_after_success, write_notes=write_notes,
+                live_config=live_config)
 
         # ── Hybrid ROM check — HARD BLOCK, no override ──────────────────────────
         # Detect ROMs assembled from program and calibration of different variants
@@ -4798,8 +4879,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             if top_warnings:
                 top_note += "\n\n".join(top_warnings) + "\n\n"
         battery_notice = self._prewrite_battery_notice()
-        ans = QMessageBox.question(
-            self, "Confirm Full ROM Write",
+        confirmation = (
             f"Writing a full 256 KB ROM image.\n\n"
             f"File    : {filename}\n"
             f"Variant : {file_variant or 'Unknown'}\n\n"
@@ -4814,9 +4894,12 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             f"• Keep ignition ON throughout. Engine must be OFF.\n"
             f"• Do NOT disconnect the adapter or cut power during write.\n"
             "\n"
-            f"Proceed?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-        )
+            f"Proceed?")
+        if live_config:
+            ans = self._confirm_edited_write("Confirm Full ROM Write", confirmation, image, filename)
+        else:
+            ans = QMessageBox.question(self, "Confirm Full ROM Write", confirmation,
+                                       QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if ans != QMessageBox.Yes:
             return
 
@@ -5024,7 +5107,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         ctrl.addWidget(self.btn_live_open_log)
         ctrl.addSpacing(group_gap)
         ctrl.addWidget(QLabel("Interval:"))
-        self.spin_interval = QSpinBox()
+        self.spin_interval = ConfigSpinBox()
         self.spin_interval.setRange(0, 5000)
         self.spin_interval.setSingleStep(100)
         self.spin_interval.setValue(self._live_settings().value("live/interval_ms", 0, type=int))
@@ -5038,7 +5121,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             lambda value: self._live_settings().setValue("live/interval_ms", value))
         ctrl.addWidget(self.spin_interval)
         ctrl.addWidget(QLabel("Mode:"))
-        self.cb_live_mode = QComboBox()
+        self.cb_live_mode = ConfigComboBox()
         self.cb_live_mode.addItem("Auto", "auto")
         self.cb_live_mode.addItem("Telegram", "telegram")
         self.cb_live_mode.addItem("Standard DS2", "ds2")
@@ -5113,6 +5196,9 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
     def _live_settings():
         return QSettings("BimmerStein", "ECU Tool")
 
+    def _live_logger_id(self):
+        return logger_ecu_id(self._ecu_id, self._ecu_program_variant)
+
     def _refresh_live_channels(self, force=False):
         """Restore favorites by parameter ID; RAM addresses stay definition-owned."""
         if self._poller is not None:
@@ -5148,7 +5234,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                 self.btn_logger_definition.setText("Logger: Bundled")
                 self.btn_logger_definition.setToolTip(str(self._live_definition_path))
                 self.act_logger_definition.setText(Path(self._live_definition_path).name)
-            catalog = (selection_catalog(self._ecu_id, self._live_definition_path)
+            catalog = (selection_catalog(self._live_logger_id(), self._live_definition_path)
                        if context else ())
         self._live_channel_context = context
         settings = self._live_settings()
@@ -5235,9 +5321,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         path, _ = QFileDialog.getOpenFileName(
             self, "Open Live Data Log", LOG_DIR, "CSV Logs (*.csv)")
         if path:
-            definition_path = self._live_definition_path if self._live_definition_key != "bundled" else None
-            family = self._ds2.family if self._is_ms42_ms43() else None
-            show_log(self, path, definition_path, family=family)
+            show_log(self, path)
 
     def _on_live_start(self):
         from live_data import live_data_supported
@@ -5251,7 +5335,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         try:
             self._refresh_live_channels()
             if (not self._is_ms42_ms43() and (self._live_definition_path is None or not live_data_supported(
-                    self._ecu_id, self._live_definition_path))):
+                    self._live_logger_id(), self._live_definition_path))):
                 raise ValueError("The selected logger definition has no channels for this ECU ID.")
             # Re-admit retained favorites each capture: a temporary profile failure
             # must not leave a checked channel absent from the next read/CSV plan.
@@ -5259,7 +5343,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                 valid_ids = {key for key, _name, _unit in self._live_catalog}
             else:
                 valid_ids = {key for key, _name, _unit in selection_catalog(
-                    self._ecu_id, self._live_definition_path)}
+                    self._live_logger_id(), self._live_definition_path)}
             valid_ids.update(key for key, _name, _unit in self._live_catalog)
             selected_ids = tuple(key for key in self._live_selected_ids if key in valid_ids)
             if not any(not key.startswith("BS_PROFILE_") for key in selected_ids):
@@ -5280,7 +5364,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                     interval=interval_ms / 1000.0, use_telegram=mode != "ds2",
                     telegram_fallback=mode == "auto", definition_path=self._live_definition_path,
                     ecu_id=self._ecu_id,
-                    ecu_variant=(self._ecu_program_variant or self._ecu_variant), ds2=self._ds2,
+                    ecu_variant=self._ecu_program_variant, ds2=self._ds2,
                     selected_ids=selected_ids)
             self._set_live_catalog(self._live_catalog, clear=True)
             self._live_sample_sequence = 0
@@ -5302,8 +5386,16 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
     def _append_live_samples(self):
         if self._poller.profile_ready:
             catalog = self._poller.available_channels()
+            available = {key for key, _name, _unit in catalog}
+            unavailable = tuple(row for row in self._live_catalog
+                                if row[0] in self._live_selected_ids and row[0] not in available)
+            catalog += unavailable
             if catalog != self._live_catalog:
                 self._set_live_catalog(catalog)
+            reasons = self._poller.unavailable_reasons
+            self.live_view.set_unavailable_channels({
+                name: reasons.get(key, "Not supported by the current ECU profile")
+                for key, name, _unit in unavailable})
         sequence, dropped, _rows, channels, samples = self._poller.completed_samples_since(
             self._live_sample_sequence)
         self._live_sample_sequence = sequence
@@ -6053,6 +6145,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
 
     def _build_config_tab(self):
         import ecu_config
+
         self._ecu_config_mod = ecu_config
         tab = QWidget()
         tab_lay = QVBoxLayout(tab)
@@ -6067,8 +6160,8 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         tab_lay.addWidget(self._config_scroll)
 
         note = QLabel(
-            "Load a full ROM or 24 KB partial, change the feature flags, then "
-            "<b>Apply &amp; Save</b>; or read and write the connected ECU below. "
+            "Load a full ROM or 24 KB partial to edit its feature flags, or read "
+            "the settings from the connected ECU. "
             "Options follow the matching CAL-ID. Program-region switches require a full ROM."
         )
         note.setWordWrap(True)
@@ -6079,7 +6172,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         file_row = QHBoxLayout()
         file_tag = QLabel("FILE")
         file_tag.setStyleSheet("color:#7ec8e3; font-weight:bold; min-width:38px;")
-        file_tag.setToolTip("Edit the feature flags of a ROM/partial file on disk, then Apply & Save.")
+        file_tag.setToolTip("Edit a full ROM or partial image from disk.")
         self.btn_config_load = self._op_btn("Load ROM / Partial…", "#1e5080", self._on_config_load)
         self.btn_config_load.setMaximumWidth(180)
         self.btn_config_close = self._op_btn("Close File", "#3d3d3d", self._on_config_close)
@@ -6092,22 +6185,33 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         self.btn_config_copy_ecu.setToolTip(
             "Read the connected ECU's current feature flags into the dropdowns,\n"
             "keeping the loaded file as the save target. Copies flags only — not maps.")
-        self.btn_config_save = self._op_btn("Apply & Save…", "#3d6b35", self._on_config_save)
-        self.btn_config_save.setMaximumWidth(150)
-        self.btn_config_save.setEnabled(False)
         file_row.addWidget(file_tag)
         file_row.addWidget(self.btn_config_load)
         file_row.addWidget(self.btn_config_close)
         file_row.addWidget(self.btn_config_copy_ecu)
-        file_row.addWidget(self.btn_config_save)
-        file_row.addStretch()
-        self.lbl_config_file = QLabel("No file loaded")
+        self.lbl_config_file = _ElidedLabel("No file loaded")
+        self.lbl_config_file.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.lbl_config_file.setStyleSheet("color:#888; font-style:italic;")
-        file_row.addWidget(self.lbl_config_file)
+        file_row.addWidget(self.lbl_config_file, 1)
         lay.addLayout(file_row)
 
+        self._config_file_actions = QWidget()
+        output_row = QHBoxLayout(self._config_file_actions)
+        output_row.setContentsMargins(0, 0, 0, 0)
+        self.btn_config_save = self._op_btn("Apply && Save…", "#3d6b35", self._on_config_save)
+        self.btn_config_flash = self._op_btn(
+            "Flash without saving…", "#7a1f1f", self._on_config_flash)
+        self.btn_config_flash.setToolTip("Review or export the configured image before flashing.")
+        output_row.addSpacing(file_tag.sizeHint().width() + file_row.spacing())
+        output_row.addWidget(self.btn_config_save)
+        output_row.addWidget(self.btn_config_flash)
+        output_row.addStretch()
+        lay.addWidget(self._config_file_actions)
+
         # ── ECU operations row (active only when NO file is loaded) ───────────
-        ecu_row = QHBoxLayout()
+        self._config_live_actions = QWidget()
+        ecu_row = QHBoxLayout(self._config_live_actions)
+        ecu_row.setContentsMargins(0, 0, 0, 0)
         ecu_tag = QLabel("ECU")
         ecu_tag.setStyleSheet("color:#c8a85f; font-weight:bold; min-width:38px;")
         ecu_tag.setToolTip("Read or write the connected ECU's feature flags directly.")
@@ -6136,8 +6240,14 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         ecu_row.addWidget(self.btn_config_read_ecu)
         ecu_row.addWidget(self.btn_config_get_file)
         ecu_row.addWidget(self.btn_config_write_ecu)
+        self.chk_config_keep = QCheckBox("Keep a copy in Bins")
+        self.chk_config_keep.setToolTip("Save the configured image in Bins / Configured before writing.")
+        ecu_row.addWidget(self.chk_config_keep)
         ecu_row.addStretch()
-        lay.addLayout(ecu_row)
+        lay.addWidget(self._config_live_actions)
+
+        self._config_saved_actions = SavedImageActions(self)
+        lay.addWidget(self._config_saved_actions)
 
         self._config_combos = {}
         self._config_section_groups = {}
@@ -6148,19 +6258,16 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
 
         def _add_feature_group(title, features):
             columns = 1 if any(feat.is_program_feature for feat in features) else 2
-            feature_label_width = max(QLabel(feat.name + ":").sizeHint().width()
-                                      for feat in features) + 8
             group = QGroupBox(title)
             group.setStyleSheet(_SECTION_GB)
             grid = QGridLayout(group)
             grid.setContentsMargins(8, 10, 8, 6)
             grid.setVerticalSpacing(1)
-            grid.setColumnMinimumWidth(0, feature_label_width)
             grid.setColumnStretch(1, 1)
+            label_width = 0
             for index, feat in enumerate(features):
                 row, column = divmod(index, columns)
                 lk = QLabel(feat.name + ":")
-                lk.setFixedWidth(feature_label_width)
                 lk.setStyleSheet("font-weight:bold; color:#cfcfcf;")
                 lk.setToolTip(feat.note)
                 cb = ConfigComboBox()
@@ -6174,9 +6281,12 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                 cb.setFixedHeight(config_combo_height)
                 cb.setToolTip(feat.note)
                 grid.addWidget(lk, row, column * 2, Qt.AlignLeft)
+                label_width = max(label_width, lk.sizeHint().width())
                 grid.addWidget(cb, row, column * 2 + 1, Qt.AlignLeft | Qt.AlignVCenter)
                 grid.setColumnStretch(column * 2 + 1, 1)
                 self._config_combos[feat.name] = cb
+            for column in range(columns):
+                grid.setColumnMinimumWidth(column * 2, label_width + 8)
             self._config_section_groups[title] = group
             lay.addWidget(group)
 
@@ -6189,7 +6299,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             [f for f in ecu_config.FEATURES if f.is_program_feature],
         )
 
-        self.chk_config_fix = QCheckBox("Recompute checksums on save (recommended)")
+        self.chk_config_fix = QCheckBox("Recompute image checksums (recommended)")
         self.chk_config_fix.setChecked(True)
         self.chk_config_fix.setStyleSheet("color:#aaa; padding:4px;")
         lay.addWidget(self.chk_config_fix)
@@ -6207,6 +6317,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
 
         self._config_data = None
         self._config_path = None
+        self._config_file_in_bins = False
         self._config_profile = None
         self._config_program_variant = None
         self._config_target_size = None
@@ -6259,6 +6370,9 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
 
     def _reset_live_config_state(self):
         """Forget live dropdown baselines that belong to a previous ECU/read."""
+        self.chk_config_keep.setChecked(False)
+        if self._config_data is None and self._ds2 is not None:
+            self._config_saved_actions.clear()
         self._config_live_values_read = False
         self._config_live_baseline = {}
 
@@ -6441,6 +6555,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                 "or a 24 KB partial.")
             return
         self._ms42_ms43_config_file_identity = None
+        self._config_source_loaded(path)
         self._config_data = data
         self._config_path = path
         # FILE mode replaces the live editor state. Require another Read from ECU
@@ -6483,11 +6598,18 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         self._log(
             f"Config loaded: {os.path.basename(path)} ({profile_label}, {kind})", "ok")
 
+    def _config_source_loaded(self, path):
+        self._config_saved_actions.clear()
+        library = Path(self._backup_mgr.folder_path(""))
+        self._config_file_in_bins = Path(path).resolve().is_relative_to(library.resolve())
+        self.btn_config_save.setText("Save to Bins…" if self._config_file_in_bins else "Apply && Save…")
+
     def _on_config_close(self):
         """Close the loaded file and return to ECU mode."""
         if self._config_data is None:
             return
         name = os.path.basename(self._config_path) if self._config_path else "file"
+        self._config_saved_actions.clear()
         self._config_data = None
         self._config_path = None
         # Return to the connected ECU's profile. Oxygen editing stays locked if
@@ -6501,10 +6623,12 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         self._log(f"Closed config file: {name} — ECU operations re-enabled.", "ok")
 
     def _update_config_buttons(self):
+        file_loaded = self._config_data is not None
+        self._config_file_actions.setVisible(file_loaded)
+        self._config_live_actions.setVisible(not file_loaded)
         if self._ms42_ms43_update_config():
             return
         busy        = getattr(self, "_task_busy", False)
-        file_loaded = self._config_data is not None
         connected   = (getattr(self, "_ds2", None) is not None
                        and not self._actuator_cleanup_pending and not self._is_ms42_ms43())
         ok = not busy
@@ -6526,11 +6650,13 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         # FILE operations — editing/saving a file works offline (no ECU needed).
         self.btn_config_close.setEnabled(ok and file_loaded)
         self.btn_config_save.setEnabled(ok and file_loaded)
+        self.btn_config_flash.setEnabled(ok and file_loaded)
         self.btn_config_copy_ecu.setEnabled(ok and file_loaded and connected)
         # ECU operations — only when no file is loaded and we're connected.
         self.btn_config_read_ecu.setEnabled(ok and (not file_loaded) and connected)
         self.btn_config_get_file.setEnabled(ok and (not file_loaded) and connected)
         self.btn_config_write_ecu.setEnabled(ok and (not file_loaded) and connected)
+        self.chk_config_keep.setEnabled(self.btn_config_write_ecu.isEnabled())
         self._apply_transmission_recovery_quarantine()
 
     def _set_config_combo(self, name, label, profile=None, allow_profile_custom=False):
@@ -6910,10 +7036,50 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         show(self, "Flags Loaded from File", message)
 
     def _on_config_save(self):
+        self._config_file_output(save=True)
+
+    def _on_config_flash(self):
+        self._config_file_output(save=False)
+
+    def _config_file_output(self, *, save):
         if self._config_data is None:
             return
-        if self._ms42_ms43_config_file_identity is not None:
-            return self._ms42_ms43_config_save()
+        identity = self._ms42_ms43_config_file_identity
+        family = identity["family"] if identity else "MS41"
+        original = bytes(self._config_data)
+        base = Path(self._config_path)
+        name = f"{base.stem}_config.bin"
+        try:
+            image, context = (self._ms42_ms43_config_file_image() if identity
+                              else (self._ms41_config_file_image(), None))
+            if image is None:  # Matching checksum reference chooser was cancelled.
+                return
+            if not save:
+                self._review_config_image(image, name, family, original, temporary=True)
+                return
+            if self._config_file_in_bins:
+                self._save_config_to_bins(image, family, original, checksum_context=context)
+                return
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Save configured image", str(base.with_name(name)),
+                "Binary Files (*.bin);;All Files (*)")
+            if not path:
+                return
+            library = Path(self._backup_mgr.folder_path("")).resolve()
+            destination = Path(path).resolve()
+            if destination.is_relative_to(library):
+                self._save_config_to_bins(image, family, original, checksum_context=context,
+                                          destination=destination.relative_to(library))
+                return
+            write_bin(path, image)
+            self._config_saved_actions.show_file(
+                path, image, lambda data, filename: self._review_config_image(
+                    data, filename, family, original, temporary=False))
+            self._log(f"Configured image saved: {path}", "ok")
+        except (OSError, ValueError, BackupIndexError) as error:
+            QMessageBox.warning(self, "Configured Image Unavailable", str(error))
+
+    def _ms41_config_file_image(self):
         changes = {name: cb.currentText() for name, cb in self._config_combos.items()}
         patched, log = self._ecu_config_mod.apply_config(
             self._config_data, changes, profile=self._config_profile)
@@ -6923,18 +7089,46 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             patched, cdet = correct_checksums(patched)
             for d in cdet:
                 self._log(d)
-        stem = os.path.splitext(os.path.basename(self._config_path))[0]
-        out, _ = QFileDialog.getSaveFileName(
-            self, "Save configured image", f"{stem}_config.bin",
-            "Binary Files (*.bin);;All Files (*)"
-        )
-        if not out:
-            return
-        with open(out, "wb") as f:
-            f.write(patched)
-        self._log(f"Configured image saved → {os.path.basename(out)}", "ok")
-        QMessageBox.information(self, "Configured Image Saved",
-            f"Saved configured image:\n{os.path.basename(out)}")
+        return bytes(patched)
+
+    def _review_config_image(self, data, filename, family, original, *, temporary):
+        self._review_edited_bin(
+            data, filename,
+            lambda image, name: self._write_edited_image(image, name, family, original=original),
+            temporary=temporary,
+            flash_reason=lambda: self._edited_image_flash_reason(data, family, original=original))
+
+    def _save_config_to_bins(self, data, family, original, *, destination=None, **metadata):
+        if destination is None:
+            mode = "full" if len(data) in (MS41ECU.FULL_ROM_SIZE, ms42_ms43_image.FULL_SIZE) else "tune"
+            entry = self._save_edited_bin(
+                data, f"{family}_config_{mode}.bin", "Configured", source="ECU Config", **metadata)
+            if entry is None:
+                return False
+        else:
+            name = destination.name
+            if not name.lower().endswith(".bin"):
+                name += ".bin"
+            folder = "/".join(destination.parts[:-1])
+            entry = self._backup_mgr.add_data(data, name, folder=folder, source="ECU Config", **metadata)
+            self._on_backup_refresh()
+        self._config_saved_actions.show_saved(
+            entry, data, lambda image, filename: self._review_config_image(
+                image, filename, family, original, temporary=False))
+        return True
+
+    def _keep_config_image(self, data, family, original, *, checksum_context=None):
+        """Keep the requested edited copy independently of a pre-write ECU backup."""
+        ecu = self._ds2
+        connection_key = self._identity_connection_key()
+        if not self._save_config_to_bins(
+                data, family, original, checksum_context=checksum_context,
+                ecu_id=self._ecu_id or "", vin=self._ecu_vin or ""):
+            return False
+        if self._ds2 is not ecu or self._identity_connection_key() != connection_key:
+            self._log("Configuration saved. The ECU connection changed before writing.", "warn")
+            return False
+        return True
 
     def _on_config_write_ecu(self):
         """Apply live config by partial write, or by full read/patch/write if needed."""
@@ -7093,6 +7287,8 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                 self._log(line)
 
         archived_source = bytes(full_rom)
+        if self.chk_config_keep.isChecked() and not self._keep_config_image(patched, "MS41", archived_source):
+            return
 
         def update_program_baseline():
             self._config_live_values_read = True
@@ -7109,6 +7305,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             bytearray(patched), "live_ECU_config_full.bin",
             archived_prewrite_image=archived_source,
             on_write_success=update_program_baseline,
+            live_config=True,
             **({"write_notes": f"Configuration changes:\n{preview}"} if top_full else {}))
 
     def _config_write_apply(self, partial):
@@ -7156,16 +7353,18 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             f"  • {f}: {ol} → {nl}   (Byte {byte}: 0x{old:02X} → 0x{new:02X})\n"
             for (f, byte, old, new, ol, nl) in diff)
         battery_notice = self._prewrite_battery_notice()
-        if QMessageBox.warning(self, "Confirm Config Write",
+        image = bytes(patched)
+        if self._confirm_edited_write("Confirm Config Write",
             "These control-bit changes will be flashed to the ECU:\n\n" + lines +
             "\nThis ERASES and rewrites the 24 KB tune sector.\n"
             "Ignition ON, engine OFF. Do not cut power during the write.\n\n" +
             battery_notice + "\n\nProceed?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            image, "live_ECU_config_tune.bin", warning=True) != QMessageBox.Yes:
             self._log("Config write cancelled.", "warn")
             return
 
-        image = bytes(patched)
+        if self.chk_config_keep.isChecked() and not self._keep_config_image(image, "MS41", bytes(partial)):
+            return
 
         # The archived full image remains a restore point, but this calibration
         # write means it is no longer an exact source for a later full-ROM edit.
@@ -7506,11 +7705,10 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         try:
             return self._archive_eeprom(image, source, prefix, variant)
         except Exception as error:
-            fallback = (
-                f"The original durable capture remains at:\n{path}"
-                if path else
-                "No durable copy was created. Retry the read before writing."
-            )
+            if not path:
+                self._save_unarchived_read(image, f"{prefix}.bin", error)
+                return None
+            fallback = f"The original durable capture remains at:\n{path}"
             self._log(
                 f"EEPROM Bins indexing failed: {error}. {fallback}",
                 "error",
@@ -10606,13 +10804,6 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         box.setDetailedText(str(error))
         box.exec_()
 
-    def _ecu_is_ms41_3(self):
-        """Best-effort: is the connected ECU running MS41.3? From the connect-time program/variant
-        detection (ABHISHEK / SS1v2 markers). The install engine re-checks this authoritatively and
-        refuses a mismatch, so a wrong guess here is safe — it only picks which dialog path runs."""
-        return (getattr(self, "_ecu_program_variant", None) == "MS41.3"
-                or getattr(self, "_ecu_variant", None) == "MS41.3")
-
     def _ecu_patch_version(self):
         """Best-effort consistent patch target for the connected ECU."""
         program = getattr(self, "_ecu_program_variant", None)
@@ -10937,7 +11128,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
 
     def _bsl_region_choices(self):
         chip, half = self.cb_bsl_chip.currentData(), self.cb_bsl_half.currentText()
-        return bsl_service.flash_regions(chip, half)
+        return bsl_service.flash_regions(chip, half, family=self._bsl_family())
 
     def _build_bsl_tab(self):
         tab = QWidget()
@@ -10950,6 +11141,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         warn.setWordWrap(True)
         warn.setStyleSheet("color:#e8c46a;")
         lay.addWidget(warn)
+        self.lbl_bsl_warning = warn
 
         order = QLabel("Last resort only — use this when the ECU no longer responds over DS2 or "
                        "Soft-BSL. Select the chip/half below, then Preview before "
@@ -10957,6 +11149,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         order.setWordWrap(True)
         order.setStyleSheet("color:#888; font-style:italic;")
         lay.addWidget(order)
+        self.lbl_bsl_order = order
 
         transport = QHBoxLayout()
         transport.addWidget(QLabel("BSL Port:"))
@@ -10973,6 +11166,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         transport.addWidget(self.btn_bsl_refresh)
         transport.addWidget(QLabel("Baud:"))
         self.cb_bsl_baud = QComboBox()
+        self.cb_bsl_baud.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.cb_bsl_baud.addItem("Low (9,600)", 9600)
         self.cb_bsl_baud.addItem("Mid (19,200)", 19200)
         self.cb_bsl_baud.addItem("High (38,400)", 38400)
@@ -10992,14 +11186,20 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         lay.addLayout(transport)
 
         top = QHBoxLayout()
-        top.addWidget(QLabel("Chip:"))
+        top.addWidget(QLabel("ECU:"))
+        self.cb_bsl_family = QComboBox()
+        self.cb_bsl_family.addItems(["MS41", "MS42", "MS43"])
+        top.addWidget(self.cb_bsl_family)
+        self.lbl_bsl_chip = QLabel("Chip:")
+        top.addWidget(self.lbl_bsl_chip)
         self.cb_bsl_chip = QComboBox()
         self.cb_bsl_chip.addItem("Auto-detect", "auto")
         self.cb_bsl_chip.addItem("Intel 28F200", "28f200")
         self.cb_bsl_chip.addItem("AMD 29F200", "29f200")
         self.cb_bsl_chip.addItem("AMD 29F400", "29f400")
         top.addWidget(self.cb_bsl_chip)
-        top.addWidget(QLabel("Half (29F400 only):"))
+        self.lbl_bsl_half = QLabel("Half (29F400 only):")
+        top.addWidget(self.lbl_bsl_half)
         self.cb_bsl_half = QComboBox()
         self.cb_bsl_half.addItems(["upper", "lower"])
         top.addWidget(self.cb_bsl_half)
@@ -11018,6 +11218,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         read_note.setWordWrap(True)
         read_note.setStyleSheet("color:#888;")
         rl.addWidget(read_note, 1)
+        self.lbl_bsl_read_note = read_note
         self.btn_bsl_read_full = self._op_btn(
             "Read Full Flash (256 KB)…", "#2a5d3a", self._on_bsl_read_full)
         self.btn_bsl_read_full.setToolTip(
@@ -11045,6 +11246,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         self.cb_bsl_chip.currentTextChanged.connect(self._on_bsl_geometry_changed)
         self.cb_bsl_half.currentTextChanged.connect(self._on_bsl_geometry_changed)
         self.cb_bsl_region.currentTextChanged.connect(self._invalidate_bsl_plan)
+        self.cb_bsl_region.currentTextChanged.connect(self._update_bsl_restore_option)
         r1.addStretch()
         fl.addLayout(r1)
         r2 = QHBoxLayout()
@@ -11058,10 +11260,17 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         r3 = QHBoxLayout()
         self.chk_bsl_fix_cksum = QCheckBox("Fix checksums before flashing")
         self.chk_bsl_force = QCheckBox("Force (override cross-variant / bad-checksum guard — brick risk)")
+        self.chk_bsl_exact_restore = QCheckBox("Restore exact backup (replace identity and retained data)")
+        self.chk_bsl_exact_restore.setToolTip(
+            "Full recovery normally preserves valid live identity and retained data. "
+            "Enable only to restore these areas from the selected exact ECU backup.")
         self.chk_bsl_fix_cksum.toggled.connect(self._invalidate_bsl_plan)
         self.chk_bsl_force.toggled.connect(self._invalidate_bsl_plan)
+        self.chk_bsl_exact_restore.toggled.connect(self._invalidate_bsl_plan)
+        self.chk_bsl_exact_restore.toggled.connect(self._on_bsl_exact_restore_changed)
         r3.addWidget(self.chk_bsl_fix_cksum)
         r3.addWidget(self.chk_bsl_force)
+        r3.addWidget(self.chk_bsl_exact_restore)
         r3.addStretch()
         fl.addLayout(r3)
 
@@ -11109,7 +11318,14 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
 
         self.cb_bsl_port.currentTextChanged.connect(self._invalidate_bsl_plan)
         self.cb_bsl_baud.currentIndexChanged.connect(self._invalidate_bsl_plan)
-        self._on_bsl_geometry_changed()
+        self._bsl_ms41_labels = tuple(
+            (widget, widget.text(), widget.toolTip()) for widget in (
+                self.lbl_bsl_warning, self.lbl_bsl_order, self.lbl_bsl_transport_mode,
+                self.lbl_bsl_read_note, self.btn_bsl_read_full, self.btn_bsl_read_tune))
+        self._bsl_ms41_port_tip = self.cb_bsl_port.toolTip()
+        self._bsl_ms41_baud_tip = self.cb_bsl_baud.toolTip()
+        self.cb_bsl_family.currentTextChanged.connect(self._on_bsl_family_changed)
+        self._on_bsl_family_changed()
 
         self._bsl_tab_index = self.tabs.addTab(tab, "  BSL-Unbricker  ")
 
@@ -11118,7 +11334,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         if not port or port.startswith("("):
             QMessageBox.warning(
                 self, "No BSL Serial Port",
-                "Select the dedicated direct-tap COM port in the BSL-Unbricker tab.")
+                "Select the hardware-BSL COM port in the BSL-Unbricker tab.")
             return None
         try:
             self._port_owner.acquire("bsl")
@@ -11129,10 +11345,76 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         return port
 
     def _bsl_chip_half(self):
+        if self._bsl_family() != "MS41":
+            return "29f400", "full"
         return self.cb_bsl_chip.currentData(), self.cb_bsl_half.currentText()
+
+    def _bsl_family(self):
+        return self.cb_bsl_family.currentText()
 
     def _bsl_baud(self):
         return int(self.cb_bsl_baud.currentData())
+
+    def _bsl_transport_options(self):
+        family = self._bsl_family()
+        return dict(baud=self._bsl_baud(), family=family,
+                    reset_line="dtr" if family == "MS41" else None)
+
+    def _on_bsl_family_changed(self, *_args):
+        family = self._bsl_family()
+        ms41 = family == "MS41"
+        self.cb_bsl_baud.blockSignals(True)
+        self.cb_bsl_baud.clear()
+        rates = (bsl_service.BSL_BAUD_RATES if ms41 else
+                 bsl_service.MS42_MS43_BSL_BAUD_RATES[family])
+        for rate in rates:
+            self.cb_bsl_baud.addItem(f"{rate:,}", rate)
+        self.cb_bsl_baud.setCurrentIndex(2 if ms41 else 0)
+        self.cb_bsl_baud.blockSignals(False)
+        for widget in (self.lbl_bsl_chip, self.cb_bsl_chip, self.lbl_bsl_half,
+                       self.cb_bsl_half, self.chk_bsl_force, self.btn_bsl_businfo,
+                       self.btn_bsl_alias, self.btn_bsl_vpp):
+            widget.setVisible(ms41)
+        self.chk_bsl_exact_restore.setChecked(False)
+        if ms41:
+            for widget, text, tooltip in self._bsl_ms41_labels:
+                widget.setText(text)
+                widget.setToolTip(tooltip)
+            self.cb_bsl_port.setToolTip(self._bsl_ms41_port_tip)
+            self.cb_bsl_baud.setToolTip(self._bsl_ms41_baud_tip)
+        else:
+            tune_kb = ms42_ms43_image.PROFILES[family].partial_size // 1024
+            self.lbl_bsl_warning.setText(
+                f"{family} hardware BSL uses K-line with echo. Enter hardware boot mode "
+                "manually using verified instructions for your ECU, then start an operation. "
+                "Disconnect the DS2 session first; this route does not pulse DTR or reset the ECU.")
+            self.lbl_bsl_order.setText(
+                "Recovery for an unbootable ECU. Each operation needs fresh hardware boot entry. "
+                "Full recovery preserves valid live identity and retained data unless exact restore is selected.")
+            self.lbl_bsl_transport_mode.setText("K-line | 8N1 | echo | manual boot entry")
+            self.lbl_bsl_transport_mode.setToolTip("Bootstrap: 38,400 baud; selected baud applies to the RAM agent.")
+            self.cb_bsl_port.setToolTip("K-line adapter connected to the manually bootstrapped ECU.")
+            self.cb_bsl_baud.setToolTip("RAM-agent transfer rate; bootstrap remains at 38,400 baud.")
+            self.lbl_bsl_read_note.setText(
+                f"Full: raw 512 KB flash. Tune: {tune_kb} KB calibration. "
+                "Both save automatically to Bins; an optional extra copy is offered.")
+            self.btn_bsl_read_full.setText("Read Full Flash (512 KB)…")
+            self.btn_bsl_read_tune.setText(f"Read Tune ({tune_kb} KB)…")
+            self.btn_bsl_read_full.setToolTip("Read all 512 KB in raw file order and save automatically to Bins.")
+            self.btn_bsl_read_tune.setToolTip(f"Read the {family} {tune_kb} KB calibration and save automatically to Bins.")
+        self._on_bsl_geometry_changed()
+        self._update_bsl_restore_option()
+
+    def _update_bsl_restore_option(self, *_args):
+        available = self._bsl_family() != "MS41" and self.cb_bsl_region.currentText() == "all"
+        self.chk_bsl_exact_restore.setVisible(available)
+        if not available:
+            self.chk_bsl_exact_restore.setChecked(False)
+
+    def _on_bsl_exact_restore_changed(self, checked):
+        if checked:
+            self.chk_bsl_fix_cksum.setChecked(False)
+        self.chk_bsl_fix_cksum.setEnabled(not checked and not getattr(self, "_task_busy", False))
 
     def _invalidate_bsl_plan(self, *_args):
         self._bsl_plan = None
@@ -11148,14 +11430,14 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         if current in choices:
             self.cb_bsl_region.setCurrentText(current)
         self.cb_bsl_region.blockSignals(False)
-        self.cb_bsl_half.setEnabled(self.cb_bsl_chip.currentData() == "29f400")
+        self.cb_bsl_half.setEnabled(self._bsl_family() == "MS41" and self.cb_bsl_chip.currentData() == "29f400")
         self._update_bsl_vpp_control(not getattr(self, "_task_busy", False))
         self._invalidate_bsl_plan()
 
     def _update_bsl_vpp_control(self, controls_enabled=True):
         """Explain and enforce that manual VPP control is Intel-28F200-only."""
         chip = self.cb_bsl_chip.currentData()
-        self.btn_bsl_vpp.setEnabled(bool(controls_enabled) and chip == "28f200")
+        self.btn_bsl_vpp.setEnabled(bool(controls_enabled) and self._bsl_family() == "MS41" and chip == "28f200")
         if chip == "28f200":
             self.btn_bsl_vpp.setText("VPP On")
             tip = (
@@ -11176,14 +11458,15 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
     def _set_bsl_controls_enabled(self, enabled):
         if not hasattr(self, "btn_bsl_dryrun"):
             return
-        for widget in (self.cb_bsl_port, self.btn_bsl_refresh, self.cb_bsl_baud,
+        for widget in (self.cb_bsl_family, self.cb_bsl_port, self.btn_bsl_refresh, self.cb_bsl_baud,
                        self.cb_bsl_chip, self.cb_bsl_region, self.chk_bsl_fix_cksum,
                        self.chk_bsl_force, self.btn_bsl_ref, self.btn_bsl_dryrun,
                        self.btn_bsl_sync, self.btn_bsl_id, self.btn_bsl_businfo,
                        self.btn_bsl_alias, self.btn_bsl_read_full,
-                       self.btn_bsl_read_tune):
+                       self.btn_bsl_read_tune, self.chk_bsl_exact_restore):
             widget.setEnabled(enabled)
-        self.cb_bsl_half.setEnabled(enabled and self.cb_bsl_chip.currentData() == "29f400")
+        self.cb_bsl_half.setEnabled(enabled and self._bsl_family() == "MS41" and self.cb_bsl_chip.currentData() == "29f400")
+        self.chk_bsl_fix_cksum.setEnabled(enabled and not self.chk_bsl_exact_restore.isChecked())
         self._update_bsl_vpp_control(enabled)
         self.btn_bsl_arm.setEnabled(enabled and self._bsl_plan is not None)
         self._apply_transmission_recovery_quarantine()
@@ -11196,16 +11479,17 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             self._invalidate_bsl_plan()
 
     def _on_bsl_dry_run(self):
+        family = self._bsl_family()
         if not self._bsl_ref:
             QMessageBox.warning(
                 self, "Reference Image Required",
-                "Select a 24 KB calibration or 256 KB full reference image before previewing the plan.")
+                f"Select a matching {family} calibration or full reference image before previewing the plan.")
             return
         port = self.cb_bsl_port.currentText()
         if not port or port.startswith("("):
             QMessageBox.warning(
                 self, "No BSL Serial Port",
-                "Select the dedicated direct-tap COM port in this tab. Preview records that port "
+                "Select the hardware-BSL COM port in this tab. Preview records that port "
                 "but does not open it.")
             return
         chip, half = self._bsl_chip_half()
@@ -11217,15 +11501,16 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                 "geometries differ.")
             return
         region = self.cb_bsl_region.currentText()
-        baud = self._bsl_baud()
-        fix_cksum, force = self.chk_bsl_fix_cksum.isChecked(), self.chk_bsl_force.isChecked()
+        fix_cksum = self.chk_bsl_fix_cksum.isChecked()
+        force = family == "MS41" and self.chk_bsl_force.isChecked()
         ref = self._bsl_ref
         self._bsl_preview.clear()
         lines = []
         try:
             plan = bsl_service.create_flash_plan(
                 port, region, ref, chip, half, fix_cksum, force,
-                baud=baud, reset_line="dtr")
+                **self._bsl_transport_options(),
+                preserve_identity=not self.chk_bsl_exact_restore.isChecked())
         except Exception as error:
             QMessageBox.warning(self, "Invalid BSL Plan", str(error))
             return
@@ -11258,10 +11543,10 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         port = self._acquire_bsl_port()
         if not port:
             return
-        if port != plan.port:
+        if port != plan.port or self._bsl_family() != plan.family:
             self._port_owner.release("bsl")
             self._invalidate_bsl_plan()
-            QMessageBox.warning(self, "Plan Changed", "The selected port changed. Preview again.")
+            QMessageBox.warning(self, "Plan Changed", "The selected port or ECU family changed. Preview again.")
             return
         chip, region = plan.chip, plan.region
         chip_label = {
@@ -11271,10 +11556,19 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         }.get(chip, chip)
         force_note = ("\n\nFORCE IS ENABLED: checksum and variant safety guards may be overridden."
                       if plan.force else "")
+        if plan.family == "MS41":
+            transport = (f"{chip_label} over the direct ASC0 hardware-BSL link using {plan.port} "
+                         f"at {plan.baud:,} baud, no echo, with DTR reset")
+        else:
+            transport = (f"the explicitly selected {plan.family} using {plan.port}, K-line with echo, "
+                         f"manual boot entry and a {plan.baud:,}-baud RAM agent")
+            if region == "all":
+                force_note = ("\n\nValid live identity and retained data will be preserved."
+                              if plan.preserve_identity else
+                              "\n\nEXACT RESTORE: identity and retained data will be replaced by the selected backup.")
         text, ok = QInputDialog.getText(
             self, "BRICK-CLASS — Hardware BSL Flash",
-            f"This ERASES + PROGRAMS + VERIFIES region '{region}' on {chip_label} over the direct "
-            f"ASC0 hardware-BSL link using {plan.port} at {plan.baud:,} baud, no echo, with DTR reset. "
+            f"This ERASES + PROGRAMS + VERIFIES region '{region}' on {transport}. "
             f"A failed/interrupted write can leave the ECU unbootable by anything "
             f"but this same tool.{force_note}\n\nType  FLASH {region.upper()}  to proceed:")
         if not ok or text.strip() != f"FLASH {region.upper()}":
@@ -11308,12 +11602,12 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         if not port:
             return
         chip, half = self._bsl_chip_half()
-        baud = self._bsl_baud()
+        options = self._bsl_transport_options()
         def task(log_fn, progress_fn):
-            log_fn(f"Hardware BSL on {port}: {baud:,} baud, direct ASC0/no echo, DTR reset.")
+            bsl_service._log_transport(log_fn, port, options["baud"], options["reset_line"], options["family"])
             rc = fn(
                 port, *extra_args, chip, half, log_fn,
-                baud=baud, reset_line="dtr", progress=progress_fn)
+                **options, progress=progress_fn)
             if rc != 0:
                 raise RuntimeError(f"{label} exited with code {rc}")
         run = (
@@ -11344,6 +11638,8 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         self._run_bsl_diag(bsl_service.verify_alias, label="BSL verify-alias")
 
     def _on_bsl_vpp_on(self):
+        if self._bsl_family() != "MS41":
+            return
         if QMessageBox.warning(
                 self, "Enable Intel Programming Voltage",
                 "Enable the Intel 28F200 programming-voltage output (P2.6) so you can measure "
@@ -11364,16 +11660,19 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         """Read a full or tune image through hardware BSL, save it, and catalogue it."""
         if mode not in ("full", "tune"):
             raise ValueError(f"unsupported BSL dump mode: {mode}")
-        size = MS41ECU.FULL_ROM_SIZE if mode == "full" else MS41ECU.TUNE_SIZE
-        kind = "full 256 KB flash" if mode == "full" else "24 KB tune"
+        family = self._bsl_family()
+        full_size, tune_size = (MS41ECU.FULL_ROM_SIZE, MS41ECU.TUNE_SIZE) if family == "MS41" else (
+            ms42_ms43_image.FULL_SIZE, ms42_ms43_image.PROFILES[family].partial_size)
+        size = full_size if mode == "full" else tune_size
+        kind = f"full {size // 1024} KB flash" if mode == "full" else f"{size // 1024} KB tune"
         stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        suggested = f"ms41_bsl_{mode}_{stamp}.bin"
+        suggested = f"{family.lower()}_bsl_{mode}_{stamp}.bin"
         port = self._acquire_bsl_port()
         if not port:
             return
         try:
-            fd, path = tempfile.mkstemp(prefix=f"bimmerstein_bsl_{mode}_", suffix=".bin")
-            os.close(fd)
+            temporary = tempfile.TemporaryDirectory(prefix=f"bimmerstein_bsl_{mode}_")
+            path = os.path.join(temporary.name, "read.bin")
         except OSError as error:
             self._port_owner.release("bsl")
             QMessageBox.critical(
@@ -11381,22 +11680,21 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                 f"Could not prepare temporary storage for the {kind}:\n{error}")
             return
         chip, half = self._bsl_chip_half()
-        baud = self._bsl_baud()
+        options = self._bsl_transport_options()
         read_fn = bsl_service.dump_full if mode == "full" else bsl_service.dump_tune
 
         def remove_temporary_output():
             try:
-                os.remove(path)
+                temporary.cleanup()
             except OSError:
                 pass
 
         def task(log_fn, progress_fn):
-            log_fn(
-                f"Reading {kind} through hardware BSL on {port}: {baud:,} baud, "
-                "direct ASC0/no echo, DTR reset.")
+            bsl_service._log_transport(log_fn, port, options["baud"], options["reset_line"], family)
+            log_fn(f"Reading {family} {kind} through hardware BSL.")
             rc = read_fn(
                 port, path, chip, half, log_fn, progress_fn,
-                baud=baud, reset_line="dtr")
+                **options)
             if rc != 0:
                 raise RuntimeError(f"hardware-BSL {mode} read exited with code {rc}")
             with open(path, "rb") as handle:
@@ -11411,21 +11709,18 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             try:
                 entry = self._backup_mgr.add_data(
                     data, suggested, source="BSL-Unbricker read",
-                    notes=(f"Hardware BSL direct ASC0 {mode} read at {baud:,} baud; "
+                    notes=(f"{family} hardware BSL {mode} read at {options['baud']:,} baud; "
                            f"chip={chip}, half={half}"))
             except Exception as error:
+                self._save_unarchived_read(data, suggested, error)
                 remove_temporary_output()
-                self._log(f"BSL read automatic Bins save failed: {error}", "error")
-                QMessageBox.critical(
-                    self, "Automatic Save Failed",
-                    f"The {kind} was read, but could not be saved to Bins:\n{error}")
                 return
             remove_temporary_output()
             self._refresh_backup_table()
             self._log(
                 f"BSL {mode} read complete: {entry.path}", "ok")
             copy_label = (
-                "BSL Full Flash (256 KB)" if mode == "full" else "BSL Tune (24 KB)")
+                f"BSL Full Flash ({size // 1024} KB)" if mode == "full" else f"BSL Tune ({size // 1024} KB)")
             self._offer_additional_read_copy(
                 data, entry, copy_label, dialog_title="BSL Read Complete")
 
@@ -11462,18 +11757,19 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         btn_load = QPushButton("Load Base .bin…")
         btn_load.clicked.connect(self._on_patches_load_base)
         bar.addWidget(btn_load)
+        self.btn_import_patch_list = QPushButton("Import patch list…")
+        self.btn_import_patch_list.clicked.connect(self._import_patch_list)
+        bar.addWidget(self.btn_import_patch_list)
         self.btn_patches_read = QPushButton("Read Base from ECU")
         self.btn_patches_read.setEnabled(False)
         self.btn_patches_read.setToolTip(
-            "Reads the full 256 KB ROM through the automatic transfer path: Soft-BSL, "
-            "native-fast DS2, or normal DS2. The ECU is returned to normal communication "
-            "mode after the read.")
+            "Read a full ROM through the connected ECU family's normal read workflow.")
         self.btn_patches_read.clicked.connect(self._on_patches_read_ecu)
         bar.addWidget(self.btn_patches_read)
         bar.addStretch()
         lay.addLayout(bar)
 
-        self.lbl_patch_base = _FooterLabel("No base loaded.")
+        self.lbl_patch_base = _ElidedLabel("No base loaded.")
         self.lbl_patch_base.setAccessibleName("Patch base image")
         self.lbl_patch_base.setStyleSheet("color:#aaa;")
 
@@ -11481,14 +11777,22 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         self._patch_group_lay = QVBoxLayout(self._patch_group)
         self._patch_group_lay.setContentsMargins(0, 0, 0, 0)
         self._patch_header = None
+        self._patch_columns = []
+        self._patch_wide_width = 0
+        self._patch_status_labels = {}
         self._patch_placeholder = QLabel("Load a base image to see the patches that apply to it.")
         self._patch_placeholder.setStyleSheet("color:#888;")
         self._patch_group_lay.addWidget(self._patch_placeholder)
         self.patches_splitter = _PanelSplitter("patches", Qt.Vertical, [240, 160])
-        patch_scroll = QScrollArea()
+        patch_scroll = _PatchListScroll()
         patch_scroll.setWidgetResizable(True)
         patch_scroll.setFrameShape(QScrollArea.NoFrame)
         patch_scroll.setWidget(self._patch_group)
+        self._native_patch_scroll = patch_scroll
+        patch_scroll.widthChanged.connect(self._fit_patch_columns)
+        self._external_patches = ExternalPatchesPanel(self)
+        self._external_patches.hide()
+        self._external_patches.changed.connect(self._update_patch_buttons)
         self._patch_group_lay.setAlignment(Qt.AlignTop)
         self.patches_splitter.addWidget(patch_scroll)
         lay.addWidget(self.patches_splitter, 1)
@@ -11499,13 +11803,22 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         self.patches_splitter.setStretchFactor(0, 0)
         self.patches_splitter.setStretchFactor(1, 1)
 
-        build_bar = QHBoxLayout()
-        self.btn_patches_build = QPushButton("Build Patched Image  (→ Bins)")
+        draft_actions = QWidget()
+        build_bar = QHBoxLayout(draft_actions)
+        build_bar.setContentsMargins(0, 0, 0, 0)
+        self.btn_patches_build = QPushButton("Save to Bins…")
         self.btn_patches_build.setEnabled(False)
         self.btn_patches_build.clicked.connect(self._on_patches_build)
         build_bar.addWidget(self.btn_patches_build)
+        self.btn_patches_flash = QPushButton("Flash without saving…")
+        self.btn_patches_flash.setToolTip("Review the modified image for flashing or export without adding it to Bins.")
+        self.btn_patches_flash.setEnabled(False)
+        self.btn_patches_flash.clicked.connect(lambda: self._on_patches_build(temporary=True))
+        build_bar.addWidget(self.btn_patches_flash)
         build_bar.addStretch()
-        output_layout.addLayout(build_bar)
+        output_layout.addWidget(draft_actions)
+        self._patch_saved_actions = SavedImageActions(self, draft_actions=draft_actions)
+        output_layout.addWidget(self._patch_saved_actions)
 
         self.patches_log = _CompactTextEdit()
         self.patches_log.setReadOnly(True)
@@ -11516,12 +11829,29 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         self._patch_tab_index = self.tabs.addTab(tab, "  Patches  ")
 
     def _set_patch_base(self, data, source, *, reset_changes=True):
+        if len(data) == ms42_ms43_image.FULL_SIZE:
+            data = bytes(data)
+            ms42_ms43_image.extract_calibration(data)
+            info = ms42_ms43_image.image_identity(data)
+            self._external_patches.open_image(data)
+            self._patch_saved_actions.clear()
+            self._set_patch_panel(self._external_patches)
+            self._patch_base, self._patch_base_source = data, source
+            summary = f"{os.path.basename(source)} · {info['family']} {info['software_id']}"
+            self.lbl_patch_base.setText(summary)
+            self.lbl_patch_base.setToolTip(source)
+            self.lbl_patch_base.setAccessibleDescription(summary)
+            self.lbl_patch_base.setStyleSheet("color:#aaa;")
+            self._update_patch_buttons()
+            return
+        self._set_patch_panel(self._native_patch_scroll)
         selected = {
             pid for pid, cb in self._patch_checkboxes.items()
             if not reset_changes and cb.isChecked() and pid not in self._patch_installed_ids
         }
         data = bytes(data)
         r = MS41ECU.resolve_version(data)
+        self._patch_saved_actions.clear()
         self._patch_base = data
         self._patch_base_source = source
         if reset_changes:
@@ -11540,6 +11870,22 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         self.lbl_patch_base.setStyleSheet("color:#e8c46a;" if r["hybrid"] else "color:#aaa;")
         self._refresh_patch_list(selected)
 
+    def _set_patch_panel(self, panel):
+        if self.patches_splitter.widget(0) is not panel:
+            old = self.patches_splitter.replaceWidget(0, panel)
+            old.hide()
+            old.setParent(self)
+            panel.show()
+
+    def _import_patch_list(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Import community patch list", "", "XDF patch list (*.xdf)")
+        if path:
+            try:
+                title = self._external_patches.import_catalog(path)
+                self.patches_log.append("Imported patch list: " + escape(title))
+            except (OSError, ValueError) as error:
+                QMessageBox.warning(self, "Patch list import failed", str(error))
+
     def _on_patch_remove(self, patch_id):
         """Revert one already-applied patch from the loaded base (restores its stock bytes),
         so it can be re-patched with something else (e.g. ignition_cut V1-V4 -> V5)."""
@@ -11551,8 +11897,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                 f"Remove '{patch_id}' from the loaded base?\n\n{title}\n\n"
                 "This restores the original stock bytes at every offset this patch touched. "
                 "Declared parameter values remain in calibration but become inactive. "
-                "It edits the in-memory base only — use Build Patched Image to archive it, or "
-                "Flash to ECU from the Backups tab once you've re-applied whatever you want.",
+                "Choose Save to Bins or Flash without saving to apply your changes.",
                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
             return
         try:
@@ -11571,6 +11916,8 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         )
 
     def _refresh_patch_list(self, selected=()):
+        self._patch_columns = []
+        self._patch_status_labels = {}
         if self._patch_header is not None:
             self._patch_header.setParent(None)
             self._patch_header.deleteLater()
@@ -11594,7 +11941,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             self._update_patch_buttons()
             if pending_removals or pending_parameters:
                 self.btn_patches_build.setToolTip(
-                    "Build and archive the image with pending patch changes.")
+                    "Save the image with pending patch changes to Bins.")
             return
         self._patch_placeholder.setVisible(False)
         self._patch_entries = {patch["id"]: patch for patch in avail}
@@ -11624,7 +11971,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             2: max(metrics.horizontalAdvance(text) for text in
                    ["Maturity"] + [p.get("maturity", "—") for p in avail]) + 8,
             3: max(metrics.horizontalAdvance(text) for text in
-                   ("Installed", "Not installed", "State")) + 8,
+                   ("Installed", "Not installed", "Install pending", "Removal pending", "State")) + 8,
             4: max(metrics.horizontalAdvance(text) for text in
                    ["Validation"] + [p.get("validation", "—") for p in avail]) + 8,
         }
@@ -11633,10 +11980,10 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         action_width = probe_button.sizeHint().width()
         probe_button.deleteLater()
         column_widths.update({column: action_width for column in (5, 6, 7)})
-        header_layout = QGridLayout(header)
+        header_layout = _PatchColumns()
+        header.setLayout(header_layout)
         header_layout.setContentsMargins(0, 5, 0, 5)
-        header_layout.setHorizontalSpacing(8)
-        header_layout.setColumnStretch(0, 1)
+        self._patch_columns.append(header_layout)
         for column, name, title in (
                 (0, "patch", "Patch"), (1, "version", "Version"),
                 (2, "maturity", "Maturity"), (3, "state", "State"),
@@ -11646,10 +11993,11 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             label.setStyleSheet("color:#aaa;")
             if column == 0:
                 label.setIndent(18)
+                header_layout.addWidget(label, 0, 0)
             else:
                 label.setFixedWidth(column_widths[column] if column < 5 else action_width * 3 + 16)
                 label.setAlignment(Qt.AlignCenter)
-            header_layout.addWidget(label, 0, column, 1, 3 if column == 5 else 1)
+                (header_layout.metadata if column < 5 else header_layout.actions).addWidget(label)
         self._patch_group_lay.addWidget(header)
         self._patch_header = header
         for p in avail:
@@ -11657,10 +12005,8 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             row_layout = QVBoxLayout(row)
             row_layout.setContentsMargins(0, 4, 0, 4)
             row_layout.setSpacing(4)
-            rlay = QGridLayout()
-            rlay.setContentsMargins(0, 0, 0, 0)
-            rlay.setHorizontalSpacing(8)
-            rlay.setColumnStretch(0, 1)
+            rlay = _PatchColumns()
+            self._patch_columns.append(rlay)
             cells = {}
             for column, width in column_widths.items():
                 if column >= 5:
@@ -11670,7 +12016,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                 cell.setAlignment(Qt.AlignCenter)
                 column_name = {1: "version", 2: "maturity", 3: "state", 4: "validation"}[column]
                 cell.setObjectName(f"patch_{column_name}_{p['id']}")
-                rlay.addWidget(cell, 0, column)
+                rlay.metadata.addWidget(cell)
                 cells[column] = cell
             row_layout.addLayout(rlay)
             details = QDialog(row, Qt.Popup)
@@ -11696,12 +12042,17 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                 lambda _=False, popup=details, button=details_button:
                 self._show_patch_details(popup, button))
             details_button.setFixedWidth(action_width)
-            rlay.addWidget(details_button, 0, 7)
 
             cb = QCheckBox(p['title'])
-            cb.setProperty("blocked_by_legacy", bool(p.get("legacy")))
+            cb.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            # An atomic upgrade reports its own availability and any occupied space.
+            # The legacy row offers removal independently in either case.
+            legacy_to_remove = [] if "can_upgrade" in p else p.get("legacy", [])
+            cb.setProperty("install_blocked", bool(legacy_to_remove) or not p["ok"])
             cb.setStyleSheet("QCheckBox{font-weight:normal;color:#d4d4d4;}")
             user_tip = p.get("user_description") or p["description"]
+            if p.get("can_upgrade"):
+                user_tip += "\n\nSelecting this revision upgrades the installed patch and keeps its settings."
             required_names = []
             for required_id in p.get("requires", []):
                 required = definitions.get(required_id, {})
@@ -11713,6 +12064,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                     "\n\nRequired patch: " + ", ".join(required_names)
                     + ". Selecting this patch automatically selects available requirements."
                 )
+            user_tip = p["title"] + "\n\n" + user_tip
             cb.setToolTip(user_tip)
             cb.setChecked(p["installed"] or p["id"] in selected)
             rlay.addWidget(cb, 0, 0)
@@ -11733,9 +12085,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
 
             cells[1].setText(p.get("version") or "—")
             cells[2].setText(p.get("maturity", "—"))
-            cells[3].setText("Installed" if p["installed"] else "Not installed")
-            cells[3].setStyleSheet("color:#9ece6a;" if p["installed"] else "color:#aaa;")
-            cells[3].setToolTip("Patch presence in the loaded base image.")
+            self._patch_status_labels[p["id"]] = cells[3]
             cells[4].setText(p.get("validation", "—"))
             proof = "\n\n".join(text for text in
                                 (p.get("status"), p.get("verification")) if text)
@@ -11776,7 +12126,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             btn_configure.setFixedWidth(action_width)
             btn_configure.setEnabled(False)
             btn_configure.setToolTip("This patch has no configurable settings.")
-            rlay.addWidget(btn_configure, 0, 5)
+            rlay.actions.addWidget(btn_configure)
             if parameter_group is not None:
                 btn_configure.clicked.connect(
                     lambda _=False, pid=p["id"]: self._on_patch_configure(pid)
@@ -11788,7 +12138,8 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             btn_rm.setFixedWidth(action_width)
             btn_rm.setEnabled(False)
             btn_rm.setToolTip("This patch is not installed in the loaded base image.")
-            rlay.addWidget(btn_rm, 0, 6)
+            rlay.actions.addWidget(btn_rm)
+            rlay.actions.addWidget(details_button)
             if p["installed"]:
                 btn_rm.setEnabled(p.get("removable", True))
                 btn_rm.setToolTip("Remove this patch from the loaded base image.")
@@ -11817,7 +12168,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                         f"Cannot remove {p['title']} while installed patch(es) {joined} "
                         "still require it. Remove the dependent patch first."
                     )
-            for leg in p.get("legacy", []):
+            for leg in legacy_to_remove:
                 warning = QLabel(f"⚠ {leg['id'].upper()} ({leg['label']}) INSTALLED")
                 warning.setWordWrap(True)
                 warning.setStyleSheet("color:#f47171;")
@@ -11849,17 +12200,31 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                 self._patch_installed_ids.add(p["id"])
                 cb.setEnabled(False)
                 cb.setToolTip(user_tip + "\n\nAlready present in this base image.")
-            elif p.get("legacy"):
+            elif legacy_to_remove and p["ok"]:
                 cb.setEnabled(False)
-                legacy_ids = ", ".join(f"{leg['id']} ({leg['label']})" for leg in p["legacy"])
+                legacy_ids = ", ".join(f"{leg['id']} ({leg['label']})" for leg in legacy_to_remove)
                 cb.setToolTip(user_tip + f"\n\nThis base already has a superseded patch applied "
                                          f"({legacy_ids}). Remove the deprecated/unsafe revision "
                                          "above, or build from a clean base, before applying this version.")
+            elif not p["ok"]:
+                cb.setEnabled(False)
+                cb.setToolTip(user_tip + "\n\n" + p["badge"])
             cb.stateChanged.connect(self._on_patch_selection_changed)
             self._patch_group_lay.addWidget(row)
             self._patch_rows[p["id"]] = row
             self._patch_checkboxes[p["id"]] = cb
+        title_width = max(cb.sizeHint().width() for cb in self._patch_checkboxes.values())
+        self._patch_wide_width = title_width + sum(column_widths.values()) + 7 * header_layout.horizontalSpacing()
+        self._fit_patch_columns()
         self._on_patch_selection_changed()
+
+    def _fit_patch_columns(self):
+        if self._patch_columns:
+            scroll = self._native_patch_scroll
+            # Reserve the vertical scroll bar in both layouts so the breakpoint stays stable.
+            width = scroll.maximumViewportSize().width() - scroll.verticalScrollBar().sizeHint().width()
+            for columns in self._patch_columns:
+                columns.set_compact(width < self._patch_wide_width)
 
     def _show_patch_details(self, popup, button):
         available = button.screen().availableGeometry().adjusted(8, 8, -8, -8)
@@ -11979,7 +12344,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             label.setFixedWidth(label_width)
             label.setToolTip(parameter["description"])
             if parameter["kind"] == "choice":
-                editor = QComboBox()
+                editor = ConfigComboBox()
                 editor.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
                 editor.setMinimumContentsLength(12)
                 editor.setObjectName(parameter["id"])
@@ -12180,7 +12545,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                             continue
                         required_cb = self._patch_checkboxes.get(required_id)
                         if (required_cb is not None and not required_cb.isChecked()
-                                and not required_cb.property("blocked_by_legacy")
+                                and not required_cb.property("install_blocked")
                                 and required_id not in blocked):
                             required_cb.setChecked(True)
                             changed = True
@@ -12193,9 +12558,19 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                     if cb.isChecked() and pid not in self._patch_installed_ids]
         blocked = patch_service.collisions(selected)
         for pid, cb in self._patch_checkboxes.items():
+            state = self._patch_status_labels[pid]
+            if pid in selected or pid in self._patch_removed_ids:
+                state.setText("Install pending" if pid in selected else "Removal pending")
+                state.setStyleSheet("color:#e8c46a;")
+                state.setToolTip("This change will be included in the edited image.")
+            else:
+                installed = pid in self._patch_installed_ids
+                state.setText("Installed" if installed else "Not installed")
+                state.setStyleSheet("color:#9ece6a;" if installed else "color:#aaa;")
+                state.setToolTip("Patch presence in the loaded base image.")
             if pid in self._patch_installed_ids:
                 continue
-            if cb.property("blocked_by_legacy"):
+            if cb.property("install_blocked"):
                 cb.setEnabled(False)
                 continue
             cb.setEnabled(pid in selected or pid not in blocked)
@@ -12233,15 +12608,23 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                 "Required patch unavailable or blocked by a conflict: " + ", ".join(names))
         elif pending_removals or pending_parameters:
             self.btn_patches_build.setToolTip(
-                "Build and archive the selected additions, removals, and parameter changes.")
+                "Save the selected additions, removals, and parameter changes to Bins.")
         else:
             self.btn_patches_build.setToolTip(
-                "Build and archive the selected patches. Available required patches are "
+                "Save the image with the selected patches to Bins. Available required patches are "
                 "selected automatically.")
 
     def _update_patch_buttons(self):
         idle = not self._task_busy
-        self.btn_patches_read.setEnabled(idle and self._ds2 is not None)
+        self.btn_patches_read.setEnabled(idle and self._ds2 is not None and not self._ms42_ms43_link_unavailable())
+        self.btn_import_patch_list.setEnabled(idle)
+        if self.patches_splitter.widget(0) is self._external_patches:
+            pending = self._external_patches.has_changes()
+            self.btn_patches_build.setEnabled(idle and pending)
+            self.btn_patches_flash.setEnabled(idle and pending)
+            self.btn_patches_build.setToolTip("Save the image with your XDF changes to Bins.")
+            self._patch_saved_actions.set_pending(pending)
+            return
         selected = {
             pid for pid, checkbox in self._patch_checkboxes.items()
             if checkbox.isChecked() and pid not in self._patch_installed_ids
@@ -12251,9 +12634,11 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             for pid in selected
             for required in self._patch_entries.get(pid, {}).get("requires", [])
         )
-        self.btn_patches_build.setEnabled(
-            idle and self._patch_base is not None and not missing
-            and bool(selected or self._patch_removed_ids or self._patch_parameter_changes))
+        pending = bool(selected or self._patch_removed_ids or self._patch_parameter_changes)
+        editable = idle and self._patch_base is not None and not missing and pending
+        self.btn_patches_build.setEnabled(editable)
+        self.btn_patches_flash.setEnabled(editable)
+        self._patch_saved_actions.set_pending(pending)
 
     def _load_patch_base_path(self, path):
         try:
@@ -12262,15 +12647,19 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Patch Base Read Failed", str(e))
             return False
-        if len(data) != MS41ECU.FULL_ROM_SIZE:
+        if len(data) not in (MS41ECU.FULL_ROM_SIZE, ms42_ms43_image.FULL_SIZE):
             QMessageBox.warning(
                 self,
                 "Not a Full ROM",
-                f"Expected a 256 KB ({MS41ECU.FULL_ROM_SIZE:,}-byte) full ROM; "
+                "Expected a 256 KiB MS41 or a 512 KiB MS42/MS43 full ROM; "
                 f"received {len(data):,} bytes.",
             )
             return False
-        self._set_patch_base(data, os.path.abspath(path))
+        try:
+            self._set_patch_base(data, os.path.abspath(path))
+        except (OSError, ValueError) as error:
+            QMessageBox.warning(self, "Patch base unavailable", str(error))
+            return False
         self.patches_log.append(f"Loaded base: {os.path.basename(path)}")
         return True
 
@@ -12294,6 +12683,9 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
     def _on_patches_read_ecu(self):
         if self._task_busy:
             return
+        if self._is_ms42_ms43():
+            self._ms42_ms43_read("full", on_archived=lambda data, entry: self._set_patch_base(data, entry.path))
+            return
         if not self._ds2:
             QMessageBox.information(self, "Not Connected", "Connect to the ECU first (Connect button).")
             return
@@ -12313,8 +12705,11 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
 
         self._run_task(task, on_success=on_done)
 
-    def _on_patches_build(self):
+    def _on_patches_build(self, *, temporary=False):
         if self._task_busy:
+            return
+        if self.patches_splitter.widget(0) is self._external_patches:
+            self._external_patches.build_output(temporary=temporary)
             return
         # Already-installed patches show up checked (status display only, see
         # _refresh_patch_list) — they must NOT be sent to build_image, since their bytes are
@@ -12374,75 +12769,47 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             change_parts.append(f"configured {configured} parameter(s)")
         change_summary = "; ".join(change_parts)
 
-        # Auto-archive the built image to the Bins catalogue (traceable, and no path to pick). add_data
-        # derives the variant / CAL ID / ECU ID / VIN / checksum straight from the patched image.
-        ts   = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        name_parts = selected + [f"removed_{pid}" for pid in removed]
-        if configured:
-            name_parts.append("settings")
-        name = "ms41_patched_" + "_".join(name_parts) + f"_{ts}.bin"
-        try:
-            entry = self._backup_mgr.add_data(
-                out, name, source="patched: " + change_summary,
-                notes="Patched build: " + change_summary)
-        except Exception as e:
-            QMessageBox.critical(self, "Build Failed", f"Built the image but could not archive it: {e}")
-            self.patches_log.append(f"ARCHIVE FAILED: {e}")
-            return
-        self._refresh_backup_table()
-        self.patches_log.append(
-            f"Built + archived to Bins: {entry.filename}  ({change_summary})")
+        comparison_base = self._patch_change_base or self._patch_base
+        boot_changed = (out[patch_service.SA1_LO:patch_service.SA1_HI]
+                        != comparison_base[patch_service.SA1_LO:patch_service.SA1_HI])
+        changed_ids = set(selected) | set(removed) | set(self._patch_parameter_changes)
+        title = "Rollback" if set(removed) == changed_ids else "Patched"
+        if len(changed_ids) == 1 and not removed:
+            pid = next(iter(changed_ids))
+            title = loaded.get(pid, {}).get("title", pid).split(" - ", 1)[0]
         for line in buildlog:
             self.patches_log.append("  " + line)
-        self._offer_additional_read_copy(
-            out, entry, "Patched Full ROM (256 KB)", dialog_title="Build Complete")
+        self._patch_output(out, "MS41", title, change_summary, temporary=temporary,
+                           source="patched: " + change_summary, notes="Patched build: " + change_summary,
+                           require_boot_write=boot_changed)
 
-        comparison_base = self._patch_change_base or self._patch_base
-        boot_region_changed = (
-            out[patch_service.SA1_LO:patch_service.SA1_HI]
-            != comparison_base[patch_service.SA1_LO:patch_service.SA1_HI]
-        )
+    def _patch_output(self, image, family, title, summary, *, source, notes,
+                      temporary=False, require_boot_write=False, before_output=None, original=None):
+        image = bytes(image)
+        title = title.removeprefix("[PATCH]").strip()
+        title = " ".join(re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", title).split())[:48].rstrip(" .")
+        name = f"{family} {title or 'Patched'}.bin"
 
-        # Offer to flash it straight to the connected ECU (same auto soft-BSL/DS2 routing + variant /
-        # identity guards as any full write on the Flash tab).
-        if self._ds2 is not None and getattr(self, "_ecu_softbsl_marker", None) == "T":
-            self._ds2_write_full(
-                bytearray(out), entry.filename,
-                require_boot_write=boot_region_changed,
-                disconnect_after_success=True,
-                write_notes=f"Patch changes: {change_summary}")
-        elif self._ds2 is not None:
-            if boot_region_changed:
-                flash_now = QMessageBox.warning(
-                    self, "BRICK-CLASS — Flash Boot-Region Patch?",
-                    f"Built and archived to Bins:\n  {entry.filename}\n\n"
-                    f"Changes: {change_summary}\n\n"
-                    "This build changes the boot/parameter region. A normal full-ROM write "
-                    "preserves that region and would leave these patch changes unapplied.\n\n"
-                    "Applying them requires a brick-class boot-region write through the "
-                    "RAM-resident Soft-BSL agent. The Flash-tab family and identity checks, "
-                    "typed WRITE BOOT confirmation, backup/verification choices, and recovery "
-                    "handling will run next. An interruption may require Soft-BSL recovery or "
-                    "hardware BSL.\n\nFlash the patched image and include the boot region now?",
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            else:
-                flash_now = QMessageBox.question(
-                    self, "Flash Patched Image?",
-                    f"Built and archived to Bins:\n  {entry.filename}\n\n"
-                    f"Changes: {change_summary}\n\n"
-                    "Flash it to the connected ECU now? The automatic transfer path uses "
-                    "Soft-BSL, native-fast DS2, or normal DS2 as available.",
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if flash_now == QMessageBox.Yes:
-                if boot_region_changed:
-                    self._ds2_write_full(
-                        bytearray(out), entry.filename, require_boot_write=True,
-                        disconnect_after_success=True)
-                else:
-                    self._ds2_write_full(
-                        bytearray(out), entry.filename, disconnect_after_success=True)
+        def write(data, filename):
+            self._write_edited_image(data, filename, family, require_boot_write=require_boot_write,
+                                     disconnect_after_success=family == "MS41",
+                                     write_notes="Patch changes: " + summary, original=original)
 
-        self._set_patch_base(out, entry.path)
+        def review(data, filename, *, temporary=False):
+            self._review_edited_bin(
+                data, filename, write, temporary=temporary, before_output=before_output if temporary else None,
+                flash_reason=lambda: self._edited_image_flash_reason(data, family, original=original))
+
+        if temporary:
+            review(image, name, temporary=True)
+            return
+        entry = self._save_edited_bin(image, name, "Patched", source=source, notes=notes,
+                                      before_output=before_output)
+        if entry is None:
+            return
+        self._set_patch_base(image, entry.path)
+        self._patch_saved_actions.show_saved(entry, image, review)
+        self.patches_log.append(f"<span>Saved {escape(entry.filename)} — {escape(summary)}</span>")
 
     # ── Backups tab ──────────────────────────────────────────────────────
 
@@ -12479,8 +12846,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         self.act_backup_patches = self.backup_open_menu.addAction(
             "Patches", self._on_backup_open_patches)
         self.act_backup_patches.setToolTip(
-            "Load the selected 256 KB full ROM into the Patches tab. The original Bin "
-            "is unchanged; built images are archived as new Bins.")
+            "Load the selected full ROM into Patches to save a modified copy or review it for flashing.")
         self.act_backup_config = self.backup_open_menu.addAction(
             "ECU Config", self._on_backup_edit_config)
         self.act_backup_config.setToolTip(
@@ -12574,8 +12940,14 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         self.backup_table.setHorizontalHeaderLabels(
             ["Date", "Filename", "Type", "Variant", "Source", "Checksum", "Notes", "Folder"]
         )
-        self.backup_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
-        self.backup_table.horizontalHeader().setDefaultSectionSize(120)
+        self.backup_table.setFont(QFont("Courier New", 9))
+        header = self.backup_table.horizontalHeader()
+        header.setMinimumSectionSize(64)
+        header.setDefaultSectionSize(90)
+        header.resizeSection(0, self.backup_table.fontMetrics().horizontalAdvance("0000-00-00  00:00") + 12)
+        header.resizeSection(1, self.backup_table.fontMetrics().horizontalAdvance("M" * 34))
+        header.setSectionResizeMode(6, QHeaderView.Stretch)
+        self.backup_table.setItemDelegateForColumn(1, _BinFilenameDelegate(self.backup_table))
         self.backup_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.backup_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.backup_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -12588,7 +12960,6 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                                    border:1px solid #444; padding:4px; font-weight:bold; }
             QTableWidget::item:selected { background:#2a6099; }
         """)
-        self.backup_table.setFont(QFont("Courier New", 9))
         lay.addWidget(self.backup_table, 1)
         self.backup_table.selectionModel().selectionChanged.connect(
             lambda: self._set_backup_buttons_enabled(getattr(self, "_ds2", None) is not None)
@@ -12648,6 +13019,8 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             for col, (text, colour) in enumerate(items):
                 item = QTableWidgetItem(text)
                 item.setForeground(QBrush(QColor(colour)))
+                if col == 1:
+                    item.setToolTip(text)
                 self.backup_table.setItem(row, col, item)
         self.backup_table.resizeRowsToContents()
         self.backup_table.clearSelection()
@@ -12803,8 +13176,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                 entry = self._backup_save_bytes(bytearray(data), mode, source="ECU read")
                 self._refresh_backup_table()
             except Exception as error:
-                self._log(f"ECU backup archive failed: {error}", "error")
-                QMessageBox.critical(self, "Backup Failed", str(error))
+                self._save_unarchived_read(data, f"ms41_{mode}.bin", error)
                 return
             self._log(f"ECU backup saved: {entry.filename}  ({entry.file_type}, "
                       f"{entry.variant}, checksum {entry.checksum_label})", "ok")
@@ -12912,20 +13284,25 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             return
         try:
             size = os.path.getsize(path)
+            profile = None
+            if size in (0x8000, 0x10000, ms42_ms43_image.FULL_SIZE):
+                with open(path, "rb") as handle:
+                    profile = ms42_ms43_image.image_profile(handle.read())
         except OSError as error:
             QMessageBox.critical(
                 self, "File Unavailable", f"Could not inspect the selected Bin:\n{error}")
             return
-        if size not in (MS41ECU.TUNE_SIZE, MS41ECU.FULL_ROM_SIZE):
+        if size not in (MS41ECU.TUNE_SIZE, MS41ECU.FULL_ROM_SIZE) and profile is None:
             QMessageBox.critical(
                 self, "Unsupported BSL Reference",
-                f"Selected Bin is {size:,} bytes. Use a 24,576-byte tune or "
-                "262,144-byte full ROM.")
+                f"Selected Bin is {size:,} bytes. Use an MS41 tune/full ROM or a recognized "
+                "MS42/MS43 calibration/full image.")
             return
 
         self._bsl_ref = path
         self._bsl_ref_lbl.setText(os.path.basename(path))
-        if size == MS41ECU.TUNE_SIZE:
+        self.cb_bsl_family.setCurrentText(profile.name if profile else "MS41")
+        if size == (profile.partial_size if profile else MS41ECU.TUNE_SIZE):
             tune_index = self.cb_bsl_region.findText("tune")
             if tune_index >= 0:
                 self.cb_bsl_region.setCurrentIndex(tune_index)
@@ -12950,7 +13327,15 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
     def _on_backup_open_patches(self):
         """Load the selected full ROM into the Patches tab without changing the Bin."""
         entry = self._selected_backup()
-        if entry and self._load_patch_base_path(entry.path):
+        if entry and getattr(entry, "variant", None) in ms42_ms43_image.PROFILES:
+            try:
+                data = self._backup_mgr.read_data(entry.filename, entry.sha256)
+                self._set_patch_base(data, entry.path)
+            except (OSError, ValueError, BackupIndexError) as error:
+                QMessageBox.warning(self, "Patch base unavailable", str(error))
+                return
+            self.tabs.setCurrentIndex(self._patch_tab_index)
+        elif entry and self._load_patch_base_path(entry.path):
             self.tabs.setCurrentIndex(self._patch_tab_index)
 
     def _on_backup_open_eeprom(self):
@@ -12965,8 +13350,8 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                     raise ValueError("Complete the pending storage write before replacing its target.")
                 family = entry.variant if entry.variant in ("MS42", "MS43") else None
                 kind = "eeprom" if len(image) == 2048 else "retained"
-                self._ms42_ms43_load_storage_bytes(image, f"Bins: {entry.filename}", family=family, kind=kind)
-                self.tabs.setCurrentIndex(self._eeprom_tab_index)
+                if self._ms42_ms43_load_storage_bytes(image, f"Bins: {entry.filename}", family=family, kind=kind):
+                    self.tabs.setCurrentIndex(self._eeprom_tab_index)
                 return
             variant = (
                 entry.variant if entry.variant in _SOFTBSL_PATCH_VERSIONS
@@ -13094,7 +13479,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                  [Path(IDENTITY_RECOVERY_DIR), Path(EEPROM_BACKUP_DIR),
                   Path(BACKUP_DIR) / "native_fast", Path(BACKUP_DIR) / "transmission"])
         if area == "Recovery":
-            roots.append(Path(BACKUP_DIR) / "bsl")
+            roots.extend((Path(BACKUP_DIR) / "bsl", Path(BACKUP_DIR) / "ms42_ms43" / "journals"))
         dialog = LibraryBrowser(self, area, roots)
         dialog.show()
 
@@ -13146,7 +13531,6 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         is_eeprom      = bool(entry and entry.file_type in ("EEPROM", "Retained Data"))
         is_full        = bool(entry and entry.file_type == "Full ROM")
         is_rom         = bool(entry and entry.file_type in ("Full ROM", "Tune"))
-        ms41_file      = bool(entry and getattr(entry, "variant", None) not in ms42_ms43_image.PROFILES)
         idle           = not busy
         # ECU operations — need a live DS2 connection.
         self.btn_backup_ecu.setEnabled(idle and connected)
@@ -13154,8 +13538,8 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             idle and connected and is_rom)
         self.btn_backup_compare.setEnabled(idle and selected_count == 2)
         # Local file operations — work offline, just need a selected row.
-        self.act_backup_open_bsl.setEnabled(idle and is_rom and ms41_file)
-        self.act_backup_patches.setEnabled(idle and is_full and ms41_file)
+        self.act_backup_open_bsl.setEnabled(idle and is_rom)
+        self.act_backup_patches.setEnabled(idle and is_full)
         self.act_backup_config.setEnabled(idle and is_rom)
         self.act_backup_eeprom.setEnabled(idle and is_eeprom)
         self.act_backup_eeprom.setText("ECU Data" if getattr(entry, "variant", None) in ("MS42", "MS43") else "EEPROM")
@@ -13225,7 +13609,11 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                 "Checksum correction needs a 256 KB full ROM or a 24 KB partial.")
             return
         else:
-            patched, details = correct_checksums(data)
+            try:
+                patched, details = correct_verified_checksums(data)
+            except ValueError as error:
+                QMessageBox.warning(self, "Checksum Correction Unavailable", str(error))
+                return
         source = Path(path)
         out, _ = QFileDialog.getSaveFileName(
             self, "Save checksum-corrected image",
@@ -13751,8 +14139,8 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
             "A checked local recovery record matches the connected engine computer.")
         prompt.setInformativeText(
             "Choose Finish reviewed conversion to apply the archived target, or "
-            "Restore original coding to return every reviewed owner to its archived "
-            "before-state.\n\nKeep ignition ON and the engine OFF until the tool asks "
+            "Restore original coding to put the saved values back. This works with "
+            "either transmission fitted.\n\nKeep ignition ON and the engine OFF until the tool asks "
             "for the ignition cycle."
         )
         finish = prompt.addButton(
@@ -14136,8 +14524,7 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                     self,
                     ("Original Coding Restored" if restored else
                      "Transmission Conversion Complete"),
-                    ("The archived original coding was restored and every fitted "
-                     "module passed final verification."
+                    ("The saved transmission coding matched the readback on every reviewed module."
                      if restored else
                      "The vehicle was converted and the fitted modules passed final "
                      "verification."),
@@ -14275,6 +14662,9 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                 "left unchanged."
                 if custom else ""
             )
+            if state.recovery_original is not None:
+                self.lbl_module_coding.setText("A cluster coding write was interrupted. Restore the saved original settings.")
+                return
             self.lbl_module_coding.setText(
                 f"{state.profile.name} settings were read from an exact built-in "
                 f"profile.{reference}{preserved}"
@@ -14388,9 +14778,11 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         editable = bool(
             available and state is not None and state.profile.target == target.key
         )
+        recovering = state is not None and state.recovery_original is not None
+        self.btn_write_module_coding.setText("Restore original coding" if recovering else "Write Changes")
         self.btn_write_module_coding.setEnabled(editable)
         for control in self._coding_controls.values():
-            control.setEnabled(editable)
+            control.setEnabled(editable and not recovering)
         if self._ds2 is not None and not self._connection_echo:
             self.lbl_module_coding.setText(
                 "Module coding requires normal K-Line mode. Direct Tap reaches "
@@ -14453,39 +14845,43 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
                     f"{self._coding_value_label(setting, current[setting.key])} → "
                     f"{self._coding_value_label(setting, requested[setting.key])}"
                 )
+        recovering = state.recovery_original is not None
+        requested = {key: value for key, value in requested.items() if value != current[key]}
+        if recovering:
+            requested = {}
+            changes = ["Restore the cluster coding saved before the interrupted write."]
         if not changes:
             QMessageBox.information(self, "Vehicle Coding", "No settings changed.")
             return
         voltage_notice = self._prewrite_battery_notice()
+        title = "Restore original coding?" if recovering else f"Write {state.profile.name} Settings?"
         answer = QMessageBox.question(
-            self, f"Write {state.profile.name} Settings?",
+            self, title,
             (f"Reference: {state.profile.key}\n\n"
              if self.chk_coding_advanced.isChecked() else "") + "\n".join(changes)
             + f"\n\n{CODING_EXPERIMENTAL_NOTICE}\n\n{voltage_notice}\n\n"
-            "Keep ignition ON and engine OFF. Write these settings?",
+            + ("Keep ignition ON and engine OFF until the original coding is verified." if recovering
+               else "Keep ignition ON and engine OFF. Write these settings?"),
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if answer != QMessageBox.Yes:
             return
 
         def task(log_fn, progress_fn):
-            log_fn(
-                f"Writing {len(changes)} {state.profile.name} setting change(s)…"
-            )
+            log_fn("Restoring original cluster coding…" if recovering else
+                   f"Writing {len(changes)} {state.profile.name} setting change(s)…")
             return write_module_coding(
                 self._diagnostic_link(), state.profile.target, state.profile.key,
-                state.raw_data, requested,
+                state.raw_data, requested, restore_original=recovering,
             )
 
         def on_success(updated):
             self._show_module_coding_state(updated)
-            self._log(
-                f"{state.profile.name} settings written and verified by exact readback.",
-                "ok",
-            )
+            result = "Original coding restored" if recovering else f"{state.profile.name} settings written"
+            self._log(f"{result} and verified by exact readback.", "ok")
             QMessageBox.information(
                 self, "Vehicle Coding Complete",
-                "Settings were written and verified. Cycle the ignition before testing them."
+                f"{result} and verified. Cycle the ignition before testing the settings."
             )
 
         def on_failure(error):
@@ -15140,26 +15536,37 @@ class MS41FlashGUI(MS42MS43Desktop, QMainWindow):
         if original is not None:
             details.append(f"Original operation error: {original}")
         data = error.read_data
+        unsaved = None
         if data and len(data) in (
                 MS41ECU.FULL_ROM_SIZE, MS41ECU.TUNE_SIZE,
                 identity.BOOT_DATA_SIZE, identity.IDENTITY_SECTOR_SIZE,
                 identity.TOP_IDENTITY_SECTOR_SIZE):
             stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            name = f"ms41_softbsl_read_{len(data)}bytes_{stamp}.bin"
             try:
                 entry = self._backup_mgr.add_data(
-                    data, f"ms41_softbsl_read_{len(data)}bytes_{stamp}.bin",
+                    data, name,
                     source="Soft-BSL read (recovery unconfirmed)",
                     notes="Complete capture; the return to E740=0 was not confirmed.",
                     ecu_id=self._ecu_id or "", vin=self._ecu_vin or "")
-                details.append(f"The completed read was saved to Bins:\n{entry.path}")
-                self._refresh_backup_table()
             except Exception as save_error:
-                details.append(f"Bins archive or refresh reported an error:\n{save_error}")
+                details.append(f"Bins archive failed:\n{save_error}")
+                unsaved = (data, name, save_error)
+            else:
+                details.append(f"The completed read was saved to Bins:\n{entry.path}")
+                try:
+                    self._refresh_backup_table()
+                except Exception as refresh_error:
+                    details.append(f"Bins refresh failed:\n{refresh_error}")
         details.append(
             "Turn ignition OFF, wait at least 10 seconds, then ON. Reconnect and "
             "confirm normal ECU communication before retrying.")
-        error.args = ("\n\n".join(details),)
         self._disconnect(keep_session_log=True)
+        if unsaved:
+            path = self._save_unarchived_read(*unsaved)
+            if path:
+                details.append(f"The completed read was saved to:\n{path}")
+        error.args = ("\n\n".join(details),)
 
     def _run_task(self, task_fn, on_success=None, on_failure=None):
         if self._task_busy:

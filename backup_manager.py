@@ -6,25 +6,64 @@ storing metadata: date, variant, checksum status, file type, and user notes.
 """
 
 import os
+import errno
 import json
 import datetime
 import hashlib
 import shutil
 import uuid
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from dataclasses import dataclass, asdict, replace
+from functools import wraps
 from pathlib import Path
+from threading import RLock
 from typing import List
 
 from app_paths import mutable_path
+
+if os.name == "nt":
+    import msvcrt
+
+    def _lock_file(stream):
+        stream.seek(0)
+        msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+else:
+    import fcntl
+
+    def _lock_file(stream):
+        fcntl.flock(stream, fcntl.LOCK_EX)
 
 
 # Anchored to the Flasher install dir, not the process CWD — a relative "backups" path
 # scatters the catalogue across whatever directory the tool happens to be launched from.
 BACKUP_DIR = str(mutable_path("backups"))
 INDEX_FILE = os.path.join(BACKUP_DIR, "index.json")
-_INTERNAL_NAMES = {"index.json", ".pending", ".folder-migration.json",
-                   "native_fast", "transmission", "bsl"}
+_INTERNAL_NAMES = {"index.json", ".catalog.lock", ".pending", ".folder-migration.json",
+                   "native_fast", "transmission", "bsl", "ms42_ms43"}
+_CATALOG_LOCK = RLock()
+
+
+def _catalog_update(method):
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._transaction():
+            return method(self, *args, **kwargs)
+    return locked
+
+
+def _scan_file(path):
+    digest = hashlib.sha256()
+    size = 0
+    calibration_digest = None
+    with open(path, "rb") as stream:
+        for block in iter(lambda: stream.read(0x10000), b""):
+            digest.update(block)
+            if size == 0x70000 and len(block) == 0x10000:
+                calibration_digest = hashlib.sha256(block).hexdigest()
+            size += len(block)
+        modified = os.fstat(stream.fileno()).st_mtime
+    return digest.hexdigest(), size, modified, calibration_digest
 
 
 def _catalog_path(relative: str) -> str:
@@ -59,10 +98,7 @@ def _move_file(source: str, destination: str):
         try:
             os.link(source, destination)
         except PermissionError:
-            # Android app policy can forbid hard links even in app-private storage.
-            # Keep the source until the exclusive copy is flushed and closed.
-            # ponytail: crash may leave a partial copy; native no-replace rename
-            # would be needed for atomic publication on Android API 30+.
+            # Some filesystems deny hard links. Keep the source until the exclusive copy is flushed.
             with open(source, "rb") as reader:
                 writer = open(destination, "xb")
                 try:
@@ -144,9 +180,8 @@ class BackupManager:
         self._missing: List[BackupEntry] = []
         self._legacy = False
         self._index_dirty = False
-        self._load()
-        self._recover_pending()
-        self._migrate_folders()
+        self._index_snapshot = object()
+        self._updating = False
         self.refresh()
 
     # ── Public API ─────────────────────────────────────────────────────────
@@ -184,6 +219,7 @@ class BackupManager:
                     continue
         return contexts.pop() if len(contexts) == 1 else None
 
+    @_catalog_update
     def create_folder(self, folder: str) -> str:
         folder = self.normalize_folder(folder)
         if not folder:
@@ -278,6 +314,7 @@ class BackupManager:
             checksum_context=saved_context,
         )
 
+    @_catalog_update
     def add_data(self, data, filename: str, notes: str = "",
                  source: str = "imported", ecu_id: str = "",
                  vin: str = "", variant: str = "", folder: str = "", *,
@@ -387,6 +424,7 @@ class BackupManager:
             raise ValueError("catalogue file failed its content check")
         return data
 
+    @_catalog_update
     def remove_exact(self, filename: str, sha256: str):
         entry = self.exact_entry(filename, sha256)
         self.read_data(entry.filename, entry.sha256)
@@ -395,12 +433,14 @@ class BackupManager:
         self._entries = [e for e in self._entries if e.filename != entry.filename]
         self._save()
 
+    @_catalog_update
     def update_notes_exact(self, filename: str, sha256: str, notes: str):
         entry = self.exact_entry(filename, sha256)
         entry.notes = str(notes)
         self._save()
         return entry
 
+    @_catalog_update
     def rename_exact(self, filename: str, sha256: str, replacement: str):
         entry = self.exact_entry(filename, sha256)
         replacement = str(replacement).strip()
@@ -442,6 +482,7 @@ class BackupManager:
             raise ValueError("folder name is reserved")
         return folder
 
+    @_catalog_update
     def update_folder_exact(self, filename: str, sha256: str, folder: str):
         entry = self.exact_entry(filename, sha256)
         folder = folder if folder in self._folders else self.normalize_folder(folder)
@@ -462,6 +503,7 @@ class BackupManager:
         self.refresh()
         return entry
 
+    @_catalog_update
     def rename_folder(self, current: str, replacement: str) -> int:
         current = current if current in self._folders else self.normalize_folder(current)
         replacement = self.normalize_folder(replacement)
@@ -493,6 +535,7 @@ class BackupManager:
         self.refresh()
         return len(matches) or 1
 
+    @_catalog_update
     def clear_folder(self, folder: str) -> int:
         """Move images to Unfiled, removing only directories left empty."""
         folder = folder if folder in self._folders else self.normalize_folder(folder)
@@ -515,6 +558,11 @@ class BackupManager:
 
     def refresh(self):
         """Reconcile disk paths with metadata, matching external moves only unambiguously."""
+        with self._transaction(refresh=True) as rescanned:
+            if not rescanned:
+                self._scan()
+
+    def _scan(self, *, read_only=False):
         old = [*self._entries, *self._missing]
         before = [asdict(entry) for entry in old]
         by_path = {entry.filename: entry for entry in old}
@@ -545,14 +593,19 @@ class BackupManager:
                     path = self._entry_path(filename)
                 except ValueError:
                     continue
-                with open(path, "rb") as stream:
-                    data = stream.read()
-                    modified = os.fstat(stream.fileno()).st_mtime
-                files[filename] = (data, hashlib.sha256(data).hexdigest(), modified)
+                files[filename] = _scan_file(path)
+
+        # Older catalogues allowed users to file BINs alongside the MS42/MS43 journals.
+        for filename in by_path:
+            if filename.lower().startswith("ms42_ms43/") and filename.lower().endswith(".bin"):
+                try:
+                    files[filename] = _scan_file(self._entry_path(filename))
+                except (FileNotFoundError, ValueError):
+                    continue
 
         matched, remaining = {}, {}
         for filename, record in files.items():
-            entry = by_content_path.get((filename, record[1], len(record[0])))
+            entry = by_content_path.get((filename, record[0], record[1]))
             if entry:
                 matched[filename] = entry
             else:
@@ -562,16 +615,18 @@ class BackupManager:
         missing_by_digest = defaultdict(list)
         for entry in missing:
             missing_by_digest[(entry.sha256, entry.size)].append(entry)
-        destination_counts = Counter(record[1] for record in remaining.values())
-        for filename, (data, digest, modified) in remaining.items():
-            candidates = missing_by_digest[(digest, len(data))]
+        destination_counts = Counter(record[0] for record in remaining.values())
+        for filename, (digest, size, modified, _calibration) in remaining.items():
+            candidates = missing_by_digest[(digest, size)]
             folder = filename.rpartition("/")[0]
             if len(candidates) == destination_counts[digest] == 1:
                 entry = candidates[0]
                 missing.remove(entry)
                 entry.filename, entry.folder = filename, folder
             else:
-                entry = self._describe(data, filename, folder=folder)
+                entry = self._describe(Path(self._entry_path(filename)).read_bytes(), filename, folder=folder)
+                if entry.sha256 != digest:
+                    raise BackupIndexError(f"File changed during catalogue scan: {filename}")
                 entry.date = datetime.datetime.fromtimestamp(modified).isoformat(timespec="seconds")
             matched[filename] = entry
         # Keep old notes/provenance for missing or ambiguously moved files in the index.
@@ -586,7 +641,7 @@ class BackupManager:
                             and entry.size == 0x10000 and entry.cs_ok is None]
         if unknown_partials:
             verified_calibrations = {
-                hashlib.sha256(files[entry.filename][0][0x70000:0x80000]).hexdigest()
+                files[entry.filename][3]
                 for entry in entries if entry.variant == "MS43"
                 and entry.size == 0x80000 and entry.cs_ok is True
             }
@@ -595,7 +650,7 @@ class BackupManager:
                     entry.cs_ok = True
         self._entries, self._missing = entries, missing
         self._folders = sorted(folders, key=str.casefold)
-        if self._index_dirty or before != [asdict(entry) for entry in [*entries, *missing]]:
+        if not read_only and (self._index_dirty or before != [asdict(entry) for entry in [*entries, *missing]]):
             self._index_dirty = True
             self._save()
 
@@ -607,10 +662,12 @@ class BackupManager:
             os.path.dirname(destination), f".{uuid.uuid4().hex}.tmp")
         try:
             with open(temporary, "x", encoding="utf-8") as stream:
-                json.dump(payload, stream, indent=2, ensure_ascii=False)
+                text = json.dumps(payload, indent=2, ensure_ascii=False)
+                stream.write(text)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, destination)
+            return text
         finally:
             try:
                 os.remove(temporary)
@@ -653,13 +710,73 @@ class BackupManager:
                 f"at {pending_dir}. Resolve the storage or metadata error and restart to retry."
             ) from error
 
-    def _load(self):
-        if not os.path.exists(INDEX_FILE):
+    @contextmanager
+    def _transaction(self, *, refresh=False):
+        with _CATALOG_LOCK:
+            if self._updating:
+                yield False
+                return
+            # The index is atomically replaced, so lock a separate stable file.
+            path = _catalog_path(".catalog.lock")
+            try:
+                stream = open(path, "rb" if os.path.isfile(path) else "a+b")
+            except OSError as error:
+                if not refresh or error.errno not in (errno.EACCES, errno.EPERM, errno.EROFS, errno.ENOSPC):
+                    raise
+                self._reload_if_changed(read_only=True)
+                yield True
+                return
+            with stream:
+                _lock_file(stream)
+                self._updating = True
+                try:
+                    yield self._reload_if_changed()
+                finally:
+                    self._updating = False
+
+    def _reload_if_changed(self, *, read_only=False):
+        try:
+            snapshot = Path(INDEX_FILE).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            snapshot = None
+        except (OSError, UnicodeError) as error:
+            raise BackupIndexError(f"Backup catalogue index is unreadable: {INDEX_FILE}. "
+                                   "The index and backup files were left unchanged.") from error
+        pending = {str(path) for path in (Path(BACKUP_DIR) / ".pending").glob("*.json")}
+        migrating = os.path.exists(os.path.join(BACKUP_DIR, ".folder-migration.json"))
+        if (not read_only and snapshot == self._index_snapshot
+                and pending == self._pending_records.keys() and not migrating):
+            return False
+        previous = {(entry.filename, entry.sha256): entry for entry in [*self._entries, *self._missing]}
+        self._load(snapshot)
+        for index, entry in enumerate(self._entries):
+            existing = previous.get((entry.filename, entry.sha256))
+            if existing is not None:
+                vars(existing).update(vars(entry))
+                self._entries[index] = existing
+        self._missing.clear()
+        self._pending_records.clear()
+        self._index_snapshot = object() if read_only else snapshot
+        try:
+            if read_only:
+                if pending or migrating or self._legacy:
+                    raise BackupIndexError("Restore catalogue write access to complete backup recovery or migration.")
+            else:
+                self._recover_pending()
+                self._migrate_folders()
+            self._scan(read_only=read_only)
+        except Exception:
+            self._index_snapshot = object()
+            raise
+        return True
+
+    def _load(self, snapshot):
+        if snapshot is None:
+            self._entries = []
             self._legacy = os.path.exists(_folder_index_file())
             return
         try:
-            with open(INDEX_FILE, "r", encoding="utf-8") as f:
-                raw = json.load(f)
+            raw = json.loads(snapshot)
             self._legacy = isinstance(raw, list)
             if not self._legacy:
                 if not isinstance(raw, dict) or raw.get("version") != 2:
@@ -765,7 +882,8 @@ class BackupManager:
 
     def _save(self):
         entries = [asdict(e) for e in [*self._entries, *self._missing]]
-        self._write_json(INDEX_FILE, entries if self._legacy else {"version": 2, "entries": entries})
+        self._index_snapshot = self._write_json(
+            INDEX_FILE, entries if self._legacy else {"version": 2, "entries": entries})
         self._index_dirty = False
         for pending in list(self._pending_records):
             try:

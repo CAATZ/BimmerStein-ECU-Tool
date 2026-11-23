@@ -16,6 +16,7 @@ BLOCK_SIZE = 1024
 PACKET_ATTEMPTS = 3
 FLASH_SIZE = 0x80000
 SECTORS = (0, 0x4000, 0x6000, 0x8000, *range(0x10000, FLASH_SIZE, 0x10000))
+BOOT_WRITE_SECTORS = (3, 0)
 STATUS = {1: "packet CRC mismatch", 2: "invalid or protected range",
           3: "receive timeout", 4: "flash verification failed",
           5: "unknown command", 6: "serial error",
@@ -253,6 +254,7 @@ class AgentReader(ResidentReader):
 class AgentWriter(AgentReader, ResidentWriter):
     operation = "write"
     chunk_size = BLOCK_SIZE
+    boot_backup = None
 
     def run(self, image, regions, **kwargs):
         from ms42_ms43_image import image_identity
@@ -262,7 +264,17 @@ class AgentWriter(AgentReader, ResidentWriter):
         self.ram_finalize = self.target_software in SUPPORTED_SOFTWARE[self.ecu.family]
         return super().run(image, regions, **kwargs)
 
-    def _prepare_image(self, image, regions, journal, state, log_fn):
+    def _prepare_image(self, image, regions, journal, state, log_fn, progress_cb):
+        if self.boot_backup is not None:
+            state.phase = "raw boot backup"
+            original_flash = self._read(0x80000, FLASH_SIZE, progress_cb)
+            try:
+                self.boot_backup(original_flash)
+            except Exception:
+                self.active = False
+                self.finish(log_fn)
+                raise
+            self.boot_backup = None
         if self.write_boot and getattr(self, "preserve_identity", False):
             from ms42_ms43_identity import IDENTITY_OFFSET, IDENTITY_SIZE, PAIRING_POINTERS, graft_identity
 
@@ -421,7 +433,7 @@ class AgentWriter(AgentReader, ResidentWriter):
             state.phase = "write boot"
             # Each sector is verified while the complete agent remains in RAM.
             # 4000..7FFF contains retained data (native MS42 adaptation journals).
-            for sector in (3, 0):
+            for sector in BOOT_WRITE_SECTORS:
                 start = SECTORS[sector]
                 end = SECTORS[sector + 1]
                 expected = image[start:end]

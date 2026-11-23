@@ -8,11 +8,11 @@ import sys
 
 import pytest
 from PyQt5.QtCore import QPoint
-from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QDialogButtonBox
+from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QMessageBox
 
 from checksum import _crc
 from gui_ms42_ms43_storage import _StorageBackupDialog
-from ms42_ms43_storage import make_snapshot
+from ms42_ms43_storage import encode_snapshot, make_snapshot
 from ms42_ms43_storage_edit import editable_fields
 from tests.test_ms42_ms43_desktop import connect, window as window
 from tests.test_ms42_ms43_storage_inspection import put_record
@@ -127,6 +127,59 @@ def test_apply_updates_only_loaded_snapshot_and_native_checks(window, monkeypatc
     assert len(editable_fields(result)) == (5 if family == "MS43" else 3)
     assert original == before and source.read_bytes() == original["data"]
     assert window._ms42_ms43_storage_source == str(source) + " (edited)"
+
+
+@pytest.mark.parametrize("discard", ("replace", "clear", "save"))
+def test_unsaved_storage_edits_survive_cancel_and_failed_save(window, monkeypatch, tmp_path, discard):
+    original = storage_snapshot()
+    path = tmp_path / "original.json"
+    path.write_text(encode_snapshot(original), encoding="utf-8")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(path), ""))
+    window._ms42_ms43_storage_load.click()
+
+    def apply(dialog):
+        dialog._editors[0x280][1].set_raw_value(123)
+        dialog.apply_button.click()
+        return dialog.result()
+
+    monkeypatch.setattr(QDialog, "exec_", apply)
+    window._ms42_ms43_storage_view.click()
+    edited = window._ms42_ms43_storage_snapshot
+    assert edited != original
+    answers = []
+
+    def confirm(*args):
+        assert args[-1] == QMessageBox.No
+        return answers.pop(0)
+
+    monkeypatch.setattr(QMessageBox, "question", confirm)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: ("", ""))
+    window._ms42_ms43_storage_save.click()
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(tmp_path), ""))
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+    window._ms42_ms43_storage_save.click()
+    assert warnings
+    for button in (window._ms42_ms43_storage_load, window._ms42_ms43_data_close):
+        answers.append(QMessageBox.No)
+        button.click()
+        assert not answers and window._ms42_ms43_storage_snapshot == edited
+
+    if discard == "save":
+        saved = tmp_path / "edited.bin"
+        monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(saved), ""))
+        window._ms42_ms43_storage_save.click()
+        assert saved.read_bytes() == edited["data"]
+        assert saved.name in window._ms42_ms43_storage_status.text()
+    else:
+        answers.append(QMessageBox.Yes)
+    if discard == "clear":
+        window._ms42_ms43_data_close.click()
+        assert window._ms42_ms43_storage_snapshot is None
+    else:
+        window._ms42_ms43_storage_load.click()
+        assert window._ms42_ms43_storage_snapshot == original
+    assert not answers
 
 
 def test_unknown_enum_is_never_clamped_or_submitted_without_a_choice(window):

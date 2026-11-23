@@ -95,12 +95,14 @@ def e39_cluster_target(state: tx.ClusterStoreState, zcs: tx.Zcs, family: str,
 
 
 def write_e39_cluster(ds2, state: tx.ClusterStoreState, target: bytes,
-                      *, restoring: bool = False) -> tx.ClusterStoreState:
-    current = read_e39_cluster(ds2, validate=not restoring)
+                      *, restoring: bool = False, reviewed_target: bytes | None = None) -> tx.ClusterStoreState:
+    current = tx._read_before_write(read_e39_cluster, ds2, validate=not restoring)
     if current.ident != state.ident or current.coding_index != state.coding_index:
-        raise RuntimeError("E39 instrument-cluster identity changed")
+        raise tx.OwnerChangedBeforeWrite("E39 instrument-cluster identity changed")
+    if restoring:
+        tx._check_restore_image(current.data, state.data, reviewed_target)
     if not restoring and current != state:
-        raise RuntimeError("E39 instrument-cluster storage changed since preflight")
+        raise tx.OwnerChangedBeforeWrite("E39 instrument-cluster storage changed since preflight")
     tx._write_cluster_target_words(ds2, state, current.data, target)
     verified = read_e39_cluster(ds2)
     if verified.ident != state.ident or verified.data != bytes(target):
@@ -155,13 +157,15 @@ def e39_stability_target(state: tx.CodingState, zcs: tx.Zcs, family: str,
 
 
 def write_e39_stability(ds2, state: tx.CodingState, target: bytes,
-                        *, restoring: bool = False) -> tx.CodingState:
-    current = tx._read_addressed_coding(
+                        *, restoring: bool = False, reviewed_target: bytes | None = None) -> tx.CodingState:
+    current = tx._read_before_write(tx._read_addressed_coding,
         ds2, state.name, (state.coding_index,), state.address, len(state.data))
     if current.ident != state.ident or current.coding_index != state.coding_index:
-        raise RuntimeError("E39 stability-control identity changed")
+        raise tx.OwnerChangedBeforeWrite("E39 stability-control identity changed")
+    if restoring:
+        tx._check_restore_image(current.data, state.data, reviewed_target)
     if not restoring and current != state:
-        raise RuntimeError("E39 stability-control coding changed since preflight")
+        raise tx.OwnerChangedBeforeWrite("E39 stability-control coding changed since preflight")
     if len(target) != len(state.data):
         raise ValueError("E39 stability-control target has the wrong length")
     if current.data != bytes(target):

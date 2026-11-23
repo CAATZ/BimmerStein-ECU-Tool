@@ -9,7 +9,10 @@ import time
 
 import transfer_rates
 from checksum import _crc
-from ds2 import DS2Error, DS2Timeout, DS2ChecksumError, DS2NegativeResponse, _xor
+from ds2 import (
+    DS2Error, DS2Timeout, DS2ChecksumError, DS2NegativeResponse, _xor,
+    _exchange_diagnostics, _echo_mismatch_offset,
+)
 from operation_log import send_to_sink
 
 
@@ -62,9 +65,11 @@ class _NoResidentReply(DS2Timeout):
 
 
 class ResidentRejected(DS2Error):
-    def __init__(self, command, status):
+    def __init__(self, command, status, *, baud=None, parity=None):
         self.command, self.status = command, status
         detail = " (flash manufacturer check failed)" if status == 0xD0 else ""
+        if baud is not None:
+            detail += f" ({baud} baud, parity {parity or 'unknown'})"
         super().__init__(f"Resident command 0x{command:02X} rejected (0x{status:02X}){detail}")
 
 
@@ -295,7 +300,7 @@ class ResidentReader:
         profile = self.ecu.profile
         return self._read(0x80000 + profile.calibration_offset, profile.partial_size, progress_cb)
 
-    def _exchange(self, command, args=b"", *, count=0, response=True, timeout=2.0):
+    def _exchange(self, command, args=b"", *, count=0, response=True, timeout=2.0, post_purge_delay_s=0):
         # Command 75 erases the resident sector on entry. Never use it here.
         if command not in self.commands:
             raise ValueError(f"Command is not part of the resident {self.operation} workflow")
@@ -305,33 +310,63 @@ class ResidentReader:
         link._check_operation()
         message = bytes((len(args) + 3, 1, command)) + bytes(args)
         message += bytes((_xor(message),))
-        link._checked_io(link._ser.reset_input_buffer)
-        written = link._checked_io(link._ser.write, message)
-        if written != len(message):
-            raise DS2Error("Incomplete resident-service request")
-        link._flush_output()
-        if link.echo and link._discard_echo(message) != message:
-            raise DS2Error("Resident-service K-line echo mismatch")
-        if not response:
-            return b""
-        header = link._read_exact(1, timeout)
-        if not header:
-            raise _NoResidentReply(f"No resident-service reply to 0x{command:02X}")
-        if header[0] < 3:
-            raise DS2Error("Invalid resident-service response length")
-        reply = header + link._read_exact(header[0], 0.5)
-        if len(reply) != header[0] + 1:
-            raise DS2Timeout("Incomplete resident-service response")
-        if _xor(reply):
-            raise DS2ChecksumError("Invalid resident-service response XOR")
-        if reply[1] != 1:
-            raise DS2Error("Unexpected resident-service response address")
-        if reply[2] != 0xA0:
-            raise ResidentRejected(command, reply[2])
-        if len(reply) != count + 4:
-            raise DS2Error("Unexpected resident-service response size")
-        link._check_operation()
-        return reply[3:-1]
+        with _exchange_diagnostics(link, "resident", "resident", command, len(message)) as (context, phase):
+            if context is not None:
+                context["expected_response_length"] = count + 4 if response else 0
+            link._checked_io(link._ser.reset_input_buffer)
+            if post_purge_delay_s:
+                time.sleep(post_purge_delay_s)
+            phase("write")
+            written = link._checked_io(link._ser.write, message)
+            if context is not None:
+                context["write_length"] = written
+            if written != len(message):
+                raise DS2Error("Incomplete resident-service request")
+            link._flush_output()
+            phase("echo")
+            if link.echo:
+                echoed = link._discard_echo(message)
+                if context is not None:
+                    context["echo_length"] = len(echoed or b"")
+                    context["echo_complete"] = echoed == message
+                    context["echo_mismatch_offset"] = _echo_mismatch_offset(message, echoed or b"")
+                if echoed != message:
+                    raise DS2Error("Resident-service K-line echo mismatch")
+            if not response:
+                return b""
+            phase("response_header")
+            header = link._read_exact(1, timeout)
+            if context is not None:
+                context["response_length"] = len(header)
+                if header:
+                    context["declared_response_length"] = header[0] + 1
+            if not header:
+                raise _NoResidentReply(f"No resident-service reply to 0x{command:02X}")
+            if header[0] < 3:
+                raise DS2Error("Invalid resident-service response length")
+            phase("response_body")
+            reply = header + link._read_exact(header[0], 0.5)
+            if context is not None:
+                context["response_length"] = len(reply)
+            if len(reply) != header[0] + 1:
+                raise DS2Timeout(
+                    f"Incomplete resident-service response to 0x{command:02X} "
+                    f"({link.baud} baud, parity {getattr(link._ser, 'parity', 'unknown')}; "
+                    f"received {len(reply)} of {header[0] + 1} declared bytes, expected {count + 4})")
+            phase("validation")
+            if _xor(reply):
+                raise DS2ChecksumError("Invalid resident-service response XOR")
+            if reply[1] != 1:
+                raise DS2Error("Unexpected resident-service response address")
+            if context is not None:
+                context["status"] = reply[2]
+            if reply[2] != 0xA0:
+                raise ResidentRejected(command, reply[2], baud=link.baud,
+                                       parity=getattr(link._ser, "parity", "unknown"))
+            if len(reply) != count + 4:
+                raise DS2Error("Unexpected resident-service response size")
+            link._check_operation()
+            return reply[3:-1]
 
     def _host_format(self, baud, parity):
         link = self.transport
@@ -506,7 +541,7 @@ class ResidentWriter(ResidentReader):
                     self.ecu.rate_confirmed = False
                 raise
             self.active = True
-        image = self._prepare_image(image, regions, journal, state, log_fn)
+        image = self._prepare_image(image, regions, journal, state, log_fn, progress_cb)
         state.phase = "preserve identity"
         if self.metadata is None:
             self._snapshot_identity(full)
@@ -570,7 +605,7 @@ class ResidentWriter(ResidentReader):
             state.verified = True
         self._finish_write(image, regions, journal, state, log_fn, progress_cb)
 
-    def _prepare_image(self, image, regions, journal, state, log_fn):
+    def _prepare_image(self, image, regions, journal, state, log_fn, progress_cb):
         return image
 
     def _finish_write(self, image, regions, journal, state, log_fn, progress_cb):

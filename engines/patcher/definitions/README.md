@@ -3,7 +3,7 @@
 `BimmerStein MS41 Patch Definitions.xml` contains the calibration controls added
 by the current BimmerStein patches:
 
-- Ignition Cut V18 and Launch Control V18 for MS41.0, MS41.1, MS41.2 and MS41.3.
+- Ignition Cut V20 and Launch Control V20 for MS41.0, MS41.1, MS41.2 and MS41.3.
 - Minimum-RPM VANOS controls for the supported MS41.0 and MS41.1 retrofits.
 
 Both 24 KB calibration files and 256 KB full images are covered. Install the

@@ -1,11 +1,98 @@
 import os
 import sys
+from types import SimpleNamespace
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import bsl_service
 import ecu_info
 from engines.bsl import bsl_unbrick as engine
 from operation_log import emit, operation_log_sink
+
+
+def _c167_image(family, full):
+    from ms42_ms43_image import FULL_SIZE, PROFILES
+    profile = PROFILES[family]
+    data = bytearray(b"\xFF" * (FULL_SIZE if full else profile.partial_size))
+    hw = profile.hw_offset if full else 0x20
+    sw = profile.sw_offset if full else 8
+    data[hw:hw + 8] = (profile.hw_prefix + "00").encode("ascii")
+    data[sw:sw + 6] = b"0110C6" if family == "MS42" else b"430069"
+    return bytes(data)
+
+
+@pytest.mark.parametrize("family", ["MS42", "MS43"])
+@pytest.mark.parametrize("full", [False, True])
+def test_c167_plan_freezes_raw_family_image_without_ms41_mapping(family, full, tmp_path, monkeypatch):
+    data = _c167_image(family, full)
+    path = tmp_path / "reference.bin"
+    path.write_bytes(data)
+    monkeypatch.setattr(engine.MS41ECU, "check_hybrid", lambda _data: pytest.fail("MS41 guard used"))
+    plan = bsl_service.create_flash_plan(
+        "COM3", "all" if full else "tune", path, "auto", "upper",
+        baud=125000, family=family)
+    path.write_bytes(b"changed")
+    request = bsl_service._flash_request(plan, True)
+    assert request.ref_bytes == data
+    assert request.family == family
+    assert request.reset_line is None
+    assert request.chip == "29f400" and request.half == "full"
+    assert request.preserve_identity is True
+    assert bsl_service.flash_regions("auto", family=family) == ["tune", "all"]
+
+
+def test_c167_plan_rejects_family_mismatch_and_force_before_dispatch(tmp_path):
+    path = tmp_path / "ms42.bin"
+    path.write_bytes(_c167_image("MS42", True))
+    with pytest.raises(ValueError, match="does not identify MS43"):
+        bsl_service.create_flash_plan("COM3", "all", path, "29f400", "full", baud=125000, family="MS43")
+    with pytest.raises(ValueError, match="cannot be overridden"):
+        bsl_service.create_flash_plan("COM3", "all", path, "29f400", "full", force=True, baud=125000, family="MS42")
+    with pytest.raises(ValueError, match="cannot modify image checksums"):
+        bsl_service.create_flash_plan("COM3", "all", path, "29f400", "full", fix_checksums=True,
+                                      baud=125000, family="MS42", preserve_identity=False)
+    path.write_bytes(_c167_image("MS42", False))
+    with pytest.raises(ValueError, match="512 KiB"):
+        bsl_service.create_flash_plan("COM3", "all", path, "29f400", "full", baud=125000, family="MS42")
+
+
+def test_c167_service_dispatch_preserves_callbacks_and_never_requests_dtr(tmp_path, monkeypatch):
+    calls = []
+    backend = SimpleNamespace(**{
+        name: (lambda request, command=name: calls.append((command, request)) or 0)
+        for name in ("cmd_sync", "cmd_id", "cmd_dump", "cmd_flash")})
+    monkeypatch.setitem(sys.modules, "ms42_ms43_bsl", backend)
+    path = tmp_path / "ms43.bin"
+    path.write_bytes(_c167_image("MS43", True))
+    plan = bsl_service.create_flash_plan(
+        "COM3", "all", path, "auto", "upper", baud=125000, family="MS43", preserve_identity=False)
+    def log(_line):
+        pass
+    assert bsl_service.flash_dry_run(plan, log) == 0
+    assert calls[-1][1].arm is False
+    def backup(_path):
+        pass
+
+    def destructive():
+        pass
+    factory = object()
+    assert bsl_service.flash_arm(plan, log, serial_factory=factory,
+                                 backup_cb=backup, destructive_cb=destructive) == 0
+    request = calls[-1][1]
+    assert request.arm is True and request.preserve_identity is False
+    assert request.backup_cb is backup and request.destructive_cb is destructive
+    assert request.serial_factory is factory
+    for function in (bsl_service.sync, bsl_service.chip_id):
+        assert function("COM3", "29f400", "full", log, baud=125000, family="MS43") == 0
+    assert bsl_service.dump_tune("COM3", path, "29f400", "full", log, baud=125000, family="MS43") == 0
+    assert [command for command, _request in calls] == [
+        "cmd_flash", "cmd_flash", "cmd_sync", "cmd_id", "cmd_dump"]
+    assert all(request.reset_line is None and request.family == "MS43" for _, request in calls)
+    assert calls[-1][1].partial is True
+    for function in (bsl_service.vpp_on, bsl_service.businfo, bsl_service.verify_alias):
+        assert function("COM3", "28f200", "upper", log, family="MS43") == 2
+    assert len(calls) == 5
 
 
 def test_operation_log_does_not_retry_a_sink_that_raises_type_error():

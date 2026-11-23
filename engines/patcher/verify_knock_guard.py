@@ -1,4 +1,4 @@
-"""Execute V18 knock handoffs and complete native transactions in ms41emu.
+"""Execute V19 knock handoffs and complete native transactions in ms41emu.
 
 No transport, hardware, alternative CPU model, or private audit-file dependency.
 The software boundary does not prove the age of an opaque ST9030 measurement.
@@ -137,7 +137,7 @@ def _preemption(gate, version, image, layout, entries):
 def verify_knock_guard(gate, version, installed_image):
     """Return a focused all-path case count, raising on any failed assertion."""
     suffix = "" if version == "MS41.3" else "_" + version.lower().replace(".", "")
-    descriptor = gate.PATCHES["ignition_cut_v18" + suffix]
+    descriptor = gate.PATCHES["ignition_cut_v19" + suffix]
     entries = descriptor["cave"]["knock_entries"]
     layout = descriptor["cave"]["knock_layout"]
     reference = gate._cut_reference(version)

@@ -354,6 +354,63 @@ def test_first_import_cannot_replace_catalog_index(tmp_path, monkeypatch):
     assert reloaded.read_data(entry.filename, entry.sha256) == data
 
 
+def test_two_catalogues_preserve_each_others_changes(tmp_path, monkeypatch):
+    first = _mgr(tmp_path, monkeypatch)
+    second = backup_manager.BackupManager()
+    capture = first.add_data(b"first", "capture.bin", notes="keep", source="ECU read")
+    other = second.add_data(b"second", "capture.bin", notes="also keep")
+    assert (capture.notes, capture.source) == ("keep", "ECU read")
+    second.update_notes_exact(capture.filename, capture.sha256, "updated")
+    assert first.rename_exact(capture.filename, capture.sha256, "renamed.bin") is capture
+    assert capture.notes == "updated" and capture.source == "ECU read"
+    second.refresh()
+    assert [entry.filename for entry in second.entries] == ["renamed.bin", other.filename]
+    assert second.read_data(capture.filename, capture.sha256) == b"first"
+    assert second.exact_entry(other.filename).notes == "also keep"
+
+
+def test_existing_read_only_catalogue_without_lock_file_can_be_browsed(tmp_path, monkeypatch):
+    manager = _mgr(tmp_path, monkeypatch)
+    capture = manager.add_data(b"original", "capture.bin", notes="keep")
+    index = Path(backup_manager.INDEX_FILE)
+    (index.parent / ".catalog.lock").unlink()
+    before = index.read_bytes()
+
+    def readonly(path, mode, *args, **kwargs):
+        if Path(path).name == ".catalog.lock":
+            raise PermissionError(errno.EACCES, "read-only catalogue")
+        return open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(backup_manager, "open", readonly, raising=False)
+    reader = backup_manager.BackupManager()
+    assert reader.exact_entry(capture.filename).notes == "keep"
+    assert reader.read_data(capture.filename, capture.sha256) == b"original"
+    with pytest.raises(PermissionError):
+        reader.update_notes_exact(capture.filename, capture.sha256, "change")
+    assert index.read_bytes() == before
+
+
+def test_older_catalogued_bins_in_ms42_ms43_remain_accessible(tmp_path, monkeypatch):
+    manager = _mgr(tmp_path, monkeypatch)
+    capture = manager.add_data(b"original", "capture.bin", notes="keep")
+    index = Path(backup_manager.INDEX_FILE)
+    folder = index.parent / "ms42_ms43" / "User folder"
+    folder.mkdir(parents=True)
+    Path(capture.path).rename(folder / "capture.bin")
+    (folder / "uncatalogued.bin").write_bytes(b"private")
+    old_path = "ms42_ms43/User folder/capture.bin"
+    row = {**asdict(capture), "filename": old_path, "folder": "ms42_ms43/User folder"}
+    index.write_text(json.dumps({"version": 2, "entries": [row]}))
+    manager.refresh()
+    assert manager.folders == []
+    assert [asdict(entry) for entry in manager.entries] == [row]
+    assert manager.read_data(old_path, capture.sha256) == b"original"
+    with pytest.raises(ValueError, match="reserved"):
+        manager.add_data(b"new", "new.bin", folder="ms42_ms43/User folder")
+    moved = manager.update_folder_exact(old_path, capture.sha256, "")
+    assert moved.filename == "capture.bin" and moved.notes == "keep"
+
+
 def test_failed_index_commit_recovers_exact_image_and_metadata(tmp_path, monkeypatch):
     mgr = _mgr(tmp_path, monkeypatch)
     original = mgr.add_data(b"existing", "existing.bin")
@@ -642,7 +699,8 @@ def test_folder_operations_roll_back_when_index_write_fails(tmp_path, monkeypatc
     assert mgr.read_data(entry.filename, entry.sha256) == bytes(512)
 
 
-@pytest.mark.parametrize("folder", ["../escape", "/absolute", "bad?", "CON", ".pending", "bsl", "a/../b"])
+@pytest.mark.parametrize("folder", ["../escape", "/absolute", "bad?", "CON", ".pending", "bsl",
+                                    "ms42_ms43/journals", ".catalog.lock", "a/../b"])
 def test_real_folder_names_cannot_escape_or_use_reserved_storage(tmp_path, monkeypatch, folder):
     mgr = _mgr(tmp_path, monkeypatch)
     with pytest.raises(ValueError):
@@ -653,11 +711,13 @@ def test_scan_ignores_recovery_storage_and_does_not_prune_on_scan_error(tmp_path
     mgr = _mgr(tmp_path, monkeypatch)
     entry = mgr.add_data(bytes(512), "original.bin")
     root = tmp_path / "backups"
-    for name in (".pending", "bsl", "native_fast", "transmission"):
+    for name in (".pending", "bsl", "native_fast", "transmission", "ms42_ms43"):
         (root / name).mkdir(exist_ok=True)
         (root / name / "private.bin").write_bytes(bytes(512))
     mgr.refresh()
     assert mgr.entries == [entry] and mgr.folders == []
+    with pytest.raises(ValueError, match="reserved"):
+        mgr.rename_folder("ms42_ms43", "moved")
     before = Path(backup_manager.INDEX_FILE).read_bytes()
 
     def fail_walk(*args, **kwargs):
@@ -703,13 +763,13 @@ def test_concurrent_file_creation_is_never_overwritten(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("failure", [None, "collision", "copy", "fsync"])
-def test_move_when_android_denies_hardlinks(tmp_path, monkeypatch, failure):
+def test_move_when_filesystem_denies_hardlinks(tmp_path, monkeypatch, failure):
     source, destination = tmp_path / "source.bin", tmp_path / "destination.bin"
     source.write_bytes(b"original capture")
-    android_os = Mock(wraps=os)
-    android_os.name = "posix"
-    android_os.link.side_effect = PermissionError(errno.EACCES, "Permission denied")
-    monkeypatch.setattr(backup_manager, "os", android_os)
+    restricted_os = Mock(wraps=os)
+    restricted_os.name = "posix"
+    restricted_os.link.side_effect = PermissionError(errno.EACCES, "Permission denied")
+    monkeypatch.setattr(backup_manager, "os", restricted_os)
 
     def fail_copy(reader, writer):
         writer.write(reader.read(3))
@@ -720,7 +780,7 @@ def test_move_when_android_denies_hardlinks(tmp_path, monkeypatch, failure):
     elif failure == "copy":
         monkeypatch.setattr(backup_manager.shutil, "copyfileobj", fail_copy)
     elif failure == "fsync":
-        android_os.fsync.side_effect = OSError("flush interrupted")
+        restricted_os.fsync.side_effect = OSError("flush interrupted")
     if failure:
         with pytest.raises(FileExistsError if failure == "collision" else OSError):
             backup_manager._move_file(str(source), str(destination))
@@ -733,10 +793,10 @@ def test_move_when_android_denies_hardlinks(tmp_path, monkeypatch, failure):
         backup_manager._move_file(str(source), str(destination))
         assert destination.read_bytes() == b"original capture"
         assert not source.exists()
-    android_os.link.assert_called_once()
+    restricted_os.link.assert_called_once()
 
 
-def test_android_retries_denied_folder_migration_and_can_save_patch(tmp_path, monkeypatch):
+def test_library_retries_denied_folder_migration_and_can_save_patch(tmp_path, monkeypatch):
     mgr = _mgr(tmp_path, monkeypatch)
     entry = mgr.add_data(bytes(512), "recovered.bin", notes="keep", source="ECU read")
     legacy = asdict(entry)
@@ -752,10 +812,10 @@ def test_android_retries_denied_folder_migration_and_can_save_patch(tmp_path, mo
     assert journal.exists() and Path(entry.path).read_bytes() == bytes(512)
 
     monkeypatch.setattr(backup_manager, "_move_file", move)
-    android_os = Mock(wraps=os)
-    android_os.name = "posix"
-    android_os.link.side_effect = denied
-    monkeypatch.setattr(backup_manager, "os", android_os)
+    restricted_os = Mock(wraps=os)
+    restricted_os.name = "posix"
+    restricted_os.link.side_effect = denied
+    monkeypatch.setattr(backup_manager, "os", restricted_os)
     migrated = backup_manager.BackupManager()
     recovered, = migrated.entries
     assert asdict(recovered) == {**legacy, "filename": "test/recovered.bin"}

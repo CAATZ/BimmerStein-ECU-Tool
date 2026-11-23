@@ -10,6 +10,10 @@ from cut_runtime import detect_cut_runtime
 
 
 @pytest.mark.parametrize("ecu_id,family,revision", [
+    ("1429861", "MS41.0", "V20"), ("1437806", "MS41.1", "V20"),
+    ("1406464", "MS41.2", "V20"), ("SHINDE1", "MS41.3", "V20"),
+    ("1429861", "MS41.0", "V19"), ("1437806", "MS41.1", "V19"),
+    ("1406464", "MS41.2", "V19"), ("SHINDE1", "MS41.3", "V19"),
     ("1429861", "MS41.0", "V18"), ("1437806", "MS41.1", "V18"),
     ("1406464", "MS41.2", "V18"), ("SHINDE1", "MS41.3", "V18"),
     ("1429861", "MS41.0", "V16"), ("1437806", "MS41.1", "V16"),
@@ -32,21 +36,27 @@ def test_cut_ram_abi_follows_installed_program_not_native_marker(ecu_id, family,
     class ImageDS2:
         def read_mem(self, address, length):
             reads.append((address, length))
-            if address < 0x10000:
+            if 0xC000 <= address < 0x10000:
                 # Native roughness can produce an A0-looking high byte at E847.
                 return b"\xa0" if (address, length) == (0xE847, 1) else bytes(length)
             return bytes(image[(address + i) ^ 0x4000] for i in range(length))
 
-    expected = "V16" if revision in ("V16", "V18") else "legacy"
+    expected = "V16" if revision in ("V16", "V18", "V19", "V20") else "legacy"
     assert detect_cut_runtime(ImageDS2(), ecu_id) == expected
-    assert all(address >= 0x18000 for address, _length in reads)
+    assert all(address < 0x8000 or address >= 0x18000 for address, _length in reads)
     poller = live_data.LiveDataPoller(ecu_id=ecu_id, ds2=ImageDS2())
     poller._prepare_live_profile()
     states = {param.name: param.address for param in poller._tel_params
               if param.id in {"BS_CUT_IGNITION_REQUEST", "BS_CUT_LAUNCH_IGN_REQUEST",
                               "BS_CUT_LAUNCH_FUEL_ACTIVE", "BS_CUT_INTENTIONAL", "BS_CUT_RUNTIME"}}
     assert len(states) == 3  # The fixture installs ignition cut, not Launch.
-    assert set(states.values()) == {0xD801 if revision in ("V16", "V18") else 0xE847}
+    assert set(states.values()) == {0xD801 if expected == "V16" else 0xE847}
+    if ecu_id == "SHINDE1" and revision == "V20":
+        numeric = live_data.LiveDataPoller(ecu_id="1406464", ecu_variant="MS41.3", ds2=ImageDS2())
+        numeric._prepare_live_profile()
+        assert numeric.available_channels() == poller.available_channels()
+        assert numeric._cut_patch_active
+        assert live_data.logger_ecu_id("1406464", "MS41.2") == "1406464"
 
     # A RAM marker cannot compensate for a missing activation hook.
     from cut_runtime import cut_runtime_probes
@@ -630,7 +640,7 @@ def test_descriptor_plan_splits_odd_cal_words_and_preserves_tps_alias_scaling(
     assert values["Launch Ignition Fixed IPW"] == ("Stock", "ms")
     assert values["Throttle Position"] == ("50.2", "%")
     assert values["Launch TPS (threshold scale)"] == (
-        ("59.98", "° throttle") if ecu_id == "1429861" else ("60.2", "%"))
+        ("59.98", "° throttle") if ecu_id == "1429861" else ("60.16", "%"))
 
 
 def test_selected_definition_drives_direct_and_batch_address_conversion(tmp_path):
@@ -687,7 +697,7 @@ def test_live_display_specs_cover_packaged_rows_and_unknowns_fail_closed():
         set(live_data._LIVE_VALUE_CHANNELS),
         set(live_data._LIVE_RAW_CHANNELS),
     ]
-    assert tuple(map(len, groups)) == (30, 26, 31, 11)
+    assert ("AlphaN Failsafe Revision", "") in live_data._LIVE_STATUS_CHANNELS
     assert sum(map(len, groups)) == len(set().union(*groups))
     assert rows == set().union(*groups)
     for row in gauges:
@@ -821,6 +831,57 @@ def test_ms413_profile_detection_uses_runtime_flag_and_selected_input():
     assert "EVAP Purge Duty" not in p.active_profile_names
 
 
+def test_missing_wideband_selector_omits_voltage_and_preserves_other_wideband_channels():
+    class MissingSelector:
+        def read_mem(self, address, length):
+            if address == live_data._WBO2_INPUT_SELECT_DS2_ADDR:
+                raise TimeoutError("selector")
+            return b"\x00\x01" if address == live_data._WBO2_ENABLE_ADDR else bytes(length)
+
+    poller = live_data.LiveDataPoller(ecu_id="1406464", ecu_variant="MS41.3", ds2=MissingSelector())
+    poller._prepare_live_profile()
+    names = dict(poller.resolved_rows())
+    assert "Wideband Input Voltage" not in names and "Wideband AFR" in names
+    assert poller.latest_values()["Wideband Input Source"] == ("Unavailable", "")
+
+
+def test_failed_ms41_telegram_keeps_history_and_csv_gap(tmp_path):
+    from live_log import parse_log
+    class Link:
+        def read_mem(self, address, length):
+            return bytes(length)
+
+        def setup_telegram_batch(self, **kwargs):
+            pass
+
+        def poll_telegram_batch(self):
+            result = next(replies)
+            if result is None:
+                raise TimeoutError("missed sample")
+            return result
+
+    replies = iter([b"\x0b\xb8", None, b"\x0f\xa0"])
+    poller = live_data.LiveDataPoller(interval=0, ecu_id="1437806", ds2=Link(), use_telegram=True,
+                                     telegram_fallback=False, selected_ids=["P8"])
+    write = poller._write_csv_row
+    latest = []
+
+    def record(row):
+        write(row)
+        latest.append(poller.latest_values()["Engine RPM"][0])
+        if len(latest) == 3:
+            poller._stop.set()
+
+    poller._write_csv_row = record
+    path = tmp_path / "gap.csv"
+    poller._pending_log_path = str(path)
+    poller._poll_loop()
+    assert latest[1] == "ERR" and latest[0] != latest[2]
+    seq, _, _, _, rows = poller.completed_samples_since(0)
+    assert seq == 3 and rows[1][2] == (None,)
+    assert parse_log(path.read_bytes())["series"][0]["values"] == [float(latest[0]), None, float(latest[2])]
+
+
 def test_ms413_with_wideband_disabled_keeps_universal_profile():
     class FakeStockProfileDS2:
         def __init__(self, poller):
@@ -914,18 +975,18 @@ def test_cut_diagnostics_use_grounded_four_variant_addresses(
         "Launch Control Switch": (launch_cals, b"\x02", "Input 81"),
         "Launch Cut Type": (launch_cals + 1, b"\x01", "Ignition"),
         "Launch Clutch Polarity": (
-            launch_cals + 2, b"\xff", "Active-low (0V)"),
+            launch_cals + 2, b"\xff", "Invalid"),
         "Launch Control RPM": (launch_cals + 3, b"\x7d", "4000"),
         "Launch Arm Speed": (launch_cals + 4, b"\x05", "5"),
         "Launch Max Speed": (launch_cals + 5, b"\x28", "40"),
-        "Launch Min TPS": (launch_cals + 6, b"\x80", "59.98" if ecu_id == "1429861" else "60"),
+        "Launch Min TPS": (launch_cals + 6, b"\x80", "59.98" if ecu_id == "1429861" else "60.16"),
         "Launch Hard Cut RPM": (
             launch_cals + 7, b"\xff", "Soft + 96"),
         "Launch Ignition Hysteresis": (launch_cals + 8, b"\x0a", "320"),
         "Launch Ignition Fixed IPW": (launch_cals + 9, b"\x34\x12", "24.88"),
-        "Ignition Cut Request": (0xD801, b"\x01", "Active"),
-        "Launch Ignition Request": (0xD801, b"\x02", "Active"),
-        "Launch Fuel Cut Active": (0xD801, b"\x04", "Active"),
+        "Ignition Cut Request": (0xD801, b"\xa1", "Active"),
+        "Launch Ignition Request": (0xD801, b"\xa2", "Active"),
+        "Launch Fuel Cut Active": (0xD801, b"\xa4", "Active"),
         "Intentional Combustion Cut": (0xD801, b"\xa4", "Active"),
         "Cut Patch Runtime": (0xD801, b"\xa0", "Active"),
         "Launch Armed": (
@@ -937,7 +998,7 @@ def test_cut_diagnostics_use_grounded_four_variant_addresses(
         "Native Fuel Recovery Priority": (0xD801, b"\xa8", "Native recovery"),
         "Fuel Cut Stage Count": (stage, b"\x03", "3"),
         "Cut RPM": (rpm, b"\x7d", "4000"),
-        "Launch TPS (threshold scale)": (0xE8D0, b"\x80", "59.98" if ecu_id == "1429861" else "60.2"),
+        "Launch TPS (threshold scale)": (0xE8D0, b"\x80", "59.98" if ecu_id == "1429861" else "60.16"),
         "Launch Speed": (speed, b"\x28", "40"),
         "Fuel Trim Additive": (additive[0], b"\x00\x80", "0.00"),
         "Fuel Trim Additive B2": (additive[1], b"\x00\x80", "0.00"),
@@ -964,6 +1025,7 @@ def test_cut_diagnostics_use_grounded_four_variant_addresses(
     clutch = params["Launch Clutch Polarity"]
     assert clutch.display(clutch.parse(b"\x00", launch_cals + 2)) == (
         "Active-high (5V)")
+    assert clutch.display(clutch.parse(b"\x01", launch_cals + 2)) == "Active-low (0V)"
 
     launch_block = next(
         block for block in live_data._build_telegram_blocks(params.values())

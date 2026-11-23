@@ -48,7 +48,8 @@ def test_tank_edit_reuses_existing_tune_and_program_routes(window, worker_runner
         return extract_calibration(source)
     ecu.read_full, ecu.read_tune = read_full, read_tune
     writes = []
-    monkeypatch.setattr(window, "_ms42_ms43_write", lambda *args: writes.append(args))
+    window.chk_correct_cksum.setChecked(False)
+    monkeypatch.setattr(window, "_ms42_ms43_write", lambda *args, **_: writes.append(args))
     window._ms42_ms43_config_write()
     assert len(writes) == 1 and writes[0][2] == mode
     assert config.read_config(writes[0][0])[NAME] == selected

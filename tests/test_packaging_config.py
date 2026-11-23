@@ -295,8 +295,8 @@ def test_release_packaging_requires_explicit_license_gates():
     assert "b[1-9]\\d*" in build_text
 
     building = (ROOT / "BUILDING.md").read_text(encoding="utf-8")
-    assert "-Version 0.1.0b19" in building
-    assert "v0.1.0b19" in building
+    assert "-Version 0.1.0b20" in building
+    assert "v0.1.0b20" in building
     assert "Nuitka" in building and "x86" in building
 
 
@@ -310,10 +310,10 @@ def test_inno_installer_uses_bimmerstein_identity_and_per_user_install():
     assert "SetupShortcutSuffix" not in installer
     assert "ArchitecturesAllowed=x86compatible" in installer
     assert 'Name: "{app}\\plugins\\__pycache__"' in installer
-    assert '#define AppVersion "0.1.0b19"' in installer
-    assert '#define AppDisplayVersion "0.1.0 Beta 19"' in installer
-    assert '#define AppNumericVersion "0.1.0.19"' in installer
-    assert r'#define SourceDir "..\release\BimmerStein-ECU-Tool-0.1.0b19-Windows-x64"' in installer
+    assert '#define AppVersion "0.1.0b20"' in installer
+    assert '#define AppDisplayVersion "0.1.0 Beta 20"' in installer
+    assert '#define AppNumericVersion "0.1.0.20"' in installer
+    assert r'#define SourceDir "..\release\BimmerStein-ECU-Tool-0.1.0b20-Windows-x64"' in installer
     assert 'SetupAppName "BimmerStein ECU Tool (' not in installer
     assert "AppPublisher=CAATZ" in installer
     assert "PrivilegesRequired=lowest" in installer
@@ -399,6 +399,11 @@ def test_nuitka_checks_both_ms42_ms43_payloads_even_when_tests_are_skipped():
                              ("--verify --eeprom", "MS43 EEPROM-agent")):
         assert (f"& $python -m engines.ms42_ms43.build {arguments}\n"
                 f'    if ($LASTEXITCODE -ne 0) {{ throw "{label} artifact verification failed." }}') in admission
+    assert ("& $python -m engines.ms42_ms43.build_hw_bsl_v1 --verify\n"
+            '    if ($LASTEXITCODE -ne 0) { throw "MS42/MS43 hardware-BSL artifact verification failed." }') in admission
+    checks = _offline_checks()
+    assert "tests/test_ms42_ms43_bsl.py" in checks.DEV_TESTS
+    assert "tests/test_gui_smoke.py::test_bsl_read_uses_real_service_and_exclusive_backend_output" in checks.DEV_TESTS
 
 
 def test_ch341a_usb_runtime_dependencies_are_pinned_and_licensed():
@@ -605,7 +610,6 @@ def test_build_rewrites_source_links_for_packaged_readme():
     assert '(BimmerStein-ECU-Tool-User-Manual.pdf)' in text
     assert "'(LICENSE.txt)'" in text
     assert "Replace('(docs/MS42_MS43.md)', '(MS42_MS43.md)')" in text
-    assert r"',\s+shared by desktop and Android'" in text
     assert 'Copy-Item -LiteralPath "docs\\MS42_MS43.md" -Destination $appDir' in text
     assert '"User manual (web-readable Markdown)"' in text
     assert '"Build and release instructions"' in text
@@ -614,13 +618,11 @@ def test_build_rewrites_source_links_for_packaged_readme():
     assert "--include-data-dir=$root\\THIRD_PARTY_LICENSES=THIRD_PARTY_LICENSES" in text
 
 
-@pytest.mark.parametrize("separator", (" ", "\n", "\r\n"))
-def test_packaged_readme_removes_wrapped_source_platform_note(tmp_path, separator):
+def test_packaged_readme_resolves_documentation_links(tmp_path):
     script = (ROOT / "build_windows_nuitka.ps1").read_text(encoding="utf-8")
     start = script.index("    $releaseReadme = Get-Content")
     end = script.index('\n    Copy-Item -LiteralPath "LICENSE"', start)
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    readme += "\nExample," + separator + "shared by desktop and Android.\n"
     (tmp_path / "README.md").write_text(readme, encoding="utf-8")
     output = tmp_path / "package"
     output.mkdir()
@@ -630,8 +632,6 @@ def test_packaged_readme_removes_wrapped_source_platform_note(tmp_path, separato
         stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
     packaged = (output / "README.md").read_text(encoding="utf-8")
-    assert "Android" not in packaged
-    assert "Example." in packaged
     assert "(MS42_MS43.md)" in packaged
     assert "(MS41_EEPROM.md)" in packaged
     assert "manual/USER_MANUAL.md" not in packaged

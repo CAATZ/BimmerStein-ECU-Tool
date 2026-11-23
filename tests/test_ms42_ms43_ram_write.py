@@ -291,8 +291,10 @@ def expected_array(peer, target, mode):
 
 
 @pytest.mark.parametrize("mode", ("tune", "full"))
-def test_complete_ram_write_verifies_restores_and_uses_native_finalization(write_workflow, mode):
+@pytest.mark.parametrize("echo_budget", (0, 128))
+def test_complete_ram_write_verifies_restores_and_uses_native_finalization(write_workflow, mode, echo_budget):
     ecu, peer = write_workflow
+    peer.echo_drain_chunk_size = echo_budget
     target = target_image(peer, mode)
     progress, journal = [], Journal()
     with ecu.transfer():
@@ -318,6 +320,7 @@ def test_complete_ram_write_verifies_restores_and_uses_native_finalization(write
                for index, request in enumerate(peer.requests))
     assert journal.closed and journal.events[-1][1]["outcome"] == "success"
     assert progress
+    assert max(len(data) for _offset, data in peer.programs) == 248
 
 
 @pytest.mark.parametrize("write_workflow", ["MS43"], indirect=True)

@@ -1,4 +1,4 @@
-"""Recorder compatibility contract shared by pytest and Android's build gate."""
+"""Recorder compatibility contract for current ignition-cut and launch-control revisions."""
 
 import unittest
 

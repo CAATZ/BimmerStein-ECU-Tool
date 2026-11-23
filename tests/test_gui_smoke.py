@@ -55,13 +55,14 @@ def test_checksum_correction_default_preserves_source_and_directory(
     directory = tmp_path / "original.bin.images"
     directory.mkdir()
     source = directory / filename
-    original = bytes(MS41ECU.TUNE_SIZE)
-    corrected = bytes([1]) * len(original)
+    original = bytearray(MS41ECU.TUNE_SIZE)
+    original[:4] = bytes.fromhex("4E 00 FF FF")
+    original[0x50:0x52] = b"\xff\xff"
+    corrected, _ = gui.correct_checksums(original)
+    assert corrected != original
     source.write_bytes(original)
     monkeypatch.setattr(
         QFileDialog, "getOpenFileName", lambda *args: (str(source), ""))
-    monkeypatch.setattr(
-        gui, "correct_checksums", lambda _data: (corrected, []))
 
     def save_dialog(_parent, _title, suggested, _filter):
         assert suggested == str(directory / "rom_cksum.bin")
@@ -383,7 +384,6 @@ def test_high_dpi_policy_and_small_screen_overflow_are_explicit():
         assert isinstance(scroll, QScrollArea)
         assert window.width() == 980
         assert window.height() == 740
-        assert scroll.widget().minimumWidth() == 980
         assert scroll.widget().minimumHeight() == 540
 
         window.show()
@@ -391,13 +391,15 @@ def test_high_dpi_policy_and_small_screen_overflow_are_explicit():
         assert scroll.horizontalScrollBar().maximum() == 0
         assert scroll.verticalScrollBar().maximum() == 0
 
-        window.resize(700, 500)
+        window.resize(scroll.widget().minimumSizeHint().width() - 100, 500)
         app.processEvents()
         assert scroll.horizontalScrollBar().maximum() > 0
         assert scroll.verticalScrollBar().maximum() > 0
 
+        scroll.horizontalScrollBar().setValue(scroll.horizontalScrollBar().maximum())
         window.tabs.setCurrentIndex(window._bsl_tab_index)
         app.processEvents()
+        assert scroll.horizontalScrollBar().value() == 0
         assert window._bsl_preview.height() >= (
             2 * window._bsl_preview.fontMetrics().lineSpacing()
         )
@@ -430,6 +432,70 @@ def test_show_fitted_keeps_a_normal_window_inside_the_work_area():
         assert calls == ["normal"]
     finally:
         window.close()
+
+
+@pytest.mark.parametrize("width,height", [(768, 576), (576, 432)])
+def test_review_dialog_actions_fit_small_work_area(qapp, tmp_path, monkeypatch, width, height):
+    from PyQt5.QtCore import QRect
+    from PyQt5.QtWidgets import QWidget
+    from eeprom_editor import EepromComparisonDialog
+    from live_data_view import show_log
+
+    owner = QWidget()
+    area = QRect(0, 0, width, height)
+    monkeypatch.setattr(owner, "screen", lambda: SimpleNamespace(availableGeometry=lambda: area))
+    csv = tmp_path / "example.csv"
+    csv.write_text("Time,Datetime,Engine RPM\n0,now,800\n1,later,850\n")
+    dialogs = [
+        (show_log(owner, str(csv)), "Close"),
+        (gui.AnalyzerParametersWindow(owner), "Close"),
+        (EepromComparisonDialog(owner, bytes(512), bytes(512), apply=True), "Apply to loaded image"),
+    ]
+    for dialog, action in dialogs:
+        dialog.show()
+        qapp.processEvents()
+        button = next(b for b in dialog.findChildren(QPushButton) if b.text() == action)
+        assert dialog.frameGeometry().width() <= area.width()
+        assert dialog.frameGeometry().height() <= area.height()
+        assert button.visibleRegion().boundingRect() == button.rect()
+        dialog.close()
+
+
+def test_default_width_keeps_tabs_and_long_config_identity_readable(qapp, tmp_path, monkeypatch):
+    from PyQt5.QtWidgets import QToolButton
+    from tests.test_diagnostics_layout import _configure_test_application
+
+    _configure_test_application(qapp)
+    monkeypatch.setattr(gui.MS41FlashGUI, "_refresh_ports", lambda self: None)
+    window = gui.MS41FlashGUI()
+    window.resize(980, 740)
+    window.show()
+    qapp.processEvents()
+    bar = window.tabs.tabBar()
+    arrows = [b for b in bar.findChildren(QToolButton) if b.isVisible()]
+    end = min((b.x() for b in arrows), default=bar.width())
+    assert sum(0 <= bar.tabRect(i).left() and bar.tabRect(i).right() < end
+               for i in range(bar.count())) >= 10
+    window.tabs.setCurrentIndex(bar.count() - 1)
+    qapp.processEvents()
+    assert 0 <= bar.tabRect(bar.count() - 1).left() < end
+
+    window.tabs.setCurrentIndex(window._config_tab_index)
+    image = bytearray(MS41ECU.TUNE_SIZE)
+    image[14:22] = b"12011110"
+    path = tmp_path / ("MS41_" + "stock_calibration_" * 5 + ".bin")
+    path.write_bytes(image)
+    window._load_config_from_path(str(path))
+    qapp.processEvents()
+    filename = window.lbl_config_file
+    assert path.name in filename.text()
+    assert filename.toolTip() == filename.text()
+    assert 0 < filename.width() < filename.fontMetrics().horizontalAdvance(filename.text())
+    assert window._config_scroll.horizontalScrollBar().maximum() == 0
+    for group in window._config_section_groups.values():
+        for label in group.findChildren(gui.QLabel):
+            assert label.contentsRect().width() >= label.fontMetrics().horizontalAdvance(label.text())
+    window.close()
 
 
 def test_softbsl_installer_post_erase_failure_keeps_port_and_recovery(monkeypatch):
@@ -3280,13 +3346,13 @@ def test_patches_tab_lists_the_ms41_3_patches():
         w._set_patch_base(ref("MS41.3"), "test")
         assert "cal_guard" in w._patch_checkboxes
         assert "door_0x43" not in w._patch_checkboxes
-        assert "vanos_minrpm_v2_ms410" not in w._patch_checkboxes  # MS41.0 target
+        assert "vanos_minrpm_v3_ms410" not in w._patch_checkboxes  # MS41.0 target
         assert len(w._patch_checkboxes) == 7   # 7 user-facing MS41.3 patches
         pending_badges = {
             label.text()
-            for label in w._patch_rows["ignition_cut_v18"].findChildren(gui.QLabel)
+            for label in w._patch_rows["ignition_cut_v20"].findChildren(gui.QLabel)
         }
-        assert "V18" in pending_badges
+        assert "V20" in pending_badges
         assert "Needs testing" in pending_badges
         assert "HIGHLY EXPERIMENTAL" in pending_badges
         calguard_badges = {
@@ -3304,9 +3370,34 @@ def test_patches_tab_lists_the_ms41_3_patches():
         assert not w._patch_checkboxes["softbsl_loader"].isChecked()
         w._patch_checkboxes["cal_guard"].setChecked(True)
         assert w._patch_checkboxes["softbsl_loader"].isChecked()
-        assert "0x3992A" not in w._patch_checkboxes["ignition_cut_v18"].toolTip()
+        assert "0x3992A" not in w._patch_checkboxes["ignition_cut_v20"].toolTip()
         assert "Independent ignition-cut limiter" in (
-            w._patch_checkboxes["ignition_cut_v18"].toolTip())
+            w._patch_checkboxes["ignition_cut_v20"].toolTip())
+    finally:
+        w.close()
+
+
+@pytest.mark.parametrize("variant,old_id,current_id", [
+    ("MS41.0", "vanos_minrpm_v2_ms410", "vanos_minrpm_v3_ms410"),
+    ("MS41.1", "vanos_minrpm_ms411", "vanos_minrpm_v2_ms411"),
+])
+def test_vanos_can_upgrade_from_the_patches_tab(variant, old_id, current_id):
+    app, w = _gui()
+    try:
+        prior, _ = gui.patch_service.patch_ms41.build(
+            ref(variant), [old_id], allow_deprecated=True)
+        w._set_patch_base(prior, old_id)
+        current = w._patch_checkboxes[current_id]
+        assert current.isEnabled()
+        current.setChecked(True)
+        assert w._patch_configure_buttons[current_id].isEnabled()
+        image, _ = w._build_patch_image([current_id])
+        definition = gui.patch_service.definitions()[current_id]
+        assert gui.patch_service.is_applied(image, definition)
+        damaged = bytearray(prior)
+        damaged[definition["cave"]["base"]] ^= 1
+        w._set_patch_base(bytes(damaged), "Occupied")
+        assert not w._patch_checkboxes[current_id].isEnabled()
     finally:
         w.close()
 
@@ -3315,7 +3406,7 @@ def test_patches_tab_warns_for_every_explicitly_untested_patch(monkeypatch):
     app, w = _gui()
     try:
         w._set_patch_base(ref("MS41.3"), "test")
-        w._patch_checkboxes["ignition_cut_v18"].setChecked(True)
+        w._patch_checkboxes["ignition_cut_v20"].setChecked(True)
         shown = {}
 
         def warning(_parent, title, message, *_args):
@@ -3342,17 +3433,17 @@ def test_patch_dependency_is_labeled_and_selected_automatically():
     app, w = _gui()
     try:
         w._set_patch_base(ref("MS41.3"), "test")
-        launch = w._patch_checkboxes["launch_control_v18"]
-        ignition = w._patch_checkboxes["ignition_cut_v18"]
+        launch = w._patch_checkboxes["launch_control_v20"]
+        ignition = w._patch_checkboxes["ignition_cut_v20"]
 
         labels = {
             label.text()
-            for label in w._patch_rows["launch_control_v18"].findChildren(gui.QLabel)
+            for label in w._patch_rows["launch_control_v20"].findChildren(gui.QLabel)
         }
-        assert "V18" in labels
+        assert "V20" in labels
         assert "Needs testing" in labels
-        assert "Requires: Ignition Cut V18" in labels
-        assert "Required patch: Ignition Cut V18" in launch.toolTip()
+        assert "Requires: Ignition Cut V20" in labels
+        assert "Required patch: Ignition Cut V20" in launch.toolTip()
 
         launch.setChecked(True)
         assert launch.isChecked()
@@ -3372,15 +3463,15 @@ def test_patch_dependency_never_removes_a_conflicting_selection(monkeypatch):
         monkeypatch.setattr(
             gui.patch_service,
             "collisions",
-            lambda selected: {"ignition_cut_v18"}
-            if "launch_control_v18" in selected else set(),
+            lambda selected: {"ignition_cut_v20"}
+            if "launch_control_v20" in selected else set(),
         )
 
-        launch = w._patch_checkboxes["launch_control_v18"]
+        launch = w._patch_checkboxes["launch_control_v20"]
         launch.setChecked(True)
 
         assert launch.isChecked()
-        assert not w._patch_checkboxes["ignition_cut_v18"].isChecked()
+        assert not w._patch_checkboxes["ignition_cut_v20"].isChecked()
         assert not w.btn_patches_build.isEnabled()
         assert "Required patch unavailable" in w.btn_patches_build.toolTip()
     finally:
@@ -3393,25 +3484,25 @@ def test_installed_dependency_remove_button_is_blocked_by_launch_control():
     app, w = _gui()
     try:
         combined, _ = patch_service.build_image(
-            ref("MS41.3"), ["ignition_cut_v18", "launch_control_v18"]
+            ref("MS41.3"), ["ignition_cut_v20", "launch_control_v20"]
         )
         w._set_patch_base(combined, "dependency-removal-test")
 
-        buttons = w._patch_rows["ignition_cut_v18"].findChildren(QPushButton)
+        buttons = w._patch_rows["ignition_cut_v20"].findChildren(QPushButton)
         remove = next(button for button in buttons if button.text() == "✕ Remove")
         labels = {
             label.text()
-            for label in w._patch_rows["ignition_cut_v18"].findChildren(gui.QLabel)
+            for label in w._patch_rows["ignition_cut_v20"].findChildren(gui.QLabel)
         }
         assert remove.isEnabled() is False
-        assert "Launch Control V18" in remove.toolTip()
-        assert "Used by: Launch Control V18" in labels
+        assert "Launch Control V20" in remove.toolTip()
+        assert "Used by: Launch Control V20" in labels
         used_by = next(
             label
-            for label in w._patch_rows["ignition_cut_v18"].findChildren(gui.QLabel)
-            if label.text() == "Used by: Launch Control V18"
+            for label in w._patch_rows["ignition_cut_v20"].findChildren(gui.QLabel)
+            if label.text() == "Used by: Launch Control V20"
         )
-        assert "Launch Control V18" in used_by.toolTip()
+        assert "Launch Control V20" in used_by.toolTip()
     finally:
         w.close()
 
@@ -3438,7 +3529,7 @@ def test_installed_dependency_badge_collapses_multiple_patch_names():
         w.close()
 
 
-def test_patches_tab_removes_field_failed_v6_and_enables_v9(monkeypatch):
+def test_patches_tab_removes_field_failed_v6_and_enables_current_ignition_cut(monkeypatch):
     import patch_service
 
     app, w = _gui()
@@ -3449,7 +3540,7 @@ def test_patches_tab_removes_field_failed_v6_and_enables_v9(monkeypatch):
 
         assert w._patch_checkboxes["ignition_cut_v6"].isChecked()
         assert not w._patch_checkboxes["ignition_cut_v6"].isEnabled()
-        assert not w._patch_checkboxes["ignition_cut_v18"].isEnabled()
+        assert not w._patch_checkboxes["ignition_cut_v20"].isEnabled()
         badges = {
             label.text()
             for label in w._patch_rows["ignition_cut_v6"].findChildren(gui.QLabel)
@@ -3466,7 +3557,7 @@ def test_patches_tab_removes_field_failed_v6_and_enables_v9(monkeypatch):
         w._on_patch_remove("ignition_cut_v6")
 
         assert "ignition_cut_v6" not in w._patch_checkboxes
-        assert w._patch_checkboxes["ignition_cut_v18"].isEnabled()
+        assert w._patch_checkboxes["ignition_cut_v20"].isEnabled()
         assert w.btn_patches_build.isEnabled()
         assert "Removed ignition_cut_v6" in w.patches_log.toPlainText()
     finally:
@@ -4527,21 +4618,6 @@ def test_softbsl_cal_preservation_control_is_gated_by_live_variant():
         w.close()
 
 
-def test_ecu_is_ms41_3_detects_from_variant_fields():
-    app, w = _gui()
-    try:
-        assert w._ecu_is_ms41_3() is False
-        w._ecu_program_variant = "MS41.3"
-        assert w._ecu_is_ms41_3() is True
-        w._ecu_program_variant = None
-        w._ecu_variant = "MS41.3"
-        assert w._ecu_is_ms41_3() is True
-        w._ecu_variant = "MS41.2"
-        assert w._ecu_is_ms41_3() is False
-    finally:
-        w.close()
-
-
 @pytest.mark.parametrize("version", ["MS41.0", "MS41.1", "MS41.2", "MS41.3"])
 def test_softbsl_install_native_target_reads_ecu_no_base_no_convert(monkeypatch, version):
     app, w = _gui()
@@ -4920,24 +4996,168 @@ def test_bsl_tab_present_with_flash_and_diag_controls():
         w.close()
 
 
-@pytest.mark.parametrize(("mode", "size"), [
-    ("tune", MS41ECU.TUNE_SIZE),
-    ("full", MS41ECU.FULL_ROM_SIZE),
+@pytest.mark.parametrize(("family", "rates", "tune_kb"), [
+    ("MS42", [125000, 166667], 32), ("MS43", [125000, 187500], 64),
 ])
-def test_bsl_read_saves_automatically_to_bins(mode, size, tmp_path, monkeypatch):
+def test_bsl_family_selection_clears_plan_and_hides_ms41_controls(family, rates, tune_kb):
     app, w = _gui()
     try:
-        path = tmp_path / f"bsl-{mode}-capture.bin"
+        w.bsl_diag_group.setChecked(True)
+        _set_bsl_chip(w, "28f200")
+        w._bsl_plan = object()
+        w.cb_bsl_family.setCurrentText(family)
+        assert w._bsl_plan is None and not w.btn_bsl_arm.isEnabled()
+        assert [w.cb_bsl_baud.itemData(i) for i in range(w.cb_bsl_baud.count())] == rates
+        assert w._bsl_transport_options() == dict(baud=125000, reset_line=None, family=family)
+        assert "manual boot entry" in w.lbl_bsl_transport_mode.text()
+        assert "no echo" not in w.lbl_bsl_transport_mode.text()
+        assert w.btn_bsl_read_full.text() == "Read Full Flash (512 KB)…"
+        assert w.btn_bsl_read_tune.text() == f"Read Tune ({tune_kb} KB)…"
+        for widget in (w.cb_bsl_chip, w.cb_bsl_half, w.chk_bsl_force,
+                       w.btn_bsl_businfo, w.btn_bsl_alias, w.btn_bsl_vpp):
+            assert widget.isHidden()
+        assert not w.btn_bsl_vpp.isEnabled()
+        w.cb_bsl_region.setCurrentText("all")
+        assert not w.chk_bsl_exact_restore.isHidden()
+        assert not w.chk_bsl_exact_restore.isChecked()
+        w._bsl_plan = object()
+        w.chk_bsl_exact_restore.setChecked(True)
+        assert w._bsl_plan is None
+        w.cb_bsl_region.setCurrentText("tune")
+        assert w.chk_bsl_exact_restore.isHidden() and not w.chk_bsl_exact_restore.isChecked()
+        w.cb_bsl_family.setCurrentText("MS41")
+        assert not w.cb_bsl_chip.isHidden()
+        assert w.btn_bsl_vpp.isEnabled()
+        assert "no echo" in w.lbl_bsl_transport_mode.text()
+        assert w.btn_bsl_read_full.text() == "Read Full Flash (256 KB)…"
+    finally:
+        w.close()
+
+
+@pytest.mark.parametrize("family", ["MS42", "MS43"])
+def test_bsl_c167_preview_freezes_identity_policy_and_family(family, tmp_path, monkeypatch):
+    from tests.test_bsl_service import _c167_image
+    app, w = _gui()
+    try:
+        path = tmp_path / "reference.bin"
+        path.write_bytes(_c167_image(family, True))
+        w.cb_bsl_family.setCurrentText(family)
+        w.cb_bsl_port.addItem("COM_BSL_TEST")
+        w.cb_bsl_port.setCurrentText("COM_BSL_TEST")
+        w.cb_bsl_region.setCurrentText("all")
+        w._bsl_ref = str(path)
+        previews = []
+        monkeypatch.setattr(gui.bsl_service, "flash_dry_run", lambda plan, _log: previews.append(plan) or 0)
+        w._on_bsl_dry_run()
+        assert w._bsl_plan.family == family
+        assert w._bsl_plan.preserve_identity is True
+        assert w._bsl_plan.reset_line is None
+        assert w._bsl_plan.baud == 125000
+        w.chk_bsl_fix_cksum.setChecked(True)
+        w.chk_bsl_exact_restore.setChecked(True)
+        assert w._bsl_plan is None
+        assert not w.chk_bsl_fix_cksum.isChecked() and not w.chk_bsl_fix_cksum.isEnabled()
+        w._set_bsl_controls_enabled(True)
+        assert not w.chk_bsl_fix_cksum.isEnabled()
+        w._on_bsl_dry_run()
+        assert w._bsl_plan.preserve_identity is False
+        assert w._bsl_plan.ref_bytes == path.read_bytes()
+        assert len(previews) == 2
+    finally:
+        w.close()
+
+
+@pytest.mark.parametrize("family", ["MS42", "MS43"])
+def test_bsl_read_uses_real_service_and_exclusive_backend_output(family, monkeypatch):
+    import ms42_ms43_bsl
+    from pathlib import Path
+
+    app, w = _gui()
+    requests, archived, failures = [], [], []
+    data = b"\xA5" * gui.ms42_ms43_image.PROFILES[family].partial_size
+
+    class FakeSession:
+        def __init__(self, request):
+            requests.append(request)
+            assert request.family == family and request.reset_line is None
+            assert not Path(request.file).exists()
+
+        def enter(self):
+            pass
+
+        def read_tune(self, _progress):
+            return data
+
+        def close(self):
+            pass
+
+    try:
+        w.cb_bsl_family.setCurrentText(family)
+        monkeypatch.setattr(ms42_ms43_bsl, "HardwareBSL", FakeSession)
+        monkeypatch.setattr(w, "_acquire_bsl_port", lambda: "FAKE_HW_BSL_ONLY")
+        monkeypatch.setattr(w._backup_mgr, "add_data", lambda payload, filename, **_metadata:
+                            archived.append(bytes(payload)) or SimpleNamespace(filename=filename, path=filename))
+        monkeypatch.setattr(w, "_refresh_backup_table", lambda: None)
+        monkeypatch.setattr(w, "_offer_additional_read_copy", lambda *args, **kwargs: None)
+        monkeypatch.setattr(QMessageBox, "critical", lambda *args: failures.append(args))
+
+        def run(task, on_success, on_failure):
+            try:
+                result = task(lambda *args: None, lambda *args: None)
+            except Exception as error:
+                on_failure(error)
+            else:
+                on_success(result)
+
+        monkeypatch.setattr(w, "_run_task", run)
+        w._on_bsl_read_tune()
+        assert archived == [data] and not failures
+        assert len(requests) == 1
+        assert not Path(requests[0].file).parent.exists()
+    finally:
+        w.close()
+
+
+@pytest.mark.parametrize("family", ["MS42", "MS43"])
+def test_bins_c167_handoff_selects_matching_bsl_family_without_io(family, tmp_path, monkeypatch):
+    from tests.test_bsl_service import _c167_image
+    app, w = _gui()
+    try:
+        path = tmp_path / "calibration.bin"
+        path.write_bytes(_c167_image(family, False))
+        monkeypatch.setattr(w, "_selected_backup", lambda: SimpleNamespace(path=str(path)))
+        monkeypatch.setattr(w, "_acquire_bsl_port", lambda: pytest.fail("local handoff opened hardware"))
+        w._on_backup_open_in_bsl()
+        assert w.cb_bsl_family.currentText() == family
+        assert w.cb_bsl_region.currentText() == "tune"
+        assert w._bsl_ref == str(path.resolve())
+        assert w._bsl_plan is None
+        assert w.tabs.currentIndex() == w._bsl_tab_index
+    finally:
+        w.close()
+
+
+@pytest.mark.parametrize(("family", "mode", "size"), [
+    ("MS41", "tune", MS41ECU.TUNE_SIZE),
+    ("MS41", "full", MS41ECU.FULL_ROM_SIZE),
+    ("MS42", "tune", 0x8000),
+    ("MS42", "full", 0x80000),
+    ("MS43", "tune", 0x10000),
+    ("MS43", "full", 0x80000),
+])
+def test_bsl_read_saves_automatically_to_bins(family, mode, size, tmp_path, monkeypatch):
+    app, w = _gui()
+    try:
+        path = tmp_path / "read.bin"
         data = b"\x5A" * size
         _set_bsl_chip(w, "28f200")
-        w.cb_bsl_baud.setCurrentIndex(2)
+        w.cb_bsl_family.setCurrentText(family)
         monkeypatch.setattr(
             QFileDialog, "getSaveFileName",
             staticmethod(lambda *a, **k: pytest.fail("BSL read must not show a save dialog")))
         monkeypatch.setattr(
-            gui.tempfile, "mkstemp",
-            lambda **kwargs: (
-                os.open(path, os.O_CREAT | os.O_RDWR), str(path)))
+            gui.tempfile, "TemporaryDirectory",
+            lambda **kwargs: SimpleNamespace(name=str(tmp_path), cleanup=lambda: path.unlink(missing_ok=True)))
         monkeypatch.setattr(w, "_acquire_bsl_port", lambda: "COM_BSL_TEST")
 
         called = {}
@@ -4981,10 +5201,13 @@ def test_bsl_read_saves_automatically_to_bins(mode, size, tmp_path, monkeypatch)
 
         assert not path.exists()
         assert called == {
-            "port": "COM_BSL_TEST", "outfile": str(path), "chip": "28f200",
-            "half": "upper", "baud": 38400, "reset_line": "dtr"}
+            "port": "COM_BSL_TEST", "outfile": str(path),
+            "chip": "28f200" if family == "MS41" else "29f400",
+            "half": "upper" if family == "MS41" else "full",
+            "baud": 38400 if family == "MS41" else 125000,
+            "reset_line": "dtr" if family == "MS41" else None, "family": family}
         assert archived["data"] == data
-        assert archived["filename"].startswith(f"ms41_bsl_{mode}_")
+        assert archived["filename"].startswith(f"{family.lower()}_bsl_{mode}_")
         assert archived["filename"].endswith(".bin")
         assert archived["source"] == "BSL-Unbricker read"
         assert archived["refreshed"] is True
@@ -4996,17 +5219,17 @@ def test_bsl_read_saves_automatically_to_bins(mode, size, tmp_path, monkeypatch)
         w.close()
 
 
-def test_bsl_read_can_save_optional_copy_after_bins_archive(tmp_path, monkeypatch):
+@pytest.mark.parametrize("archive_fails", [False, True])
+def test_bsl_read_can_save_optional_copy_after_bins_archive(tmp_path, monkeypatch, archive_fails):
     app, w = _gui()
     try:
-        temporary_path = tmp_path / "temporary-bsl-read.bin"
+        temporary_path = tmp_path / "read.bin"
         copy_path = tmp_path / "operator-copy.bin"
         data = b"\xA5" * MS41ECU.TUNE_SIZE
         _set_bsl_chip(w, "28f200")
         monkeypatch.setattr(
-            gui.tempfile, "mkstemp",
-            lambda **kwargs: (
-                os.open(temporary_path, os.O_CREAT | os.O_RDWR), str(temporary_path)))
+            gui.tempfile, "TemporaryDirectory",
+            lambda **kwargs: SimpleNamespace(name=str(tmp_path), cleanup=lambda: temporary_path.unlink(missing_ok=True)))
         monkeypatch.setattr(w, "_acquire_bsl_port", lambda: "COM_BSL_TEST")
 
         def fake_dump(port, outfile, chip, half, log, progress, **kwargs):
@@ -5018,6 +5241,8 @@ def test_bsl_read_can_save_optional_copy_after_bins_archive(tmp_path, monkeypatc
         archived = {}
         def archive(image, filename, **metadata):
             archived.update(data=bytes(image), filename=filename, **metadata)
+            if archive_fails:
+                raise OSError("Bins drive full")
             return type("Entry", (), {
                 "filename": filename,
                 "path": os.path.join(gui.BACKUP_DIR, filename),
@@ -5027,6 +5252,10 @@ def test_bsl_read_can_save_optional_copy_after_bins_archive(tmp_path, monkeypatc
         monkeypatch.setattr(w._port_owner, "release", lambda owner: None)
         monkeypatch.setattr(
             QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
+        def choose_save(*args):
+            assert temporary_path.read_bytes() == data
+            return QMessageBox.Save
+        monkeypatch.setattr(QMessageBox, "warning", choose_save)
         dialog = {}
         monkeypatch.setattr(
             QFileDialog, "getSaveFileName",
@@ -5050,7 +5279,8 @@ def test_bsl_read_can_save_optional_copy_after_bins_archive(tmp_path, monkeypatc
         assert archived["data"] == data
         assert not temporary_path.exists()
         assert copy_path.read_bytes() == data
-        assert dialog["title"] == "Save Additional BSL Tune (24 KB) Copy"
+        assert dialog["title"] == ("Save Completed Read" if archive_fails else
+                                    "Save Additional BSL Tune (24 KB) Copy")
         assert dialog["suggested"] == archived["filename"]
     finally:
         w.close()
@@ -5060,12 +5290,11 @@ def test_bsl_incomplete_read_removes_temporary_file_and_skips_bins(
         tmp_path, monkeypatch):
     app, w = _gui()
     try:
-        path = tmp_path / "incomplete-bsl-read.bin"
+        path = tmp_path / "read.bin"
         _set_bsl_chip(w, "28f200")
         monkeypatch.setattr(
-            gui.tempfile, "mkstemp",
-            lambda **kwargs: (
-                os.open(path, os.O_CREAT | os.O_RDWR), str(path)))
+            gui.tempfile, "TemporaryDirectory",
+            lambda **kwargs: SimpleNamespace(name=str(tmp_path), cleanup=lambda: path.unlink(missing_ok=True)))
         monkeypatch.setattr(w, "_acquire_bsl_port", lambda: "COM_BSL_TEST")
 
         def incomplete_dump(port, outfile, chip, half, log, progress, **kwargs):
@@ -6241,6 +6470,9 @@ def test_softbsl_recovery_archive_failure_preserves_operation_error_and_saved_pa
         def fail_archive(*_args, **_kwargs):
             raise RuntimeError(f"catalog failed; image retained at {path}")
         monkeypatch.setattr(w._backup_mgr, "add_data", fail_archive)
+        fallback = []
+        monkeypatch.setattr(w, "_save_unarchived_read",
+                            lambda *args: fallback.append(args) or "alternate.bin")
         error = gui.softbsl_service.SoftBSLRecoveryStateError(
             "marker 0 unconfirmed", read_data=b"\x11" * MS41ECU.TUNE_SIZE)
 
@@ -6248,6 +6480,8 @@ def test_softbsl_recovery_archive_failure_preserves_operation_error_and_saved_pa
 
         assert "marker 0 unconfirmed" in str(error)
         assert path in str(error)
+        assert "alternate.bin" in str(error)
+        assert fallback[0][0] == error.read_data
         assert "10 seconds" in str(error)
         assert error.read_data == b"\x11" * MS41ECU.TUNE_SIZE
     finally:
@@ -6262,7 +6496,7 @@ def test_backup_from_ecu_catalog_failure_shows_durable_path_without_success(monk
         monkeypatch.setattr(
             QInputDialog, "getItem", lambda *_args: ("Tune Region (24 KB)", True))
         monkeypatch.setattr(
-            QMessageBox, "critical", lambda *_args: shown.append(_args))
+            QMessageBox, "warning", lambda *_args: shown.append(_args) or QMessageBox.Discard)
         monkeypatch.setattr(
             QMessageBox, "information", lambda *_args: pytest.fail("reported saved backup"))
         def fail_archive(*_args, **_kwargs):
@@ -6274,7 +6508,7 @@ def test_backup_from_ecu_catalog_failure_shows_durable_path_without_success(monk
         w._on_backup_from_ecu()
 
         assert len(shown) == 1
-        assert shown[0][1] == "Backup Failed"
+        assert shown[0][1] == "Read Complete — Save Failed"
         assert "saved-capture.bin" in shown[0][2]
     finally:
         w._ds2 = None
@@ -7162,7 +7396,7 @@ def test_coding_tab_reads_generic_module_and_preserves_custom_values(monkeypatch
         monkeypatch.setattr(gui, "read_module_coding", lambda ds2, key: state)
         monkeypatch.setattr(
             gui, "write_module_coding",
-            lambda *args: written.append(args) or state,
+            lambda *args, restore_original=False: written.append((*args, restore_original)) or state,
         )
         monkeypatch.setattr(
             QMessageBox, "question",
@@ -7194,10 +7428,59 @@ def test_coding_tab_reads_generic_module_and_preserves_custom_values(monkeypatch
         assert written[0][:4] == (
             connection, "e39_gm3", "E39.GM3.TEST", b"\x06",
         )
-        assert written[0][4] == {"comfort_open": True}
+        assert written[0][4:] == ({"comfort_open": True}, False)
         assert "11.70 V — LOW" in questions[0]
         assert "HIGHLY EXPERIMENTAL" in questions[0]
         assert "not recommended until further testing" in questions[0]
+    finally:
+        w._ds2 = None
+        w.close()
+
+
+def test_cluster_restore_confirmation_in_coding_tab(monkeypatch, tmp_path):
+    from dataclasses import replace
+    from tests.test_ms41_e39_cluster_checksum import ClusterBus
+    from vehicle_coding import read_module_coding
+
+    monkeypatch.setenv("BIMMERSTEIN_DATA_DIR", str(tmp_path))
+    bus = ClusterBus()
+    original = read_module_coding(bus, "e39_kmb")
+    partial = replace(original, recovery_original=original.raw_data)
+    app, w = _gui()
+    writes, titles = [], []
+    replies = iter((QMessageBox.No, QMessageBox.Yes))
+
+    def question(_parent, title, *_args):
+        titles.append(title)
+        return next(replies)
+
+    def run(task, on_success, **_kwargs):
+        on_success(task(lambda *_: None, lambda *_: None))
+
+    try:
+        w.cb_coding_chassis.setCurrentText("E39")
+        w.cb_coding_module.setCurrentIndex(w.cb_coding_module.findData("e39_kmb"))
+        w._ds2 = bus
+        w._connection_echo = True
+        monkeypatch.setattr(gui, "read_module_coding", lambda *_: partial)
+        monkeypatch.setattr(gui, "write_module_coding",
+                            lambda *args, **kwargs: writes.append((args, kwargs)) or original)
+        monkeypatch.setattr(w, "_run_task", run)
+        monkeypatch.setattr(w, "_run_state_changing_task", run)
+        monkeypatch.setattr(w, "_prewrite_battery_notice", lambda: "12.6 V")
+        monkeypatch.setattr(QMessageBox, "question", staticmethod(question))
+        monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *_: None))
+
+        w._on_read_module_coding()
+        assert w.btn_write_module_coding.text() == "Restore original coding"
+        assert all(not control.isEnabled() for control in w._coding_controls.values())
+        w.btn_write_module_coding.click()
+        assert writes == []
+        w.btn_write_module_coding.click()
+        assert writes == [((bus, "e39_kmb", original.profile.key, partial.raw_data, {}),
+                           {"restore_original": True})]
+        assert titles == ["Restore original coding?"] * 2
+        assert w.btn_write_module_coding.text() == "Write Changes"
     finally:
         w._ds2 = None
         w.close()
@@ -8434,7 +8717,8 @@ def test_config_tab_scrolls_instead_of_compressing_combobox_rows():
                                 if combo.x() == x)
             assert all(y + height <= next_y for (y, height), (next_y, _) in
                        zip(geometries, geometries[1:]))
-        assert w._main_scroll.horizontalScrollBar().maximum() > 0
+        canvas = w._main_scroll.widget()
+        assert canvas.width() == max(canvas.minimumSizeHint().width(), w._main_scroll.viewport().width())
     finally:
         w.close()
 
@@ -8499,8 +8783,11 @@ def test_config_write_snapshots_verify_option_before_worker_task(monkeypatch):
         monkeypatch.setattr(gui, "correct_checksums", lambda data, **kwargs: (data, []))
         monkeypatch.setattr(
             QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.No))
-        monkeypatch.setattr(
-            QMessageBox, "warning", staticmethod(lambda *a, **k: QMessageBox.Yes))
+        def confirm(title, text, image, filename, *, warning):
+            assert title == "Confirm Config Write" and "Test flag" in text and warning
+            assert image == patched and filename == "live_ECU_config_tune.bin"
+            return QMessageBox.Yes
+        monkeypatch.setattr(w, "_confirm_edited_write", confirm)
 
         class SnapshotCheck:
             calls = 0
@@ -8820,6 +9107,7 @@ def test_config_full_patch_passes_original_archive_to_guarded_writer(monkeypatch
 
         assert captured["data"][0x605C] == 0x30
         assert captured["filename"] == "live_ECU_config_full.bin"
+        assert captured["kwargs"]["live_config"]
         assert captured["kwargs"]["archived_prewrite_image"] == image
         captured["kwargs"]["on_write_success"]()
         assert w._config_live_baseline["Program CRC Check"] == "Enabled"
@@ -8828,105 +9116,66 @@ def test_config_full_patch_passes_original_archive_to_guarded_writer(monkeypatch
         w.close()
 
 
-def test_patches_build_archives_to_bins_and_offers_flash(monkeypatch):
+def test_patches_build_archives_named_bin_with_immediate_export_and_review(monkeypatch, tmp_path):
     app, w = _gui()
     try:
         import patch_service
-        w._patch_base = b"\xFF" * 262144
-        w._patch_installed_ids = set()
+        base = bytes([0xFF]) * 262144
+        w._patch_base = base
         w._patch_checkboxes = {"test": w.chk_correct_cksum}
-        monkeypatch.setattr(patch_service, "build_image",
-                            lambda base, sel: (b"\xFF" * 262144, ["ok"]))
+        monkeypatch.setattr(patch_service, "build_image", lambda *_: (base, ["ok"]))
+        chosen = "Summer tune.bin"
+        entry = SimpleNamespace(filename=chosen, path=str(tmp_path / chosen))
         archived = {}
-        class FakeEntry:
-            filename = "ms41_patched_test.bin"
-            path = os.path.join(gui.BACKUP_DIR, filename)
-        monkeypatch.setattr(w._backup_mgr, "add_data",
-                            lambda data, name, **k: (archived.update(source=k.get("source"),
-                                                                     n=len(data)), FakeEntry())[1])
+
+        def archive(data, name, **metadata):
+            archived.update(data=data, name=name, **metadata)
+            return entry
+
+        monkeypatch.setattr(w._backup_mgr, "add_data", archive)
+        monkeypatch.setattr(gui.QInputDialog, "getText", lambda *args, **kwargs: (chosen, True))
         monkeypatch.setattr(w, "_refresh_backup_table", lambda: None)
-        copied = {}
-        monkeypatch.setattr(w, "_offer_additional_read_copy",
-                            lambda data, entry, label, **k: copied.update(label=label, n=len(data)))
-        monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: QMessageBox.Yes))
-        monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
-        w._ds2 = object()                      # "connected" -> offers to flash
-        flashed = {}
-        monkeypatch.setattr(
-            w, "_ds2_write_full",
-            lambda data, name, **kwargs:
-                flashed.update(name=name, n=len(data), kwargs=kwargs))
-
+        reviews, exports = [], []
+        monkeypatch.setattr(w, "_review_edited_bin",
+                            lambda data, name, callback, **opts: reviews.append((data, name, opts["temporary"])))
+        monkeypatch.setattr(w, "_export_edited_bin",
+                            lambda data, name, **opts: exports.append((data, name)))
         w._on_patches_build()
-
-        assert archived["n"] == 262144
-        assert archived["source"].startswith("patched:")
-        assert copied == {"label": "Patched Full ROM (256 KB)", "n": 262144}
-        assert flashed["name"] == "ms41_patched_test.bin"   # flashed the freshly-built image
-        assert flashed["n"] == 262144
-        assert flashed["kwargs"] == {"disconnect_after_success": True}
-        assert FakeEntry.path in w.lbl_patch_base.toolTip()
+        assert archived["data"] == base
+        assert archived["name"] == chosen and archived["folder"] == "Patched"
+        assert archived["source"] == "patched: added test"
+        assert entry.path in w.lbl_patch_base.toolTip()
+        assert not w._patch_saved_actions.isHidden() and not reviews
+        w._patch_saved_actions.export.click()
+        w._patch_saved_actions.review.click()
+        assert exports == [(base, chosen)]
+        assert reviews == [(base, chosen, False)]
     finally:
         w.close()
 
 
-def test_patches_build_boot_change_offers_guarded_boot_write(monkeypatch):
+def test_patches_temporary_boot_edit_keeps_draft_and_uses_guarded_writer(monkeypatch):
     app, w = _gui()
     try:
         import patch_service
-        base = b"\xFF" * 262144
+        base = bytes([0xFF]) * 262144
         built = bytearray(base)
         built[patch_service.SA1_LO] = 0xEA
         w._patch_base = base
-        w._patch_installed_ids = set()
         w._patch_checkboxes = {"cal_guard": w.chk_correct_cksum}
-        monkeypatch.setattr(
-            patch_service, "build_image", lambda base, selected: (bytes(built), ["ok"]))
-
-        class FakeEntry:
-            filename = "ms41_patched_cal_guard.bin"
-            path = os.path.join(gui.BACKUP_DIR, filename)
-
-        monkeypatch.setattr(w._backup_mgr, "add_data", lambda *a, **k: FakeEntry())
-        monkeypatch.setattr(w, "_refresh_backup_table", lambda: None)
-        monkeypatch.setattr(w, "_offer_additional_read_copy", lambda *a, **k: None)
-        warnings = []
-        monkeypatch.setattr(
-            QMessageBox, "warning",
-            staticmethod(lambda _parent, title, message, *a, **k:
-                         warnings.append((title, message)) or QMessageBox.Yes))
-        questions = []
-        monkeypatch.setattr(
-            QMessageBox, "question",
-            staticmethod(lambda *a, **k: questions.append(a) or QMessageBox.Yes))
-        w._ds2 = object()
+        monkeypatch.setattr(patch_service, "build_image", lambda *_: (bytes(built), []))
+        monkeypatch.setattr(w._backup_mgr, "add_data", lambda *_a, **_kw: pytest.fail("Archived temporary image"))
+        monkeypatch.setattr(w, "_review_edited_bin", lambda data, name, write, **_: write(data, name))
         flashed = {}
-        monkeypatch.setattr(
-            w, "_ds2_write_full",
-            lambda data, name, **kwargs:
-                flashed.update(data=bytes(data), name=name, kwargs=kwargs))
-
-        w._on_patches_build()
-
-        title, message = warnings[-1]
-        assert "BRICK-CLASS" in title
-        assert "boot/parameter region" in message
-        assert "typed WRITE BOOT" in message
-        assert "hardware BSL" in message
-        assert questions == []
+        monkeypatch.setattr(w, "_write_edited_image",
+                            lambda data, name, family, **opts: flashed.update(data=data, family=family, **opts))
+        w._on_patches_build(temporary=True)
         assert flashed["data"] == bytes(built)
-        assert flashed["kwargs"] == {
-            "require_boot_write": True,
-            "disconnect_after_success": True,
-        }
-
-        flashed.clear()
-        monkeypatch.setattr(
-            QMessageBox, "warning",
-            staticmethod(lambda _parent, title, message, *a, **k:
-                         warnings.append((title, message)) or QMessageBox.No))
-        w._on_patches_build()
-        assert flashed == {}
+        assert flashed["family"] == "MS41"
+        assert flashed["require_boot_write"] and flashed["disconnect_after_success"]
+        assert "cal_guard" in flashed["write_notes"]
+        assert w._patch_base == base and w._patch_checkboxes["cal_guard"].isChecked()
+        assert w._patch_saved_actions.isHidden()
     finally:
         w.close()
 
@@ -8964,14 +9213,10 @@ def test_patches_builds_and_flashes_boot_patch_removal_only(monkeypatch):
 
         monkeypatch.setattr(w._backup_mgr, "add_data", archive)
         monkeypatch.setattr(w, "_refresh_backup_table", lambda: None)
-        monkeypatch.setattr(w, "_offer_additional_read_copy", lambda *a, **k: None)
-        warnings = []
-        monkeypatch.setattr(
-            QMessageBox, "warning",
-            staticmethod(lambda _parent, title, message, *a, **k:
-                         warnings.append((title, message)) or QMessageBox.Yes),
-        )
+        monkeypatch.setattr(gui.QInputDialog, "getText", lambda *args, text: (text, True))
+        monkeypatch.setattr(w, "_review_edited_bin", lambda data, name, write, **_: write(data, name))
         w._ds2 = object()
+        w.btn_write_full.setEnabled(True)
         flashed = {}
         monkeypatch.setattr(
             w, "_ds2_write_full",
@@ -8982,16 +9227,17 @@ def test_patches_builds_and_flashes_boot_patch_removal_only(monkeypatch):
         w._on_patches_build()
 
         assert archived["data"] == removed_image
-        assert "removed_cal_guard" in archived["name"]
+        assert archived["name"] == "MS41 Rollback.bin"
         assert archived["kwargs"]["source"] == "patched: removed cal_guard"
-        assert warnings[-1][0].startswith("BRICK-CLASS")
-        assert "Changes: removed cal_guard" in warnings[-1][1]
+        assert not flashed
+        w._patch_saved_actions.review.click()
         assert flashed == {
             "data": removed_image,
             "name": FakeEntry.filename,
             "kwargs": {
                 "require_boot_write": True,
                 "disconnect_after_success": True,
+                "write_notes": "Patch changes: removed cal_guard",
             },
         }
         assert w._patch_removed_ids == set()
@@ -9014,7 +9260,7 @@ def test_patches_build_archives_and_skips_flash_when_disconnected(monkeypatch):
             path = os.path.join(gui.BACKUP_DIR, filename)
         monkeypatch.setattr(w._backup_mgr, "add_data", lambda data, name, **k: FakeEntry())
         monkeypatch.setattr(w, "_refresh_backup_table", lambda: None)
-        monkeypatch.setattr(w, "_offer_additional_read_copy", lambda *a, **k: None)
+        monkeypatch.setattr(gui.QInputDialog, "getText", lambda *args, text: (text, True))
         monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: QMessageBox.Yes))
         w._ds2 = None                          # not connected -> archive only, no flash prompt
         flashed = {}
@@ -10003,11 +10249,9 @@ def test_top_patch_build_uses_common_confirmation_and_respects_boot_option(
         window._patch_installed_ids = set()
         window._patch_checkboxes = {"test": window.chk_correct_cksum}
         monkeypatch.setattr(patch_service, "build_image", lambda *_args: (bytes(built), ["ok"]))
-        monkeypatch.setattr(window._backup_mgr, "add_data", lambda *_args, **_kwargs:
-                            SimpleNamespace(filename="patched.bin", path=os.path.join(gui.BACKUP_DIR, "patched.bin")))
-        monkeypatch.setattr(window, "_refresh_backup_table", lambda: None)
-        monkeypatch.setattr(window, "_offer_additional_read_copy", lambda *_args, **_kwargs: None)
-        window._on_patches_build()
+        monkeypatch.setattr(window, "_review_edited_bin", lambda data, name, write, **_: write(data, name))
+        window.btn_write_full.setEnabled(True)
+        window._on_patches_build(temporary=True)
         if boot_edit and not write_boot:
             assert state["errors"][0][0] == "Write Boot Required for This Edit"
             assert not state["questions"]
@@ -10039,17 +10283,28 @@ def test_top_config_full_preview_is_passed_to_combined_confirmation(monkeypatch)
         assert captured["data"][0x605C] == 0x30
         assert captured["kwargs"]["archived_prewrite_image"] == image
         assert "Configuration changes:" in captured["kwargs"]["write_notes"]
+        assert captured["kwargs"]["live_config"]
         assert "Program CRC Check" in captured["kwargs"]["write_notes"]
     finally:
         window._ds2 = None
         window.close()
 
 
-def test_top_full_confirmation_cancel_performs_no_preparation(monkeypatch):
+@pytest.mark.parametrize("live_config", [False, True])
+def test_top_full_confirmation_cancel_performs_no_preparation(monkeypatch, live_config):
     app, window, state = _top_full_write_gui(monkeypatch)
     try:
-        monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.No)
-        window._ds2_write_full(bytearray(ref("MS41.3")), "donor.bin")
+        image = ref("MS41.3")
+        decisions = []
+        def review(title, text, prepared, name):
+            assert title == "Confirm Full ROM Write" and "TOP boot/parameter region" in text
+            assert len(prepared) == len(image) and name == "donor.bin"
+            decisions.append("exportable")
+            return QMessageBox.No
+        monkeypatch.setattr(window, "_confirm_edited_write", review)
+        monkeypatch.setattr(QMessageBox, "question", lambda *_: decisions.append("ordinary") or QMessageBox.No)
+        window._ds2_write_full(bytearray(image), "donor.bin", live_config=live_config)
+        assert decisions == (["exportable"] if live_config else ["ordinary"])
         assert not state["writes"]
         assert not state["completed"]
         assert not state["errors"]

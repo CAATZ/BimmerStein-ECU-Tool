@@ -48,6 +48,23 @@ def test_read_worker_catalogues_correct_storage_without_writing(window, worker_r
         assert "learned values and diagnostic records" in window._ms42_ms43_storage_note.text()
 
 
+def test_storage_read_survives_archive_failure(window, worker_runner, monkeypatch):
+    connect(window, "MS43")
+    expected = snapshot()
+    window._ms42_ms43_show_storage(expected, "Previous backup")
+    monkeypatch.setattr(storage, "read_storage", lambda *args, **kwargs: expected)
+    def fail_archive(*args):
+        raise OSError("disk full")
+    monkeypatch.setattr(window, "_ms42_ms43_catalog_storage", fail_archive)
+    fallback = []
+    monkeypatch.setattr(window, "_save_unarchived_read", lambda *args: fallback.append(args))
+    window._ms42_ms43_read_storage()
+    assert window._ms42_ms43_storage_snapshot == expected
+    assert window._ms42_ms43_storage_source == "ECU eeprom read"
+    data, name, error = fallback[0]
+    assert data == expected["data"] and name == "MS43_eeprom.bin" and str(error) == "disk full"
+
+
 @pytest.mark.parametrize("kind", ("eeprom", "retained"))
 def test_restore_uses_loaded_target_and_catalogues_before_and_after(window, worker_runner, monkeypatch, kind):
     ecu = connect(window, "MS43")

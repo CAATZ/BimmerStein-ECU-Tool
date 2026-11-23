@@ -1,4 +1,4 @@
-"""Launch V14 delivery preserves V7/V8/V9/V10/V11 tuning and independent fuel hysteresis."""
+"""Current Launch preserves V7/V8/V9/V10/V11 tuning and independent fuel hysteresis."""
 import pytest
 
 import checksum
@@ -8,10 +8,10 @@ from tests.conftest import ref
 
 
 VARIANTS = (
-    ("MS41.0", "_ms410", "ignition_cut_v18_ms410"),
-    ("MS41.1", "_ms411", "ignition_cut_v18_ms411"),
-    ("MS41.2", "_ms412", "ignition_cut_v18_ms412"),
-    ("MS41.3", "", "ignition_cut_v18"),
+    ("MS41.0", "_ms410", "ignition_cut_v20_ms410"),
+    ("MS41.1", "_ms411", "ignition_cut_v20_ms411"),
+    ("MS41.2", "_ms412", "ignition_cut_v20_ms412"),
+    ("MS41.3", "", "ignition_cut_v20"),
 )
 
 
@@ -36,13 +36,13 @@ def _valid_checksums(image):
 
 
 @pytest.mark.parametrize("variant,suffix,ignition_id", VARIANTS)
-def test_launch_v14_clean_install_and_dependency_contract(variant, suffix, ignition_id):
+def test_current_launch_clean_install_and_dependency_contract(variant, suffix, ignition_id):
     patches = patch_ms41.load_patches()
     old_id, new_id = "launch_control_v7" + suffix, ignition_id.replace("ignition_cut", "launch_control")
     old, new = patches[old_id], patches[new_id]
     assert old["deprecated"]
     assert patches["launch_control_v11" + suffix]["superseded_by"] == "launch_control_v12" + suffix
-    assert not new.get("deprecated") and new["version"] == ("V18")
+    assert not new.get("deprecated") and new["version"] == "V20"
     assert old_id in new["supersedes"]
     assert new["requires"] == [ignition_id]
     assert {name: new["cave"]["cals"][name] for name in old["cave"]["cals"]} == old["cave"]["cals"]
@@ -117,7 +117,7 @@ def test_configured_launch_upgrade_and_both_removals_preserve_tuning(
 
 @pytest.mark.parametrize("variant,suffix,ignition_id", VARIANTS)
 @pytest.mark.parametrize("predecessor", ["v7", "v8", "v9", "v10", "v11"])
-def test_launch_v14_rejects_corrupted_predecessor_cave(variant, suffix, ignition_id, predecessor):
+def test_current_launch_rejects_corrupted_predecessor_cave(variant, suffix, ignition_id, predecessor):
     patches = patch_ms41.load_patches()
     old_id, new_id = "launch_control_" + predecessor + suffix, ignition_id.replace("ignition_cut", "launch_control")
     historical, _ = patch_ms41.build(ref(variant), patches[old_id]["requires"] + [old_id], allow_deprecated=True)

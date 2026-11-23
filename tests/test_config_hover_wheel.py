@@ -54,6 +54,52 @@ def test_resize_help_is_on_the_divider_and_never_inherited_by_its_children(windo
     QToolTip.hideText()
 
 
+def test_patch_dialog_wheel_scrolls_over_integer_decimal_and_choice_fields(window, monkeypatch):
+    from PyQt5.QtWidgets import QDialog
+    import patch_service
+
+    patch_id = "ignition_cut_v20"
+    patch = patch_service.patch_ms41.load_patches()[patch_id]
+    image = bytes(0x40000)
+    group = dict(patch_id=patch_id, title=patch["title"], version=patch["version"], editable=True,
+                 parameters=[patch_service._public_parameter(image, patch, spec)
+                             for spec in patch_service._parameter_specs(patch)])
+    window._patch_base = image
+    window._patch_parameter_groups[patch_id] = group
+    window._patch_installed_ids.add(patch_id)
+    monkeypatch.setattr(patch_service, "editable_parameters", lambda _: [group])
+    window.resize(980, 740)
+    window.show()
+
+    def check(dialog):
+        dialog.resize(700, 375)
+        dialog.show()
+        QApplication.processEvents()
+        scroll = dialog.findChild(QScrollArea)
+        rpm = dialog.findChild(gui._PatchNumberEditor, "CUTRPM_editor").spin
+        angle = dialog.findChild(gui._PatchNumberEditor, "CUT_IGN_ANGLE_editor").spin
+        choice = dialog.findChild(QComboBox, "CUTSW")
+        rpm.setValue(4000)
+        expected = rpm.value(), angle.value(), choice.currentData()
+        assert expected[0] == 4000
+        for control in (rpm, angle, choice):
+            assert control.isEnabled()
+            scroll.verticalScrollBar().setValue(0)
+            control.clearFocus()
+            wheel(control)
+            assert scroll.verticalScrollBar().value() > 0
+            assert (rpm.value(), angle.value(), choice.currentData()) == expected
+        rpm.setFocus()
+        QTest.keyClick(rpm, Qt.Key_Up)
+        assert rpm.value() == 4032
+        dialog.reject()
+        return dialog.result()
+
+    monkeypatch.setattr(QDialog, "exec_", check)
+    window._on_patch_configure(patch_id)
+    assert not window._patch_parameter_changes
+
+
 @pytest.mark.parametrize("family,software", (("MS42", "0110C6"), ("MS43", "430069")))
 def test_all_config_rows_and_combos_show_their_parameter_help(window, family, software):
     connect(window, family)
@@ -149,6 +195,31 @@ def test_closed_combo_scrolls_outer_page_when_inner_table_cannot_scroll(window, 
     assert combo.currentIndex() == 0
     assert inner_bar.value() == previous_inner
     assert outer_bar.value() > previous_outer if delta < 0 else outer_bar.value() < previous_outer
+
+
+def test_live_polling_controls_scroll_without_editing_the_next_session(window):
+    spin, mode = window.spin_interval, window.cb_live_mode
+    window.tabs.setCurrentIndex(next(index for index in range(window.tabs.count())
+                                     if window.tabs.tabText(index).strip() == "Live Data"))
+    page = window.tabs.currentWidget()
+    page.widget().setMinimumHeight(1000)
+    window.show()
+    QApplication.processEvents()
+    settings = window._live_settings()
+    settings.remove("live/interval_ms")
+    bar = page.verticalScrollBar()
+    for control in (spin, mode):
+        window.tabs.tabBar().setFocus()
+        bar.setValue(bar.maximum() // 2)
+        before = bar.value()
+        wheel(control, delta=120 if control is spin else -120)
+        assert bar.value() != before
+        assert (spin.value(), mode.currentData()) == (0, "auto")
+        assert not settings.contains("live/interval_ms")
+    QTest.keyClick(spin, Qt.Key_Up)
+    QTest.keyClick(mode, Qt.Key_Down)
+    assert settings.value("live/interval_ms", type=int) == 100
+    assert mode.currentData() == "telegram"
 
 
 def test_popup_wheel_scrolls_choices_and_click_commits_selection(window):

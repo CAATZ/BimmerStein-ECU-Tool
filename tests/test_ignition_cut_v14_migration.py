@@ -27,7 +27,7 @@ def corrected(image):
 
 
 def current_ids(suffix):
-    revision = "v18"
+    revision = "v20"
     return ["ignition_cut_" + revision + suffix, "launch_control_" + revision + suffix]
 
 
@@ -124,7 +124,7 @@ def test_v14_partial_predecessor_launch_fails_closed(family, suffix, old_ig, old
 def test_ms410_v14_to_v15_preserves_configuration_and_removal(with_launch, transitional_fix, monkeypatch):
     patches = patch_ms41.load_patches()
     ignition, launch = "ignition_cut_v15_ms410", "launch_control_v15_ms410"
-    # Retain this exact historical transition while V18 is the active catalog.
+    # Retain this exact historical transition while V20 is the active catalog.
     for patch_id in (ignition, launch):
         patches[patch_id] = dict(patches[patch_id], deprecated=False)
     monkeypatch.setattr(patch_ms41, "load_patches", lambda: patches)

@@ -79,6 +79,17 @@ def test_softbsl_checksum_uses_canonical_implementation():
     assert softbsl_checksum._prog_calc is checksum._prog_calc
 
 
+@pytest.mark.parametrize("truncated_table", [False, True])
+def test_missing_calibration_table_cannot_report_valid_correction(truncated_table):
+    image = bytearray(checksum.TUNE_SIZE)
+    if truncated_table:
+        image[-4:] = bytes.fromhex("4E 00 FF FF")
+    corrected, notes = correct_checksums(image)
+    assert corrected == image and "no usable checksum table" in notes[-1]
+    with pytest.raises(ValueError, match="no calibration checksum table"):
+        checksum.correct_verified_checksums(image)
+
+
 def test_invalid_program_bounds_refuse_correction_without_partial_changes():
     source = _synthetic_program_image()
     source[0x6356:0x635A] = (0x40001).to_bytes(4, "little")

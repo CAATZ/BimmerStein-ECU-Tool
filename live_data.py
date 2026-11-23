@@ -72,6 +72,7 @@ _PROFILE_DISPLAY_ROWS = [
     ("Front O2 B1 Voltage", "V"),
     ("Front O2 B2 Voltage", "V"),
     ("MAF Sensor Voltage", "V"),
+    ("AlphaN Failsafe Revision", ""),
     ("Wideband Mode", ""),
     ("Wideband Input Source", ""),
     ("Narrowband Emulation", ""),
@@ -123,12 +124,13 @@ _PROFILE_DISPLAY_ROWS = [
 ]
 PROFILE_DISPLAY_NAMES = frozenset(name for name, _unit in _PROFILE_DISPLAY_ROWS)
 _PROFILE_STATUS_NAMES = frozenset({
-    "Wideband Mode", "Wideband Input Source", "Narrowband Emulation",
+    "Wideband Mode", "Wideband Input Source", "Narrowband Emulation", "AlphaN Failsafe Revision",
 })
 _PROFILE_STATUS_IDS = {
     "BS_PROFILE_WIDEBAND_MODE": "Wideband Mode",
     "BS_PROFILE_WIDEBAND_INPUT_SOURCE": "Wideband Input Source",
     "BS_PROFILE_NARROWBAND_EMULATION": "Narrowband Emulation",
+    "BS_PROFILE_ALPHAN_REVISION": "AlphaN Failsafe Revision",
 }
 
 # Non-gauge presentation kinds remain code-owned for runtime probes and raw
@@ -137,6 +139,7 @@ _LIVE_STATUS_CHANNELS = frozenset({
     ("Closed Throttle", ""), ("Part Load", ""), ("Full Load", ""),
     ("Decel Fuel Cut", ""), ("Engine Start", ""),
     ("Wideband Mode", ""), ("Narrowband Emulation", ""),
+    ("AlphaN Failsafe Revision", ""),
     ("Cut Input 80", ""), ("Cut Input 81", ""), ("Cut Input 82", ""),
     ("Ignition Cut Request", ""), ("Launch Ignition Request", ""),
     ("Launch Fuel Cut Active", ""), ("Intentional Combustion Cut", ""),
@@ -267,8 +270,13 @@ def _definition_parameters_for(definition, ecu_id):
                  for param in definition.parameters_for(ecu_id))
 
 
+def logger_ecu_id(ecu_id, program_variant):
+    """SS1v2 can retain the stock MS41.2 firmware number."""
+    return "SHINDE1" if program_variant == "MS41.3" else ecu_id
+
+
 def telegram_params_for(ecu_id, profile: str = PROFILE_STANDARD,
-                        wideband_input_addr: int = _DEFAULT_WBO2_INPUT_ADDR,
+                        wideband_input_addr: int | None = _DEFAULT_WBO2_INPUT_ADDR,
                         include_cut: bool = False, definition_path=None,
                         definition: LoggerDefinition | None = None,
                         cut_revision: str = "V16", include_launch: bool = False,
@@ -301,6 +309,8 @@ def telegram_params_for(ecu_id, profile: str = PROFILE_STANDARD,
             if param.id == "BS_CUT_LEGACY_FD5A7" and (not include_launch or cut_revision == "V16"):
                 continue
         if param.id == "BS_WB_INPUT":
+            if wideband_input_addr is None:
+                continue
             param = param.with_address(wideband_input_addr)
         if (param.id in {"BS_CUT_IGNITION_REQUEST", "BS_CUT_LAUNCH_IGN_REQUEST",
                          "BS_CUT_LAUNCH_FUEL_ACTIVE", "BS_CUT_INTENTIONAL", "BS_CUT_RUNTIME"}
@@ -631,7 +641,7 @@ class LiveDataPoller:
         self._interval     = interval
         self._use_telegram = use_telegram
         self._telegram_fallback = telegram_fallback
-        self._ecu_id       = ecu_id
+        self._ecu_id       = logger_ecu_id(ecu_id, ecu_variant)
         self._ecu_variant  = ecu_variant
         self._profile      = PROFILE_STANDARD
         self._profile_ready = False
@@ -643,10 +653,11 @@ class LiveDataPoller:
             raise ValueError("selected_ids must contain parameter IDs, not a string")
         self._selected_ids = None if selected_ids is None else frozenset(selected_ids)
         self._available_status = {}
+        self._unavailable_reasons = {}
         self._acquisition_mode = None
         # Resolve only parameters explicitly mapped for this ECU ID.
         self._configure_parameters(telegram_params_for(
-            ecu_id, definition=self._logger_definition))
+            self._ecu_id, definition=self._logger_definition))
         self._log_columns = tuple(log_columns) if log_columns is not None else None
         self._active_profile_names = set()
         self._stop         = threading.Event()
@@ -677,6 +688,8 @@ class LiveDataPoller:
         with self._lock:
             self._latest.clear()
             self._errors.clear()
+            self._profile_ready = False
+            self._unavailable_reasons = {}
             self._terminal_error = None
             self._csv_rows = 0
             self._sample_sequence = 0
@@ -728,6 +741,12 @@ class LiveDataPoller:
 
     def available_rows(self):
         return [(name, unit) for _key, name, unit in self.available_channels()]
+
+    @property
+    def unavailable_reasons(self):
+        """Why selected channels failed admission; never part of acquisition."""
+        with self._lock:
+            return dict(self._unavailable_reasons)
 
     @property
     def acquisition_mode(self):
@@ -833,12 +852,13 @@ class LiveDataPoller:
         """Select the universal or MS41.3 WBO2 profile once per polling session."""
         if self._profile_ready:
             return
-        self._require_measurement_selection(
-            _definition_parameters_for(self._logger_definition, str(self._ecu_id or "")))
+        candidates = _definition_parameters_for(self._logger_definition, str(self._ecu_id or ""))
+        self._require_measurement_selection(candidates)
 
         profile = PROFILE_STANDARD
         input_addr = _DEFAULT_WBO2_INPUT_ADDR
         status_values = {}
+        wideband_reason = "Wideband mode disabled"
         if self._is_ms413():
             try:
                 flags = self._read_word_le(_WBO2_ENABLE_ADDR)
@@ -847,6 +867,7 @@ class LiveDataPoller:
                     "Enabled" if wideband_enabled else "Disabled", "")
             except Exception as error:
                 wideband_enabled = False
+                wideband_reason = "Wideband status check failed"
                 status_values["Wideband Mode"] = ("Unavailable", "")
                 with self._lock:
                     self._errors.append(
@@ -872,26 +893,32 @@ class LiveDataPoller:
                     status_values["Wideband Input Source"] = (
                         f"{source} (0x{selected:04X})", "")
                 except Exception as error:
-                    input_addr = _DEFAULT_WBO2_INPUT_ADDR
-                    status_values["Wideband Input Source"] = (
-                        "Front O2 Bank 1 fallback (0xFA9A)", "")
+                    input_addr = None
+                    wideband_reason = "Wideband input selector unavailable"
+                    status_values["Wideband Input Source"] = ("Unavailable", "")
                     with self._lock:
-                        self._errors.append(
-                            f"Wideband input selection unavailable ({error}); "
-                            "showing the Front O2 Bank 1 input")
+                        self._errors.append(f"Wideband input selection unavailable ({error})")
 
         key = self._ecu_id
         cut_revision = None
         launch_revision = None
+        cut_reason = "Ignition-cut patch not detected"
+        launch_reason = "Launch-control patch not detected"
+        alphan_reason = "AlphaN patch not detected"
         self._alphan_extended_active = False
         if str(key) == "SHINDE1" and self._ds2 is not None:
             try:
-                if detect_alphan_failsafe_runtime(self._ds2, key):
+                revision = detect_alphan_failsafe_runtime(self._ds2, key)
+                status_values["AlphaN Failsafe Revision"] = (revision or "Not detected", "")
+                if revision:
                     scale = bytes(self._ds2.read_mem(0x133BF, 1))
                     if len(scale) != 1:
                         raise ValueError("short load-scaling configuration read")
                     self._alphan_extended_active = scale[0] & 3 == 2
+                    alphan_reason = "Extended AlphaN load scaling disabled"
             except Exception as error:
+                alphan_reason = "Extended AlphaN support check failed"
+                status_values.setdefault("AlphaN Failsafe Revision", ("Unavailable", ""))
                 with self._lock:
                     self._errors.append(f"Extended AlphaN channels unavailable ({error})")
         self._cut_patch_active = False
@@ -900,13 +927,17 @@ class LiveDataPoller:
                 cut_revision = detect_cut_runtime(self._ds2, key)
                 self._cut_patch_active = cut_revision is not None
             except Exception as error:
+                cut_reason = "Ignition-cut patch check failed"
                 with self._lock:
                     self._errors.append(
                         f"Cut-patch runtime status unavailable ({error})")
             if self._cut_patch_active:
                 try:
                     launch_revision = detect_launch_runtime(self._ds2, key)
+                    if launch_revision is not None and launch_revision != cut_revision:
+                        launch_reason = "Launch and ignition-cut patches do not match"
                 except Exception as error:
+                    launch_reason = "Launch-control patch check failed"
                     with self._lock:
                         self._errors.append(f"Launch-patch runtime status unavailable ({error})")
         self._profile = profile
@@ -917,6 +948,30 @@ class LiveDataPoller:
             include_launch=launch_revision is not None and launch_revision == cut_revision,
             include_alphan=self._alphan_extended_active))
         self._available_status = dict(status_values)
+        admitted = {key for key, _name, _unit in self.available_channels()}
+        candidate_ids = {p.id for p in candidates if p.address >= 0x20 and not p.groupsize}
+        if str(key) == "SHINDE1":
+            candidate_ids.update(_PROFILE_STATUS_IDS)
+        unavailable = {}
+        for param_id in ((self._selected_ids or set()) & candidate_ids) - admitted:
+            if param_id.startswith("BS_WB_") or param_id == "BS_PROFILE_WIDEBAND_INPUT_SOURCE":
+                reason = wideband_reason
+            elif param_id.startswith("BS_STD_"):
+                reason = "Unavailable with wideband mode enabled"
+            elif param_id in _ALPHAN_EXTENDED_IDS:
+                reason = alphan_reason
+            elif param_id.startswith("BS_CUT_"):
+                if not self._cut_patch_active:
+                    reason = cut_reason
+                elif param_id in _V16_LIVE_IDS and cut_revision != "V16":
+                    reason = "Requires V16-compatible ignition-cut patch"
+                elif launch_revision is None or launch_revision != cut_revision:
+                    reason = launch_reason
+                else:
+                    reason = "Requires a legacy launch-control patch"
+            else:
+                reason = "Unsupported by this ECU configuration"
+            unavailable[param_id] = reason
         active_names = {
             p.name for p in self._tel_params if p.name in PROFILE_DISPLAY_NAMES
         }
@@ -928,6 +983,7 @@ class LiveDataPoller:
         self._active_profile_names = active_names
         with self._lock:
             self._latest.update(selected_status)
+            self._unavailable_reasons = unavailable
         self._profile_ready = True
 
     def _poll_loop(self):
@@ -976,6 +1032,8 @@ class LiveDataPoller:
                     break
                 try:
                     data = self._ds2.read_mem(block.start, block.size)
+                    if len(data) != block.size:
+                        raise ValueError(f"short RAM read at 0x{block.start:04X}")
                     ram_snapshot.update((block.start + offset, value)
                                         for offset, value in enumerate(data))
                     with self._lock:
@@ -1025,18 +1083,29 @@ class LiveDataPoller:
             cycle_started = time.monotonic()
             csv_row = self._csv_row_base()
             try:
-                snapshot = _decode_batch_snapshot(
-                    self._ds2.poll_telegram_batch(), self._batch_entries)
+                try:
+                    snapshot = _decode_batch_snapshot(
+                        self._ds2.poll_telegram_batch(), self._batch_entries)
+                except Exception as error:
+                    with self._lock:
+                        self._errors.append(f"DS2 batch poll: {error}")
+                    if self._stop.is_set():
+                        break
+                    snapshot = {}
                 interrupted = False
                 for block in self._batch_supplements:
                     if self._stop.is_set():
                         interrupted = True
                         break
-                    data = self._ds2.read_mem(block.start, block.size)
-                    if len(data) != block.size:
-                        raise ValueError(f"short supplemental RAM read at 0x{block.start:04X}")
-                    snapshot.update((block.start + offset, value)
-                                    for offset, value in enumerate(data))
+                    try:
+                        data = self._ds2.read_mem(block.start, block.size)
+                        if len(data) != block.size:
+                            raise ValueError(f"short supplemental RAM read at 0x{block.start:04X}")
+                        snapshot.update((block.start + offset, value)
+                                        for offset, value in enumerate(data))
+                    except Exception as error:
+                        with self._lock:
+                            self._errors.append(f"DS2 supplemental read: {error}")
                 if interrupted:
                     break
                 # Apply the same definition parser as READ_MEM after restoring
@@ -1046,8 +1115,11 @@ class LiveDataPoller:
                         if (_is_ram_roughness_parameter(parameter)
                                 or parameter.id in _ALPHAN_EXTENDED_IDS):
                             continue
-                        data = bytes(snapshot[parameter.address + offset]
-                                     for offset in range(parameter.length))
+                        addresses = range(parameter.address, parameter.address + parameter.length)
+                        if any(address not in snapshot for address in addresses):
+                            self._latest[parameter.name] = ("ERR", parameter.unit)
+                            continue
+                        data = bytes(snapshot[address] for address in addresses)
                         display = parameter.display(parameter.parse(data, parameter.address))
                         self._latest[parameter.name] = (display, parameter.unit)
                         csv_row[parameter.name] = display
@@ -1056,6 +1128,9 @@ class LiveDataPoller:
             except Exception as error:
                 with self._lock:
                     self._errors.append(f"DS2 batch poll: {error}")
+                    self._latest.update((p.name, ("ERR", p.unit)) for p in self._tel_params)
+                if not self._stop.is_set():
+                    self._write_csv_row(self._csv_row_base())
                 self._stop.wait(max(0.0, self._interval - (time.monotonic() - cycle_started)))
                 continue
             self._write_csv_row(csv_row)
@@ -1149,7 +1224,12 @@ class LiveDataPoller:
         self._csv_writer = csv.DictWriter(
             self._csv_file, fieldnames=headers, extrasaction="ignore"
         )
-        self._csv_writer.writeheader()
+        from live_log import csv_channel_header
+        units = dict(self.resolved_rows())
+        self._csv_writer.writerow({
+            key: csv_channel_header(key, units[key]) if key in units else key
+            for key in headers
+        })
 
     def _ensure_csv(self):
         if self._pending_log_path and self._csv_file is None:

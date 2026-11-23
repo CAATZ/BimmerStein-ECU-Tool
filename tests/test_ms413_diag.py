@@ -1,5 +1,6 @@
 import json
 from io import StringIO
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -290,6 +291,8 @@ def test_capture_reconnects_same_ecu_and_records_reset_evidence(
     assert len(gap["poll_exceptions"]) == 3
     assert gap["poll_duration_s"] >= 0
     start = next(record for record in records if record["type"] == "start")
+    header = Path(ms413_diag.__file__).read_text(encoding="utf-8").splitlines()[0]
+    assert start["recorder_version"] == json.loads(header.split(": ", 1)[1])["version"]
     assert start["operator_note"] == (
         "Audi coils; coil DTCs disabled; phase 1 idle")
     assert start["stationary_wideband"] is True
@@ -395,7 +398,9 @@ def test_only_ignition_and_launch_hooks_are_required():
         if not name.startswith(("ignition_cut_v10_", "ignition_cut_v11_", "ignition_cut_v14_",
                                 "launch_control_v14_", "ignition_cut_v16_", "launch_control_v16_",
                                 "ignition_cut_v17_", "launch_control_v17_",
-                                "ignition_cut_v18_", "launch_control_v18_"))
+                                "ignition_cut_v18_", "launch_control_v18_",
+                                "ignition_cut_v19_", "launch_control_v19_",
+                                "ignition_cut_v20_", "launch_control_v20_"))
     }
     assert set(ms413_diag.REQUIRED_RUNTIME_PROBES) == {
         name for name in probes
@@ -410,14 +415,14 @@ def test_only_ignition_and_launch_hooks_are_required():
         "ignition_cut_v9_coil_hook"]
 
 
-@pytest.mark.parametrize("revision", ["V9", "V10", "V11", "V14", "V16", "V17", "V18"])
+@pytest.mark.parametrize("revision", ["V9", "V10", "V11", "V14", "V16", "V17", "V18", "V19", "V20"])
 def test_hook_profiles_match_exact_installed_revision(revision):
     from engines.patcher import patch_ms41
     from tests.conftest import ref
 
     patches = patch_ms41.load_patches()
     ignition = "ignition_cut_" + revision.lower()
-    launch = "launch_control_" + revision.lower() if revision in ("V14", "V16", "V17", "V18") else "launch_control_v7"
+    launch = "launch_control_" + revision.lower() if revision in ("V14", "V16", "V17", "V18", "V19", "V20") else "launch_control_v7"
     patches[launch] = dict(patches[launch], requires=[ignition])
     image, _ = patch_ms41.build(
         ref("MS41.3"), [ignition, launch],
@@ -540,6 +545,47 @@ def test_v17_knock_qualification_keeps_raw_histories_separate_from_fault_veto():
         "knock_old_reply_drained"] is None
 
 
+def test_v20_recorder_decodes_completed_pair_witness_and_private_counters():
+    layout = ms413_diag._batch_layout_for_revision(ms413_diag.V20_RECOVERY_BATCH_LAYOUT, "V20")
+    ms413_diag.DS2Interface._build_custom_batch_setup(ms413_diag._batch_entries(layout))
+    guard = bytes.fromhex("e72f015503000f")
+    values = {name: value for (name, _addr, _length), value in
+              zip(ms413_diag.V20_KNOCK_GUARD_LAYOUT, guard)}
+    payload = _payload(dict(values, cut_recovery_pending=0xE0), layout)
+    fast = ms413_diag.decode_batch_payload(payload, layout, "V20")["values"]
+    assert fast["knock_guard_raw"] == guard.hex()
+    assert fast["knock_drained_channel_mask_raw"] == "0x2F"
+    assert fast["knock_reply_state"] == "awaiting completed pair"
+    assert (fast["knock_witness_value"], fast["knock_witness_channel"]) == (85, 3)
+    assert fast["knock_reply_credited"] is False
+    assert fast["knock_retained_valid_mask_raw"] == "0x0F"
+    assert fast["knock_modified_timing_episode"]
+    assert fast["last_charge_omitted"] and fast["launch_spark_authorized"]
+    assert fast["misfire_counters_initialized"] and fast["cut_recovery_unknown_bits"] == "0x00"
+    assert "knock_open_phase_mask_raw" not in fast
+    assert ms413_diag._decode_knock_guard(bytes(7), "V20")["knock_reply_state"] is None
+    invalidated = ms413_diag._decode_knock_guard(bytes.fromhex("a70003a5050000"), "V20")
+    assert invalidated["knock_reply_state"] == "invalidated by omitted charge"
+    assert invalidated["knock_witness_value"] is None
+    assert ms413_diag._decode_knock_guard(bytes.fromhex("a700ff0102ff00"), "V20")[
+        "knock_witness_value"] is None
+    assert "knock_open_phase_mask_raw" in ms413_diag._decode_knock_guard(guard, "V19")
+
+    class FakeDS2:
+        def read_mem(self, address, length):
+            return {(0xD802, 1): b"\xe0", (0xD805, 7): guard,
+                    (0xD80D, 1): b"\x01", (0xD80E, 6): bytes(range(6))}.get((address, length), bytes(length))
+
+        def read_dtc(self):
+            return b"\x00"
+
+    slow = ms413_diag._slow_snapshot(FakeDS2(), "preflight", "V20")
+    assert slow["knock_learning"]["knock_reply_state"] == fast["knock_reply_state"]
+    assert slow["slow_values"]["launch_fuel_stage_owner_raw"] == 1
+    assert slow["slow_values"]["misfire_cylinder_recovery"] == list(range(6))
+    assert slow["raw_reads"]["misfire_cylinder_recovery"]["address"] == "0x0D80E"
+
+
 def test_v17_recorder_rejects_an_old_app_ram_mapping(monkeypatch):
     monkeypatch.setattr(ms413_diag, "cut_state_address", lambda _revision: 0xE847)
     with pytest.raises(RuntimeError, match="updated app/core"):
@@ -612,6 +658,7 @@ def test_v16_reconnect_and_confirmation_select_new_ram_from_actual_program():
 
 @pytest.mark.parametrize("ignition,launch", [
     ("V14", "V16"), ("V16", "V14"), ("V16", "V17"), ("V17", "V16"), ("V18", "V17"), ("V17", "V18"),
+    ("V18", "V19"), ("V19", "V18"),
 ])
 def test_diagnostic_rejects_mixed_legacy_and_v16_state_owners(ignition, launch):
     from engines.patcher import patch_ms41
@@ -748,7 +795,7 @@ def test_wire_capture_preserves_reply_bytes_and_parser_cleanup(
     transport._ser = Serial()
     original_execute, original_read = transport._execute, transport._read_exact
     if wrapped:
-        # Android owns the raw transport; also preserve existing instance hooks.
+        # Preserve existing instance hooks on the wrapped transport.
         transport._execute, transport._read_exact = original_execute, original_read
     client = SimpleNamespace(_ds2=transport) if wrapped else transport
     report = StringIO()
@@ -890,6 +937,10 @@ def test_capture_confirms_only_first_recovery_anomaly(monkeypatch):
 
     assert result == 130  # Deterministic user cancellation after three samples.
     records = [json.loads(line) for line in report.getvalue().splitlines()]
+    start = next(record for record in records if record["type"] == "start")
+    declared = [(item["name"], int(item["address"], 16), item["length"])
+                for item in start["batch_layout"]]
+    assert declared == list(ms413_diag._batch_layout_for_revision(ms413_diag.RECOVERY_BATCH_LAYOUT, "V11"))
     samples = [record for record in records if record["type"] == "sample"]
     assert [sample["values"]["cut_recovery_pending_raw"] for sample in samples] == [
         "0x04", "0xC4", "0xC4"]
@@ -910,7 +961,7 @@ def test_capture_confirms_only_first_recovery_anomaly(monkeypatch):
     assert "_read_exact" not in transport.__dict__
 
 
-@pytest.mark.parametrize("revision", ["V14", "V16", "V17", "V18"])
+@pytest.mark.parametrize("revision", ["V14", "V16", "V17", "V18", "V19"])
 def test_current_profiles_cals_and_runtime_match_current_descriptors(monkeypatch, revision):
     from engines.patcher import patch_ms41
 
@@ -937,7 +988,7 @@ def test_current_profiles_cals_and_runtime_match_current_descriptors(monkeypatch
         probes[name]["matches"] = True
 
     layout = ms413_diag._batch_layout_for_revision(
-        ms413_diag.V18_RECOVERY_BATCH_LAYOUT if revision == "V18" else
+        ms413_diag.V18_RECOVERY_BATCH_LAYOUT if revision in ("V18", "V19") else
         ms413_diag.V17_RECOVERY_BATCH_LAYOUT if revision == "V17" else ms413_diag.V14_RECOVERY_BATCH_LAYOUT,
         revision)
     entries = ms413_diag._batch_entries(layout)
@@ -948,7 +999,7 @@ def test_current_profiles_cals_and_runtime_match_current_descriptors(monkeypatch
     assert values["cut_recovery_unknown_bits"] == "0x00"
     assert values["misfire_recovery_pending"] is True
     assert values["timing_state"] == (
-        "limiter timing constraint active" if revision in ("V17", "V18") else "timing override published")
+        "limiter timing constraint active" if revision in ("V17", "V18", "V19") else "timing override published")
     assert values["timing_source"] == "standalone ignition band"
     assert values["front_o2_b2_v"] is None
     assert ms413_diag._decode_recovery(0x10, "V11")["cut_recovery_unknown_bits"] == "0x10"
@@ -992,7 +1043,7 @@ def test_current_profiles_cals_and_runtime_match_current_descriptors(monkeypatch
     assert records[-1]["recovery_anomaly_samples"] == 0
     actual_layout = next(record for record in records if record["type"] == "batch_layout")
     actual_addresses = {item["name"]: item["address"] for item in actual_layout["batch_layout"]}
-    assert actual_addresses["cut_state"] == ("0xD801" if revision in ("V16", "V17", "V18") else "0xE847")
+    assert actual_addresses["cut_state"] == ("0xD801" if revision in ("V16", "V17", "V18", "V19") else "0xE847")
 
 
 def test_v18_knock_marker_distinguishes_modified_episode_without_changing_v17():
@@ -1035,10 +1086,11 @@ def test_v8_recovery_restores_only_missing_input_bytes_within_native_batch_limit
     assert decoded["launch_ignition_cut"] and decoded["native_fuel_recovery_priority"]
 
 
-def test_v8_snapshot_keeps_native_context_and_calibrated_target_separate():
+@pytest.mark.parametrize("state,valid", [(0xAA, True), (0xFF, False)])
+def test_snapshot_keeps_native_context_and_calibrated_target_separate(state, valid):
     calls = []
     memory = bytearray(0x20000)
-    for address,value in ((0xD801,0xAA),(0xFD13,128),(0xFDB6,64),(0xF014,203),
+    for address,value in ((0xD801,state),(0xFD13,128),(0xFDB6,64),(0xF014,203),
                           (0xFD60,128),(0xFD61,3),(0x147E3,125),(0x147E6,128)):
         memory[address] = value
 
@@ -1061,11 +1113,21 @@ def test_v8_snapshot_keeps_native_context_and_calibrated_target_separate():
     assert result["limiter_context"]["effective_soft_threshold_rpm"] == 6496
     assert result["limiter_context"]["native_fuel_limiter_active"]
     assert result["limiter_context"]["launch_armed"]
-    assert result["limiter_context"]["native_fuel_recovery_priority"]
+    assert result["limiter_context"]["native_fuel_recovery_priority"] is valid
+    assert result["limiter_context"]["runtime_valid"] is valid
     assert result["launch_control_cals"]["rpm"] == 4000
     assert result["launch_control_cals"]["min_tps_raw"] == 128
     assert result["launch_control_cals"]["min_tps_pct"] == 60.16
     assert all(result["slow_values"][f"input_{pin}"] for pin in (80,81,82))
+
+
+def test_invalid_cut_marker_and_polarity_are_not_reported_as_active():
+    layout = ms413_diag._batch_layout_for_revision(ms413_diag.V18_RECOVERY_BATCH_LAYOUT, "V19")
+    result = ms413_diag.decode_batch_payload(_payload({"cut_state": 0xFF}, layout), layout, "V19")
+    flags = ("cut_patch_runtime", "standalone_ignition_cut", "launch_ignition_cut",
+             "launch_fuel_cut", "native_fuel_recovery_priority")
+    assert all(result["values"][name] is False for name in flags)
+    assert ms413_diag._decode_launch_cals(bytes([255] * 16), "V19")["clutch_polarity"] == "invalid 255"
 
 
 @pytest.mark.parametrize("raw,label", [(0xA0,"native"), (0xA1,"fixed base override"),
@@ -1075,3 +1137,27 @@ def test_v18_fixed_ipw_status(raw, label):
     sample = ms413_diag.decode_batch_payload(_payload({"fixed_ipw_state":raw}, layout), layout, "V18")
     assert sample["values"]["fixed_ipw_state"] == label
     assert ms413_diag._decode_fixed_ipw_state(raw)["fixed_ipw_state_raw"] == f"0x{raw:02X}"
+
+
+def test_current_recorder_recognizes_configured_v20_on_numeric_ss1v2():
+    from engines.patcher import patch_ms41
+    from tests.conftest import ref
+    from patch_service import apply_parameter_changes
+    from ms41 import SS1V2_PROG_SIG, SS1V2_PROG_SIG_ADDR
+
+    image, _ = patch_ms41.build(ref("MS41.3"), ["ignition_cut_v20", "launch_control_v20"])
+    image, _ = apply_parameter_changes(image, "ignition_cut_v20", {"CUTRPM": "4000", "CUT_HYST": "48"})
+    image, _ = apply_parameter_changes(image, "launch_control_v20", {"LC_MINTPS": "65"})
+    assert image[SS1V2_PROG_SIG_ADDR:SS1V2_PROG_SIG_ADDR + len(SS1V2_PROG_SIG)] == SS1V2_PROG_SIG
+
+    class ImageLink:
+        def identify(self):
+            return b"1406464" + bytes(ms413_diag.IDENTITY_LENGTH - 7)
+
+        def read_mem(self, address, length):
+            return bytes(image[(address + i) ^ 0x4000] for i in range(length))
+
+    _, identity = ms413_diag._identity_snapshot(ImageLink())
+    assert identity["ecu_id"] == "1406464" and identity["ms413_program_signature"]["matches"]
+    assert identity["ignition_hook_revision"] == "V20"
+    assert ms413_diag._required_probe_failures(identity["patch_probes"]) == []

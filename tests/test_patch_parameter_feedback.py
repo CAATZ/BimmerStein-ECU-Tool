@@ -123,7 +123,7 @@ def test_launch_feedback_uses_family_specific_units_from_mobile_schema():
     for spec in specs:
         if spec["id"] == "LC_MINTPS":
             spec.update(units="° throttle", maximum="119.5", step="0.46862745098039")
-    # Android transmits these fields, not private codec/choice definitions.
+    # The serialized fields omit internal codec and choice definitions.
     mobile_specs = [{key: spec.get(key) for key in (
         "id", "kind", "current", "minimum", "maximum", "step", "decimals", "units",
     )} for spec in specs]
@@ -139,7 +139,7 @@ def test_fixed_ipw_feedback_distinguishes_base_pulse_and_native_output_gates():
     assert "not a command to switch injection off" in result["CUT_IPW"]
 
 
-@pytest.mark.parametrize("revision,expected", ((None, False), ("V17", False), ("V18", True)))
+@pytest.mark.parametrize("revision,expected", ((None, False), ("V17", False), ("V18", True), ("V19", True), ("V20", True)))
 def test_current_fuel_fallback_is_not_claimed_for_older_patches(revision, expected):
     result = patch_service.parameter_feedback(parameters(), {"CUT_IPW": "0"}, revision=revision)
     assert ("cannot fit the validated timing interval" in result["CUT_IPW"]) == expected

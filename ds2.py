@@ -60,6 +60,72 @@ except ImportError:
 log = logging.getLogger("ds2")
 
 
+
+
+def _ignore_phase(name):
+    pass
+
+
+def _exchange_trace_mode(callback):
+    # Lifecycle-only listeners still receive operation events such as erase_requested.
+    if not callback:
+        return "off"
+    mode = getattr(callback, "exchange_trace", "verbose")
+    return mode if mode in ("off", "compact") else "verbose"
+
+
+@contextmanager
+def _exchange_diagnostics(link, source, protocol, command, request_length):
+    """Collect scalar metadata; deliver only after the wire exchange has ended."""
+    callback = getattr(link, "diagnostic_fn", None)
+    mode = _exchange_trace_mode(callback)
+    if mode == "off":
+        yield None, _ignore_phase
+        return
+    context = dict(source=source, protocol=protocol, command=command,
+                   request_length=request_length, phase="purge", write_length=0,
+                   echo_length=0, echo_complete=None, echo_mismatch_offset=None, response_length=0,
+                   baud=link.baud, parity=getattr(link._ser, "parity", None),
+                   stopbits=getattr(link._ser, "stopbits", None))
+    timed = mode != "compact"
+    started = changed = time.monotonic() if timed else None
+    durations = dict(write_duration_s=0.0, echo_duration_s=0.0, response_duration_s=0.0) if timed else None
+
+    def phase(name):
+        nonlocal changed
+        if timed:
+            now = time.monotonic()
+            kind = context["phase"].split("_")[0] + "_duration_s"
+            if kind in durations:
+                durations[kind] += now - changed
+            changed = now
+        context["phase"] = name
+
+    try:
+        yield context, phase
+    except Exception as error:
+        context["error_type"] = type(error).__name__
+        raise
+    finally:
+        if timed:
+            phase(context["phase"])
+            context.update({key: round(value, 6) for key, value in durations.items()})
+            context["duration_s"] = round(time.monotonic() - started, 6)
+
+        try:
+            callback("request_failed" if "error_type" in context else "request_completed", context)
+        except Exception as error:
+            # Diagnostics must not turn an accepted exchange into a retry.
+            log.debug("Exchange diagnostic callback failed (%s)", type(error).__name__)
+
+
+def _echo_mismatch_offset(expected, actual):
+    if expected == actual:
+        return None
+    return next((index for index, pair in enumerate(zip(expected, actual)) if pair[0] != pair[1]),
+                min(len(expected), len(actual)))
+
+
 def _import_d2xx_serial():
     """Import the internal D2XX-backed serial class; the constructor loads/probes the driver."""
     from engines.softbsl.d2xx_serial import D2XXSerial
@@ -443,8 +509,7 @@ class DS2Interface:
         """Consume echoed TX bytes from a half-duplex K-Line bus.
 
         Strategy:
-          1. Sleep for exactly the frame TX time so all bytes have left the
-             adapter and are on the wire.
+          1. Wait the frame TX time before reading the echo.
           2. Read exactly len(frame) bytes with _ECHO_READ_TMO timeout.
              The timeout must cover Windows USB-serial receive latency (≤16 ms),
              after which all echo bytes should be in the software buffer.
@@ -463,7 +528,6 @@ class DS2Interface:
         self._check_operation()
         if not self.echo:
             return b""
-        # Wait for TX to complete on the wire before reading echo
         tx_time = len(frame) * self._BITS_PER_CHAR / self.baud
         time.sleep(tx_time)
         # Read and discard exactly len(frame) echo bytes
@@ -490,22 +554,33 @@ class DS2Interface:
         frame = self._command_frame(command, args)
         if self.verbose:
             log.debug("TX (no response expected) %s", frame.hex(" "))
-        self._checked_io(self._ser.reset_input_buffer)
-        written = self._checked_io(self._ser.write, frame)
-        if written != len(frame):
-            raise DS2Error(
-                f"short write for command 0x{command:02X}: {written}/{len(frame)} bytes")
-        self._flush_output()
-        echoed = self._discard_echo(frame)
-        if self.echo:
-            if len(echoed) != len(frame):
-                raise DS2Timeout(
-                    f"short K-line echo for command 0x{command:02X}: "
-                    f"{len(echoed)}/{len(frame)} bytes")
-            if echoed != frame:
+        with _exchange_diagnostics(self, "send_no_response", "ds2", command, len(frame)) as (context, phase):
+            self._checked_io(self._ser.reset_input_buffer)
+            phase("write")
+            written = self._checked_io(self._ser.write, frame)
+            if context is not None:
+                context["write_length"] = written
+            if written != len(frame):
                 raise DS2Error(
-                    f"K-line echo mismatch for command 0x{command:02X}")
-        self._check_operation()
+                    f"short write for command 0x{command:02X}: {written}/{len(frame)} bytes")
+            self._flush_output()
+            phase("echo")
+            echoed = self._discard_echo(frame)
+            if context is not None:
+                context["echo_length"] = len(echoed or b"")
+                if self.echo:
+                    context["echo_complete"] = echoed == frame
+                    context["echo_mismatch_offset"] = _echo_mismatch_offset(frame, echoed or b"")
+            if self.echo:
+                if len(echoed) != len(frame):
+                    raise DS2Timeout(
+                        f"short K-line echo for command 0x{command:02X}: "
+                        f"{len(echoed)}/{len(frame)} bytes")
+                if echoed != frame:
+                    raise DS2Error(
+                        f"K-line echo mismatch for command 0x{command:02X}")
+            phase("validation")
+            self._check_operation()
 
     def execute(self, command: int, args: bytes = b"", timeout: float = None,
                 *, pending_program=None) -> bytes:
@@ -521,9 +596,10 @@ class DS2Interface:
                 subcommand=args[0], address=int.from_bytes(args[1:4], "big"),
                 data_length=args[4],
             )
-        started = time.monotonic()
         callback = self.diagnostic_fn
-        if callback:
+        trace_mode = _exchange_trace_mode(callback)
+        if trace_mode == "verbose":
+            started = time.monotonic()
             callback("request_started", dict(context))
         try:
             self._check_operation()
@@ -532,16 +608,18 @@ class DS2Interface:
         except Exception as error:
             if isinstance(error, DS2Error):
                 error.request_context = dict(context)
-            if callback:
-                callback("request_failed", dict(
-                    context, error_type=type(error).__name__,
-                    duration_s=round(time.monotonic() - started, 6),
-                ))
+            if trace_mode != "off":
+                if trace_mode == "verbose":
+                    context["duration_s"] = round(time.monotonic() - started, 6)
+                context["error_type"] = type(error).__name__
+
+                callback("request_failed", context)
             raise
-        if callback:
-            callback("request_completed", dict(
-                context, duration_s=round(time.monotonic() - started, 6),
-            ))
+        if trace_mode != "off":
+            if trace_mode == "verbose":
+                context["duration_s"] = round(time.monotonic() - started, 6)
+
+            callback("request_completed", context)
         return result
 
     def _execute(self, command, args, timeout, context, *, pending_program=None):
@@ -699,36 +777,58 @@ class DS2Interface:
         if timeout is None:
             timeout = READ_TIMEOUT
         frame = bytes(frame)
-        self._checked_io(self._ser.reset_input_buffer)
-        written = self._checked_io(self._ser.write, frame)
-        if written != len(frame):
-            raise DS2Error(
-                f"short write to module 0x{resp_addr:02X}: "
-                f"{written}/{len(frame)} bytes")
-        self._flush_output()
-        echo = self._discard_echo(frame)
-        if strict_echo and self.echo and echo != frame:
-            raise DS2Error(f"K-line echo mismatch for module 0x{resp_addr:02X}")
+        with _exchange_diagnostics(
+                self, "send_frame", "ds2", frame[2] if len(frame) > 2 else None, len(frame)) as (context, phase):
+            self._checked_io(self._ser.reset_input_buffer)
+            phase("write")
+            written = self._checked_io(self._ser.write, frame)
+            if context is not None:
+                context["write_length"] = written
+            if written != len(frame):
+                raise DS2Error(
+                    f"short write to module 0x{resp_addr:02X}: "
+                    f"{written}/{len(frame)} bytes")
+            self._flush_output()
+            phase("echo")
+            echo = self._discard_echo(frame)
+            if context is not None:
+                context["echo_length"] = len(echo or b"")
+                if self.echo:
+                    context["echo_complete"] = echo == frame
+                    context["echo_mismatch_offset"] = _echo_mismatch_offset(frame, echo or b"")
+            if strict_echo and self.echo and echo != frame:
+                raise DS2Error(f"K-line echo mismatch for module 0x{resp_addr:02X}")
 
-        head = self._read_exact(2, timeout)
-        if len(head) < 2:
-            raise DS2Timeout(f"no response from module 0x{resp_addr:02X} "
-                             f"(got {len(head)} byte(s))")
-        if head[0] != resp_addr:
-            raise DS2Error(f"unexpected response address 0x{head[0]:02X} "
-                           f"(expected 0x{resp_addr:02X})")
-        resp_len = head[1]
-        if resp_len < 4:
-            raise DS2Error(f"implausible response length {resp_len}")
-        rest = self._read_exact(resp_len - 2, INTER_BYTE_TMO + 0.5)
-        resp = head + rest
-        if len(resp) != resp_len:
-            raise DS2Timeout(f"short response from 0x{resp_addr:02X}: "
-                             f"expected {resp_len}, got {len(resp)}")
-        if _xor(resp[:-1]) != resp[-1]:
-            raise DS2ChecksumError(f"bad checksum on module 0x{resp_addr:02X} response")
-        self._check_operation()
-        return resp
+            phase("response_header")
+            head = self._read_exact(2, timeout)
+            if context is not None:
+                context["response_length"] = len(head)
+                if len(head) >= 2:
+                    context["declared_response_length"] = head[1]
+            if len(head) < 2:
+                raise DS2Timeout(f"no response from module 0x{resp_addr:02X} "
+                                 f"(got {len(head)} byte(s))")
+            if head[0] != resp_addr:
+                raise DS2Error(f"unexpected response address 0x{head[0]:02X} "
+                               f"(expected 0x{resp_addr:02X})")
+            resp_len = head[1]
+            if resp_len < 4:
+                raise DS2Error(f"implausible response length {resp_len}")
+            phase("response_body")
+            rest = self._read_exact(resp_len - 2, INTER_BYTE_TMO + 0.5)
+            resp = head + rest
+            if context is not None:
+                context["response_length"] = len(resp)
+            if len(resp) != resp_len:
+                raise DS2Timeout(f"short response from 0x{resp_addr:02X}: "
+                                 f"expected {resp_len}, got {len(resp)}")
+            phase("validation")
+            if _xor(resp[:-1]) != resp[-1]:
+                raise DS2ChecksumError(f"bad checksum on module 0x{resp_addr:02X} response")
+            if context is not None:
+                context["status"] = resp[2]
+            self._check_operation()
+            return resp
 
     def send_bmw_fast(self, body: bytes, target: int, timeout: float = None) -> bytes:
         """Send one BMW-Fast K-line telegram and return its validated raw reply.

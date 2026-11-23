@@ -1,0 +1,123 @@
+{
+  "revision": 1,
+  "assembler_sha256": "68cd289f63e27ec0908215190a0f5b570bb3bfa9174f36f3bf8795564ec06d81",
+  "sources": {
+    "hw_bsl_v1.asm": "6d89175c87dc873ecd805ddc12bf1eb8ac7a9be46b4f1a57b1e04705dbd245bd",
+    "hw_bsl_v1_stage0.asm": "58bad0c3c1336b61e70d01a7b834e90c0390fb56a8208de4ba63767c04a9b265"
+  },
+  "stage0_sha256": "c6b6dca1aaac2c416bb4e63473061df4559412898270875dbfe6bd682a5b9be6",
+  "stage0_symbols": {
+    "entry": 64064,
+    "receive": 64072
+  },
+  "agent_sha256": {
+    "MS42": "eaf2da22cc94450ee8ee406b1aa9755f8ad6c1d23c2befc27223d6adc416e49b",
+    "MS43": "d8371fab7b04a20f0e6f7991b538c1a68721522c21250a9b4e13c3cb5678ff0c"
+  },
+  "variants": {
+    "MS42-125000": {
+      "sha256": "4dffa6d89d71948e26cdc5f5ce0c769de1f396e3b668dfd1bf14c73022745281",
+      "symbols": {
+        "entry": 62976,
+        "self_crc": 63030,
+        "body_rx": 63268,
+        "baud_wait": 63338,
+        "crc_byte": 63366,
+        "crc_bit": 63370,
+        "crc_next": 63378,
+        "tx_crc": 63384,
+        "tx": 63394,
+        "tx_wait": 63406,
+        "tx_done": 63426,
+        "rx": 63428,
+        "rx_wait": 63434,
+        "rx_ready": 63466,
+        "flash_command": 63474,
+        "flash_single": 63512,
+        "reject": 63526,
+        "reject_early": 63542,
+        "failed": 63550
+      },
+      "resolved_sha256": "c28a9efba03268c094a6d1e812c91fb6726caf65a298114245fff5f58a2633c6",
+      "code_size": 578
+    },
+    "MS42-166667": {
+      "sha256": "319fb0aa559d26d0d9c40b7cfbfab9548bd6f6c5c547c18e7a867b7b5ecfcbc9",
+      "symbols": {
+        "entry": 62976,
+        "self_crc": 63030,
+        "body_rx": 63268,
+        "baud_wait": 63338,
+        "crc_byte": 63366,
+        "crc_bit": 63370,
+        "crc_next": 63378,
+        "tx_crc": 63384,
+        "tx": 63394,
+        "tx_wait": 63406,
+        "tx_done": 63426,
+        "rx": 63428,
+        "rx_wait": 63434,
+        "rx_ready": 63466,
+        "flash_command": 63474,
+        "flash_single": 63512,
+        "reject": 63526,
+        "reject_early": 63542,
+        "failed": 63550
+      },
+      "resolved_sha256": "810e3bb2d24dba200e04f50a6575b00709a1e9d52b8fe8063a82dbaaef69b9e5",
+      "code_size": 578
+    },
+    "MS43-125000": {
+      "sha256": "9d83d6bb4c38fd2747b970546bfc89a5806cd331e871c69de90df5f30ad63e85",
+      "symbols": {
+        "entry": 62976,
+        "self_crc": 63030,
+        "body_rx": 63268,
+        "baud_wait": 63338,
+        "crc_byte": 63366,
+        "crc_bit": 63370,
+        "crc_next": 63378,
+        "tx_crc": 63384,
+        "tx": 63394,
+        "tx_wait": 63406,
+        "tx_done": 63426,
+        "rx": 63428,
+        "rx_wait": 63434,
+        "rx_ready": 63466,
+        "flash_command": 63474,
+        "flash_single": 63512,
+        "reject": 63526,
+        "reject_early": 63542,
+        "failed": 63550
+      },
+      "resolved_sha256": "8f6b4235447adabab2c70017ce5cc7f61b6a744217ffb3c3d24429ba65c7fc4a",
+      "code_size": 578
+    },
+    "MS43-187500": {
+      "sha256": "f0f6efffd02819ea828d1096b20c5288e5dc3dc168150acf9871f563568081de",
+      "symbols": {
+        "entry": 62976,
+        "self_crc": 63030,
+        "body_rx": 63268,
+        "baud_wait": 63338,
+        "crc_byte": 63366,
+        "crc_bit": 63370,
+        "crc_next": 63378,
+        "tx_crc": 63384,
+        "tx": 63394,
+        "tx_wait": 63406,
+        "tx_done": 63426,
+        "rx": 63428,
+        "rx_wait": 63434,
+        "rx_ready": 63466,
+        "flash_command": 63474,
+        "flash_single": 63512,
+        "reject": 63526,
+        "reject_early": 63542,
+        "failed": 63550
+      },
+      "resolved_sha256": "219234d31728d9e6fc948ce5fdfb749306d4d1d2a89cb36b21cb4a6f8a87be93",
+      "code_size": 578
+    }
+  }
+}

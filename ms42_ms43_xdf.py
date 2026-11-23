@@ -17,7 +17,7 @@ def _number(text, default=0):
 
 
 class XDFDefinitions:
-    def __init__(self, root):
+    def __init__(self, root, *, allow_patch_only=False):
         if root.tag != "XDFFORMAT":
             raise DefinitionError("the XDF root must be <XDFFORMAT>")
         header = root.find("XDFHEADER")
@@ -29,7 +29,7 @@ class XDFDefinitions:
         self.family = families[0] if len(families) == 1 else None
         # The reviewed MS42 v1.3 header contains this extra zero in its title.
         title = title.replace("01100C6", "0110C6") if self.family == "MS42" else title
-        pattern = r"\b(011[0-9A-F]{3})\b" if self.family == "MS42" else r"(?<![A-Z0-9])(?:MS)?(43[0-9A-F]{4})(?![A-Z0-9])"
+        pattern = r"\b(011[0-9A-F]{3})\b" if self.family == "MS42" else r"(?<![A-Z0-9])(?:MS)?(43(?:[0-9A-F]{4}|X001))(?![A-Z0-9])"
         versions = set(re.findall(pattern, title))
         if self.family is None or len(versions) != 1:
             raise DefinitionError("XDF title must identify one MS42/MS43 software revision")
@@ -38,16 +38,25 @@ class XDFDefinitions:
         self.base = 0 if base is None else _number(base.get("offset"))
         if base is not None and _number(base.get("subtract")):
             self.base = -self.base
-        region = header.find("REGION")
-        self.size = 0 if region is None else _number(region.get("size"))
+        regions = [node for node in header.findall("REGION")
+                   if _number(node.get("type"), 0xffffffff) == 0xffffffff]
+        if len(regions) != 1 or _number(regions[0].get("startaddress")) != 0:
+            raise DefinitionError("XDF must declare one binary file region starting at zero")
+        self.size = _number(regions[0].get("size"))
         profile = PROFILES[self.family]
+        # Some XDFs express the calibration window as its base and last offset.
+        if self.size == profile.partial_size - 1 and self.base == profile.calibration_offset:
+            self.size, self.base = profile.partial_size, 0
         if self.size not in (FULL_SIZE, profile.partial_size):
             raise DefinitionError("XDF must declare the full or calibration image size")
         self.categories = {_number(item.get("index")) + 1: item.get("name", "")
                            for item in header.findall("CATEGORY")}
         self.entries = [item for item in root if item.tag in ("XDFCONSTANT", "XDFTABLE")]
-        if not self.entries:
-            raise DefinitionError("XDF has no constants or tables to inspect")
+        self.flags = root.findall("XDFFLAG")
+        self.other_items = sum(item.tag.startswith("XDF") and item.tag not in
+                               {"XDFHEADER", "XDFCONSTANT", "XDFTABLE", "XDFFLAG"} for item in root)
+        if not self.entries and not self.flags and not (allow_patch_only and root.find("XDFPATCH") is not None):
+            raise DefinitionError("XDF has no constants, tables or flags to inspect")
 
     def analyze(self, data):
         identity = image_identity(data)
@@ -61,7 +70,8 @@ class XDFDefinitions:
         profile = PROFILES[self.family]
         file_base = profile.calibration_offset if len(data) == profile.partial_size else 0
         definition_base = profile.calibration_offset if self.size == profile.partial_size else 0
-        rows, scalars, maps, unsupported, outside = [], 0, 0, 0, 0
+        rows, scalars, maps, outside = [], 0, 0, 0
+        unsupported = len(self.flags) + self.other_items
         for item in self.entries:
             value_axis = item if item.tag == "XDFCONSTANT" else item.find("XDFAXIS[@id='z']")
             if value_axis is None:
@@ -131,25 +141,36 @@ def _reject_declaration(*_args):
     raise DefinitionError("XDF document/entity declarations are not supported")
 
 
-@lru_cache(maxsize=8)
-def _load(raw):
+def parse_xdf(raw):
     try:
         # Expat recognizes declarations in the XML's actual encoding, including UTF-16.
         parser = expat.ParserCreate()
         parser.StartDoctypeDeclHandler = _reject_declaration
         parser.EntityDeclHandler = _reject_declaration
         parser.Parse(raw, True)
-        return XDFDefinitions(ET.fromstring(raw))
+        return ET.fromstring(raw)
     except (expat.ExpatError, ET.ParseError, ValueError) as error:
         raise DefinitionError(str(error)) from error
 
 
-def load_definitions(path):
+def xdf_bytes(path):
     try:
         with Path(path).open("rb") as stream:
             raw = stream.read(16 * 1024 * 1024 + 1)
         if len(raw) > 16 * 1024 * 1024:
             raise DefinitionError("XDF exceeds the 16 MiB size limit")
-        return _load(raw)
+        return raw
     except OSError as error:
         raise DefinitionError(str(error)) from error
+
+
+@lru_cache(maxsize=8)
+def _load(raw):
+    try:
+        return XDFDefinitions(parse_xdf(raw))
+    except ValueError as error:
+        raise DefinitionError(str(error)) from error
+
+
+def load_definitions(path):
+    return _load(xdf_bytes(path))

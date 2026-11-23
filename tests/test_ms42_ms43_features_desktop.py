@@ -63,7 +63,7 @@ def test_family_config_read_uses_small_span_and_worker_contract(window, worker_r
                  for patch in patches_for(family, window._ecu_cal_id) for offset, original, _ in patch.entries]
     assert calls == expected
     assert len(window._ms42_ms43_config_combos) == count
-    assert window.btn_config_write_ecu.isEnabled()
+    assert not window.btn_config_write_ecu.isEnabled()
     assert "Air conditioning: Yes" in window._ms42_ms43_config_detected.text()
 
 
@@ -79,8 +79,9 @@ def test_config_write_uses_selected_reader_then_existing_tune_writer(
     partial = images.extract_calibration(synthetic_image(family))
     window._ms42_ms43_config_values(config.read_config(partial))
     feature = next(item for item in config.features_for(family, window._ecu_cal_id) if item.name == feature_name)
-    label, value = feature.options[0]
+    label, value = next(option for option in feature.options if option[0] != config.read_config(partial)[feature.name])
     window._ms42_ms43_config_combos[feature.name].setCurrentText(label)
+    assert window.btn_config_write_ecu.isEnabled()
     window.chk_force_slow_ds2.setChecked(slow)
     lifecycle = []
 
@@ -94,7 +95,8 @@ def test_config_write_uses_selected_reader_then_existing_tune_writer(
     ecu.read_transfer = transfer
     ecu.read_tune = lambda **_: pytest.fail("The context reader owns the RAM link")
     writes = []
-    monkeypatch.setattr(window, "_ms42_ms43_write", lambda *args: writes.append(args))
+    window.chk_correct_cksum.setChecked(False)
+    monkeypatch.setattr(window, "_ms42_ms43_write", lambda *args, **_: writes.append(args))
     window._on_config_write_ecu()
     expected = bytearray(partial)
     expected[feature.byte] = value
@@ -133,6 +135,45 @@ def test_ms42_paired_crc_has_one_control_and_partial_files_cannot_change_it(wind
     expected = config.apply_config(full, {"Calibration CRC": "Disabled"})
     expected = images.correct_checksums(expected, "MS42")[0]
     assert output.read_bytes() == expected and source.read_bytes() == full
+
+
+def test_copy_live_settings_into_file_keeps_file_baseline(window, worker_runner, monkeypatch, tmp_path):
+    connect(window, "MS42")
+    setting = "Electrical cooling fan"
+    original = config.apply_config(images.extract_calibration(synthetic_image("MS42")),
+                                   {setting: "Fitted"})
+    source, output = tmp_path / "original.bin", tmp_path / "configured.bin"
+    source.write_bytes(original)
+    window._load_config_from_path(str(source))
+    alternative = "Not fitted"
+    monkeypatch.setattr("ms42_ms43_config_patches.read_live_config", lambda *_: {setting: alternative})
+    monkeypatch.setattr(diagnostics, "read_learned_config", lambda *_: {})
+    window._ms42_ms43_config_read(copy=True)
+    assert window._ms42_ms43_config_changes() == {setting: alternative}
+    window.chk_config_fix.setChecked(False)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_: (str(output), ""))
+    window._on_config_save()
+    assert config.read_config(output.read_bytes())[setting] == alternative and source.read_bytes() == original
+
+
+def test_live_config_keeps_unedited_settings_from_fresh_read(window, worker_runner, monkeypatch):
+    ecu = connect(window, "MS42")
+    setting, unrelated = "Electrical cooling fan", "EVAP purge operation"
+    previous = {setting: "Not fitted", unrelated: "Above 65.25 °C"}
+    changes = {setting: "Fitted", unrelated: "Disabled"}
+    tune = config.apply_config(images.extract_calibration(synthetic_image("MS42")), previous)
+    window._ms42_ms43_config_values(config.read_config(tune))
+    window._ms42_ms43_config_combos[setting].setCurrentText(changes[setting])
+    fresh = config.apply_config(tune, {unrelated: changes[unrelated]})
+    ecu.read_tune = lambda **_: fresh
+    writes = []
+    window.chk_correct_cksum.setChecked(False)
+    monkeypatch.setattr(window, "_ms42_ms43_write", lambda target, *_, **_opts: writes.append(target))
+    window._ms42_ms43_config_write()
+    assert writes == [config.apply_config(tune, changes)]
+    ecu.read_tune = lambda **_: writes[0]
+    window._ms42_ms43_config_write()
+    assert len(writes) == 1 and not window.btn_config_write_ecu.isEnabled()
 
 
 @pytest.mark.parametrize("family", ["MS42", "MS43"])

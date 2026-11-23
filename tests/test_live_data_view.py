@@ -80,6 +80,27 @@ def qt_app(monkeypatch, tmp_path):
     return app
 
 
+def test_graph_and_instrument_keep_the_same_channel_color_after_filtering(qt_app):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QImage
+    from live_data_view import COLORS, LiveDataView
+
+    view = LiveDataView(live=False)
+    view.resize(980, 740)
+    view.load(parse_log(b"Time,Engine RPM,Coolant Temp\n0,900,85\n1,950,85\n"))
+    view.channels.item(0).setCheckState(Qt.Unchecked)
+    assert view.selected_channels() == ["Coolant Temp"]
+    view.show()
+    for index, widget in ((1, view.plot), (2, view.gauges)):
+        view.tabs.setCurrentIndex(index)
+        qt_app.processEvents()
+        image = widget.grab().toImage().convertToFormat(QImage.Format_RGBA8888)
+        pixels = image.constBits().asstring(image.sizeInBytes())
+        assert bytes.fromhex(COLORS[1][1:] + "ff") in pixels
+        assert bytes.fromhex(COLORS[0][1:] + "ff") not in pixels
+    view.close()
+
+
 def test_plot_reduction_keeps_spikes_and_missing_sample_breaks():
     from live_data_view import plot_segments, nearest_sample
     values = [0.] * 100
@@ -390,6 +411,7 @@ def test_gui_routes_maximum_rate_modes_and_graphs_without_csv(
         sample_rate = 20.
         terminal_error = None
         profile_ready = True
+        unavailable_reasons = {}
         def __init__(self, **kwargs):
             captured.update(kwargs)
             self.acquisition_mode = "telegram" if kwargs["use_telegram"] else "standard"
@@ -519,3 +541,24 @@ def test_saved_viewer_opens_with_cursor_and_rejects_bad_file(qt_app, tmp_path, m
     path.write_text("bad file", encoding="utf-8")
     assert show_log(None, path) is None
     assert errors and "Time column" in errors[0]
+
+
+def test_saved_viewer_pages_without_losing_samples(qt_app, tmp_path, monkeypatch):
+    from PyQt5.QtWidgets import QPushButton
+    import live_log
+    from live_data_view import LiveDataView, show_log
+    monkeypatch.setattr(live_log, "_PAGE_ROWS", 2)
+    path = tmp_path / "drive.csv"
+    path.write_text("Time,Engine RPM\n0,800\n1,\n2,950\n", encoding="utf-8")
+    dialog = show_log(None, path)
+    try:
+        view = dialog.findChild(LiveDataView)
+        actions = {button.text(): button for button in dialog.findChildren(QPushButton)}
+        assert view.times == [0., 1.] and not actions["Previous page"].isEnabled()
+        actions["Next page"].click()
+        assert view.times == [2.] and view.sample_text("Engine RPM") == "950"
+        assert not actions["Next page"].isEnabled()
+        actions["Previous page"].click()
+        assert view.series["Engine RPM"]["values"] == [800., None]
+    finally:
+        dialog.close()

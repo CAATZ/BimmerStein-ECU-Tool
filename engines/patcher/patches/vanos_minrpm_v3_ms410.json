@@ -1,0 +1,45 @@
+{
+  "id": "vanos_minrpm_v3_ms410",
+  "family_id": "vanos_minrpm",
+  "version": "V3",
+  "status": "VEHICLE TEST REQUIRED",
+  "tested": false,
+  "title": "VANOS minimum RPM",
+  "user_description": "Sets the minimum RPM for closed-throttle VANOS engagement on MS41.0. Original VANOS logic follows the factory decision at every RPM.",
+  "description": "MS41.0 program 1429861. In the two closed-throttle states, VANOSRPM 0xFF selects the factory release path. Numeric settings use the retained RPM and stock engagement maps. VANOSRT5 identifies this revision. Upgrades from V1 and V2 preserve the setting and recompute the program checksum.",
+  "target": "MS41.0",
+  "recompute": ["program"],
+  "requires": [],
+  "conflicts": [],
+  "supersedes": ["vanos_minrpm_v2_ms410", "vanos_minrpm_ms410"],
+  "revert_superseded": true,
+  "allow_direct_upgrade": true,
+  "cave": {
+    "region": "seg3-head",
+    "base": 196608,
+    "splice_off": 178170,
+    "splice_op": "jmps",
+    "relocatable": false,
+    "cals": {
+      "VANOSRPM": 94208,
+      "VERSION_MARKER": 94216
+    }
+  },
+  "edits": [
+    {
+      "off": 178170,
+      "expect": "8a0a0240",
+      "data": "fa030040"
+    },
+    {
+      "off": 196608,
+      "expect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "data": "e60004008a0a02409a0a0a50438f00302d05f3f8e2e943f800309d02fa0202f8fa020af8"
+    },
+    {
+      "off": 94216,
+      "expect": "ffffffffffffffff",
+      "data": "56414e4f53525435"
+    }
+  ]
+}

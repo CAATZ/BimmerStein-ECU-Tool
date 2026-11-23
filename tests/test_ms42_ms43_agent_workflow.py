@@ -634,7 +634,8 @@ def test_gui_boot_option_reaches_real_worker_and_preserves_retained_data(
     window._ds2 = ecu
     window.chk_force_slow_ds2.setChecked(False)
     window.chk_bootloader_write.setChecked(True)
-    window.chk_backup_before_write.setChecked(False)
+    window.chk_backup_before_write.setChecked(True)
+    window.chk_boot_preserve_identity.setChecked(False)
     window.chk_verify.setChecked(False)
     monkeypatch.setattr(QInputDialog, "getText", lambda *_: ("WRITE BOOT", True))
     monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.Yes)
@@ -643,11 +644,29 @@ def test_gui_boot_option_reaches_real_worker_and_preserves_retained_data(
     monkeypatch.setattr(window, "_show_flash_complete", lambda *_: None)
     window._ms42_ms43_write(target, "offline-boot.bin", "full")
     assert worker_runner.results == [(True, None)]
+    entry, = window._backup_mgr.entries
+    assert window._backup_mgr.read_data(entry.filename, entry.sha256) == peer.original
+    assert peer.agent_launches == 1
     assert ecu.last_write.completed and peer.agent_requests[0][:3] == (ord("I"), 1, 4)
     assert peer.image[:0x4000] == target[:0x4000]
     assert peer.image[0x8000:0x10000] == target[0x8000:0x10000]
     assert peer.image[0x4000:0x8000] == peer.original[0x4000:0x8000]
     assert [sector for sector in peer.erases if sector < 4] == [3, 0]
+
+
+def test_boot_backup_save_failure_restores_diagnostics_before_any_flash_change(agent_workflow):
+    ecu, peer = agent_workflow
+
+    def full_disk(data):
+        assert data == peer.original and not peer.erases and not peer.programs
+        raise OSError("backup drive full")
+
+    with pytest.raises(protocol.FlashInterrupted, match="backup drive full"):
+        with ecu.transfer():
+            ecu.write_full(boot_target(peer), use_ram=True, use_agent=True, write_boot=True,
+                           boot_backup=full_disk, journal=Journal())
+    assert peer.restored and not peer.erases and not peer.programs
+    assert not ecu.last_write.destructive_started and not ecu.can_retry_write
 
 
 def test_lost_reset_ack_prevents_retry_and_further_commands(agent_workflow):

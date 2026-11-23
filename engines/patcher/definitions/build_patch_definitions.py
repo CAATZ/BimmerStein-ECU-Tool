@@ -14,11 +14,15 @@ import xml.etree.ElementTree as ET
 
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_FRAGMENT = HERE / "ms412_ignition_cut_v18_launch_control_v18.xml"
+DEFAULT_FRAGMENT = HERE / "ms412_ignition_cut_v20_launch_control_v20.xml"
 DEFAULT_OUTPUT = HERE / "BimmerStein MS41 Patch Definitions.xml"
-BEGIN = "<!-- OPENMS41 V18/V18 PATCH TABLES BEGIN -->"
-END = "<!-- OPENMS41 V18/V18 PATCH TABLES END -->"
+BEGIN = "<!-- OPENMS41 V20/V20 PATCH TABLES BEGIN -->"
+END = "<!-- OPENMS41 V20/V20 PATCH TABLES END -->"
 LEGACY_MARKERS = [
+    ("<!-- OPENMS41 V19/V19 PATCH TABLES BEGIN -->",
+     "<!-- OPENMS41 V19/V19 PATCH TABLES END -->"),
+    ("<!-- OPENMS41 V18/V18 PATCH TABLES BEGIN -->",
+     "<!-- OPENMS41 V18/V18 PATCH TABLES END -->"),
     ("<!-- OPENMS41 V17/V17 PATCH TABLES BEGIN -->",
      "<!-- OPENMS41 V17/V17 PATCH TABLES END -->"),
     ("<!-- OPENMS41 V16/V16 PATCH TABLES BEGIN -->",
@@ -99,17 +103,29 @@ DTD = """<!DOCTYPE roms [
 <!ATTLIST state name CDATA #REQUIRED data CDATA #REQUIRED >
 ]>"""
 
-VANOS_TABLE_MS410 = """<table type="2D" name="VANOS Retrofit - Minimum RPM (Closed Throttle)" category="VANOS Retrofit" storagetype="uint8" sizey="1" storageaddress="0x3000">
-  <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
+VANOS_TABLE_TEMPLATE = """<table type="2D" name="VANOS Retrofit - Minimum RPM (Closed Throttle)" category="VANOS Retrofit" storagetype="uint8" sizey="1" storageaddress="{address}">
+  <scaling units="{units}" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
   <table type="Static Y Axis" name="Engage Above" sizey="1"><data>RPM</data></table>
-  <description>Minimum RPM for closed-throttle VANOS engagement added by the tested MS41.0 V2 retrofit. Marker VANOSRT3 identifies the checksum-correct revision; raw 0xFF preserves stock behavior.</description>
+  <description>{description}</description>
 </table>"""
-
-VANOS_TABLE_MS411 = """<table type="2D" name="VANOS Retrofit - Minimum RPM (Closed Throttle)" category="VANOS Retrofit" storagetype="uint8" sizey="1" storageaddress="0x3720">
-  <scaling units="RPM" expression="x*32" to_byte="x/32" format="0" fineincrement="32" coarseincrement="320" />
-  <table type="Static Y Axis" name="Engage Above" sizey="1"><data>RPM</data></table>
-  <description>Minimum RPM for closed-throttle VANOS engagement added by the MS41.1 VANOSRT2 retrofit. Raw 0xFF preserves stock behavior; use only after that patch is installed.</description>
-</table>"""
+VANOS_TABLE_MS410 = VANOS_TABLE_TEMPLATE.format(
+    address="0x3000", units="RPM",
+    description="MS41.0 VANOSRT3 uses every value as a minimum RPM for closed-throttle VANOS engagement, including 8160 (raw 0xFF).",
+)
+VANOS_TABLE_MS410_V3 = VANOS_TABLE_TEMPLATE.format(
+    address="0x3000", units="RPM (8160 = Original VANOS logic)",
+    description="MS41.0 VANOSRT5 uses the original closed-throttle VANOS logic at 8160 (raw 0xFF). Values from 0 to 8128 RPM set the minimum in 32 RPM steps.",
+)
+VANOS_TABLE_MS411 = VANOS_TABLE_TEMPLATE.format(
+    address="0x3720",
+    units="RPM",
+    description="MS41.1 VANOSRT2 uses every value as a minimum RPM for closed-throttle VANOS engagement, including 8160 (raw 0xFF).",
+)
+VANOS_TABLE_MS411_V2 = VANOS_TABLE_TEMPLATE.format(
+    address="0x3720",
+    units="RPM (8160 = Original VANOS logic)",
+    description="MS41.1 VANOSRT4 uses the original closed-throttle VANOS logic at 8160 (raw 0xFF). Values from 0 to 8128 RPM set the minimum in 32 RPM steps.",
+)
 
 MS410_ADDRESS_MAP = {
     0x2A65: 0x3010, 0x2A66: 0x3011, 0x2A67: 0x3012, 0x2A68: 0x3013,
@@ -139,8 +155,12 @@ IGNITION_LAUNCH_VARIANTS = (
 VANOS_VARIANTS = (
     ("BIMMERSTEIN_MS410_VANOSRT3_24K", "3008", "VANOSRT3", "1429861", "MS41.0 1429861 + VANOS V2 / VANOSRT3 (24KB)", "24kb", False, MS410_ADDRESS_MAP, VANOS_TABLE_MS410),
     ("BIMMERSTEIN_MS410_VANOSRT3_256K", "17008", "VANOSRT3", "1429861", "MS41.0 1429861 + VANOS V2 / VANOSRT3 (256KB)", "256kb", True, MS410_ADDRESS_MAP, VANOS_TABLE_MS410),
+    ("BIMMERSTEIN_MS410_VANOSRT5_24K", "3008", "VANOSRT5", "1429861", "MS41.0 1429861 + VANOS V3 / VANOSRT5 (24KB)", "24kb", False, MS410_ADDRESS_MAP, VANOS_TABLE_MS410_V3),
+    ("BIMMERSTEIN_MS410_VANOSRT5_256K", "17008", "VANOSRT5", "1429861", "MS41.0 1429861 + VANOS V3 / VANOSRT5 (256KB)", "256kb", True, MS410_ADDRESS_MAP, VANOS_TABLE_MS410_V3),
     ("BIMMERSTEIN_MS411_VANOSRT2_24K", "3728", "VANOSRT2", "1437806", "MS41.1 1437806 + VANOSRT2 (24KB)", "24kb", False, MS411_ADDRESS_MAP, VANOS_TABLE_MS411),
     ("BIMMERSTEIN_MS411_VANOSRT2_256K", "17728", "VANOSRT2", "1437806", "MS41.1 1437806 + VANOSRT2 (256KB)", "256kb", True, MS411_ADDRESS_MAP, VANOS_TABLE_MS411),
+    ("BIMMERSTEIN_MS411_VANOSRT4_24K", "3728", "VANOSRT4", "1437806", "MS41.1 1437806 + VANOS V2 / VANOSRT4 (24KB)", "24kb", False, MS411_ADDRESS_MAP, VANOS_TABLE_MS411_V2),
+    ("BIMMERSTEIN_MS411_VANOSRT4_256K", "17728", "VANOSRT4", "1437806", "MS41.1 1437806 + VANOS V2 / VANOSRT4 (256KB)", "256kb", True, MS411_ADDRESS_MAP, VANOS_TABLE_MS411_V2),
 )
 
 
@@ -191,7 +211,7 @@ def _ms410_controls(fragment: str) -> str:
         .replace("SIR fd60.8", "MS41.0 FD51.0")
         .replace("SIR fd60.7", "MS41.0 FD50.7")
         .replace(
-            '<scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0" fineincrement="1" coarseincrement="10" />',
+            '<scaling units="TPS%" expression="x*.47" to_byte="x/.47" format="0.00" fineincrement="0.47" coarseincrement="4.7" />',
             '<scaling units="° throttle" expression="x*0.46862745098039" to_byte="x/0.46862745098039" format="0.00" fineincrement="0.46862745098039" coarseincrement="4.6862745098039" />',
         )
         .replace("<data>TPS%</data>", "<data>° throttle</data>")
@@ -216,7 +236,7 @@ def _payload(
     )
     return (
         f"{BEGIN}\n"
-        f"<!-- Ignition Cut V18 + Launch Control V18 controls. "
+        f"<!-- Ignition Cut V20 + Launch Control V20 controls. "
         f"{address_note} -->\n"
         f"{tables}\n"
         f"{END}"

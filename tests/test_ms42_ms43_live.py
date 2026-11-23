@@ -432,3 +432,24 @@ def test_knock_axis_consumers_against_actual_reviewed_firmware(family, name, dig
     assert image[rpm - 1] == 16 and image[load - 1] == 4
     assert list(image[rpm:rpm + 16]) == sorted(image[rpm:rpm + 16])
     assert list(image[load:load + 4]) == sorted(image[load:load + 4])
+
+@pytest.mark.parametrize("family,ecu_id", [("MS42", "0110C6"), ("MS43", "430069")])
+def test_configured_telegram_failure_keeps_sample_gap(family, ecu_id):
+    replies = iter([b"\x0b\xb8", b"\x00", b"\x0f\xa0"])
+    link = Link(lambda _command, args: reply(next(replies)) if args == b"\x00" else reply())
+    poller = live.MS42MS43LiveDataPoller(MS42MS43ECU(link, family), interval=0, ecu_id=ecu_id,
+                                         use_telegram=True, telegram_fallback=False, selected_ids=["N"])
+    write = poller._write_csv_row
+    readings = []
+
+    def record(row):
+        write(row)
+        readings.append(row.get("Engine Speed"))
+        if len(readings) == 3:
+            poller._stop.set()
+
+    poller._write_csv_row = record
+    poller._poll_loop()
+    assert readings == ["3000", "", "4000"]
+    seq, _, _, _, rows = poller.completed_samples_since(0)
+    assert seq == 3 and rows[1][2] == (None,)

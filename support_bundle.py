@@ -46,11 +46,24 @@ def _write_redacted_operation_journal(archive, source, member, *, diagnostic=Fal
                     if diagnostic and isinstance(fields, dict):
                         record["fields"] = {
                             key: fields[key] for key in (
-                                "command", "subcommand", "address", "data_length",
-                                "baud", "request_length", "phase", "echo_length",
-                                "echo_complete", "response_length",
-                                "expected_response_length", "flash_response_hex",
-                                "status", "duration_s", "error_type", "outcome",
+                                "source", "protocol", "command", "subcommand",
+                                "address", "data_length", "baud", "parity", "stopbits",
+                                "request_length", "frame_length", "phase", "write_length", "echo_length",
+                                "echo_complete", "echo_mismatch_offset", "response_length",
+                                "declared_response_length",
+                                "expected_response_length",
+                                "status", "write_duration_s", "echo_duration_s",
+                                "response_duration_s", "duration_s", "elapsed_s",
+                                "error_type", "outcome", "dropped_events",
+                                "state", "link", "length", "count", "destructive",
+                                "destructive_started", "retry_allowed", "retry_supported",
+                                "safe_legacy_fallback", "transport_retained", "power_cycle_required",
+                                "verify_requested", "verified_bytes", "final_link",
+                                "program_blocks", "program_payload_bytes",
+                                "usb_packets", "usb_raw_bytes", "usb_payload_bytes",
+                                "usb_status_only_packets", "usb_overrun_packets",
+                                "usb_parity_error_packets", "usb_framing_error_packets",
+                                "usb_break_packets", "usb_read_gap_max_us",
                             ) if key in fields
                         }
                     target.write(
@@ -91,13 +104,10 @@ def create_support_bundle(
                 for index, source in enumerate(path for path in paths if os.path.isfile(path)):
                     member = (f"{prefix}.jsonl" if index == 0
                               else f"{prefix}s/{index:04d}.jsonl")
-                    if prefix == "native-fast-journal":
-                        archive.write(source, member)
-                    else:
-                        _write_redacted_operation_journal(
-                            archive, source, member,
-                            diagnostic=prefix == "diagnostic-journal",
-                        )
+                    _write_redacted_operation_journal(
+                        archive, source, member,
+                        diagnostic=prefix != "operation-journal",
+                    )
                     members.append(member)
             if session_log and os.path.isfile(session_log):
                 archive.write(session_log, "session-log.txt")
